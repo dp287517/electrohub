@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import ReactFlow, { 
   useNodesState, 
   useEdgesState, 
@@ -12,14 +12,9 @@ import ReactFlow, {
   Panel
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { toPng } from 'html-to-image';
-import { jsPDF } from 'jspdf';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Box, Text, Cylinder, Html } from '@react-three/drei';
-import * as THREE from 'three';
 import { 
   ArrowLeft, Save, RefreshCw, Download, Zap, Edit2, 
-  X, Printer, Settings, Layers, Box as BoxIcon, AlertCircle, ShieldCheck, ArrowUpRight, Check, Cuboid
+  X, Printer, Settings, Layers, AlertCircle, ShieldCheck, ArrowUpRight, Check, Cuboid, AlertTriangle
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -28,141 +23,213 @@ const DEVICES_PER_FOLIO = 12;
 const FOLIO_WIDTH = 2000;
 const DEVICE_SPACING = 140;
 
-// ==================== 3D COMPONENTS ====================
+// ==================== 3D ERROR BOUNDARY ====================
+class ThreeErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
 
-// Câble animé (Courant)
-const AnimatedCable = ({ start, end, color = "#fbbf24" }) => {
-  const ref = useRef();
-  // Animation de texture pour simuler le courant
-  useFrame((state) => {
-    if (ref.current) {
-      ref.current.offset.x -= 0.02;
-    }
-  });
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
 
-  const points = useMemo(() => {
-    const curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(...start),
-      new THREE.Vector3(start[0], start[1] - 0.5, start[2]), // Courbe vers le bas
-      new THREE.Vector3(end[0], end[1] + 0.5, end[2]),     // Courbe vers le haut
-      new THREE.Vector3(...end)
-    ]);
-    return curve.getPoints(20);
-  }, [start, end]);
+  componentDidCatch(error, errorInfo) {
+    console.error('[3D Error]', error, errorInfo);
+  }
 
-  return (
-    <mesh>
-      <tubeGeometry args={[new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(p.x, p.y, p.z))), 20, 0.05, 8, false]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5}>
-         {/* Texture procédurale simple pour l'effet de flux */}
-      </meshStandardMaterial>
-    </mesh>
-  );
-};
-
-// Disjoncteur 3D
-const Breaker3D = ({ position, label, isIncoming, isDiff, amperage }) => {
-  const [hovered, setHovered] = useState(false);
-  
-  return (
-    <group position={position}>
-      {/* Boîtier */}
-      <Box 
-        args={[0.8, 1.2, 0.5]} 
-        onPointerOver={() => setHovered(true)} 
-        onPointerOut={() => setHovered(false)}
-      >
-        <meshStandardMaterial color={isIncoming ? "#f59e0b" : hovered ? "#3b82f6" : "#f3f4f6"} />
-      </Box>
-      
-      {/* Manette (Switch) */}
-      <Box position={[0, 0.1, 0.26]} args={[0.2, 0.4, 0.1]}>
-        <meshStandardMaterial color="#1f2937" />
-      </Box>
-
-      {/* Label (HTML Overlay) */}
-      <Html position={[0, -0.8, 0]} center distanceFactor={10} transform>
-        <div className="bg-white/90 px-2 py-1 rounded text-[8px] font-bold border border-gray-300 whitespace-nowrap text-center">
-          {label}
-          <div className="text-[6px] text-gray-500">{amperage}A {isDiff ? 'DDR' : ''}</div>
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex-1 flex items-center justify-center bg-gray-100">
+          <div className="text-center p-8 bg-white rounded-2xl shadow-lg max-w-md">
+            <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+            <h3 className="text-lg font-bold text-gray-800 mb-2">Vue 3D non disponible</h3>
+            <p className="text-gray-600 text-sm mb-4">
+              La vue 3D nécessite des fonctionnalités non supportées par votre navigateur ou configuration actuelle.
+            </p>
+            <p className="text-xs text-gray-400 bg-gray-50 p-2 rounded font-mono">
+              {this.state.error?.message || 'Worker blob not supported'}
+            </p>
+            <button
+              onClick={() => this.props.onFallback()}
+              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+            >
+              Retour au schéma 2D
+            </button>
+          </div>
         </div>
-      </Html>
-    </group>
-  );
-};
+      );
+    }
 
-// Armoire 3D
-const Switchboard3DScene = ({ devices, boardName }) => {
-  const feeders = devices.filter(d => !d.is_main_incoming);
-  const mainIncoming = devices.find(d => d.is_main_incoming);
+    return this.props.children;
+  }
+}
+
+// ==================== SIMPLE 3D VIEW (Sans Workers) ====================
+// Version simplifiée qui utilise Canvas 2D pour simuler une vue 3D
+const Simple3DView = ({ devices, boardName }) => {
+  const canvasRef = useRef(null);
   
-  // Calcul dimensions armoire
-  const width = Math.max(4, feeders.length * 1.2);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Clear
+    ctx.fillStyle = '#f3f4f6';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Draw grid
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < width; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = 0; y < height; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+    
+    // Draw title
+    ctx.fillStyle = '#1f2937';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(boardName || 'Tableau Électrique', width / 2, 50);
+    
+    // Draw cabinet background (isometric-ish)
+    const cabX = width / 2 - 200;
+    const cabY = 100;
+    const cabWidth = 400;
+    const cabHeight = 350;
+    
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.1)';
+    ctx.fillRect(cabX + 10, cabY + 10, cabWidth, cabHeight);
+    
+    // Main cabinet
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(cabX, cabY, cabWidth, cabHeight);
+    ctx.strokeStyle = '#9ca3af';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cabX, cabY, cabWidth, cabHeight);
+    
+    // Busbar
+    const busY = cabY + 80;
+    const gradient = ctx.createLinearGradient(cabX + 20, busY, cabX + 20, busY + 20);
+    gradient.addColorStop(0, '#d97706');
+    gradient.addColorStop(0.5, '#fbbf24');
+    gradient.addColorStop(1, '#b45309');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(cabX + 20, busY, cabWidth - 40, 20);
+    ctx.strokeStyle = '#92400e';
+    ctx.strokeRect(cabX + 20, busY, cabWidth - 40, 20);
+    
+    // Draw breakers
+    const feeders = devices.filter(d => !d.is_main_incoming);
+    const mainIncoming = devices.find(d => d.is_main_incoming);
+    const breakerWidth = 50;
+    const breakerHeight = 80;
+    const startX = cabX + 40;
+    const breakerY = busY + 50;
+    const spacing = Math.min(60, (cabWidth - 80) / Math.max(feeders.length, 1));
+    
+    // Main incoming
+    if (mainIncoming) {
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(cabX + cabWidth / 2 - 30, cabY + 20, 60, 50);
+      ctx.strokeStyle = '#d97706';
+      ctx.strokeRect(cabX + cabWidth / 2 - 30, cabY + 20, 60, 50);
+      ctx.fillStyle = '#92400e';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('ARRIVÉE', cabX + cabWidth / 2, cabY + 50);
+      
+      // Connection line
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cabX + cabWidth / 2, cabY + 70);
+      ctx.lineTo(cabX + cabWidth / 2, busY);
+      ctx.stroke();
+    }
+    
+    // Feeders
+    feeders.slice(0, 6).forEach((device, idx) => {
+      const x = startX + idx * spacing;
+      const y = breakerY;
+      
+      // Connection from busbar
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + breakerWidth / 2, busY + 20);
+      ctx.lineTo(x + breakerWidth / 2, y);
+      ctx.stroke();
+      
+      // Breaker box
+      ctx.fillStyle = device.is_differential ? '#f3e8ff' : '#f9fafb';
+      ctx.fillRect(x, y, breakerWidth, breakerHeight);
+      ctx.strokeStyle = device.is_differential ? '#7c3aed' : '#374151';
+      ctx.strokeRect(x, y, breakerWidth, breakerHeight);
+      
+      // Label
+      ctx.fillStyle = '#374151';
+      ctx.font = '8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(device.position_number || `Q${idx + 1}`, x + breakerWidth / 2, y + 12);
+      
+      // Amperage
+      if (device.in_amps) {
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(`${device.in_amps}A`, x + breakerWidth / 2, y + breakerHeight - 10);
+      }
+      
+      // IEC symbol (simplified cross)
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x + breakerWidth / 2 - 8, y + 30);
+      ctx.lineTo(x + breakerWidth / 2 + 8, y + 50);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + breakerWidth / 2 + 8, y + 30);
+      ctx.lineTo(x + breakerWidth / 2 - 8, y + 50);
+      ctx.stroke();
+      
+      // Output line
+      ctx.strokeStyle = '#374151';
+      ctx.beginPath();
+      ctx.moveTo(x + breakerWidth / 2, y + breakerHeight);
+      ctx.lineTo(x + breakerWidth / 2, y + breakerHeight + 20);
+      ctx.stroke();
+    });
+    
+    // Info text
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${devices.length} disjoncteurs`, width / 2, height - 30);
+    ctx.fillText('Vue simplifiée - La vue 3D complète nécessite WebGL Workers', width / 2, height - 10);
+    
+  }, [devices, boardName]);
   
   return (
-    <>
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} />
-      <OrbitControls minPolarAngle={0} maxPolarAngle={Math.PI / 1.8} />
-
-      {/* Armoire (Fond) */}
-      <Box position={[0, 0, -0.5]} args={[width + 2, 6, 0.2]}>
-        <meshStandardMaterial color="#e5e7eb" />
-      </Box>
-      
-      {/* Titre 3D */}
-      <Text position={[0, 3.5, 0]} fontSize={0.3} color="#1f2937">
-        {boardName}
-      </Text>
-
-      {/* Jeu de Barres (Cuivre) */}
-      <Box position={[0, 1.5, 0]} args={[width, 0.2, 0.1]}>
-        <meshStandardMaterial color="#b45309" metalness={0.8} roughness={0.2} />
-      </Box>
-
-      {/* Arrivée Principale */}
-      {mainIncoming && (
-        <>
-          <Breaker3D 
-            position={[-width/2 + 1, 1.5, 0.5]} 
-            label="Arrivée Générale" 
-            amperage={mainIncoming.in_amps}
-            isIncoming={true}
-          />
-          {/* Câble Arrivée -> Barre */}
-          <AnimatedCable start={[-width/2 + 1, 1.5, 0.5]} end={[0, 1.5, 0]} color="#ef4444" />
-        </>
-      )}
-
-      {/* Départs */}
-      {feeders.map((dev, i) => {
-        const x = -width/2 + 2.5 + (i * 1.2); // Position X
-        const y = -0.5; // Position Y (rangée du bas)
-        
-        return (
-          <group key={dev.id}>
-            {/* Câble Barre -> Disjoncteur */}
-            <AnimatedCable start={[x, 1.5, 0]} end={[x, y + 0.6, 0]} color="#fbbf24" />
-            
-            {/* Disjoncteur */}
-            <Breaker3D 
-              position={[x, y, 0.3]} 
-              label={dev.name || dev.reference}
-              amperage={dev.in_amps}
-              isDiff={dev.is_differential}
-            />
-            
-            {/* Câble Départ (vers le bas) */}
-            <Cylinder position={[x, y - 1, 0.3]} args={[0.05, 0.05, 1]} rotation={[0,0,0]}>
-               <meshStandardMaterial color="#374151" />
-            </Cylinder>
-          </group>
-        );
-      })}
-      
-      {/* Sol (Grille) */}
-      <gridHelper args={[20, 20, 0xff0000, 'teal']} position={[0, -4, 0]} />
-    </>
+    <div className="flex-1 bg-gray-100 flex items-center justify-center p-4">
+      <canvas 
+        ref={canvasRef} 
+        width={800} 
+        height={600}
+        className="bg-white rounded-xl shadow-lg"
+      />
+    </div>
   );
 };
 
@@ -342,6 +409,7 @@ const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
 const DiagramContent = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const reactFlowWrapper = useRef(null);
   
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -353,7 +421,8 @@ const DiagramContent = () => {
   const [selectedNode, setSelectedNode] = useState(null);
   const [viewMode, setViewMode] = useState('2d'); // '2d' or '3d'
   const [totalFolios, setTotalFolios] = useState(1);
-  const [deviceData, setDeviceData] = useState([]); // Store raw device data for 3D
+  const [deviceData, setDeviceData] = useState([]);
+  const [isPrinting, setIsPrinting] = useState(false);
   
   const { fitView, setViewport } = useReactFlow();
 
@@ -366,7 +435,7 @@ const DiagramContent = () => {
       setBoard(boardRes);
       const devicesRes = await api.switchboard.listDevices(id);
       const devices = devicesRes.data || [];
-      setDeviceData(devices); // Save for 3D
+      setDeviceData(devices);
 
       const upstreamSources = boardRes.upstream_sources || [];
       if (upstreamSources.length === 0) upstreamSources.push({ id: 'src-def', source_board_name: boardRes.is_principal ? 'Réseau' : 'Amont', name: 'Arrivée' });
@@ -427,10 +496,14 @@ const DiagramContent = () => {
     downstreamId: dev.downstream_switchboard_id
   });
 
+  // FIXED: Navigation retour vers le tableau avec ID correct
   const handleBack = () => {
-    // Correct redirection logic
-    if (board && board.id) navigate(`/switchboards?board=${board.id}`);
-    else navigate('/switchboards');
+    if (board && board.id) {
+      // Utilise navigate avec state pour forcer le rechargement
+      navigate(`/switchboards?board=${board.id}`, { replace: false });
+    } else {
+      navigate('/switchboards');
+    }
   };
 
   const handleNodeSave = async (nodeId, newData) => {
@@ -444,6 +517,7 @@ const DiagramContent = () => {
         downstream_switchboard_id: newData.downstream_switchboard_id
       });
       setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...newData, type: newData.device_type, isDifferential: newData.is_differential, downstreamLabel: newData.downstream_name } } : n));
+      setSelectedNode(null);
     } catch(e) { alert("Erreur sauvegarde"); }
   };
 
@@ -458,41 +532,35 @@ const DiagramContent = () => {
     setSaving(false); alert("Disposition sauvegardée !");
   };
 
+  // NOUVEAU: Export PDF vectoriel via le backend
   const handleExportPDF = async () => {
-    if (reactFlowWrapper.current === null) return;
-    const flowElement = document.querySelector('.react-flow');
-    const originalBg = flowElement.style.background;
-    flowElement.style.background = '#fff';
-    // Hide UI
-    document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = 'none');
-
+    if (!board) return;
+    setIsPrinting(true);
     try {
-      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
-      const pdfW = pdf.internal.pageSize.getWidth();
-      const pdfH = pdf.internal.pageSize.getHeight();
-
-      for (let i = 0; i < totalFolios; i++) {
-        if (i > 0) pdf.addPage();
-        const xPos = i * FOLIO_WIDTH;
-        await setViewport({ x: -xPos + 50, y: 50, zoom: 1 });
-        await new Promise(r => setTimeout(r, 500));
-        const dataUrl = await toPng(reactFlowWrapper.current, { backgroundColor: '#fff', pixelRatio: 2, width: reactFlowWrapper.current.offsetWidth, height: reactFlowWrapper.current.offsetHeight });
-        pdf.addImage(dataUrl, 'PNG', 10, 10, pdfW - 20, pdfH - 40);
-        
-        // VRAI Cartouche vectoriel redessiné (propre)
-        const tbX = pdfW - 130, tbY = pdfH - 35;
-        pdf.setFillColor(255); pdf.rect(tbX, tbY, 120, 25, 'F'); pdf.rect(tbX, tbY, 120, 25);
-        pdf.line(tbX + 80, tbY, tbX + 80, tbY + 25); pdf.line(tbX, tbY + 12, tbX + 120, tbY + 12);
-        pdf.setFontSize(7); pdf.setTextColor(100); pdf.text("CLIENT / PROJET", tbX + 2, tbY + 4); pdf.text("TITRE", tbX + 2, tbY + 16);
-        pdf.setFontSize(10); pdf.setTextColor(0); pdf.setFont("helvetica", "bold");
-        pdf.text(settings?.company_name || "Client", tbX + 2, tbY + 9); pdf.text(board?.name || "Schéma", tbX + 2, tbY + 21);
-        pdf.setFontSize(8); pdf.text("FOLIO: " + (i + 1) + "/" + totalFolios, tbX + 82, tbY + 21);
+      const response = await fetch(`${api.baseURL}/api/switchboard/boards/${board.id}/diagram-pdf?site=${api.site}`, {
+        method: 'GET',
+        headers: { 'X-Site': api.site }
+      });
+      
+      if (!response.ok) {
+        throw new Error('PDF generation failed');
       }
-      pdf.save(`${board?.code}_schema.pdf`);
-    } catch (e) { console.error(e); alert("Erreur Export PDF"); } finally {
-      flowElement.style.background = originalBg;
-      document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = '');
-      fitView();
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${board.code || board.name}_schema.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) { 
+      console.error('PDF Export error:', e);
+      alert("Erreur lors de l'export PDF. Vérifiez que l'endpoint /diagram-pdf est disponible.");
+    } finally {
+      setIsPrinting(false);
     }
   };
 
@@ -500,6 +568,17 @@ const DiagramContent = () => {
 
   return (
     <div className="h-screen flex flex-col bg-gray-100">
+      {/* CSS for animations */}
+      <style>{`
+        @keyframes slideLeft {
+          from { opacity: 0; transform: translateX(100%); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        .animate-slideLeft {
+          animation: slideLeft 0.3s ease-out forwards;
+        }
+      `}</style>
+
       <div className="h-14 bg-white border-b flex items-center justify-between px-4 z-10 shadow-sm">
         <div className="flex items-center gap-3">
           <button onClick={handleBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><ArrowLeft size={20} className="text-gray-600" /></button>
@@ -512,7 +591,10 @@ const DiagramContent = () => {
           {viewMode === '2d' && (
             <>
               <button onClick={handleSaveLayout} disabled={saving} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm shadow-sm transition-colors disabled:opacity-50"><Save size={16} /><span className="hidden md:inline">Sauvegarder</span></button>
-              <button onClick={handleExportPDF} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-900 text-white rounded text-sm shadow-sm transition-colors"><Printer size={16} /><span className="hidden md:inline">PDF</span></button>
+              <button onClick={handleExportPDF} disabled={isPrinting} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-900 text-white rounded text-sm shadow-sm transition-colors disabled:opacity-50">
+                {isPrinting ? <RefreshCw size={16} className="animate-spin" /> : <Printer size={16} />}
+                <span className="hidden md:inline">PDF</span>
+              </button>
             </>
           )}
         </div>
@@ -528,9 +610,9 @@ const DiagramContent = () => {
             </Panel>
           </ReactFlow>
         ) : (
-          <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
-             <Switchboard3DScene devices={deviceData} boardName={board?.name} />
-          </Canvas>
+          <ThreeErrorBoundary onFallback={() => setViewMode('2d')}>
+            <Simple3DView devices={deviceData} boardName={board?.name} />
+          </ThreeErrorBoundary>
         )}
 
         {viewMode === '2d' && selectedNode && selectedNode.type === 'breaker' && (
