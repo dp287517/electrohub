@@ -499,10 +499,9 @@ const DiagramContent = () => {
   // FIXED: Navigation retour vers le tableau avec ID correct
   const handleBack = () => {
     if (board && board.id) {
-      // Utilise navigate avec state pour forcer le rechargement
-      navigate(`/switchboards?board=${board.id}`, { replace: false });
+      navigate(`/app/switchboards?board=${board.id}`, { replace: false });
     } else {
-      navigate('/switchboards');
+      navigate('/app/switchboards');
     }
   };
 
