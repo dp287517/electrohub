@@ -1,4 +1,4 @@
-// server_switchboard.js
+// server_switchboard.js - Backend complet Switchboard avec schéma unifilaire PDF vectoriel
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -32,21 +32,21 @@ if (process.env.OPENAI_API_KEY) {
 
 const app = express();
 
-// --- CORRECTION CSP (POUR LA 3D ET LES WORKERS) ---
-// Remplace app.use(helmet()) par une config permissive pour les blobs/workers
+// --- CSP CORRIGÉE (POUR LA 3D ET LES WORKERS) ---
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:"], // blob: nécessaire pour React Three Fiber
-      workerSrc: ["'self'", "blob:"], // blob: nécessaire pour les workers 3D
-      imgSrc: ["'self'", "data:", "blob:", "https:"], // Images et textures
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:"],
+      scriptSrcElem: ["'self'", "'unsafe-inline'", "blob:"],
+      workerSrc: ["'self'", "blob:", "data:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
       connectSrc: ["'self'", process.env.CORS_ORIGIN || "*", "https://api.openai.com"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       fontSrc: ["'self'", "https:", "data:"]
     }
   },
-  crossOriginEmbedderPolicy: false // Souvent nécessaire pour les ressources 3D externes
+  crossOriginEmbedderPolicy: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
@@ -577,6 +577,441 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   }
 });
 
+// ==================== PDF SCHÉMA UNIFILAIRE VECTORIEL ====================
+
+app.get('/api/switchboard/boards/:id/diagram-pdf', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+
+    // Get board info
+    const boardRes = await pool.query(
+      `SELECT * FROM switchboards WHERE id = $1 AND site = $2`, [id, site]
+    );
+    if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
+    const board = boardRes.rows[0];
+
+    // Get devices with downstream info
+    const devicesRes = await pool.query(
+      `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
+       FROM devices d
+       LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
+       WHERE d.switchboard_id = $1 
+       ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`, [id]
+    );
+    const devices = devicesRes.rows;
+
+    // Get upstream info (Sources)
+    const upstreamRes = await pool.query(
+      `SELECT d.*, sb.name as source_board_name, sb.code as source_board_code
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.downstream_switchboard_id = $1`, [id]
+    );
+    const upstreamDevices = upstreamRes.rows;
+
+    // Get logo and settings
+    const logoRes = await pool.query(
+      `SELECT logo, logo_mime, company_name, company_address, company_phone, company_email 
+       FROM site_settings WHERE site = $1`, [site]
+    );
+    const settings = logoRes.rows[0] || {};
+
+    // Separate main incoming from feeders
+    const mainIncoming = devices.find(d => d.is_main_incoming);
+    const feeders = devices.filter(d => !d.is_main_incoming);
+
+    // Pagination settings
+    const DEVICES_PER_FOLIO = 10;
+    const totalFolios = Math.max(1, Math.ceil(feeders.length / DEVICES_PER_FOLIO));
+
+    // Create PDF - A3 Landscape for more space
+    const doc = new PDFDocument({ 
+      margin: 30, 
+      size: 'A3',
+      layout: 'landscape',
+      bufferPages: true 
+    });
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_schema.pdf"`);
+    
+    doc.pipe(res);
+
+    // Colors
+    const COLORS = {
+      busbar: '#b45309',
+      busbarLight: '#fbbf24',
+      busbarDark: '#92400e',
+      wire: '#1f2937',
+      breaker: '#374151',
+      differential: '#7c3aed',
+      incoming: '#d97706',
+      downstream: '#059669',
+      text: '#111827',
+      textLight: '#6b7280',
+      gridLine: '#e5e7eb',
+      background: '#f9fafb'
+    };
+
+    // ===== HELPER: Draw IEC Breaker Symbol =====
+    const drawBreakerSymbol = (x, y, size = 30, isDifferential = false, isIncoming = false) => {
+      const color = isIncoming ? COLORS.incoming : isDifferential ? COLORS.differential : COLORS.breaker;
+      doc.strokeColor(color).lineWidth(1.5);
+      
+      // Breaker cross symbol (IEC standard)
+      const s = size;
+      const cx = x + s/2;
+      const cy = y + s/2;
+      
+      // Input line
+      doc.moveTo(cx, y).lineTo(cx, y + s * 0.2).stroke();
+      
+      // Cross (breaker)
+      doc.moveTo(cx - s * 0.25, y + s * 0.25).lineTo(cx + s * 0.25, y + s * 0.75).stroke();
+      doc.moveTo(cx + s * 0.25, y + s * 0.25).lineTo(cx - s * 0.25, y + s * 0.75).stroke();
+      
+      // Output line
+      doc.moveTo(cx, y + s * 0.8).lineTo(cx, y + s).stroke();
+      
+      // Trip indicator (small arc at top)
+      doc.moveTo(cx - s * 0.15, y + s * 0.2)
+         .quadraticCurveTo(cx, y + s * 0.1, cx + s * 0.15, y + s * 0.2)
+         .stroke();
+      
+      // If differential, add the DDR symbol (ellipse)
+      if (isDifferential) {
+        doc.strokeColor(COLORS.differential).lineWidth(1);
+        doc.ellipse(cx, y + s * 0.5, s * 0.35, s * 0.15).stroke();
+        // Test button
+        doc.circle(cx + s * 0.25, y + s * 0.5, 2).fill(COLORS.differential);
+      }
+      
+      return { cx, bottomY: y + s };
+    };
+
+    // ===== HELPER: Draw Source Symbol =====
+    const drawSourceSymbol = (x, y, label, subLabel) => {
+      const boxW = 100;
+      const boxH = 40;
+      
+      // Box
+      doc.rect(x - boxW/2, y, boxW, boxH)
+         .strokeColor(COLORS.breaker)
+         .lineWidth(1.5)
+         .stroke();
+      
+      // Lightning icon
+      doc.save();
+      doc.translate(x - 8, y + 8);
+      doc.path('M6 0 L0 12 L5 12 L3 20 L12 8 L7 8 L9 0 Z')
+         .fillColor(COLORS.incoming)
+         .fill();
+      doc.restore();
+      
+      // Labels
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text(label, x - boxW/2 + 20, y + 8, { width: boxW - 25, align: 'left' });
+      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
+      doc.text(subLabel || '', x - boxW/2 + 20, y + 20, { width: boxW - 25, align: 'left' });
+      
+      return { bottomY: y + boxH };
+    };
+
+    // ===== HELPER: Draw Busbar =====
+    const drawBusbar = (x, y, width) => {
+      const height = 12;
+      
+      // Copper gradient effect (3 bands)
+      doc.rect(x, y, width, height/3).fillColor(COLORS.busbarDark).fill();
+      doc.rect(x, y + height/3, width, height/3).fillColor(COLORS.busbarLight).fill();
+      doc.rect(x, y + height * 2/3, width, height/3).fillColor(COLORS.busbar).fill();
+      
+      // Border
+      doc.rect(x, y, width, height).strokeColor(COLORS.busbarDark).lineWidth(0.5).stroke();
+      
+      // Label
+      doc.fontSize(5).fillColor('#fff').font('Helvetica-Bold');
+      doc.text('JEU DE BARRES 400V', x + width/2 - 30, y + 3);
+      
+      return { topY: y, bottomY: y + height, centerY: y + height/2 };
+    };
+
+    // ===== HELPER: Draw Device Card =====
+    const drawDeviceCard = (x, y, device, index) => {
+      const cardW = 70;
+      const cardH = 100;
+      const symbolSize = 28;
+      
+      // Wire from busbar to device
+      doc.strokeColor(COLORS.wire).lineWidth(1.5);
+      doc.moveTo(x + cardW/2, y - 20).lineTo(x + cardW/2, y).stroke();
+      
+      // Card background
+      const bgColor = device.is_main_incoming ? '#fef3c7' : device.is_differential ? '#f3e8ff' : '#ffffff';
+      doc.rect(x, y, cardW, cardH)
+         .fillColor(bgColor)
+         .fill();
+      doc.rect(x, y, cardW, cardH)
+         .strokeColor(device.is_differential ? COLORS.differential : COLORS.gridLine)
+         .lineWidth(device.is_differential ? 1.5 : 1)
+         .stroke();
+      
+      // Position number badge
+      doc.rect(x, y, 18, 14).fillColor(COLORS.breaker).fill();
+      doc.fontSize(7).font('Helvetica-Bold').fillColor('#fff');
+      doc.text(device.position_number || String(index + 1), x + 2, y + 3, { width: 14, align: 'center' });
+      
+      // DDR badge if differential
+      if (device.is_differential) {
+        doc.rect(x + cardW - 22, y, 22, 14).fillColor(COLORS.differential).fill();
+        doc.fontSize(5).fillColor('#fff');
+        doc.text('DDR', x + cardW - 20, y + 4);
+      }
+      
+      // Symbol
+      drawBreakerSymbol(x + cardW/2 - symbolSize/2, y + 18, symbolSize, device.is_differential, device.is_main_incoming);
+      
+      // Name (truncated)
+      const displayName = (device.name || device.reference || '-').substring(0, 12);
+      doc.fontSize(6).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text(displayName, x + 2, y + 52, { width: cardW - 4, align: 'center' });
+      
+      // Specs
+      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
+      const specs = [];
+      if (device.in_amps) specs.push(`${device.in_amps}A`);
+      if (device.icu_ka) specs.push(`${device.icu_ka}kA`);
+      if (device.poles) specs.push(`${device.poles}P`);
+      doc.text(specs.join(' • '), x + 2, y + 62, { width: cardW - 4, align: 'center' });
+      
+      // Manufacturer & Reference
+      if (device.manufacturer || device.reference) {
+        doc.fontSize(5).fillColor(COLORS.textLight);
+        doc.text(`${device.manufacturer || ''} ${device.reference || ''}`.trim().substring(0, 15), 
+                 x + 2, y + 72, { width: cardW - 4, align: 'center' });
+      }
+      
+      // Output wire
+      doc.strokeColor(COLORS.wire).lineWidth(1.5);
+      doc.moveTo(x + cardW/2, y + cardH).lineTo(x + cardW/2, y + cardH + 15).stroke();
+      
+      // Cable cross-section label
+      const cableSize = device.in_amps < 20 ? '3G2.5' : device.in_amps < 40 ? '5G6' : '5G16';
+      doc.fontSize(4).fillColor(COLORS.textLight);
+      doc.text(cableSize, x + cardW/2 + 3, y + cardH + 5);
+      
+      // Downstream indicator
+      if (device.downstream_name) {
+        doc.rect(x, y + cardH - 18, cardW, 18)
+           .fillColor('#d1fae5')
+           .fill();
+        doc.rect(x, y + cardH - 18, cardW, 18)
+           .strokeColor(COLORS.downstream)
+           .stroke();
+        doc.fontSize(5).font('Helvetica-Bold').fillColor(COLORS.downstream);
+        doc.text(`→ ${(device.downstream_name || '').substring(0, 10)}`, x + 2, y + cardH - 13, { width: cardW - 4, align: 'center' });
+      }
+      
+      return { bottomY: y + cardH + 20 };
+    };
+
+    // ===== HELPER: Draw Cartouche =====
+    const drawCartouche = (folio, totalFolios) => {
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+      const cartH = 60;
+      const cartY = pageH - cartH - 20;
+      const margin = 30;
+      
+      // Cartouche box
+      doc.rect(margin, cartY, pageW - margin * 2, cartH)
+         .strokeColor(COLORS.breaker)
+         .lineWidth(1)
+         .stroke();
+      
+      // Vertical dividers
+      const col1 = margin + 150;
+      const col2 = col1 + 200;
+      const col3 = col2 + 200;
+      const col4 = pageW - margin - 100;
+      
+      doc.moveTo(col1, cartY).lineTo(col1, cartY + cartH).stroke();
+      doc.moveTo(col2, cartY).lineTo(col2, cartY + cartH).stroke();
+      doc.moveTo(col3, cartY).lineTo(col3, cartY + cartH).stroke();
+      doc.moveTo(col4, cartY).lineTo(col4, cartY + cartH).stroke();
+      
+      // Company info
+      if (settings.logo) {
+        try {
+          doc.image(settings.logo, margin + 5, cartY + 5, { width: 50, height: 35 });
+        } catch (e) { /* ignore logo errors */ }
+      }
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text(settings.company_name || 'ElectroHub', margin + 60, cartY + 10);
+      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
+      doc.text(settings.company_address || '', margin + 60, cartY + 22, { width: 80 });
+      doc.text(settings.company_phone || '', margin + 60, cartY + 42);
+      
+      // Board info
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text(board.name, col1 + 10, cartY + 8);
+      doc.fontSize(7).font('Helvetica').fillColor(COLORS.textLight);
+      doc.text(`Code: ${board.code || '-'}`, col1 + 10, cartY + 22);
+      doc.text(`Bât: ${board.building_code || '-'} | Étage: ${board.floor || '-'}`, col1 + 10, cartY + 34);
+      doc.text(`Régime: ${board.regime_neutral || 'TN-S'}`, col1 + 10, cartY + 46);
+      
+      // Title
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text('SCHÉMA UNIFILAIRE', col2 + 10, cartY + 12);
+      doc.fontSize(8).font('Helvetica').fillColor(COLORS.textLight);
+      doc.text(`${feeders.length} départs • ${devices.filter(d => d.is_differential).length} DDR`, col2 + 10, cartY + 30);
+      if (mainIncoming) {
+        doc.text(`Arrivée: ${mainIncoming.in_amps || '?'}A ${mainIncoming.manufacturer || ''} ${mainIncoming.reference || ''}`, col2 + 10, cartY + 42);
+      }
+      
+      // Source info
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text('SOURCE', col3 + 10, cartY + 8);
+      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
+      if (upstreamDevices.length > 0) {
+        upstreamDevices.slice(0, 2).forEach((src, i) => {
+          doc.text(`${src.source_board_name} (${src.name})`, col3 + 10, cartY + 20 + i * 12);
+        });
+      } else if (board.is_principal) {
+        doc.text('Tableau Principal (TGBT)', col3 + 10, cartY + 20);
+      } else {
+        doc.text('Non définie', col3 + 10, cartY + 20);
+      }
+      
+      // Folio & Date
+      doc.fontSize(9).font('Helvetica-Bold').fillColor(COLORS.text);
+      doc.text(`Folio ${folio}/${totalFolios}`, col4 + 10, cartY + 10);
+      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
+      doc.text(new Date().toLocaleDateString('fr-FR'), col4 + 10, cartY + 28);
+      doc.text(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }), col4 + 10, cartY + 40);
+    };
+
+    // ===== GENERATE FOLIOS =====
+    for (let folio = 0; folio < totalFolios; folio++) {
+      if (folio > 0) doc.addPage();
+      
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+      const margin = 30;
+      const diagramAreaH = pageH - 150; // Leave space for cartouche
+      
+      // Background grid
+      doc.strokeColor(COLORS.gridLine).lineWidth(0.25);
+      for (let gx = margin; gx < pageW - margin; gx += 50) {
+        doc.moveTo(gx, margin).lineTo(gx, diagramAreaH).stroke();
+      }
+      for (let gy = margin; gy < diagramAreaH; gy += 50) {
+        doc.moveTo(margin, gy).lineTo(pageW - margin, gy).stroke();
+      }
+      
+      // Get devices for this folio
+      const startIdx = folio * DEVICES_PER_FOLIO;
+      const folioDevices = feeders.slice(startIdx, startIdx + DEVICES_PER_FOLIO);
+      
+      // Calculate layout
+      const deviceSpacing = Math.min(90, (pageW - margin * 2 - 150) / Math.max(folioDevices.length, 1));
+      const busbarWidth = Math.max(400, folioDevices.length * deviceSpacing + 100);
+      const busbarX = (pageW - busbarWidth) / 2;
+      const busbarY = 140;
+      
+      // Draw source(s)
+      if (folio === 0) {
+        if (upstreamDevices.length > 0) {
+          upstreamDevices.forEach((src, i) => {
+            const srcX = pageW / 2 + (i - (upstreamDevices.length - 1) / 2) * 120;
+            drawSourceSymbol(srcX, 40, src.source_board_name, src.name);
+            // Connect to main incoming or busbar
+            doc.strokeColor(COLORS.incoming).lineWidth(2);
+            doc.moveTo(srcX, 80).lineTo(srcX, mainIncoming ? 90 : busbarY).stroke();
+          });
+        } else {
+          drawSourceSymbol(pageW / 2, 40, board.is_principal ? 'Réseau' : 'Amont', 'Arrivée');
+          doc.strokeColor(COLORS.incoming).lineWidth(2);
+          doc.moveTo(pageW / 2, 80).lineTo(pageW / 2, mainIncoming ? 90 : busbarY).stroke();
+        }
+        
+        // Main incoming breaker
+        if (mainIncoming) {
+          const mainX = pageW / 2 - 35;
+          const mainY = 90;
+          
+          // Card for main incoming
+          const mainCardW = 70;
+          const mainCardH = 45;
+          
+          doc.rect(mainX, mainY, mainCardW, mainCardH)
+             .fillColor('#fef3c7')
+             .fill();
+          doc.rect(mainX, mainY, mainCardW, mainCardH)
+             .strokeColor(COLORS.incoming)
+             .lineWidth(1.5)
+             .stroke();
+          
+          // Symbol
+          drawBreakerSymbol(mainX + mainCardW/2 - 12, mainY + 5, 24, mainIncoming.is_differential, true);
+          
+          // Label
+          doc.fontSize(6).font('Helvetica-Bold').fillColor(COLORS.incoming);
+          doc.text('ARRIVÉE', mainX + 2, mainY + 32, { width: mainCardW - 4, align: 'center' });
+          doc.fontSize(5).fillColor(COLORS.text);
+          doc.text(`${mainIncoming.in_amps || '?'}A`, mainX + 2, mainY + 40, { width: mainCardW - 4, align: 'center' });
+          
+          // Connect to busbar
+          doc.strokeColor(COLORS.incoming).lineWidth(2);
+          doc.moveTo(pageW / 2, mainY + mainCardH).lineTo(pageW / 2, busbarY).stroke();
+        }
+      } else {
+        // Continuation from previous folio
+        drawSourceSymbol(pageW / 2, 40, `Folio ${folio}`, 'Suite...');
+        doc.strokeColor(COLORS.wire).lineWidth(2);
+        doc.moveTo(pageW / 2, 80).lineTo(pageW / 2, busbarY).stroke();
+      }
+      
+      // Draw busbar
+      drawBusbar(busbarX, busbarY, busbarWidth);
+      
+      // Draw devices
+      folioDevices.forEach((device, i) => {
+        const devX = busbarX + 50 + i * deviceSpacing;
+        const devY = busbarY + 35;
+        
+        // Vertical line from busbar
+        doc.strokeColor(COLORS.wire).lineWidth(1.5);
+        doc.moveTo(devX + 35, busbarY + 12).lineTo(devX + 35, devY).stroke();
+        
+        drawDeviceCard(devX, devY, device, startIdx + i);
+      });
+      
+      // Continuation indicator if more folios
+      if (folio < totalFolios - 1) {
+        const contX = pageW - margin - 60;
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.textLight);
+        doc.text('Suite →', contX, busbarY - 5);
+        doc.text(`Folio ${folio + 2}`, contX, busbarY + 15);
+      }
+      
+      // Draw cartouche
+      drawCartouche(folio + 1, totalFolios);
+    }
+
+    // ===== FINALIZE =====
+    doc.end();
+    
+  } catch (e) {
+    console.error('[DIAGRAM PDF] error:', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Diagram PDF generation failed', details: e.message });
+    }
+  }
+});
+
 // ==================== SWITCHBOARDS CRUD ====================
 
 // LIST Switchboards
@@ -635,7 +1070,6 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     const sb = r.rows[0];
 
     // GET UPSTREAM: Find devices in OTHER boards that point to THIS board
-    // This solves the "Double Feeding" visibility
     const upstream = await pool.query(
       `SELECT d.id, d.name, d.position_number, d.in_amps, 
               s.id as source_board_id, s.name as source_board_name, s.code as source_board_code
@@ -651,7 +1085,7 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
       is_principal: sb.is_principal,
       has_photo: sb.has_photo,
       diagram_data: sb.diagram_data || {},
-      upstream_sources: upstream.rows, // Array of devices feeding this board
+      upstream_sources: upstream.rows,
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
