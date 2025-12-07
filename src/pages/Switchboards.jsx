@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers, DoorOpen,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
-  Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle
+  Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
+  Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -49,6 +51,12 @@ const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
     </svg>
   );
 };
+
+// ==================== INPUT STYLES (FIXED FOR DARK MODE) ====================
+
+const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
+const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900";
+const inputSmallClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400";
 
 // ==================== MODAL COMPONENTS ====================
 
@@ -134,8 +142,12 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
               <li>• Nom du tableau (ligne 2)</li>
               <li>• Code tableau (ligne 4)</li>
               <li>• Bâtiment et étage depuis le code</li>
-              <li>• Liste des départs avec détection DDR</li>
+              <li>• Liste des départs</li>
             </ul>
+            <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+              <Info size={12} />
+              La détection DDR se fait uniquement via l'analyse photo IA
+            </p>
           </div>
         </div>
 
@@ -222,6 +234,86 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = '
               <Trash2 size={18} />
             )}
             Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Share Link Modal
+const ShareLinkModal = ({ isOpen, onClose, board }) => {
+  const [copied, setCopied] = useState(false);
+  
+  if (!isOpen || !board) return null;
+  
+  const url = `${window.location.origin}${window.location.pathname}?board=${board.id}`;
+  
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      // Fallback
+      const input = document.createElement('input');
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Share2 size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Partager le lien</h2>
+              <p className="text-blue-100 text-sm">{board.name}</p>
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={url}
+              readOnly
+              className={`${inputBaseClass} flex-1 text-sm font-mono`}
+            />
+            <button
+              onClick={handleCopy}
+              className={`px-4 py-2 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                copied 
+                  ? 'bg-emerald-100 text-emerald-700' 
+                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+              }`}
+            >
+              {copied ? <CheckCircle size={18} /> : <Copy size={18} />}
+              {copied ? 'Copié!' : 'Copier'}
+            </button>
+          </div>
+          
+          <p className="text-sm text-gray-500">
+            Ce lien ouvrira directement ce tableau électrique.
+          </p>
+        </div>
+        
+        <div className="border-t p-4">
+          <button
+            onClick={onClose}
+            className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+          >
+            Fermer
           </button>
         </div>
       </div>
@@ -445,27 +537,27 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Fabricant</span>
-                    <p className="font-semibold">{deviceSpecs.manufacturer || '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.manufacturer || '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Référence</span>
-                    <p className="font-semibold">{deviceSpecs.reference || '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.reference || '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Calibre</span>
-                    <p className="font-semibold">{deviceSpecs.in_amps ? `${deviceSpecs.in_amps} A` : '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.in_amps ? `${deviceSpecs.in_amps} A` : '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Icu</span>
-                    <p className="font-semibold">{deviceSpecs.icu_ka ? `${deviceSpecs.icu_ka} kA` : '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.icu_ka ? `${deviceSpecs.icu_ka} kA` : '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Pôles</span>
-                    <p className="font-semibold">{deviceSpecs.poles || '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.poles || '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Tension</span>
-                    <p className="font-semibold">{deviceSpecs.voltage_v ? `${deviceSpecs.voltage_v} V` : '-'}</p>
+                    <p className="font-semibold text-gray-900">{deviceSpecs.voltage_v ? `${deviceSpecs.voltage_v} V` : '-'}</p>
                   </div>
                 </div>
                 {deviceSpecs.is_differential && (
@@ -534,9 +626,98 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   );
 };
 
+// Mobile Tree Drawer
+const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, deviceCounts, getProgress }) => {
+  if (!isOpen) return null;
+  
+  return (
+    <div className="fixed inset-0 z-50">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      
+      {/* Drawer */}
+      <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl animate-slideRight overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="p-4 border-b bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg">Arborescence</h2>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+        
+        {/* Tree Content */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="space-y-1">
+            {Object.entries(tree).map(([building, floors]) => (
+              <div key={building}>
+                <button
+                  onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  <Building2 size={16} className="text-blue-500" />
+                  <span className="font-medium truncate flex-1">{building}</span>
+                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                    {Object.values(floors).flat().length}
+                  </span>
+                </button>
+                
+                {expandedBuildings[building] && (
+                  <div className="ml-4 space-y-1 mt-1">
+                    {Object.entries(floors).map(([floor, floorBoards]) => (
+                      <div key={floor}>
+                        <button
+                          onClick={() => setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: !prev[`${building}-${floor}`] }))}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                        >
+                          {expandedFloors[`${building}-${floor}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <Layers size={14} className="text-amber-500" />
+                          <span className="text-sm truncate flex-1">Étage {floor}</span>
+                          <span className="text-xs text-gray-400">{floorBoards.length}</span>
+                        </button>
+                        
+                        {expandedFloors[`${building}-${floor}`] && (
+                          <div className="ml-4 space-y-1 mt-1">
+                            {floorBoards.map(board => (
+                              <button
+                                key={board.id}
+                                onClick={() => { onSelectBoard(board); onClose(); }}
+                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg transition-all
+                                  ${selectedBoard?.id === board.id 
+                                    ? 'bg-blue-100 text-blue-700 shadow-sm' 
+                                    : 'text-gray-600 hover:bg-gray-100'}`}
+                              >
+                                <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
+                                <span className="text-sm truncate flex-1">{board.name}</span>
+                                {deviceCounts[board.id]?.total > 0 && (
+                                  <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ==================== MAIN COMPONENT ====================
 
 export default function Switchboards() {
+  // URL params for deep linking
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  
   // State
   const [boards, setBoards] = useState([]);
   const [devices, setDevices] = useState([]);
@@ -566,10 +747,12 @@ export default function Switchboards() {
   // Modal state
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showAIWizard, setShowAIWizard] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   // Photo upload refs
   const boardPhotoRef = useRef(null);
@@ -584,6 +767,31 @@ export default function Switchboards() {
   useEffect(() => {
     loadBoards();
   }, []);
+
+  // Handle URL params for deep linking
+  useEffect(() => {
+    const boardId = searchParams.get('board');
+    if (boardId && boards.length > 0 && !selectedBoard) {
+      const board = boards.find(b => b.id === Number(boardId));
+      if (board) {
+        setSelectedBoard(board);
+        // Expand tree to show this board
+        const building = board.meta?.building_code || 'Sans bâtiment';
+        const floor = board.meta?.floor || 'Sans étage';
+        setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+        setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
+      }
+    }
+  }, [boards, searchParams]);
+
+  // Update URL when selecting a board
+  useEffect(() => {
+    if (selectedBoard) {
+      setSearchParams({ board: selectedBoard.id.toString() });
+    } else {
+      setSearchParams({});
+    }
+  }, [selectedBoard]);
 
   useEffect(() => {
     if (selectedBoard) {
@@ -709,6 +917,38 @@ export default function Switchboards() {
       await loadBoards();
     } catch (err) {
       console.error('Delete device error:', err);
+    }
+  };
+
+  // Print PDF
+  const handlePrintPDF = async () => {
+    if (!selectedBoard) return;
+    setIsPrinting(true);
+    try {
+      // Call backend API to generate PDF
+      const response = await fetch(`${api.baseURL}/api/switchboard/boards/${selectedBoard.id}/pdf?site=${api.site}`, {
+        method: 'GET',
+        headers: {
+          'X-Site': api.site
+        }
+      });
+      
+      if (!response.ok) throw new Error('PDF generation failed');
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      // Open in new tab or download
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selectedBoard.code || selectedBoard.name}_listing.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Print PDF error:', err);
+      alert('Erreur lors de la génération du PDF. Vérifiez que l\'endpoint est disponible.');
+    } finally {
+      setIsPrinting(false);
     }
   };
 
@@ -878,7 +1118,7 @@ export default function Switchboards() {
                       {floorBoards.map(board => (
                         <button
                           key={board.id}
-                          onClick={() => { setSelectedBoard(board); if (isMobile) setShowMobileDrawer(false); }}
+                          onClick={() => setSelectedBoard(board)}
                           className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg transition-all
                             ${selectedBoard?.id === board.id 
                               ? 'bg-blue-100 text-blue-700 shadow-sm' 
@@ -1074,7 +1314,7 @@ export default function Switchboards() {
               type="text"
               value={boardForm.name}
               onChange={(e) => setBoardForm(prev => ({ ...prev, name: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={inputBaseClass}
               placeholder="ex: Tableau Général"
             />
           </div>
@@ -1085,7 +1325,7 @@ export default function Switchboards() {
               type="text"
               value={boardForm.code}
               onChange={(e) => setBoardForm(prev => ({ ...prev, code: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+              className={`${inputBaseClass} font-mono`}
               placeholder="ex: 11-1-04-FL"
             />
           </div>
@@ -1097,7 +1337,7 @@ export default function Switchboards() {
                 type="text"
                 value={boardForm.building_code}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, building_code: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="11"
               />
             </div>
@@ -1107,7 +1347,7 @@ export default function Switchboards() {
                 type="text"
                 value={boardForm.floor}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, floor: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="1"
               />
             </div>
@@ -1117,7 +1357,7 @@ export default function Switchboards() {
                 type="text"
                 value={boardForm.room}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, room: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="104"
               />
             </div>
@@ -1128,7 +1368,7 @@ export default function Switchboards() {
             <select
               value={boardForm.regime_neutral}
               onChange={(e) => setBoardForm(prev => ({ ...prev, regime_neutral: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className={selectBaseClass}
             >
               <option value="TN-S">TN-S</option>
               <option value="TN-C">TN-C</option>
@@ -1198,7 +1438,7 @@ export default function Switchboards() {
                 type="text"
                 value={deviceForm.name}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, name: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="ex: Prise T15 côté Lausanne"
               />
             </div>
@@ -1208,7 +1448,7 @@ export default function Switchboards() {
                 type="text"
                 value={deviceForm.position_number}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, position_number: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-mono"
+                className={`${inputBaseClass} font-mono`}
                 placeholder="ex: 1, 9.1"
               />
             </div>
@@ -1222,7 +1462,7 @@ export default function Switchboards() {
                 type="text"
                 value={deviceForm.manufacturer}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, manufacturer: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="ex: Schneider"
               />
             </div>
@@ -1232,7 +1472,7 @@ export default function Switchboards() {
                 type="text"
                 value={deviceForm.reference}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, reference: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="ex: NSX250N"
               />
             </div>
@@ -1246,7 +1486,7 @@ export default function Switchboards() {
                 type="number"
                 value={deviceForm.in_amps}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, in_amps: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="63"
               />
             </div>
@@ -1256,7 +1496,7 @@ export default function Switchboards() {
                 type="number"
                 value={deviceForm.icu_ka}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, icu_ka: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="36"
               />
             </div>
@@ -1265,7 +1505,7 @@ export default function Switchboards() {
               <select
                 value={deviceForm.poles}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, poles: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={selectBaseClass}
               >
                 <option value={1}>1P</option>
                 <option value={2}>2P</option>
@@ -1279,7 +1519,7 @@ export default function Switchboards() {
                 type="number"
                 value={deviceForm.voltage_v}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, voltage_v: e.target.value }))}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={inputBaseClass}
                 placeholder="400"
               />
             </div>
@@ -1292,7 +1532,7 @@ export default function Switchboards() {
               type="text"
               value={deviceForm.trip_unit}
               onChange={(e) => setDeviceForm(prev => ({ ...prev, trip_unit: e.target.value }))}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className={inputBaseClass}
               placeholder="ex: Micrologic 5.2 E"
             />
           </div>
@@ -1343,7 +1583,7 @@ export default function Switchboards() {
                   step="0.1"
                   value={deviceForm.settings.ir}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, ir: e.target.value }}))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className={inputSmallClass}
                 />
               </div>
               <div>
@@ -1353,7 +1593,7 @@ export default function Switchboards() {
                   step="0.1"
                   value={deviceForm.settings.tr}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, tr: e.target.value }}))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className={inputSmallClass}
                 />
               </div>
               <div>
@@ -1363,7 +1603,7 @@ export default function Switchboards() {
                   step="0.1"
                   value={deviceForm.settings.isd}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, isd: e.target.value }}))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className={inputSmallClass}
                 />
               </div>
               <div>
@@ -1373,7 +1613,7 @@ export default function Switchboards() {
                   step="0.1"
                   value={deviceForm.settings.ii}
                   onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, ii: e.target.value }}))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className={inputSmallClass}
                 />
               </div>
             </div>
@@ -1408,8 +1648,15 @@ export default function Switchboards() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes slideRight {
+          from { opacity: 0; transform: translateX(-100%); }
+          to { opacity: 1; transform: translateX(0); }
+        }
         .animate-slideUp {
           animation: slideUp 0.3s ease-out forwards;
+        }
+        .animate-slideRight {
+          animation: slideRight 0.3s ease-out forwards;
         }
       `}</style>
 
@@ -1418,6 +1665,15 @@ export default function Switchboards() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
+              {/* Mobile menu button */}
+              {isMobile && (
+                <button
+                  onClick={() => setShowMobileDrawer(true)}
+                  className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                >
+                  <Menu size={24} />
+                </button>
+              )}
               <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white">
                 <Zap size={24} />
               </div>
@@ -1430,14 +1686,14 @@ export default function Switchboards() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowImportModal(true)}
-                className="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 transition-colors flex items-center gap-2"
+                className="px-3 md:px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 transition-colors flex items-center gap-2"
               >
                 <FileSpreadsheet size={18} />
                 <span className="hidden sm:inline">Import Excel</span>
               </button>
               <button
                 onClick={() => setShowBoardForm(true)}
-                className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 transition-all flex items-center gap-2"
+                className="px-3 md:px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 transition-all flex items-center gap-2"
               >
                 <Plus size={18} />
                 <span className="hidden sm:inline">Tableau</span>
@@ -1453,7 +1709,7 @@ export default function Switchboards() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Rechercher un tableau..."
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400"
             />
           </div>
         </div>
@@ -1477,11 +1733,11 @@ export default function Switchboards() {
             {/* Board Header */}
             <AnimatedCard>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
-                <div className="flex">
+                <div className="flex flex-col sm:flex-row">
                   {/* Photo Section */}
                   <div 
                     onClick={() => boardPhotoRef.current?.click()}
-                    className="w-32 h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
+                    className="w-full sm:w-32 h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
                   >
                     <input
                       ref={boardPhotoRef}
@@ -1519,7 +1775,7 @@ export default function Switchboards() {
                           <span className="text-sm text-gray-500 font-mono">{selectedBoard.code}</span>
                         </div>
                         <h2 className="text-xl font-bold text-gray-900 mt-1">{selectedBoard.name}</h2>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
+                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 flex-wrap">
                           <span className="flex items-center gap-1">
                             <Building2 size={14} />
                             Bât. {selectedBoard.meta?.building_code || '-'}
@@ -1537,7 +1793,32 @@ export default function Switchboards() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {/* Share Link */}
+                        <button
+                          onClick={() => setShowShareModal(true)}
+                          className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
+                          title="Partager le lien"
+                        >
+                          <Link size={18} />
+                        </button>
+                        {/* Print PDF */}
+                        <button
+                          onClick={handlePrintPDF}
+                          disabled={isPrinting}
+                          className="p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors disabled:opacity-50"
+                          title="Imprimer le listing PDF"
+                        >
+                          {isPrinting ? <RefreshCw size={18} className="animate-spin" /> : <Printer size={18} />}
+                        </button>
+                        {/* Single Line Diagram */}
+                        <button
+                          onClick={() => navigate(`/switchboards/${selectedBoard.id}/diagram`)}
+                          className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl transition-colors"
+                          title="Schéma unifilaire"
+                        >
+                          <GitBranch size={18} />
+                        </button>
                         <button
                           onClick={() => startEditBoard(selectedBoard)}
                           className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
@@ -1631,6 +1912,21 @@ export default function Switchboards() {
         )}
       </div>
 
+      {/* Mobile Tree Drawer */}
+      <MobileTreeDrawer
+        isOpen={showMobileDrawer}
+        onClose={() => setShowMobileDrawer(false)}
+        tree={tree}
+        expandedBuildings={expandedBuildings}
+        setExpandedBuildings={setExpandedBuildings}
+        expandedFloors={expandedFloors}
+        setExpandedFloors={setExpandedFloors}
+        selectedBoard={selectedBoard}
+        onSelectBoard={setSelectedBoard}
+        deviceCounts={deviceCounts}
+        getProgress={getProgress}
+      />
+
       {/* Modals */}
       <ImportExcelModal
         isOpen={showImportModal}
@@ -1646,6 +1942,12 @@ export default function Switchboards() {
         itemName={deleteTarget?.name}
         itemType="tableau"
         isLoading={isDeleting}
+      />
+
+      <ShareLinkModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        board={selectedBoard}
       />
 
       <AIPhotoWizard
