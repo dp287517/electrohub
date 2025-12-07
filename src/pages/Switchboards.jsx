@@ -86,7 +86,6 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
       });
       setHasLogo(data.has_logo);
       if (data.has_logo) {
-        // Force refresh logic could be added here
         setLogoPreview(api.switchboard.logoUrl({ bust: true }));
       } else {
         setLogoPreview(null);
@@ -114,7 +113,6 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
     const file = e.target.files[0];
     if (!file) return;
     
-    // Local preview immediately
     const reader = new FileReader();
     reader.onload = (ev) => setLogoPreview(ev.target.result);
     reader.readAsDataURL(file);
@@ -944,7 +942,7 @@ export default function Switchboards() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false); // <--- NEW STATE
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showAIWizard, setShowAIWizard] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -965,32 +963,36 @@ export default function Switchboards() {
     loadBoards();
   }, []);
 
-  // Handle URL params for deep linking
+  // Handle URL params for deep linking (CORRECTED)
   useEffect(() => {
     const boardId = searchParams.get('board');
-    if (boardId && boards.length > 0 && (!selectedBoard || selectedBoard.id !== Number(boardId))) {
-      // Use api to get full board details (including upstream sources)
-      api.switchboard.getBoard(boardId).then(board => {
-        if (board) {
-          setSelectedBoard(board);
-          // Expand tree to show this board
-          const building = board.meta?.building_code || 'Sans bâtiment';
-          const floor = board.meta?.floor || 'Sans étage';
-          setExpandedBuildings(prev => ({ ...prev, [building]: true }));
-          setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
-        }
-      }).catch(console.error);
-    }
-  }, [boards, searchParams]); // Remove selectedBoard from dep to avoid loop
-
-  // Update URL when selecting a board
-  useEffect(() => {
-    if (selectedBoard) {
-      setSearchParams({ board: selectedBoard.id.toString() });
+    if (boardId) {
+      // If we have an ID in URL but not loaded in state, or different ID
+      if (!selectedBoard || selectedBoard.id !== Number(boardId)) {
+        api.switchboard.getBoard(boardId)
+          .then(board => {
+            if (board) {
+              setSelectedBoard(board);
+              // Expand tree to show this board
+              const building = board.meta?.building_code || 'Sans bâtiment';
+              const floor = board.meta?.floor || 'Sans étage';
+              setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+              setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
+            }
+          })
+          .catch(console.error);
+      }
     } else {
-      setSearchParams({});
+      // URL has no board ID -> Clear selection
+      if (selectedBoard) {
+        setSelectedBoard(null);
+      }
     }
-  }, [selectedBoard]);
+  }, [searchParams]); // Dependent only on URL changes
+
+  // Update URL when selecting a board (REMOVED: Now handled by handlers)
+  // We removed the useEffect that automatically syncs selectedBoard -> URL 
+  // to avoid the race condition on load.
 
   useEffect(() => {
     if (selectedBoard) {
@@ -1046,6 +1048,27 @@ export default function Switchboards() {
     }
   };
 
+  // Select board handler wrapper to fetch full details AND update URL
+  const handleSelectBoard = async (board) => {
+    // 1. Update URL (Source of Truth)
+    setSearchParams({ board: board.id.toString() });
+    
+    // 2. Fetch data
+    try {
+      const fullBoard = await api.switchboard.getBoard(board.id);
+      setSelectedBoard(fullBoard);
+    } catch (err) {
+      console.error('Failed to fetch full board details', err);
+      setSelectedBoard(board); // Fallback
+    }
+  };
+
+  // Close board handler
+  const handleCloseBoard = () => {
+    setSelectedBoard(null);
+    setSearchParams({}); // Clear URL param
+  };
+
   // Board handlers
   const handleSaveBoard = async () => {
     try {
@@ -1082,7 +1105,7 @@ export default function Switchboards() {
     try {
       await api.switchboard.deleteBoard(deleteTarget.id);
       if (selectedBoard?.id === deleteTarget.id) {
-        setSelectedBoard(null);
+        handleCloseBoard();
         setDevices([]);
       }
       await loadBoards();
@@ -1187,8 +1210,10 @@ export default function Switchboards() {
       if (result.success) {
         await loadBoards();
         // Select the imported board with full details
-        const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
-        setSelectedBoard(boardDetail);
+        if (result.switchboard?.id) {
+           const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
+           handleSelectBoard(boardDetail); // Use handleSelectBoard to set URL
+        }
         
         setShowImportModal(false);
         alert(`Import réussi!\n${result.devices_created} disjoncteurs créés pour "${result.switchboard.name}"`);
@@ -1304,17 +1329,6 @@ export default function Switchboards() {
     const counts = deviceCounts[boardId];
     if (!counts || counts.total === 0) return 0;
     return Math.round((counts.complete / counts.total) * 100);
-  };
-
-  // Select board handler wrapper to fetch full details
-  const handleSelectBoard = async (board) => {
-    try {
-      const fullBoard = await api.switchboard.getBoard(board.id);
-      setSelectedBoard(fullBoard);
-    } catch (err) {
-      console.error('Failed to fetch full board details', err);
-      setSelectedBoard(board); // Fallback
-    }
   };
 
   // ==================== RENDER ====================
@@ -1464,7 +1478,10 @@ export default function Switchboards() {
               {device.downstream_switchboard_id && (
                 <div className="absolute top-0 right-0 p-2">
                    <span 
-                    onClick={(e) => { e.stopPropagation(); navigate(`?board=${device.downstream_switchboard_id}`); }}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      handleSelectBoard({ id: device.downstream_switchboard_id }); 
+                    }}
                     className="cursor-pointer px-2 py-1 bg-green-100 text-green-700 text-xs rounded-bl-xl rounded-tr-xl font-medium flex items-center gap-1 hover:bg-green-200 transition-colors"
                     title={`Alimente le tableau ${device.downstream_switchboard_name}`}
                    >
@@ -2168,7 +2185,7 @@ export default function Switchboards() {
                         </button>
                         {isMobile && (
                           <button
-                            onClick={() => setSelectedBoard(null)}
+                            onClick={handleCloseBoard}
                             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
                           >
                             <X size={18} />
