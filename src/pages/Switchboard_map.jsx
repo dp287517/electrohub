@@ -1,10 +1,12 @@
+// src/pages/Switchboard_map.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api"; // adapte le chemin si besoin
-import { Document, Page, pdfjs } from "react-pdf";
-import "react-pdf/dist/esm/Page/AnnotationLayer.css";
+import { api } from "../lib/api"; // garde ton chemin actuel
 
-// IMPORTANT: configure worker pour react-pdf
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+import * as pdfjsLib from "pdfjs-dist";
+import "pdfjs-dist/web/pdf_viewer.css";
+
+// Worker PDFJS (CDN, simple et fiable sur Render/Vite)
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export default function Switchboard_map() {
   const [plans, setPlans] = useState([]);
@@ -25,7 +27,10 @@ export default function Switchboard_map() {
   const [focusSwitchboard, setFocusSwitchboard] = useState(null);
 
   const pageWrapRef = useRef(null);
+  const canvasRef = useRef(null);
+
   const [pageSize, setPageSize] = useState({ w: 1, h: 1 });
+  const [isRenderingPdf, setIsRenderingPdf] = useState(false);
 
   // -------- load plans --------
   useEffect(() => {
@@ -33,11 +38,11 @@ export default function Switchboard_map() {
       setLoadingPlans(true);
       try {
         const r = await api.switchboardMaps.listPlans();
-        const arr = r?.plans || [];
+        const arr = r?.plans || r || [];
         setPlans(arr);
         if (arr[0]) setSelectedPlan(arr[0]);
       } catch (e) {
-        console.error(e);
+        console.error("Load plans error:", e);
       } finally {
         setLoadingPlans(false);
       }
@@ -48,10 +53,11 @@ export default function Switchboard_map() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await api.switchboards.list(); // à vérifier chez toi
-        setSwitchboards(r?.switchboards || r?.items || []);
+        // garde ta logique : list() -> {switchboards/items}
+        const r = await api.switchboards.list();
+        setSwitchboards(r?.switchboards || r?.items || r?.data || []);
       } catch (e) {
-        console.error(e);
+        console.error("Load switchboards error:", e);
       }
     })();
   }, []);
@@ -66,9 +72,9 @@ export default function Switchboard_map() {
           selectedPlan,
           pageIndex
         );
-        setPositions(r?.positions || []);
+        setPositions(r?.positions || r || []);
       } catch (e) {
-        console.error(e);
+        console.error("Load positions error:", e);
       } finally {
         setLoadingPositions(false);
       }
@@ -80,6 +86,69 @@ export default function Switchboard_map() {
     return api.switchboardMaps.planFileUrlAuto(selectedPlan, { bust: true });
   }, [selectedPlan]);
 
+  // -------- PDF render (pdfjs-dist) --------
+  async function renderPdfPage(url, pageNumber) {
+    if (!url || !canvasRef.current) return;
+
+    setIsRenderingPdf(true);
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        url,
+        withCredentials: true,
+      });
+      const pdf = await loadingTask.promise;
+
+      const total = pdf.numPages || 1;
+      setNumPages(total);
+
+      const safePageNumber = Math.min(
+        Math.max(1, pageNumber),
+        total
+      );
+
+      const page = await pdf.getPage(safePageNumber);
+
+      // On scale proprement selon container
+      const wrap = pageWrapRef.current;
+      const wrapWidth = wrap?.clientWidth || 1000;
+      const baseViewport = page.getViewport({ scale: 1 });
+
+      const scale = wrapWidth / baseViewport.width;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+
+      // DPR pour netteté
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = viewport.width * dpr;
+      canvas.height = viewport.height * dpr;
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      setPageSize({ w: viewport.width, h: viewport.height });
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+      }).promise;
+
+      await loadingTask.destroy();
+    } catch (e) {
+      console.error("PDF render error:", e);
+    } finally {
+      setIsRenderingPdf(false);
+    }
+  }
+
+  // Re-render PDF when plan or page changes
+  useEffect(() => {
+    if (!planUrl) return;
+    renderPdfPage(planUrl, pageIndex + 1);
+    // eslint-disable-next-line
+  }, [planUrl, pageIndex]);
+
   // -------- click on a point --------
   async function onPointClick(p) {
     setFocusPoint(p);
@@ -87,7 +156,7 @@ export default function Switchboard_map() {
       const r = await api.switchboards.get(p.switchboard_id);
       setFocusSwitchboard(r?.switchboard || r);
     } catch (e) {
-      console.error(e);
+      console.error("Load switchboard detail error:", e);
       setFocusSwitchboard(null);
     }
   }
@@ -120,24 +189,13 @@ export default function Switchboard_map() {
         selectedPlan,
         pageIndex
       );
-      setPositions(r?.positions || []);
+      setPositions(r?.positions || r || []);
+
       setPlacementMode(false);
     } catch (e2) {
-      console.error(e2);
+      console.error("Placement error:", e2);
       alert("Erreur placement: " + e2.message);
     }
-  }
-
-  function onDocLoadSuccess({ numPages }) {
-    setNumPages(numPages || 1);
-    if (pageIndex > (numPages || 1) - 1) setPageIndex(0);
-  }
-
-  function onPageRenderSuccess(page) {
-    try {
-      const viewport = page.getViewport({ scale: 1 });
-      setPageSize({ w: viewport.width, h: viewport.height });
-    } catch {}
   }
 
   return (
@@ -233,26 +291,36 @@ export default function Switchboard_map() {
           overflow: "auto",
           display: "inline-block",
           background: "#f8f8f8",
+          maxWidth: "100%",
         }}
       >
         {!planUrl && <div style={{ padding: 20 }}>Aucun plan</div>}
 
         {planUrl && (
-          <Document file={planUrl} onLoadSuccess={onDocLoadSuccess}>
-            <Page
-              pageNumber={pageIndex + 1}
-              onRenderSuccess={onPageRenderSuccess}
-              renderTextLayer={false}
-              renderAnnotationLayer={false}
-            />
-          </Document>
+          <canvas ref={canvasRef} />
+        )}
+
+        {isRenderingPdf && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(255,255,255,0.6)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+            }}
+          >
+            Chargement PDF...
+          </div>
         )}
 
         {/* Points overlay */}
         {planUrl &&
           positions.map((p) => {
-            const left = p.x_frac * pageSize.w;
-            const top = p.y_frac * pageSize.h;
+            const left = (p.x_frac ?? p.x) * pageSize.w;
+            const top = (p.y_frac ?? p.y) * pageSize.h;
 
             const isFocused =
               focusPoint?.switchboard_id === p.switchboard_id;
@@ -296,10 +364,13 @@ export default function Switchboard_map() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <h3 style={{ margin: 0 }}>
-              Détail switchboard
-            </h3>
-            <button onClick={() => { setFocusPoint(null); setFocusSwitchboard(null); }}>
+            <h3 style={{ margin: 0 }}>Détail switchboard</h3>
+            <button
+              onClick={() => {
+                setFocusPoint(null);
+                setFocusSwitchboard(null);
+              }}
+            >
               Fermer
             </button>
           </div>
@@ -321,7 +392,7 @@ export default function Switchboard_map() {
               <div style={{ marginTop: 8 }}>
                 <button
                   onClick={() =>
-                    (window.location.href = `/switchboards/${focusSwitchboard.id}`)
+                    (window.location.href = `/app/switchboards/${focusSwitchboard.id}`)
                   }
                 >
                   Ouvrir fiche Switchboard
