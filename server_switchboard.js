@@ -1516,7 +1516,7 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// ==================== EXCEL IMPORT ====================
+// ==================== EXCEL IMPORT (CORRIGÉ - Filtre les métadonnées de fin) ====================
 
 app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res) => {
   try {
@@ -1572,21 +1572,120 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     let devicesCreated = 0;
     const startRow = 12;
 
+    // ====== LISTE DES MOTS-CLÉS À EXCLURE (métadonnées de fin) ======
+    const EXCLUDED_KEYWORDS = [
+      'modifié', 'modified', 'date', 'nom', 'name', 'prénom', 'prenom', 'first name',
+      'société', 'societe', 'company', 'visa', 'maintenance', 'préventive', 'preventive',
+      'copie', 'transmise', 'responsable', 'signature', 'approved', 'checked',
+      'revision', 'révision', 'version', 'drawn', 'dessiné', 'vérifié', 'verified'
+    ];
+
+    // ====== FONCTION DE VALIDATION D'UNE POSITION ======
+    // Une position valide est: un nombre (1, 2, 10) ou un format comme "9.1", "2.3", "15a", "A1"
+    const isValidPosition = (pos) => {
+      if (!pos) return false;
+      const str = String(pos).trim();
+      if (!str) return false;
+      
+      // Check if it's a number (integer or decimal like 9.1)
+      if (/^\d+(\.\d+)?$/.test(str)) return true;
+      
+      // Check alphanumeric positions like "15a", "A1", "2a", etc.
+      if (/^[A-Za-z]?\d+[A-Za-z]?$/.test(str)) return true;
+      
+      return false;
+    };
+
+    // ====== FONCTION DE DÉTECTION DE MÉTADONNÉES ======
+    const isMetadataRow = (row) => {
+      // Get all cell values as lowercase strings
+      const cellValues = [];
+      for (let col = 1; col <= 7; col++) {
+        const val = row.getCell(col).value;
+        if (val) cellValues.push(String(val).toLowerCase().trim());
+      }
+      
+      // Check if any cell contains excluded keywords
+      for (const cellVal of cellValues) {
+        for (const keyword of EXCLUDED_KEYWORDS) {
+          if (cellVal.includes(keyword)) {
+            return true;
+          }
+        }
+      }
+      
+      // Check if it looks like a date (common patterns)
+      for (const cellVal of cellValues) {
+        // JS Date object converted to string
+        if (cellVal.includes('mon ') || cellVal.includes('tue ') || cellVal.includes('wed ') ||
+            cellVal.includes('thu ') || cellVal.includes('fri ') || cellVal.includes('sat ') ||
+            cellVal.includes('sun ') || /^\d{4}-\d{2}-\d{2}/.test(cellVal) ||
+            /^\d{2}\/\d{2}\/\d{4}/.test(cellVal) || /^\d{2}\.\d{2}\.\d{4}/.test(cellVal)) {
+          return true;
+        }
+      }
+      
+      return false;
+    };
+
+    // ====== COMPTEUR DE LIGNES VIDES CONSÉCUTIVES ======
+    let consecutiveEmptyRows = 0;
+    const MAX_EMPTY_ROWS = 3; // Stop after 3 consecutive empty rows
+
     for (let rowNum = startRow; rowNum <= sheet.rowCount; rowNum++) {
       const row = sheet.getRow(rowNum);
+      
+      // Get position (column 1)
       const positionCell = row.getCell(1).value;
       const position = positionCell ? String(positionCell).trim() : '';
       
-      if (!position || position.toLowerCase().includes('repère') || position.toLowerCase().includes('départ')) continue;
-
+      // Get designation (columns 2-5)
       let designation = '';
       for (let col = 2; col <= 5; col++) {
         const val = row.getCell(col).value;
         if (val) { designation = String(val).trim(); break; }
       }
 
-      if (!designation) continue;
+      // Skip header row
+      if (position.toLowerCase().includes('repère') || 
+          position.toLowerCase().includes('repere') || 
+          position.toLowerCase().includes('départ') ||
+          position.toLowerCase().includes('depart')) {
+        continue;
+      }
 
+      // Check for empty row
+      if (!position && !designation) {
+        consecutiveEmptyRows++;
+        if (consecutiveEmptyRows >= MAX_EMPTY_ROWS) {
+          console.log(`[EXCEL IMPORT] Stopping at row ${rowNum}: ${MAX_EMPTY_ROWS} consecutive empty rows`);
+          break;
+        }
+        continue;
+      }
+      
+      // Reset counter if we have content
+      consecutiveEmptyRows = 0;
+
+      // Skip metadata rows (dates, names, signatures, etc.)
+      if (isMetadataRow(row)) {
+        console.log(`[EXCEL IMPORT] Skipping metadata row ${rowNum}: "${position}" / "${designation}"`);
+        continue;
+      }
+
+      // Validate position format
+      if (!isValidPosition(position)) {
+        console.log(`[EXCEL IMPORT] Skipping invalid position at row ${rowNum}: "${position}"`);
+        continue;
+      }
+
+      // Skip if no designation
+      if (!designation) {
+        console.log(`[EXCEL IMPORT] Skipping row ${rowNum}: no designation`);
+        continue;
+      }
+
+      // Insert the device
       await pool.query(
         `INSERT INTO devices (site, switchboard_id, name, device_type, position_number, is_differential, is_complete)
          VALUES ($1, $2, $3, $4, $5, false, false)`,
@@ -1606,7 +1705,7 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
   }
 });
 
-// ==================== AI PHOTO ANALYSIS ====================
+// ==================== AI PHOTO ANALYSIS (PROMPT AMÉLIORÉ) ====================
 
 app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
   try {
@@ -1624,21 +1723,47 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       messages: [
         {
           role: 'system',
-          content: 'Output ONLY valid JSON.'
+          content: `Tu es un expert en identification de disjoncteurs et appareillage électrique.
+Tu dois identifier PRÉCISÉMENT le fabricant et la référence à partir de la photo.
+
+RÈGLES IMPORTANTES:
+1. Lis ATTENTIVEMENT tous les textes visibles sur l'appareil (étiquettes, marquages, logos)
+2. Le fabricant doit être identifié par son LOGO ou son NOM écrit sur l'appareil
+3. La référence est le CODE PRODUIT généralement imprimé sur la face avant
+4. Ne devine PAS - si tu ne vois pas clairement l'information, indique null
+
+FABRICANTS COURANTS (identifie par logo/nom):
+- Schneider Electric (logo "SE" ou "Life is On")
+- ABB (logo orange/rouge)
+- Hager (logo bleu/blanc, souvent sur fond bleu)
+- Legrand (logo, souvent vert/blanc)
+- Siemens (logo vert)
+- Eaton (logo rouge/noir)
+- General Electric / GE
+
+ATTENTION: Un disjoncteur Hager n'est PAS un Schneider. Regarde bien le logo!
+
+Réponds UNIQUEMENT en JSON avec ces champs:
+{
+  "manufacturer": "string ou null si non identifiable",
+  "reference": "string ou null si non lisible", 
+  "is_differential": true/false (présence symbole DDR, bouton test, indicateur 30mA/300mA)
+}`
         },
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: `Analyze electrical device. Extract: manufacturer, reference, is_differential (boolean). JSON only.`
+              text: `Identifie ce disjoncteur. Lis TOUS les textes visibles. Quel est le LOGO/NOM du fabricant? Quelle est la RÉFÉRENCE exacte?`
             },
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' } }
           ]
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 300
+      max_tokens: 500,
+      temperature: 0.1 // Low temperature for more precise answers
     });
 
     const result = JSON.parse(response.choices[0].message.content);
@@ -1664,9 +1789,37 @@ app.post('/api/switchboard/search-device', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: `Expert electrical specs extraction. Return JSON: manufacturer, reference, device_type, in_amps (number), icu_ka (number), ics_ka (number), poles (number), voltage_v (number), trip_unit, is_differential (boolean), settings (ir, tr, isd, tsd, ii, ig, tg, zsi, erms, curve_type).` 
+          content: `Tu es un expert en appareillage électrique. Extrait les spécifications techniques à partir du texte fourni.
+
+FABRICANTS CONNUS:
+- Schneider Electric: NSX, Compact NS, iC60, Acti9, Masterpact
+- ABB: Tmax, SACE, S200, F200
+- Hager: HN, HM, HYC, NCN, NRN, MCA, MCB, MBN, MBB, MBS, NDB, NKB, NKC, NKN
+- Legrand: DX3, DNX, DPX
+- Siemens: 3VA, 5SY, 5SL
+- Eaton: FAZ, PL, NZM, LZMN
+- General Electric: Enfinity, EP, Record Plus
+
+Retourne UNIQUEMENT du JSON valide avec ces champs:
+{
+  "manufacturer": "nom du fabricant",
+  "reference": "référence complète",
+  "device_type": "Low Voltage Circuit Breaker",
+  "in_amps": nombre ou null,
+  "icu_ka": nombre ou null,
+  "ics_ka": nombre ou null,
+  "poles": nombre (1,2,3,4) ou null,
+  "voltage_v": nombre ou null,
+  "trip_unit": "nom de l'unité de déclenchement ou null",
+  "is_differential": true/false,
+  "settings": {
+    "ir": nombre, "tr": nombre, "isd": nombre, "tsd": nombre,
+    "ii": nombre, "ig": nombre, "tg": nombre,
+    "zsi": boolean, "erms": boolean, "curve_type": "B/C/D"
+  }
+}` 
         },
-        { role: 'user', content: `Extract specs: ${query}` }
+        { role: 'user', content: `Extrait les spécifications: ${query}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
