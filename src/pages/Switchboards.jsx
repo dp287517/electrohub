@@ -990,10 +990,6 @@ export default function Switchboards() {
     }
   }, [searchParams]); // Dependent only on URL changes
 
-  // Update URL when selecting a board (REMOVED: Now handled by handlers)
-  // We removed the useEffect that automatically syncs selectedBoard -> URL 
-  // to avoid the race condition on load.
-
   useEffect(() => {
     if (selectedBoard) {
       loadDevices(selectedBoard.id);
@@ -1680,26 +1676,27 @@ export default function Switchboards() {
     </div>
   );
 
-  // Device Form Modal
+  // Device Form Modal - CORRECTED CSS FOR MOBILE
   const renderDeviceForm = () => (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slideUp">
-        <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 p-6 text-white rounded-t-2xl z-10">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold">{editingDeviceId ? 'Modifier le disjoncteur' : 'Nouveau disjoncteur'}</h2>
+        <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 p-4 sm:p-6 text-white rounded-t-2xl z-10">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="text-lg sm:text-xl font-bold">{editingDeviceId ? 'Modifier le disjoncteur' : 'Nouveau disjoncteur'}</h2>
             <button
               onClick={() => setShowAIWizard(true)}
-              className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors"
+              className="px-3 py-1.5 sm:px-4 sm:py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs sm:text-sm font-medium flex items-center gap-2 transition-colors"
             >
               <Sparkles size={16} />
-              Analyser une photo
+              <span className="hidden xs:inline">Analyser photo</span>
+              <span className="xs:hidden">IA</span>
             </button>
           </div>
         </div>
         
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4">
           {/* Basic Info */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Désignation</label>
               <input
@@ -1779,7 +1776,7 @@ export default function Switchboards() {
           </div>
 
           {/* Manufacturer & Reference */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Fabricant</label>
               <input
@@ -1802,8 +1799,8 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Electrical Specs */}
-          <div className="grid grid-cols-4 gap-3">
+          {/* Electrical Specs - CORRECTED: 2 columns on mobile, 4 on desktop */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Calibre (A)</label>
               <input
@@ -1861,16 +1858,16 @@ export default function Switchboards() {
             />
           </div>
 
-          {/* Checkboxes */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Checkboxes - CORRECTED: Stack on mobile */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="flex items-center gap-3 p-3 bg-purple-50 rounded-xl cursor-pointer">
               <input
                 type="checkbox"
                 checked={deviceForm.is_differential}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, is_differential: e.target.checked }))}
-                className="w-5 h-5 rounded text-purple-500 focus:ring-purple-500"
+                className="w-5 h-5 rounded text-purple-500 focus:ring-purple-500 flex-shrink-0"
               />
-              <div>
+              <div className="min-w-0">
                 <span className="font-medium text-purple-700 flex items-center gap-1">
                   <ShieldCheck size={16} />
                   Différentiel (DDR)
@@ -1884,9 +1881,9 @@ export default function Switchboards() {
                 type="checkbox"
                 checked={deviceForm.is_main_incoming}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, is_main_incoming: e.target.checked }))}
-                className="w-5 h-5 rounded text-amber-500 focus:ring-amber-500"
+                className="w-5 h-5 rounded text-amber-500 focus:ring-amber-500 flex-shrink-0"
               />
-              <div>
+              <div className="min-w-0">
                 <span className="font-medium text-amber-700">Disjoncteur d'arrivée</span>
                 <p className="text-xs text-amber-600">Protège l'ensemble du tableau</p>
               </div>
@@ -1899,7 +1896,7 @@ export default function Switchboards() {
               <Settings size={16} />
               Réglages LSIG (optionnel)
             </summary>
-            <div className="grid grid-cols-4 gap-3 mt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Ir (×In)</label>
                 <input
