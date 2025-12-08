@@ -1072,10 +1072,12 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     // GET UPSTREAM: Find devices in OTHER boards that point to THIS board
     const upstream = await pool.query(
       `SELECT d.id, d.name, d.position_number, d.in_amps, 
-              s.id as source_board_id, s.name as source_board_name, s.code as source_board_code
-       FROM devices d
-       JOIN switchboards s ON d.switchboard_id = s.id
-       WHERE d.downstream_switchboard_id = $1`, [id]
+              s.id as source_switchboard_id,
+              s.name as source_board_name, 
+              s.code as source_board_code
+      FROM devices d
+      JOIN switchboards s ON d.switchboard_id = s.id
+      WHERE d.downstream_switchboard_id = $1`, [id]
     );
 
     res.json({
