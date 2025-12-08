@@ -1,4 +1,4 @@
-/** src/lib/api.js */
+/** src/lib/api.js - API complète ElectroHub */
 
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -199,7 +199,6 @@ export async function del(path) {
 }
 
 export async function upload(path, formData /* FormData */) {
-  // ne pas fixer Content-Type sur FormData
   const site = currentSite();
   const url = `${API_BASE}${path}`;
   const headers = identityHeaders(new Headers({ "X-Site": site }));
@@ -223,14 +222,14 @@ export const api = {
   get baseURL() { return API_BASE; },
   get site() { return currentSite(); },
 
-  /** --- AUTH / PROFILE (si utilisés) --- */
+  /** --- AUTH / PROFILE --- */
   auth: {
     me: () => get("/api/auth/me"),
     login: (payload) => post("/api/auth/login", payload),
     logout: () => post("/api/auth/logout", {}),
   },
 
-  /** --- OIBT (existant) --- */
+  /** --- OIBT --- */
   oibt: {
     listProjects: (params) => get("/api/oibt/projects", params),
     getProject: (id) => get(`/api/oibt/projects/${id}`),
@@ -256,8 +255,6 @@ export const api = {
       ),
 
     listUpcoming: (params) => get("/api/oibt/periodics/upcoming", params),
-
-    // Vue par bâtiment : années + avancement + prochaine échéance
     listBuildings: (params) => get("/api/oibt/periodics/buildings", params),
   },
 
@@ -289,46 +286,28 @@ export const api = {
 
   /** --- CONTROLS --- */
   controls: {
-    // ========================= TÂCHES & HIÉRARCHIE =========================
-
-    // Arborescence (bâtiments / HV / TGBT / devices)
     hierarchyTree: (params) =>
       get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-
-    // Alias rétro-compat
     tree: (params) =>
       get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-
-    // Schéma TSD pour une tâche
     taskSchema: (id) =>
       get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
-
     taskHistory(id) {
       return get(`/api/controls/tasks/${encodeURIComponent(id)}/history`);
     },
-
-    // Alias rétro-compat
     taskDetails: (id) =>
       get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
-
-    // Clôture d'une tâche + replanification
     closeTask: (id, payload = {}) =>
       jsonFetch(`/api/controls/tasks/${encodeURIComponent(id)}/close`, {
         method: "PATCH",
         body: JSON.stringify(payload || {}),
       }),
-
-    // Alias rétro-compat
     completeTask: (id, payload = {}) =>
       jsonFetch(`/api/controls/tasks/${encodeURIComponent(id)}/close`, {
         method: "PATCH",
         body: JSON.stringify(payload || {}),
       }),
-
-    // Bootstrap auto-link des tâches TSD
     autoLink: () => get("/api/controls/bootstrap/auto-link"),
-
-    // Équipements manquants par rapport à la librairie TSD
     getMissingEquipment: () => get("/api/controls/missing-equipment"),
 
     uploadTaskFiles({ taskId, entityId, entityType, files }) {
@@ -337,7 +316,6 @@ export const api = {
       if (entityId) fd.append("entity_id", entityId);
       if (entityType) fd.append("entity_type", entityType);
       (files || []).forEach((f) => fd.append("files", f));
-
       return upload("/api/controls/files/upload", fd);
     },
 
@@ -348,23 +326,14 @@ export const api = {
       return get(`/api/controls/files?${params.toString()}`);
     },
 
-    // ============================ PLANS PDF ================================
-
-    // Upload ZIP de plans (PDF)
     uploadZip: (file) => {
       const fd = new FormData();
       fd.append("zip", file);
       return upload("/api/controls/maps/uploadZip", fd);
     },
-
-    // Liste des plans
     listPlans: () => get("/api/controls/maps/listPlans"),
-
-    // Renommage d'un plan
     renamePlan: (logical_name, display_name) =>
       put("/api/controls/maps/renamePlan", { logical_name, display_name }),
-
-    // URL PDF des plans Controls (backend controls_plans)
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
@@ -372,40 +341,29 @@ export const api = {
         )}`,
         bust
       ),
-
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`,
         bust
       ),
-
-    // Helper auto (string | plan, détecte UUID ou id numérique)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       const key =
         typeof plan === "string"
           ? plan
           : plan?.id || plan?.logical_name || "";
       const useId = isUuid(key) || isNumericId(key);
-
       const url = useId
-        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
-            key
-          )}`
+        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
         : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
             typeof plan === "string" ? plan : plan?.logical_name || ""
           )}`;
-
       return withBust(url, bust);
     },
 
-    // ======================= POSITIONS SUR PLANS ==========================
-
     positions: (logical_name, page_index = 0) =>
       get("/api/controls/maps/positions", { logical_name, page_index }),
-
     positionsById: (id, page_index = 0) =>
       get("/api/controls/maps/positions", { id, page_index }),
-
     positionsAuto: (planOrKey, page_index = 0) => {
       const key =
         typeof planOrKey === "string"
@@ -419,16 +377,9 @@ export const api = {
         page_index,
       });
     },
-
-    // Création / mise à jour position (appelée par ControlsMap)
     setPosition: (payload) =>
       post("/api/controls/maps/setPosition", payload),
 
-    // ============================ IA CONTROLS ==============================
-
-    // Analyse automatique d'une tâche (résumé, risques, priorités...).
-    // - nouvel usage : api.controls.analyze({ taskId, ...extra })
-    // - rétro-compat : api.controls.analyze(taskId)
     analyze: (arg) => {
       if (!arg) {
         throw new Error("controls.analyze nécessite un taskId");
@@ -448,9 +399,6 @@ export const api = {
       );
     },
 
-    // Assistant IA sur une tâche :
-    // - nouvel usage : api.controls.assistant({ taskId, question, ...extra })
-    // - rétro-compat : api.controls.assistant(taskId, question)
     assistant: (arg1, arg2) => {
       if (typeof arg1 === "object") {
         const { taskId, question, ...extra } = arg1 || {};
@@ -469,27 +417,17 @@ export const api = {
       );
     },
 
-    // Analyse multi-photos d'équipements (IA Controls, même principe ATEX)
     extractFromPhotos: (files = []) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
       return upload(`/api/controls/ai/analyzePhotoBatch`, fd);
     },
-
-    // Alias rétro-compat si besoin
     analyzePhotoBatch: (files = []) =>
       api.controls.extractFromPhotos(files),
 
-    // ========================= FONCTIONS LEGACY ============================
-
-    // Catalogue TSD (exposé côté backend)
     catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
-
-    // Sync legacy : alias sur auto-link
     sync: ({ create = 1, seed = 1 } = {}) =>
       get("/api/controls/bootstrap/auto-link", { create, seed }),
-
-    // Upload de pièces jointes sur tâche (si route présente côté serveur)
     uploadAttachments: (taskId, files, label) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("file", f));
@@ -499,8 +437,6 @@ export const api = {
         fd
       );
     },
-
-    // Historique / enregistrements / health (si implémentés côté backend)
     history: (params) => get("/api/controls/history", params),
     records: (params) => get("/api/controls/records", params),
     health: () => get("/api/controls/health"),
@@ -808,13 +744,8 @@ export const api = {
       ),
   },
 
-  /* ======================================================================
-     ========================= ATEX (corrigé) ============================
-     ====================================================================== */
-
-  /** --- ATEX (équipements, fichiers, contrôles, IA) --- */
+  /** --- ATEX --- */
   atex: {
-    // Equipements
     listEquipments: (params) => get(`/api/atex/equipments`, params),
     getEquipment: (id) =>
       get(`/api/atex/equipments/${encodeURIComponent(id)}`),
@@ -825,7 +756,6 @@ export const api = {
     removeEquipment: (id) =>
       del(`/api/atex/equipments/${encodeURIComponent(id)}`),
 
-    // Photo principale
     photoUrl: (equipmentId, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/atex/equipments/${encodeURIComponent(
@@ -848,7 +778,6 @@ export const api = {
       );
     },
 
-    // Pièces jointes
     listFiles: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`),
 
@@ -866,7 +795,6 @@ export const api = {
       );
     },
 
-    // alias compat front
     uploadAttachments: (equipmentId, files = [], label) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -887,7 +815,6 @@ export const api = {
     deleteFile: (fileId) =>
       del(`/api/atex/files/${encodeURIComponent(fileId)}`),
 
-    // Contrôles
     startCheck: (equipmentId) =>
       post(
         `/api/atex/equipments/${encodeURIComponent(
@@ -929,19 +856,16 @@ export const api = {
     listHistory: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/history`),
 
-    // ✅ Quick check (valider un contrôle aujourd'hui sans formulaire)
     quickCheckEquipment: (id) =>
       post(
         `/api/atex/equipments/${encodeURIComponent(id)}/quickCheck`,
         {}
       ),
 
-    // Calendrier & paramètres
     calendar: () => get(`/api/atex/calendar`),
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 
-    // IA extraction (multi-photos) & conformité
     extractFromPhotos: (files = []) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -961,7 +885,6 @@ export const api = {
         target_dust,
       }),
 
-    // ✅ Appliquer la décision IA sur la fiche
     applyCompliance: (
       equipmentId,
       { decision = null, rationale = "", source = null } = {}
@@ -973,12 +896,10 @@ export const api = {
         { decision, rationale, source }
       ),
 
-    // ✅ Alias rétro-compat
     analyzePhotoBatch: (files = []) =>
       api.atex.extractFromPhotos(files),
     aiAnalyze: (payload) => api.atex.assessConformity(payload),
 
-    // (Optionnel) Audit trail en bas de fiche
     getEquipmentHistory: (id) =>
       get(`/api/atex/equipments/${encodeURIComponent(id)}/history`),
 
@@ -986,7 +907,7 @@ export const api = {
       post("/api/atex/bulk/rename", { field, from, to }),
   },
 
-  /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
+  /** --- ATEX MAPS --- */
   atexMaps: {
     uploadZip: (file) => {
       const { email, name } = getIdentity();
@@ -1054,7 +975,6 @@ export const api = {
         y_frac,
       }),
 
-    // Sous-zones (subareas)
     listSubareas: (planKey, page_index = 0) => {
       const key =
         typeof planKey === "string"
@@ -1187,9 +1107,8 @@ export const api = {
       post("/api/atex/bulk/rename", { field, from, to }),
   },
 
-  /** --- VSD (Variateurs de Fréquence) --- */
+  /** --- VSD --- */
   vsd: {
-    // Équipements
     listEquipments: (params) => get("/api/vsd/equipments", params),
     getEquipment: (id) => get(`/api/vsd/equipments/${encodeURIComponent(id)}`),
     createEquipment: (payload) => post("/api/vsd/equipments", payload),
@@ -1198,7 +1117,6 @@ export const api = {
     deleteEquipment: (id) =>
       del(`/api/vsd/equipments/${encodeURIComponent(id)}`),
 
-    // Photo principale
     photoUrl: (id, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/vsd/equipments/${encodeURIComponent(id)}/photo`,
@@ -1210,7 +1128,6 @@ export const api = {
       return upload(`/api/vsd/equipments/${encodeURIComponent(id)}/photo`, fd);
     },
 
-    // Contrôles
     listChecks: (equipmentId) =>
       get("/api/vsd/checks", { equipment_id: equipmentId }),
     createCheck: (payload) => post("/api/vsd/checks", payload),
@@ -1222,7 +1139,6 @@ export const api = {
         result: "conforme",
       }),
 
-    // Fichiers attachés
     listFiles: (equipmentId) =>
       get("/api/vsd/files", { equipment_id: equipmentId }),
     uploadFiles: (equipmentId, files = []) => {
@@ -1233,12 +1149,10 @@ export const api = {
     },
     deleteFile: (id) => del(`/api/vsd/files/${encodeURIComponent(id)}`),
 
-    // Calendrier & paramètres
     calendar: () => get(`/api/vsd/calendar`),
     settingsGet: () => get(`/api/vsd/settings`),
     settingsSet: (payload) => put(`/api/vsd/settings`, payload),
 
-    // IA extraction (multi-photos)
     extractFromPhotos: (files = []) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -1247,7 +1161,6 @@ export const api = {
 
     analyzePhotoBatch: (files = []) => api.vsd.extractFromPhotos(files),
 
-    // Historique (optionnel)
     getEquipmentHistory: (id) =>
       get(`/api/vsd/equipments/${encodeURIComponent(id)}/history`),
 
@@ -1255,7 +1168,7 @@ export const api = {
       post("/api/vsd/bulk/rename", { field, from, to }),
   },
 
-  /** --- VSD MAPS (Plans PDF + positions) --- */
+  /** --- VSD MAPS --- */
   vsdMaps: {
     uploadZip: (file) => {
       const { email, name } = getIdentity();
@@ -1322,9 +1235,8 @@ export const api = {
       }),
   },
 
-  /** --- MECA (Équipements électromécaniques) --- */
+  /** --- MECA --- */
   meca: {
-    // LISTE / GET / CREATE / UPDATE / DELETE
     listEquipments: (params) => get("/api/meca/equipments", params),
     getEquipment: (id) => get(`/api/meca/equipments/${encodeURIComponent(id)}`),
     createEquipment: (payload) => post("/api/meca/equipments", payload),
@@ -1333,7 +1245,6 @@ export const api = {
     deleteEquipment: (id) =>
       del(`/api/meca/equipments/${encodeURIComponent(id)}`),
 
-    // PHOTO PRINCIPALE
     photoUrl: (id, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`,
@@ -1346,7 +1257,6 @@ export const api = {
       return upload(`/api/meca/equipments/${encodeURIComponent(id)}/photo`, fd);
     },
 
-    // FICHIERS ATTACHÉS
     listFiles: (equipmentId) =>
       get("/api/meca/files", { equipment_id: equipmentId }),
 
@@ -1361,7 +1271,7 @@ export const api = {
       del(`/api/meca/files/${encodeURIComponent(fileId)}`),
   },
 
-  /** --- MECA MAPS (Plans PDF + positions) --- */
+  /** --- MECA MAPS --- */
   mecaMaps: {
     uploadZip: (file) => {
       const fd = new FormData();
@@ -1404,7 +1314,6 @@ export const api = {
       return withBust(url, bust);
     },
 
-    // POSITIONS SUR PLAN
     positions: (logical_name, page_index = 0) =>
       get(`/api/meca/maps/positions`, { logical_name, page_index }),
 
@@ -1426,7 +1335,6 @@ export const api = {
       });
     },
 
-    // SET POSITION
     setPosition: (equipmentId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
       post(`/api/meca/maps/setPosition`, {
         equipment_id: equipmentId,
@@ -1438,11 +1346,10 @@ export const api = {
       }),
   },
 
-  /** --- DCF ASSISTANT v8.0.0 --- */
+  /** --- DCF ASSISTANT --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
-    // --- FILE MANAGEMENT ---
     uploadExcelMulti: (formData) => upload("/api/dcf/uploadExcelMulti", formData),
 
     uploadExcel: (file) => {
@@ -1467,12 +1374,10 @@ export const api = {
 
     getFileDebug: (id) => get(`/api/dcf/files/${id}/debug`),
 
-    // --- SESSIONS ---
     startSession: (payload) => post("/api/dcf/startSession", payload),
     listSessions: () => get("/api/dcf/sessions"),
     getSession: (id) => get(`/api/dcf/session/${id}`),
 
-    // --- ATTACHMENTS (Screenshots) ---
     uploadAttachments: (files = [], sessionId = null) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -1480,16 +1385,13 @@ export const api = {
       return upload("/api/dcf/attachments/upload", fd);
     },
 
-    // --- CHAT ---
     chat: (payload) => post("/api/dcf/chat", payload),
 
-    // --- REFERENCE DATA ---
     reference: {
       taskLists: () => get("/api/dcf/reference/tasklists"),
       plan: (planNumber) => get(`/api/dcf/reference/plan/${planNumber}`),
     },
 
-    // --- WIZARD v8.0 ---
     wizard: {
       analyze: async (messageOrFormData, sessionId) => {
         if (typeof messageOrFormData === "string") {
@@ -1550,7 +1452,7 @@ export const api = {
     validate: ({ fileIds, mode = "auto" }) => post("/api/dcf/validate", { fileIds, mode }),
   },
 
-  /** --- LEARN-EX (Formation ATEX Niveau 0) --- */
+  /** --- LEARN-EX --- */
   learnEx: {
     health: () => get("/api/learn-ex/health"),
     config: () => get("/api/learn-ex/config"),
@@ -1613,18 +1515,40 @@ export const api = {
       );
     },
 
-    // ========================= PDF EXPORT =========================
+    // ========================= PDF EXPORT (LISTING) =========================
 
     // URL du PDF listing (téléchargement direct via lien <a>)
     pdfUrl: (id) =>
       `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/pdf?site=${currentSite()}`,
 
-    // Télécharger le PDF (retourne un Blob pour usage programmatique)
+    // Télécharger le PDF listing (retourne un Blob)
     downloadPdf: async (id) => {
       const site = currentSite();
       const headers = identityHeaders(new Headers({ "X-Site": site }));
       const res = await fetch(
         `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/pdf?site=${site}`,
+        {
+          method: "GET",
+          headers,
+          credentials: "include",
+        }
+      );
+      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+      return res.blob();
+    },
+
+    // ========================= PDF SCHÉMA UNIFILAIRE =========================
+
+    // URL du PDF schéma unifilaire (téléchargement direct)
+    diagramPdfUrl: (id) =>
+      `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/diagram-pdf?site=${currentSite()}`,
+
+    // Télécharger le PDF schéma unifilaire (retourne un Blob)
+    downloadDiagramPdf: async (id) => {
+      const site = currentSite();
+      const headers = identityHeaders(new Headers({ "X-Site": site }));
+      const res = await fetch(
+        `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/diagram-pdf?site=${site}`,
         {
           method: "GET",
           headers,
@@ -1701,6 +1625,11 @@ export const api = {
 
     searchDevice: (query) =>
       post("/api/switchboard/search-device", { query }),
+
+    // ========================= GRAPH (Arborescence) =========================
+
+    getGraph: (id) =>
+      get(`/api/switchboard/boards/${encodeURIComponent(id)}/graph`),
 
     // ========================= CALENDRIER & STATS =========================
 
