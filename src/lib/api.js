@@ -442,6 +442,31 @@ export const api = {
     health: () => get("/api/controls/health"),
   },
 
+  switchboardMaps: {
+  listPlans: () => get("/api/switchboard/maps/listPlans"),
+  planFileUrlAuto: (plan, { bust = true } = {}) => {
+    const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+    const useId = isUuid(key) || isNumericId(key);
+    const url = useId
+      ? `${API_BASE}/api/switchboard/maps/planFile?id=${encodeURIComponent(key)}`
+      : `${API_BASE}/api/switchboard/maps/planFile?logical_name=${encodeURIComponent(
+          typeof plan === "string" ? plan : plan?.logical_name || ""
+        )}`;
+    return withBust(url, bust);
+  },
+  positionsAuto: (planOrKey, page_index = 0) => {
+    const key = typeof planOrKey === "string"
+      ? planOrKey
+      : planOrKey?.id || planOrKey?.logical_name || "";
+    if (isUuid(key) || isNumericId(key)) {
+      return get("/api/switchboard/maps/positions", { id: key, page_index });
+    }
+    return get("/api/switchboard/maps/positions", { logical_name: key, page_index });
+  },
+  setPosition: (payload) => post("/api/switchboard/maps/setPosition", payload),
+  placedIds: () => get("/api/switchboard/maps/missing"),
+},
+
   /** --- COMP-EXT --- */
   compExt: {
     list: (params) => get("/api/comp-ext/vendors", params),
@@ -1233,6 +1258,35 @@ export const api = {
         x_frac,
         y_frac,
       }),
+  },
+
+  // ==================== SWITCHBOARD MAPS ====================
+  switchboardMaps: {
+    // mêmes plans que VSD (mutualisés)
+    listPlans: () => get(`/api/vsd-map/plans/list`),
+
+    // liste des points switchboards posés
+    listPoints: (planId) =>
+      get(`/api/switchboard/maps/${planId}/points/list`),
+
+    // save bulk (points array)
+    savePoints: (planId, points) =>
+      post(`/api/switchboard/maps/${planId}/points/save`, { points }),
+
+    // delete 1 point
+    deletePoint: (pointId) =>
+      del(`/api/switchboard/maps/points/${pointId}`),
+
+    // helper pour avoir juste les ids posés (super pratique côté Switchboards.jsx)
+    placedIds: async () => {
+      const plans = await get(`/api/vsd-map/plans/list`);
+      const all = [];
+      for (const p of plans || []) {
+        const pts = await get(`/api/switchboard/maps/${p.id}/points/list`);
+        for (const pt of pts || []) all.push(pt.switchboard_id);
+      }
+      return Array.from(new Set(all));
+    },
   },
 
   /** --- MECA --- */
