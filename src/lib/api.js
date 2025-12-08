@@ -1484,25 +1484,37 @@ export const api = {
   switchboard: {
     // ========================= TABLEAUX (BOARDS) =========================
 
+    /** Liste tous les tableaux avec filtres et pagination */
     listBoards: (params) => get("/api/switchboard/boards", params),
+
+    /** Récupère un tableau par son ID (inclut upstream_sources) */
     getBoard: (id) => get(`/api/switchboard/boards/${encodeURIComponent(id)}`),
+
+    /** Crée un nouveau tableau */
     createBoard: (payload) => post("/api/switchboard/boards", payload),
+
+    /** Met à jour un tableau existant */
     updateBoard: (id, payload) =>
       put(`/api/switchboard/boards/${encodeURIComponent(id)}`, payload),
+
+    /** Supprime un tableau et ses disjoncteurs associés */
     deleteBoard: (id) =>
       del(`/api/switchboard/boards/${encodeURIComponent(id)}`),
 
-    // Dupliquer un tableau
+    /** Duplique un tableau (sans les disjoncteurs) */
     duplicateBoard: (id) =>
       post(`/api/switchboard/boards/${encodeURIComponent(id)}/duplicate`, {}),
 
-    // Photo du tableau
+    // ========================= PHOTO TABLEAU =========================
+
+    /** URL de la photo du tableau (pour affichage <img>) */
     boardPhotoUrl: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/photo`,
+        `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/photo?site=${currentSite()}`,
         bust
       ),
 
+    /** Upload de la photo du tableau */
     uploadBoardPhoto: (id, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -1517,11 +1529,11 @@ export const api = {
 
     // ========================= PDF EXPORT (LISTING) =========================
 
-    // URL du PDF listing (téléchargement direct via lien <a>)
+    /** URL du PDF listing (téléchargement direct via lien <a>) */
     pdfUrl: (id) =>
       `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/pdf?site=${currentSite()}`,
 
-    // Télécharger le PDF listing (retourne un Blob)
+    /** Télécharge le PDF listing (retourne un Blob) */
     downloadPdf: async (id) => {
       const site = currentSite();
       const headers = identityHeaders(new Headers({ "X-Site": site }));
@@ -1539,11 +1551,11 @@ export const api = {
 
     // ========================= PDF SCHÉMA UNIFILAIRE =========================
 
-    // URL du PDF schéma unifilaire (téléchargement direct)
+    /** URL du PDF schéma unifilaire (téléchargement direct) */
     diagramPdfUrl: (id) =>
       `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/diagram-pdf?site=${currentSite()}`,
 
-    // Télécharger le PDF schéma unifilaire (retourne un Blob)
+    /** Télécharge le PDF schéma unifilaire (retourne un Blob) */
     downloadDiagramPdf: async (id) => {
       const site = currentSite();
       const headers = identityHeaders(new Headers({ "X-Site": site }));
@@ -1561,43 +1573,58 @@ export const api = {
 
     // ========================= SITE SETTINGS (Logo, Company) =========================
 
-    // Récupérer les paramètres du site
+    /** Récupère les paramètres du site (logo, infos société) */
     getSettings: () => get("/api/switchboard/settings"),
 
-    // Mettre à jour les paramètres du site
+    /** Met à jour les paramètres du site (infos société) */
     updateSettings: (payload) => put("/api/switchboard/settings", payload),
 
-    // Upload du logo
+    /** Upload du logo de l'entreprise */
     uploadLogo: (file) => {
       const fd = new FormData();
       fd.append("logo", file);
       return upload("/api/switchboard/settings/logo", fd);
     },
 
-    // URL du logo (pour affichage <img>)
+    /** URL du logo (pour affichage <img>) */
     logoUrl: ({ bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/switchboard/settings/logo?site=${currentSite()}`,
         bust
       ),
 
-    // Supprimer le logo
+    /** Supprime le logo de l'entreprise */
     deleteLogo: () => del("/api/switchboard/settings/logo"),
 
     // ========================= DISJONCTEURS (DEVICES) =========================
 
+    /** Liste tous les disjoncteurs d'un tableau (inclut infos downstream) */
     listDevices: (boardId, params) =>
       get(`/api/switchboard/boards/${encodeURIComponent(boardId)}/devices`, params),
+
+    /** Récupère un disjoncteur par son ID */
     getDevice: (id) =>
       get(`/api/switchboard/devices/${encodeURIComponent(id)}`),
+
+    /** Crée un nouveau disjoncteur */
     createDevice: (payload) => post("/api/switchboard/devices", payload),
+
+    /** Met à jour un disjoncteur existant */
     updateDevice: (id, payload) =>
       put(`/api/switchboard/devices/${encodeURIComponent(id)}`, payload),
+
+    /** Supprime un disjoncteur */
     deleteDevice: (id) =>
       del(`/api/switchboard/devices/${encodeURIComponent(id)}`),
 
     // ========================= IMPORT EXCEL =========================
 
+    /** 
+     * Import depuis fichier Excel (.xls ou .xlsx)
+     * - Crée ou met à jour le tableau
+     * - Détecte les doublons et les ignore
+     * - Retourne: { success, already_exists, switchboard, devices_created, devices_skipped, existing_devices }
+     */
     importExcel: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -1609,32 +1636,86 @@ export const api = {
 
     // ========================= COMPTAGES =========================
 
+    /** 
+     * Récupère le nombre de disjoncteurs (total et complets) pour une liste de tableaux
+     * @param {number[]} boardIds - Liste des IDs de tableaux (vide = tous)
+     * @returns {{ counts: { [boardId]: { total: number, complete: number } } }}
+     */
     getDeviceCounts: (boardIds = []) =>
       post("/api/switchboard/devices-count", { board_ids: boardIds }),
 
     // ========================= IA PHOTO ANALYSIS =========================
 
+    /** 
+     * Analyse une photo de disjoncteur avec OpenAI Vision
+     * Retourne: { manufacturer, reference, is_differential, in_amps, cache_suggestions[], ... }
+     */
     analyzePhoto: (file) => {
       const fd = new FormData();
       fd.append("photo", file);
       return upload("/api/switchboard/analyze-photo", fd);
     },
 
-    searchDownstreams: (query) =>
-      get("/api/switchboard/search-downstreams", { query }),
-
+    /** 
+     * Recherche les spécifications d'un disjoncteur via requête texte (IA)
+     * @param {string} query - Ex: "Schneider NSX250N Micrologic 5.2"
+     */
     searchDevice: (query) =>
       post("/api/switchboard/search-device", { query }),
 
+    /** 
+     * Recherche les tableaux aval (pour liaison downstream)
+     * @param {string} query - Texte de recherche (code ou nom)
+     * @returns {{ suggestions: [{ id, name, code, building_code, floor, room }] }}
+     */
+    searchDownstreams: (query) =>
+      get("/api/switchboard/search-downstreams", { query }),
+
+    // ========================= CACHE PRODUITS SCANNÉS =========================
+
+    /** 
+     * Sauvegarde un produit scanné dans le cache (apprentissage IA)
+     * Si le produit existe déjà (même référence+fabricant), met à jour et incrémente scan_count
+     */
+    saveScannedProduct: (payload) =>
+      post("/api/switchboard/scanned-products", payload),
+
+    /** 
+     * Recherche dans le cache des produits scannés
+     * @param {{ q?: string, manufacturer?: string, reference?: string }}
+     */
+    searchScannedProducts: (params) =>
+      get("/api/switchboard/scanned-products/search", params),
+
+    /** Liste tous les produits scannés (triés par popularité) */
+    listScannedProducts: () =>
+      get("/api/switchboard/scanned-products"),
+
+    /** Supprime un produit du cache */
+    deleteScannedProduct: (id) =>
+      del(`/api/switchboard/scanned-products/${encodeURIComponent(id)}`),
+
     // ========================= GRAPH (Arborescence) =========================
 
+    /** 
+     * Récupère l'arborescence complète d'un tableau (devices + downstream recursif)
+     * @returns {{ switchboard_id, devices: [{ ...device, children, downstream }] }}
+     */
     getGraph: (id) =>
       get(`/api/switchboard/boards/${encodeURIComponent(id)}/graph`),
 
     // ========================= CALENDRIER & STATS =========================
 
+    /** Récupère le calendrier des tableaux (pour vue planning) */
     calendar: () => get("/api/switchboard/calendar"),
+
+    /** 
+     * Statistiques globales du module
+     * @returns {{ total_boards, total_devices, complete_devices, differential_devices }}
+     */
     stats: () => get("/api/switchboard/stats"),
+
+    /** Health check du service */
     health: () => get("/api/switchboard/health"),
   },
 
