@@ -596,7 +596,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp">
         {/* Header */}
         <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-6 text-white">
