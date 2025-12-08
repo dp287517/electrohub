@@ -26,6 +26,7 @@ import Doors from './pages/Doors.jsx';
 import Dcf from './pages/Dcf.jsx';
 import LearnEx from './pages/Learn_ex.jsx';
 import SwitchboardDiagram from './pages/SwitchboardDiagram';
+import SwitchboardDiagram from './pages/Switchboard_map';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
@@ -76,6 +77,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <SwitchboardDiagram />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/switchboards/:id/diagram"
+            element={
+              <ProtectedRoute>
+                <Switchboardmap />
               </ProtectedRoute>
             }
           />
