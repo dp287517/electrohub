@@ -87,19 +87,9 @@ export default function App() {
             }
           />
 
-          {/* ✅ Switchboard map */}
+          {/* ✅ Switchboard map - Route corrigée (sans :id) */}
           <Route
-            path="/app/switchboards/:id/map"
-            element={
-              <ProtectedRoute>
-                <SwitchboardMap />
-              </ProtectedRoute>
-            }
-          />
-
-          {/* ✅ Switchboard map (par id si un jour tu l’utilises) */}
-          <Route
-            path="/app/switchboards/:id/map"
+            path="/app/switchboards/map"
             element={
               <ProtectedRoute>
                 <SwitchboardMap />
