@@ -97,6 +97,16 @@ export default function App() {
             }
           />
 
+          {/* ✅ Switchboard map (par id si un jour tu l’utilises) */}
+          <Route
+            path="/app/switchboards/:id/map"
+            element={
+              <ProtectedRoute>
+                <SwitchboardMap />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
