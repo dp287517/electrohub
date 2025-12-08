@@ -81,7 +81,7 @@ export default function App() {
             }
           />
           <Route
-            path="/app/switchboards/:id/diagram"
+            path="/app/switchboards/:id/map"
             element={
               <ProtectedRoute>
                 <Switchboardmap />
