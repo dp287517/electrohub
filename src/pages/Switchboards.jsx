@@ -6,7 +6,7 @@ import {
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Phone, Mail
+  MapPin, Phone, Mail, Database, History, Star
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -58,6 +58,100 @@ const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
 const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
 const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900";
 const inputSmallClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400";
+
+// ==================== IMPORT RESULT MODAL ====================
+
+const ImportResultModal = ({ isOpen, onClose, result }) => {
+  if (!isOpen || !result) return null;
+
+  const isWarning = result.already_exists;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className={`p-6 text-white ${isWarning 
+          ? 'bg-gradient-to-r from-amber-500 to-orange-600' 
+          : 'bg-gradient-to-r from-emerald-500 to-teal-600'}`}>
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              {isWarning ? <AlertTriangle size={24} /> : <CheckCircle size={24} />}
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">
+                {isWarning ? 'Tableau existant mis à jour' : 'Import réussi !'}
+              </h2>
+              <p className={`text-sm ${isWarning ? 'text-amber-100' : 'text-emerald-100'}`}>
+                {result.switchboard?.code}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {/* Board Info */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-900 mb-2">{result.switchboard?.name}</h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span className="text-gray-500">Code :</span>
+                <span className="ml-1 font-mono text-gray-900">{result.switchboard?.code}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Bâtiment :</span>
+                <span className="ml-1 text-gray-900">{result.switchboard?.building || '-'}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Étage :</span>
+                <span className="ml-1 text-gray-900">{result.switchboard?.floor || '-'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-emerald-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-bold text-emerald-600">{result.devices_created}</p>
+              <p className="text-xs text-emerald-700">Créés</p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-bold text-gray-600">{result.devices_skipped}</p>
+              <p className="text-xs text-gray-700">Ignorés</p>
+            </div>
+            {isWarning && (
+              <div className="bg-amber-50 rounded-xl p-3 text-center">
+                <p className="text-2xl font-bold text-amber-600">{result.existing_devices}</p>
+                <p className="text-xs text-amber-700">Existants</p>
+              </div>
+            )}
+          </div>
+
+          {/* Message */}
+          {isWarning && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
+              <p className="flex items-start gap-2">
+                <Info size={16} className="flex-shrink-0 mt-0.5" />
+                Le tableau existait déjà. Les départs avec des positions déjà présentes ont été ignorés pour éviter les doublons.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t p-4">
+          <button
+            onClick={onClose}
+            className={`w-full py-3 px-4 rounded-xl text-white font-medium transition-all ${
+              isWarning 
+                ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700'
+                : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700'
+            }`}
+          >
+            Continuer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ==================== MODAL COMPONENTS ====================
 
@@ -281,7 +375,7 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
             </div>
             <div>
               <h2 className="text-xl font-bold">Import Excel</h2>
-              <p className="text-emerald-100 text-sm">Importez une liste de départs</p>
+              <p className="text-emerald-100 text-sm">Importez une liste de départs (.xls ou .xlsx)</p>
             </div>
           </div>
         </div>
@@ -310,12 +404,19 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
                 <CheckCircle className="mx-auto text-emerald-500" size={40} />
                 <p className="font-medium text-emerald-700">{file.name}</p>
                 <p className="text-sm text-gray-500">{(file.size / 1024).toFixed(1)} KB</p>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setFile(null); }}
+                  className="text-xs text-red-600 hover:text-red-800"
+                >
+                  Supprimer
+                </button>
               </div>
             ) : (
               <div className="space-y-2">
                 <Upload className="mx-auto text-gray-400" size={40} />
                 <p className="font-medium text-gray-700">Glissez votre fichier Excel ici</p>
                 <p className="text-sm text-gray-500">ou cliquez pour parcourir</p>
+                <p className="text-xs text-gray-400">Formats supportés: .xlsx et .xls (Excel 97-2003)</p>
               </div>
             )}
           </div>
@@ -330,11 +431,11 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
               <li>• Nom du tableau (ligne 2)</li>
               <li>• Code tableau (ligne 4)</li>
               <li>• Bâtiment et étage depuis le code</li>
-              <li>• Liste des départs</li>
+              <li>• Liste des départs avec détection doublons</li>
             </ul>
             <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
               <Info size={12} />
-              La détection DDR se fait uniquement via l'analyse photo IA
+              Si le tableau existe déjà (même code), les nouveaux départs seront ajoutés
             </p>
           </div>
         </div>
@@ -465,7 +566,7 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
             </div>
             <div>
               <h2 className="text-xl font-bold">Partager le lien</h2>
-              <p className="text-blue-100 text-sm">{board.name}</p>
+              <p className="text-blue-100 text-sm">{board.code} - {board.name}</p>
             </div>
           </div>
         </div>
@@ -509,13 +610,14 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
   );
 };
 
-// AI Photo Wizard
+// AI Photo Wizard - Enhanced with Cache Suggestions
 const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   const [step, setStep] = useState(1);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoResult, setPhotoResult] = useState(null);
   const [deviceSpecs, setDeviceSpecs] = useState(null);
+  const [cacheSuggestions, setCacheSuggestions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
@@ -527,6 +629,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
       setPhotoPreview(null);
       setPhotoResult(null);
       setDeviceSpecs(null);
+      setCacheSuggestions([]);
       setError(null);
     }
   }, [isOpen]);
@@ -552,6 +655,10 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
         setError(result.error);
       } else {
         setPhotoResult(result);
+        // Store cache suggestions if available
+        if (result.cache_suggestions && result.cache_suggestions.length > 0) {
+          setCacheSuggestions(result.cache_suggestions);
+        }
         setStep(2);
       }
     } catch (err) {
@@ -586,6 +693,23 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
     }
   };
 
+  // Use cached product suggestion
+  const useCachedProduct = (product) => {
+    setDeviceSpecs({
+      manufacturer: product.manufacturer,
+      reference: product.reference,
+      device_type: product.device_type || 'Low Voltage Circuit Breaker',
+      in_amps: product.in_amps,
+      icu_ka: product.icu_ka,
+      ics_ka: product.ics_ka,
+      poles: product.poles,
+      voltage_v: product.voltage_v,
+      is_differential: product.is_differential,
+      settings: product.settings || {}
+    });
+    setStep(3);
+  };
+
   const handleComplete = () => {
     if (deviceSpecs) {
       onComplete(deviceSpecs);
@@ -597,9 +721,9 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp">
         {/* Header */}
-        <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-6 text-white">
+        <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-600 p-6 text-white z-10">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
               <Sparkles size={24} />
@@ -677,7 +801,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
             </div>
           )}
 
-          {/* Step 2: Photo Analysis Result */}
+          {/* Step 2: Photo Analysis Result + Cache Suggestions */}
           {step === 2 && photoResult && (
             <div className="space-y-4">
               <div className="text-center">
@@ -688,7 +812,19 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
               <div className="bg-gray-50 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Fabricant</span>
-                  <span className="font-semibold text-gray-900">{photoResult.manufacturer || 'Non détecté'}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-900">{photoResult.manufacturer || 'Non détecté'}</span>
+                    {photoResult.manufacturer_confidence && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        photoResult.manufacturer_confidence === 'high' ? 'bg-emerald-100 text-emerald-700' :
+                        photoResult.manufacturer_confidence === 'medium' ? 'bg-amber-100 text-amber-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {photoResult.manufacturer_confidence === 'high' ? 'Sûr' :
+                         photoResult.manufacturer_confidence === 'medium' ? 'Probable' : 'Incertain'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Référence</span>
@@ -703,7 +839,64 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
                     </span>
                   </div>
                 )}
+                {photoResult.in_amps && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Calibre détecté</span>
+                    <span className="font-semibold text-gray-900">{photoResult.in_amps}A</span>
+                  </div>
+                )}
               </div>
+
+              {/* Manufacturer clues */}
+              {photoResult.manufacturer_clues && (
+                <div className="bg-blue-50 rounded-xl p-3 text-sm">
+                  <p className="text-blue-700 font-medium flex items-center gap-1">
+                    <Info size={14} />
+                    Indices d'identification :
+                  </p>
+                  <p className="text-blue-600 mt-1">{photoResult.manufacturer_clues}</p>
+                </div>
+              )}
+
+              {/* Cache Suggestions */}
+              {cacheSuggestions.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <p className="text-sm font-medium text-amber-800 flex items-center gap-2 mb-3">
+                    <Database size={16} />
+                    Produits similaires déjà enregistrés :
+                  </p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {cacheSuggestions.map((product, idx) => (
+                      <button
+                        key={product.id || idx}
+                        onClick={() => useCachedProduct(product)}
+                        className="w-full text-left p-3 bg-white rounded-lg border border-amber-200 hover:border-amber-400 hover:bg-amber-50 transition-all"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-medium text-gray-900">{product.manufacturer} {product.reference}</span>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {product.in_amps && `${product.in_amps}A`}
+                              {product.icu_ka && ` • ${product.icu_ka}kA`}
+                              {product.poles && ` • ${product.poles}P`}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {product.validated && (
+                              <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                <Star size={10} /> Validé
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-400 flex items-center gap-1">
+                              <History size={10} /> {product.scan_count}x
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {photoPreview && (
                 <div className="flex justify-center">
@@ -814,7 +1007,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   );
 };
 
-// Mobile Tree Drawer
+// Mobile Tree Drawer - CORRECTED: Display CODE instead of NAME
 const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, deviceCounts, getProgress }) => {
   if (!isOpen) return null;
   
@@ -878,7 +1071,8 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
                                     : 'text-gray-600 hover:bg-gray-100'}`}
                               >
                                 <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
-                                <span className="text-sm truncate flex-1">{board.name}</span>
+                                {/* ========== CHANGED: Display CODE instead of NAME ========== */}
+                                <span className="text-sm font-mono truncate flex-1">{board.code}</span>
                                 {deviceCounts[board.id]?.total > 0 && (
                                   <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
                                 )}
@@ -927,7 +1121,7 @@ export default function Switchboards() {
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
     in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
     position_number: '', is_differential: false, is_main_incoming: false,
-    downstream_switchboard_id: null, downstream_name: '', // Added for downstream linking
+    downstream_switchboard_id: null, downstream_name: '',
     settings: { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
   });
   const [editingBoardId, setEditingBoardId] = useState(null);
@@ -949,6 +1143,10 @@ export default function Switchboards() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
 
+  // Import result modal
+  const [showImportResult, setShowImportResult] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+
   // Photo upload refs
   const boardPhotoRef = useRef(null);
 
@@ -963,17 +1161,15 @@ export default function Switchboards() {
     loadBoards();
   }, []);
 
-  // Handle URL params for deep linking (CORRECTED)
+  // Handle URL params for deep linking
   useEffect(() => {
     const boardId = searchParams.get('board');
     if (boardId) {
-      // If we have an ID in URL but not loaded in state, or different ID
       if (!selectedBoard || selectedBoard.id !== Number(boardId)) {
         api.switchboard.getBoard(boardId)
           .then(board => {
             if (board) {
               setSelectedBoard(board);
-              // Expand tree to show this board
               const building = board.meta?.building_code || 'Sans bâtiment';
               const floor = board.meta?.floor || 'Sans étage';
               setExpandedBuildings(prev => ({ ...prev, [building]: true }));
@@ -983,12 +1179,11 @@ export default function Switchboards() {
           .catch(console.error);
       }
     } else {
-      // URL has no board ID -> Clear selection
       if (selectedBoard) {
         setSelectedBoard(null);
       }
     }
-  }, [searchParams]); // Dependent only on URL changes
+  }, [searchParams]);
 
   useEffect(() => {
     if (selectedBoard) {
@@ -1005,7 +1200,6 @@ export default function Switchboards() {
       }
       try {
         const res = await api.switchboard.searchDownstreams(downstreamSearch);
-        // Filter out current board to avoid circular link to self
         const results = (res.suggestions || []).filter(b => b.id !== selectedBoard?.id);
         setDownstreamResults(results);
       } catch (err) {
@@ -1023,7 +1217,6 @@ export default function Switchboards() {
     try {
       const res = await api.switchboard.listBoards({ pageSize: 100 });
       setBoards(res.data || []);
-      // Load device counts
       if (res.data?.length) {
         const counts = await api.switchboard.getDeviceCounts(res.data.map(b => b.id));
         setDeviceCounts(counts.counts || {});
@@ -1044,25 +1237,20 @@ export default function Switchboards() {
     }
   };
 
-  // Select board handler wrapper to fetch full details AND update URL
   const handleSelectBoard = async (board) => {
-    // 1. Update URL (Source of Truth)
     setSearchParams({ board: board.id.toString() });
-    
-    // 2. Fetch data
     try {
       const fullBoard = await api.switchboard.getBoard(board.id);
       setSelectedBoard(fullBoard);
     } catch (err) {
       console.error('Failed to fetch full board details', err);
-      setSelectedBoard(board); // Fallback
+      setSelectedBoard(board);
     }
   };
 
-  // Close board handler
   const handleCloseBoard = () => {
     setSelectedBoard(null);
-    setSearchParams({}); // Clear URL param
+    setSearchParams({});
   };
 
   // Board handlers
@@ -1085,7 +1273,6 @@ export default function Switchboards() {
       
       await loadBoards();
       if (editingBoardId && selectedBoard?.id === editingBoardId) {
-        // Refresh selected board details including upstream info
         const updated = await api.switchboard.getBoard(editingBoardId);
         setSelectedBoard(updated);
       }
@@ -1120,7 +1307,6 @@ export default function Switchboards() {
     try {
       await api.switchboard.uploadBoardPhoto(selectedBoard.id, file);
       await loadBoards();
-      // Update selected board
       setSelectedBoard(prev => ({ ...prev, has_photo: true }));
     } catch (err) {
       console.error('Photo upload error:', err);
@@ -1149,7 +1335,7 @@ export default function Switchboards() {
       }
       
       await loadDevices(selectedBoard.id);
-      await loadBoards(); // Refresh counts
+      await loadBoards();
       resetDeviceForm();
     } catch (err) {
       console.error('Save device error:', err);
@@ -1171,12 +1357,9 @@ export default function Switchboards() {
     if (!selectedBoard) return;
     setIsPrinting(true);
     try {
-      // Call backend API to generate PDF
       const response = await fetch(`${api.baseURL}/api/switchboard/boards/${selectedBoard.id}/pdf?site=${api.site}`, {
         method: 'GET',
-        headers: {
-          'X-Site': api.site
-        }
+        headers: { 'X-Site': api.site }
       });
       
       if (!response.ok) throw new Error('PDF generation failed');
@@ -1184,7 +1367,6 @@ export default function Switchboards() {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       
-      // Open in new tab or download
       const a = document.createElement('a');
       a.href = url;
       a.download = `${selectedBoard.code || selectedBoard.name}_listing.pdf`;
@@ -1192,27 +1374,29 @@ export default function Switchboards() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Print PDF error:', err);
-      alert('Erreur lors de la génération du PDF. Vérifiez que l\'endpoint est disponible.');
+      alert('Erreur lors de la génération du PDF.');
     } finally {
       setIsPrinting(false);
     }
   };
 
-  // Import Excel
+  // Import Excel - ENHANCED with result modal
   const handleImportExcel = async (file) => {
     setIsImporting(true);
     try {
       const result = await api.switchboard.importExcel(file);
       if (result.success) {
         await loadBoards();
-        // Select the imported board with full details
         if (result.switchboard?.id) {
            const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
-           handleSelectBoard(boardDetail); // Use handleSelectBoard to set URL
+           handleSelectBoard(boardDetail);
         }
         
         setShowImportModal(false);
-        alert(`Import réussi!\n${result.devices_created} disjoncteurs créés pour "${result.switchboard.name}"`);
+        
+        // Show result modal instead of simple alert
+        setImportResult(result);
+        setShowImportResult(true);
       }
     } catch (err) {
       console.error('Import error:', err);
@@ -1295,7 +1479,7 @@ export default function Switchboards() {
       settings: device.settings || { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
     });
     setEditingDeviceId(device.id);
-    setDownstreamSearch(''); // Reset search on edit open
+    setDownstreamSearch('');
     setShowDeviceForm(true);
   };
 
@@ -1329,7 +1513,7 @@ export default function Switchboards() {
 
   // ==================== RENDER ====================
 
-  // Sidebar Tree (Desktop)
+  // Sidebar Tree (Desktop) - CORRECTED: Display CODE instead of NAME
   const renderTree = () => (
     <div className="space-y-1">
       {Object.entries(tree).map(([building, floors]) => (
@@ -1372,7 +1556,8 @@ export default function Switchboards() {
                               : 'text-gray-600 hover:bg-gray-100'}`}
                         >
                           <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
-                          <span className="text-sm truncate flex-1">{board.name}</span>
+                          {/* ========== CHANGED: Display CODE instead of NAME ========== */}
+                          <span className="text-sm font-mono truncate flex-1">{board.code}</span>
                           {deviceCounts[board.id]?.total > 0 && (
                             <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
                           )}
@@ -1389,7 +1574,7 @@ export default function Switchboards() {
     </div>
   );
 
-  // Mobile Board Cards
+  // Mobile Board Cards - ENHANCED: Show CODE prominently
   const renderMobileCards = () => (
     <div className="grid grid-cols-1 gap-3 p-4">
       {boards.filter(b => 
@@ -1417,11 +1602,13 @@ export default function Switchboards() {
                         Principal
                       </span>
                     )}
-                    <span className={`text-xs ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-400'}`}>
+                    {/* ========== CHANGED: CODE is now the main title ========== */}
+                    <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
                     </span>
                   </div>
-                  <h3 className={`font-semibold mt-1 ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
+                  {/* Name is now secondary */}
+                  <h3 className={`text-sm mt-1 ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
                     {board.name}
                   </h3>
                   <div className={`flex items-center gap-3 mt-2 text-sm ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
@@ -1443,7 +1630,6 @@ export default function Switchboards() {
                 </div>
               </div>
               
-              {/* Progress bar */}
               {counts?.total > 0 && (
                 <div className={`mt-3 h-1.5 rounded-full overflow-hidden ${selectedBoard?.id === board.id ? 'bg-white/20' : 'bg-gray-100'}`}>
                   <div 
@@ -1592,6 +1778,7 @@ export default function Switchboards() {
               className={`${inputBaseClass} font-mono`}
               placeholder="ex: 11-1-04-FL"
             />
+            <p className="text-xs text-gray-500 mt-1">Le code sera affiché dans l'arborescence</p>
           </div>
           
           <div className="grid grid-cols-3 gap-3">
@@ -1676,7 +1863,7 @@ export default function Switchboards() {
     </div>
   );
 
-  // Device Form Modal - CORRECTED CSS FOR MOBILE
+  // Device Form Modal
   const renderDeviceForm = () => (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slideUp">
@@ -1719,7 +1906,7 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Downstream Board Link (Updated UI) */}
+          {/* Downstream Board Link */}
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
                <ArrowUpRight size={16} className="text-green-600" />
@@ -1758,14 +1945,14 @@ export default function Switchboards() {
                           <button
                             key={board.id}
                             onClick={() => {
-                              setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: board.id, downstream_name: board.name }));
+                              setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: board.id, downstream_name: board.code }));
                               setDownstreamSearch('');
                               setShowDownstreamResults(false);
                             }}
                             className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center justify-between"
                           >
-                             <span className="font-medium text-gray-900">{board.name}</span>
-                             <span className="text-xs text-gray-500 font-mono">{board.code}</span>
+                             <span className="font-mono font-medium text-gray-900">{board.code}</span>
+                             <span className="text-xs text-gray-500">{board.name}</span>
                           </button>
                         ))}
                       </div>
@@ -1799,7 +1986,7 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Electrical Specs - CORRECTED: 2 columns on mobile, 4 on desktop */}
+          {/* Electrical Specs */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Calibre (A)</label>
@@ -1858,7 +2045,7 @@ export default function Switchboards() {
             />
           </div>
 
-          {/* Checkboxes - CORRECTED: Stack on mobile */}
+          {/* Checkboxes */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="flex items-center gap-3 p-3 bg-purple-50 rounded-xl cursor-pointer">
               <input
@@ -1986,7 +2173,6 @@ export default function Switchboards() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {/* Mobile menu button */}
               {isMobile && (
                 <button
                   onClick={() => setShowMobileDrawer(true)}
@@ -2036,7 +2222,7 @@ export default function Switchboards() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher un tableau..."
+              placeholder="Rechercher par code ou nom..."
               className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400"
             />
           </div>
@@ -2100,9 +2286,10 @@ export default function Switchboards() {
                               Principal
                             </span>
                           )}
-                          <span className="text-sm text-gray-500 font-mono">{selectedBoard.code}</span>
+                          {/* CODE is now prominent */}
+                          <span className="text-lg font-mono font-bold text-gray-900">{selectedBoard.code}</span>
                         </div>
-                        <h2 className="text-xl font-bold text-gray-900 mt-1">{selectedBoard.name}</h2>
+                        <h2 className="text-base text-gray-600 mt-1">{selectedBoard.name}</h2>
                         
                         {/* Source (Upstream) Display */}
                         {selectedBoard.upstream_sources && selectedBoard.upstream_sources.length > 0 ? (
@@ -2110,7 +2297,7 @@ export default function Switchboards() {
                              {selectedBoard.upstream_sources.map(source => (
                                <div key={source.id} className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2 border border-amber-200">
                                   <ArrowRight size={12} />
-                                  Alimenté par : <span className="font-semibold">{source.source_board_name}</span> (via {source.name})
+                                  Alimenté par : <span className="font-semibold font-mono">{source.source_board_code}</span> (via {source.name})
                                </div>
                              ))}
                            </div>
@@ -2143,7 +2330,6 @@ export default function Switchboards() {
                       </div>
 
                       <div className="flex items-center gap-1 flex-wrap">
-                        {/* Share Link */}
                         <button
                           onClick={() => setShowShareModal(true)}
                           className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
@@ -2151,7 +2337,6 @@ export default function Switchboards() {
                         >
                           <Link size={18} />
                         </button>
-                        {/* Print PDF */}
                         <button
                           onClick={handlePrintPDF}
                           disabled={isPrinting}
@@ -2160,7 +2345,6 @@ export default function Switchboards() {
                         >
                           {isPrinting ? <RefreshCw size={18} className="animate-spin" /> : <Printer size={18} />}
                         </button>
-                        {/* Single Line Diagram */}
                         <button
                           onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)}
                           className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl transition-colors"
@@ -2282,6 +2466,12 @@ export default function Switchboards() {
         onClose={() => setShowImportModal(false)}
         onImport={handleImportExcel}
         isLoading={isImporting}
+      />
+
+      <ImportResultModal
+        isOpen={showImportResult}
+        onClose={() => { setShowImportResult(false); setImportResult(null); }}
+        result={importResult}
       />
 
       <SiteSettingsModal
