@@ -2385,7 +2385,7 @@ export default function Switchboards() {
                           <Link size={18} />
                         </button>
                         <button
-                          onClick={() => navigate('/switchboard-map')}
+                          onClick={() => navigate('/app/switchboards/map')}
                           className="px-3 py-2 rounded-xl bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors text-sm font-medium flex items-center gap-2"
                           title="Voir les plans des switchboards"
                         >
