@@ -1603,8 +1603,19 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       if (!pos) return false;
       const str = String(pos).trim();
       if (!str) return false;
+      
+      // Format numérique simple: "1", "1.5", "123"
       if (/^\d+(\.\d+)?$/.test(str)) return true;
+      
+      // Format avec une lettre: "A1", "1A", "A1B"
       if (/^[A-Za-z]?\d+[A-Za-z]?$/.test(str)) return true;
+      
+      // Format alphanumérique complexe: "11F1", "13FI1", "A12B3", etc.
+      if (/^[A-Za-z0-9]+$/.test(str) && /\d/.test(str) && str.length <= 15) return true;
+      
+      // Format avec tiret ou point: "01-01", "1.1.2", "A-1"
+      if (/^[A-Za-z0-9][-.\dA-Za-z]*\d[-.\dA-Za-z]*$/.test(str) && str.length <= 15) return true;
+      
       return false;
     };
 
