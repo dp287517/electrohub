@@ -1112,6 +1112,7 @@ export default function Switchboards() {
   const [isLoading, setIsLoading] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+  const [placedBoardIds, setPlacedBoardIds] = useState([]);
   
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
@@ -1221,6 +1222,16 @@ export default function Switchboards() {
         const counts = await api.switchboard.getDeviceCounts(res.data.map(b => b.id));
         setDeviceCounts(counts.counts || {});
       }
+
+      // NEW: récupère les switchboards déjà placés sur au moins un plan
+      try {
+        const placed = await api.switchboardMaps.placedIds();
+        setPlacedBoardIds(placed || []);
+      } catch (e) {
+        console.error("Load placements error:", e);
+        setPlacedBoardIds([]); // fallback
+      }
+
     } catch (err) {
       console.error('Load boards error:', err);
     } finally {
@@ -1510,6 +1521,9 @@ export default function Switchboards() {
     if (!counts || counts.total === 0) return 0;
     return Math.round((counts.complete / counts.total) * 100);
   };
+    const isBoardPlacedOnMap = (board) => {
+    return placedBoardIds.includes(board.id);
+  };
 
   // ==================== RENDER ====================
 
@@ -1558,6 +1572,17 @@ export default function Switchboards() {
                           <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
                           {/* ========== CHANGED: Display CODE instead of NAME ========== */}
                           <span className="text-sm font-mono truncate flex-1">{board.code}</span>
+
+                          {!isBoardPlacedOnMap(board) && (
+                            <span
+                              className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
+                              title="Ce tableau n'est pas encore placé sur un plan"
+                            >
+                              <MapPin size={10} />
+                              Non placé
+                            </span>
+                          )}
+
                           {deviceCounts[board.id]?.total > 0 && (
                             <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
                           )}
@@ -1602,6 +1627,19 @@ export default function Switchboards() {
                         Principal
                       </span>
                     )}
+
+                    {!isBoardPlacedOnMap(board) && (
+                      <span
+                        className={`px-2 py-0.5 text-[10px] rounded-full font-medium flex items-center gap-1 ${
+                          selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'
+                        }`}
+                        title="Ce tableau n'est pas encore placé sur un plan"
+                      >
+                        <MapPin size={10} />
+                        Non placé
+                      </span>
+                    )}
+
                     {/* ========== CHANGED: CODE is now the main title ========== */}
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
@@ -2288,6 +2326,15 @@ export default function Switchboards() {
                           )}
                           {/* CODE is now prominent */}
                           <span className="text-lg font-mono font-bold text-gray-900">{selectedBoard.code}</span>
+                            {!isBoardPlacedOnMap(selectedBoard) && (
+                          <span
+                            className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
+                            title="Ce tableau n'est pas encore placé sur un plan"
+                          >
+                            <MapPin size={10} />
+                            Non placé
+                          </span>
+                        )}
                         </div>
                         <h2 className="text-base text-gray-600 mt-1">{selectedBoard.name}</h2>
                         
@@ -2336,6 +2383,14 @@ export default function Switchboards() {
                           title="Partager le lien"
                         >
                           <Link size={18} />
+                        </button>
+                        <button
+                          onClick={() => navigate('/switchboard-map')}
+                          className="px-3 py-2 rounded-xl bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors text-sm font-medium flex items-center gap-2"
+                          title="Voir les plans des switchboards"
+                        >
+                          <MapPin size={16} />
+                          Plans
                         </button>
                         <button
                           onClick={handlePrintPDF}
