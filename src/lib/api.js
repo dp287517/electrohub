@@ -1260,35 +1260,6 @@ export const api = {
       }),
   },
 
-  // ==================== SWITCHBOARD MAPS ====================
-  switchboardMaps: {
-    // mêmes plans que VSD (mutualisés)
-    listPlans: () => get(`/api/vsd-map/plans/list`),
-
-    // liste des points switchboards posés
-    listPoints: (planId) =>
-      get(`/api/switchboard/maps/${planId}/points/list`),
-
-    // save bulk (points array)
-    savePoints: (planId, points) =>
-      post(`/api/switchboard/maps/${planId}/points/save`, { points }),
-
-    // delete 1 point
-    deletePoint: (pointId) =>
-      del(`/api/switchboard/maps/points/${pointId}`),
-
-    // helper pour avoir juste les ids posés (super pratique côté Switchboards.jsx)
-    placedIds: async () => {
-      const plans = await get(`/api/vsd-map/plans/list`);
-      const all = [];
-      for (const p of plans || []) {
-        const pts = await get(`/api/switchboard/maps/${p.id}/points/list`);
-        for (const pt of pts || []) all.push(pt.switchboard_id);
-      }
-      return Array.from(new Set(all));
-    },
-  },
-
   /** --- MECA --- */
   meca: {
     listEquipments: (params) => get("/api/meca/equipments", params),
