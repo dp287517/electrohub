@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 import { createProxyMiddleware } from "http-proxy-middleware";
+import switchboardMapApp from "./server_switchboard_map.js";
 
 dotenv.config();
 const { Pool } = pg;
@@ -21,6 +22,7 @@ const app = express();
 // Sécurité & cookies
 app.use(helmet());
 app.use(cookieParser());
+app.use(switchboardMapApp);
 
 // -------- AUTH LIGHT (n'a pas besoin du body pour passer) ----------
 function authMiddleware(req, _res, next) {
