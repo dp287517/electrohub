@@ -9,7 +9,7 @@ import React, {
   useImperativeHandle,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, API_BASE } from "../lib/api.js";
 
 // PDF.js (comme VSD)
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
@@ -19,6 +19,7 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// icons
 import {
   Zap,
   Search,
@@ -30,7 +31,6 @@ import {
   CheckCircle,
   AlertCircle,
   X,
-  Eye,
   RefreshCw,
   Trash2,
   ExternalLink,
@@ -45,6 +45,66 @@ import {
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
+/* ----------------------------- Helpers EXACT VSD ----------------------------- */
+function getCookie(name) {
+  const m = document.cookie.match(
+    new RegExp("(?:^|; )" + name + "=([^;]+)")
+  );
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email)
+      email =
+        localStorage.getItem("email") ||
+        localStorage.getItem("user.email") ||
+        null;
+    if (!name)
+      name =
+        localStorage.getItem("name") ||
+        localStorage.getItem("user.name") ||
+        null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName))
+          name = String(u.name || u.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base)
+      name = base
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
+  }
+  return { email, name };
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+
+function pdfDocOpts(url) {
+  // EXACTEMENT comme VSD
+  return {
+    url,
+    withCredentials: true,
+    httpHeaders: userHeaders(),
+    standardFontDataUrl: "/standard_fonts/",
+  };
+}
+
 /* ----------------------------- UI Helpers ----------------------------- */
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
@@ -55,10 +115,6 @@ const AnimatedCard = ({ children, delay = 0, className = "" }) => (
   >
     {children}
   </div>
-);
-
-const LoadingSpinner = ({ size = 24, className = "" }) => (
-  <RefreshCw size={size} className={`animate-spin ${className}`} />
 );
 
 const Badge = ({ children, variant = "default", className = "" }) => {
@@ -130,7 +186,7 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
   );
 }
 
-/* ----------------------------- Confirm Modal UI (style Switchboard) ----------------------------- */
+/* ----------------------------- Confirm Modal UI ----------------------------- */
 function ConfirmModal({
   open,
   title = "Confirmation",
@@ -144,10 +200,7 @@ function ConfirmModal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[7000] flex items-center justify-center">
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={onCancel}
-      />
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
       <div className="relative w-[92vw] max-w-md bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp">
         <div
           className={`px-4 py-3 ${
@@ -163,10 +216,7 @@ function ConfirmModal({
           <Btn variant="ghost" onClick={onCancel}>
             {cancelText}
           </Btn>
-          <Btn
-            variant={danger ? "danger" : "primary"}
-            onClick={onConfirm}
-          >
+          <Btn variant={danger ? "danger" : "primary"} onClick={onConfirm}>
             {confirmText}
           </Btn>
         </div>
@@ -205,9 +255,7 @@ const SwitchboardCard = ({
             >
               {board.code}
             </span>
-            {board.is_principal && (
-              <Badge variant="success">Principal</Badge>
-            )}
+            {board.is_principal && <Badge variant="success">Principal</Badge>}
             {isPlacedElsewhere && (
               <Badge variant="purple">Placé ailleurs</Badge>
             )}
@@ -255,7 +303,9 @@ const SwitchboardCard = ({
               onPlace(board);
             }}
             className="px-2 py-1 bg-blue-500 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
-            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
+            title={
+              isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"
+            }
           >
             <Target size={12} />
             {isPlacedSomewhere ? "Déplacer" : "Placer"}
@@ -379,7 +429,7 @@ const PlacementModeIndicator = ({ board, onCancel }) => (
   </div>
 );
 
-/* ----------------------------- Leaflet Viewer (adapté VSD) ----------------------------- */
+/* ----------------------------- Leaflet Viewer (copié VSD + icon jaune) ----------------------------- */
 const SwitchboardLeafletViewer = forwardRef(
   (
     {
@@ -389,7 +439,7 @@ const SwitchboardLeafletViewer = forwardRef(
       onReady,
       onMovePoint,
       onClickPoint,
-      onCreatePoint, // (xFrac, yFrac) when placement mode
+      onCreatePoint,
       disabled = false,
       placementActive = false,
       markerPickRadiusPx = 20,
@@ -400,13 +450,13 @@ const SwitchboardLeafletViewer = forwardRef(
     const mapRef = useRef(null);
     const imageLayerRef = useRef(null);
     const markersLayerRef = useRef(null);
-    const addBtnControlRef = useRef(null);
 
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+
     const pointsRef = useRef(initialPoints);
     const aliveRef = useRef(true);
 
-    // keep view between reloads
+    // Zoom persistant (exact VSD)
     const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
     const initialFitDoneRef = useRef(false);
     const userViewTouchedRef = useRef(false);
@@ -421,9 +471,9 @@ const SwitchboardLeafletViewer = forwardRef(
       const s = ICON_PX;
       const bg = isPrincipal
         ? "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);"
-        : "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
+        : "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);"; // jaune elec
       const html = `
-        <div class="sb-marker" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
+        <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
           <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${
         s * 0.55
       }" fill="white" xmlns="http://www.w3.org/2000/svg">
@@ -455,6 +505,7 @@ const SwitchboardLeafletViewer = forwardRef(
 
           const latlng = L.latLng(y, x);
           const icon = makeSwitchboardIcon(!!p.is_principal);
+
           const mk = L.marker(latlng, {
             icon,
             draggable: !disabled && !placementActive,
@@ -478,9 +529,7 @@ const SwitchboardLeafletViewer = forwardRef(
             regime_neutral: p.regime_neutral,
           };
 
-          mk.on("click", () => {
-            onClickPoint?.(mk.__meta);
-          });
+          mk.on("click", () => onClickPoint?.(mk.__meta));
 
           mk.on("dragend", () => {
             if (!onMovePoint) return;
@@ -517,21 +566,8 @@ const SwitchboardLeafletViewer = forwardRef(
         if (map) {
           try {
             map.stop();
-          } catch {}
-          try {
             map.off();
-          } catch {}
-          try {
-            map.eachLayer((l) => {
-              try {
-                map.removeLayer(l);
-              } catch {}
-            });
-          } catch {}
-          try {
-            if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
-          } catch {}
-          try {
+            map.eachLayer((l) => map.removeLayer(l));
             map.remove();
           } catch {}
         }
@@ -543,7 +579,6 @@ const SwitchboardLeafletViewer = forwardRef(
           } catch {}
           markersLayerRef.current = null;
         }
-        addBtnControlRef.current = null;
         initialFitDoneRef.current = false;
         userViewTouchedRef.current = false;
       };
@@ -566,17 +601,13 @@ const SwitchboardLeafletViewer = forwardRef(
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = window.devicePixelRatio || 1;
 
-          loadingTaskRef.current = pdfjsLib.getDocument({
-            url: fileUrl,
-            withCredentials: true,
-          });
+          loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           if (cancelled) return;
 
           const page = await pdf.getPage(Number(pageIndex) + 1);
           const baseVp = page.getViewport({ scale: 1 });
 
-          // ultra net (comme VSD)
           const targetBitmapW = Math.min(
             4096,
             Math.max(2048, Math.floor(containerW * dpr * 1.5))
@@ -652,10 +683,8 @@ const SwitchboardLeafletViewer = forwardRef(
             markersLayerRef.current = L.layerGroup().addTo(m);
           }
 
-          // click map
           m.on("click", (e) => {
             if (!aliveRef.current) return;
-            const clicked = e.containerPoint;
 
             if (placementActive && onCreatePoint) {
               const ll = e.latlng;
@@ -665,9 +694,10 @@ const SwitchboardLeafletViewer = forwardRef(
               return;
             }
 
-            // else: click => nearest marker
+            const clicked = e.containerPoint;
             let nearest = null;
             let nearestDist = Infinity;
+
             markersLayerRef.current?.eachLayer((mk) => {
               const mp = m.latLngToContainerPoint(mk.getLatLng());
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
@@ -676,6 +706,7 @@ const SwitchboardLeafletViewer = forwardRef(
                 nearest = mk.__meta;
               }
             });
+
             if (nearest && nearestDist <= markerPickRadiusPx) {
               onClickPoint?.(nearest);
             }
@@ -742,7 +773,17 @@ const SwitchboardLeafletViewer = forwardRef(
         cleanupMap();
         cleanupPdf();
       };
-    }, [fileUrl, pageIndex, disabled, placementActive, drawMarkers, markerPickRadiusPx, onCreatePoint, onReady, onClickPoint]);
+    }, [
+      fileUrl,
+      pageIndex,
+      disabled,
+      placementActive,
+      drawMarkers,
+      markerPickRadiusPx,
+      onCreatePoint,
+      onReady,
+      onClickPoint,
+    ]);
 
     useEffect(() => {
       pointsRef.current = initialPoints;
@@ -755,11 +796,13 @@ const SwitchboardLeafletViewer = forwardRef(
       const m = mapRef.current;
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
+
       const b = layer.getBounds();
       try {
         m.scrollWheelZoom?.disable();
       } catch {}
       m.invalidateSize(false);
+
       const fitZoom = m.getBoundsZoom(b, true);
       m.setMinZoom(fitZoom - 1);
       m.fitBounds(b, { padding: [8, 8] });
@@ -797,7 +840,7 @@ const SwitchboardLeafletViewer = forwardRef(
 
         <div
           ref={wrapRef}
-          className="relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+          className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
           style={{ height: wrapperHeight }}
         />
 
@@ -853,16 +896,14 @@ export default function SwitchboardMap() {
     position: null,
   });
 
-  // Leaflet viewer ref
   const viewerRef = useRef(null);
 
-  // Stable plan URL (évite reset zoom)
+  // Stable plan URL (comme VSD)
   const stableFileUrl = useMemo(() => {
     if (!selectedPlan) return null;
     return api.switchboardMaps.planFileUrlAuto(selectedPlan, { bust: true });
   }, [selectedPlan]);
 
-  /* ----------------------------- Effects ----------------------------- */
   useEffect(() => {
     const handleResize = () => {
       setIsMobile(window.innerWidth < 768);
@@ -882,7 +923,6 @@ export default function SwitchboardMap() {
     if (selectedPlan) loadPositions();
   }, [selectedPlan, pageIndex]);
 
-  /* ----------------------------- API Calls ----------------------------- */
   const loadPlans = async () => {
     setLoadingPlans(true);
     try {
@@ -934,7 +974,6 @@ export default function SwitchboardMap() {
       );
       const posList = res?.positions || [];
       setPositions(posList);
-      // IMPORTANT: on ne touche pas placedIds ici
       viewerRef.current?.drawMarkers(posList);
     } catch (err) {
       console.error("Erreur chargement positions:", err);
@@ -975,12 +1014,13 @@ export default function SwitchboardMap() {
   const handleDeletePosition = async (position) => {
     try {
       const response = await fetch(
-        `${api.baseURL}/api/switchboard/maps/positions/${position.id}`,
+        `${API_BASE}/api/switchboard/maps/positions/${position.id}`,
         {
           method: "DELETE",
           headers: {
             "Content-Type": "application/json",
             "X-Site": api.site,
+            ...userHeaders(),
           },
           credentials: "include",
         }
@@ -999,10 +1039,12 @@ export default function SwitchboardMap() {
     }
   };
 
-  /* ----------------------------- Events ----------------------------- */
   const handlePositionClick = async (positionMeta) => {
-    // positionMeta vient du marker leaflet
-    const pos = positions.find((p) => p.switchboard_id === positionMeta.switchboard_id) || positionMeta;
+    const pos =
+      positions.find(
+        (p) => p.switchboard_id === positionMeta.switchboard_id
+      ) || positionMeta;
+
     setSelectedPosition(pos);
 
     try {
@@ -1025,7 +1067,6 @@ export default function SwitchboardMap() {
     navigate(`/app/switchboards?board=${boardId}`);
   };
 
-  /* ----------------------------- Filters / Stats ----------------------------- */
   const currentPlanIds = useMemo(
     () => new Set(positions.map((p) => p.switchboard_id)),
     [positions]
@@ -1062,7 +1103,6 @@ export default function SwitchboardMap() {
     [switchboards, placedIds]
   );
 
-  /* ----------------------------- Render ----------------------------- */
   return (
     <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
       <style>{`
@@ -1130,7 +1170,10 @@ export default function SwitchboardMap() {
           <div className="w-full max-w-[360px] bg-white border-r shadow-sm flex flex-col animate-slideRight">
             <div className="p-3 border-b space-y-2">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Search
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400"
+                  size={16}
+                />
                 <Input
                   className="pl-8"
                   placeholder="Rechercher un tableau..."
@@ -1181,7 +1224,8 @@ export default function SwitchboardMap() {
                 filteredSwitchboards.map((b) => {
                   const isPlacedHere = currentPlanIds.has(b.id);
                   const isPlacedSomewhere = placedIds.has(b.id);
-                  const isPlacedElsewhere = isPlacedSomewhere && !isPlacedHere;
+                  const isPlacedElsewhere =
+                    isPlacedSomewhere && !isPlacedHere;
                   const isSelected =
                     selectedPosition?.switchboard_id === b.id ||
                     selectedBoard?.id === b.id;
@@ -1195,7 +1239,9 @@ export default function SwitchboardMap() {
                       isPlacedElsewhere={isPlacedElsewhere}
                       isSelected={isSelected}
                       onClick={() => {
-                        const pos = positions.find((p) => p.switchboard_id === b.id);
+                        const pos = positions.find(
+                          (p) => p.switchboard_id === b.id
+                        );
                         if (pos) handlePositionClick(pos);
                         else {
                           setSelectedPosition(null);
@@ -1220,7 +1266,9 @@ export default function SwitchboardMap() {
                 className="border rounded-lg px-3 py-2 text-sm bg-white text-black"
                 value={selectedPlan?.logical_name || ""}
                 onChange={(e) => {
-                  const p = plans.find((x) => x.logical_name === e.target.value);
+                  const p = plans.find(
+                    (x) => x.logical_name === e.target.value
+                  );
                   setSelectedPlan(p || null);
                   setPageIndex(0);
                   setSelectedPosition(null);
@@ -1237,7 +1285,9 @@ export default function SwitchboardMap() {
               <div className="flex items-center gap-1">
                 <Btn
                   variant="ghost"
-                  onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                  onClick={() =>
+                    setPageIndex((i) => Math.max(0, i - 1))
+                  }
                   disabled={pageIndex <= 0}
                   title="Page précédente"
                 >
@@ -1249,7 +1299,9 @@ export default function SwitchboardMap() {
                 <Btn
                   variant="ghost"
                   onClick={() =>
-                    setPageIndex((i) => Math.min(numPages - 1, i + 1))
+                    setPageIndex((i) =>
+                      Math.min(numPages - 1, i + 1)
+                    )
                   }
                   disabled={pageIndex >= numPages - 1}
                   title="Page suivante"
@@ -1297,13 +1349,11 @@ export default function SwitchboardMap() {
                 initialPoints={positions}
                 placementActive={!!placementMode}
                 onReady={() => {
-                  // update numPages once pdf is ready
                   (async () => {
                     try {
-                      const t = pdfjsLib.getDocument({
-                        url: stableFileUrl,
-                        withCredentials: true,
-                      });
+                      const t = pdfjsLib.getDocument(
+                        pdfDocOpts(stableFileUrl)
+                      );
                       const pdf = await t.promise;
                       setNumPages(pdf.numPages || 1);
                       await t.destroy();
@@ -1312,7 +1362,11 @@ export default function SwitchboardMap() {
                 }}
                 onClickPoint={handlePositionClick}
                 onMovePoint={async (switchboardId, xy) => {
-                  await handleSetPositionById(switchboardId, xy.x, xy.y);
+                  await handleSetPositionById(
+                    switchboardId,
+                    xy.x,
+                    xy.y
+                  );
                 }}
                 onCreatePoint={(xFrac, yFrac) => {
                   if (!placementMode) return;
@@ -1342,13 +1396,18 @@ export default function SwitchboardMap() {
         title="Détacher du plan"
         message={
           confirmState.position
-            ? `Supprimer le placement de ${confirmState.position.code || confirmState.position.name} ?`
+            ? `Supprimer le placement de ${
+                confirmState.position.code ||
+                confirmState.position.name
+              } ?`
             : ""
         }
         confirmText="Détacher"
         cancelText="Annuler"
         danger
-        onCancel={() => setConfirmState({ open: false, position: null })}
+        onCancel={() =>
+          setConfirmState({ open: false, position: null })
+        }
         onConfirm={async () => {
           const pos = confirmState.position;
           setConfirmState({ open: false, position: null });
