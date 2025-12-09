@@ -878,8 +878,15 @@ app.get("/api/switchboard/maps/missing", async (req, res) => {
 
 await ensureSchema();
 
-app.listen(PORT, HOST, () => {
-  console.log(`[switchboard-map] listening on ${HOST}:${PORT}`);
-  console.log(`[switchboard-map] VSD proxy: ${VSD_MAPS_BASE}`);
-  console.log(`[switchboard-map] Switchboard service: ${SWITCHBOARD_BASE}`);
-});
+// ✅ Export pour que server_switchboard.js puisse monter ces routes
+export default app;
+
+// ✅ On ne démarre ce microservice SEUL que si on le demande explicitement
+if (process.env.START_SWB_MAP === "true") {
+  app.listen(PORT, HOST, () => {
+    console.log(`[switchboard-map] listening on ${HOST}:${PORT}`);
+    console.log(`[switchboard-map] VSD proxy: ${VSD_MAPS_BASE}`);
+    console.log(`[switchboard-map] Switchboard service: ${SWITCHBOARD_BASE}`);
+  });
+}
+
