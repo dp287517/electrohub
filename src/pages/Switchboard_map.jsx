@@ -6,15 +6,13 @@ import "pdfjs-dist/web/pdf_viewer.css";
 
 import {
   Map, Zap, Search, ChevronLeft, ChevronRight,
-  Building2, Layers, MapPin, CheckCircle, AlertCircle, X, Eye,
-  RefreshCw, List, Trash2, ExternalLink,
-  ZoomIn, ZoomOut, RotateCcw,
-  ArrowLeft, Target, Crosshair
+  Building2, Layers, CheckCircle, AlertCircle, X,
+  RefreshCw, List, ZoomIn, ZoomOut, RotateCcw,
+  ArrowLeft, Target, Crosshair, ExternalLink, Trash2
 } from "lucide-react";
 
 // Configuration du worker PDF.js
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // ==================== COMPONENTS ====================
 
@@ -62,16 +60,49 @@ const EmptyState = ({ icon: Icon, title, description, action }) => (
   </div>
 );
 
+// Modal confirmation (style proche de Switchboards)
+const ConfirmModal = ({ open, title, message, confirmLabel="Confirmer", cancelLabel="Annuler", onConfirm, onCancel, danger=false }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border animate-slideUp overflow-hidden">
+        <div className={`p-4 ${danger ? "bg-gradient-to-r from-red-500 to-rose-600" : "bg-gradient-to-r from-blue-500 to-indigo-600"} text-white`}>
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-lg">{title}</h3>
+            <button onClick={onCancel} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+        <div className="p-4 text-gray-700 text-sm">
+          {message}
+        </div>
+        <div className="p-4 pt-0 flex items-center justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`px-4 py-2 rounded-xl text-white font-medium transition
+              ${danger
+                ? "bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700"
+                : "bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
+              }`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Switchboard Card (for sidebar)
-const SwitchboardCard = ({
-  board,
-  isPlacedHere,
-  isPlacedSomewhere,
-  isPlacedElsewhere,
-  isSelected,
-  onClick,
-  onPlace
-}) => {
+const SwitchboardCard = ({ board, isPlaced, isSelected, onClick, onPlace }) => {
   return (
     <div
       className={`p-3 rounded-xl border transition-all cursor-pointer group
@@ -88,10 +119,6 @@ const SwitchboardCard = ({
             </span>
             {board.is_principal && (
               <Badge variant="success">Principal</Badge>
-            )}
-            {/* NEW: placé ailleurs */}
-            {isPlacedElsewhere && (
-              <Badge variant="purple">Placé ailleurs</Badge>
             )}
           </div>
           <p className={`text-xs truncate mt-0.5 ${isSelected ? 'text-blue-600' : 'text-gray-500'}`}>
@@ -110,15 +137,10 @@ const SwitchboardCard = ({
         </div>
 
         <div className="flex flex-col items-end gap-1">
-          {isPlacedHere ? (
+          {isPlaced ? (
             <span className="flex items-center gap-1 text-emerald-600 text-xs">
               <CheckCircle size={14} />
               Placé
-            </span>
-          ) : isPlacedSomewhere ? (
-            <span className="flex items-center gap-1 text-purple-600 text-xs">
-              <CheckCircle size={14} />
-              Placé ailleurs
             </span>
           ) : (
             <span className="flex items-center gap-1 text-amber-600 text-xs">
@@ -127,15 +149,15 @@ const SwitchboardCard = ({
             </span>
           )}
 
-          {/* NEW: bouton toujours dispo pour replacer/déplacer */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onPlace(board); }}
-            className="px-2 py-1 bg-blue-500 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
-            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
-          >
-            <Target size={12} />
-            {isPlacedSomewhere ? "Déplacer" : "Placer"}
-          </button>
+          {!isPlaced && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPlace(board); }}
+              className="px-2 py-1 bg-blue-500 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
+            >
+              <Target size={12} />
+              Placer
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -143,38 +165,24 @@ const SwitchboardCard = ({
 };
 
 // Position Marker on Map
-const PositionMarker = ({
-  position,
-  isSelected,
-  isFocused,
-  isDragging,
-  draggingFrac,
-  onClick,
-  onDelete,
-  onStartDrag,
-  scale = 1
-}) => {
+const PositionMarker = ({ position, isSelected, isFocused, onClick, onDelete }) => {
   const [showMenu, setShowMenu] = useState(false);
 
   const markerSize = isFocused ? 24 : isSelected ? 20 : 16;
-
-  const xFrac = isDragging ? draggingFrac.xFrac : position.x_frac;
-  const yFrac = isDragging ? draggingFrac.yFrac : position.y_frac;
 
   return (
     <div
       className="absolute transform -translate-x-1/2 -translate-y-1/2 z-10"
       style={{
-        left: `${xFrac * 100}%`,
-        top: `${yFrac * 100}%`,
+        left: `${position.x_frac * 100}%`,
+        top: `${position.y_frac * 100}%`,
       }}
     >
       {/* Marker */}
       <div
         onClick={(e) => { e.stopPropagation(); onClick(position); }}
-        onMouseDown={(e) => onStartDrag?.(position, e)}
         onContextMenu={(e) => { e.preventDefault(); setShowMenu(!showMenu); }}
-        className={`relative cursor-move transition-all duration-200 group
+        className={`relative cursor-pointer transition-all duration-200 group
           ${isFocused ? 'z-20' : 'z-10'}`}
         style={{ width: markerSize, height: markerSize }}
       >
@@ -189,11 +197,10 @@ const PositionMarker = ({
             ${position.is_principal
               ? 'bg-gradient-to-br from-emerald-400 to-teal-500'
               : isFocused
-                ? 'bg-gradient-to-br from-blue-500 to-indigo-600'
+                ? 'bg-gradient-to-br from-blue-500 to-indigo-600'      /* on ne touche pas, c’est le beau focus */
                 : isSelected
                   ? 'bg-gradient-to-br from-blue-400 to-blue-600'
-                  // NEW: default yellow electricity (gris -> jaune)
-                  : 'bg-gradient-to-br from-yellow-400 to-amber-500'
+                  : 'bg-gradient-to-br from-yellow-400 to-amber-500'   /* ✅ jaune élec par défaut */
             }`}
         />
 
@@ -225,7 +232,7 @@ const PositionMarker = ({
               onClick={(e) => { e.stopPropagation(); onClick(position); setShowMenu(false); }}
               className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
             >
-              <Eye size={14} />
+              <ExternalLink size={14} />
               Voir détails
             </button>
             <button
@@ -243,7 +250,7 @@ const PositionMarker = ({
 };
 
 // Detail Panel for selected switchboard
-const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
+const DetailPanel = ({ position, board, onClose, onNavigate }) => {
   if (!position) return null;
 
   return (
@@ -295,12 +302,6 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
           )}
         </div>
 
-        {/* Coordinates */}
-        <div className="text-xs text-gray-400 flex items-center gap-2">
-          <MapPin size={12} />
-          Position: {(position.x_frac * 100).toFixed(1)}%, {(position.y_frac * 100).toFixed(1)}%
-        </div>
-
         {/* Actions */}
         <div className="flex gap-2 pt-2">
           <button
@@ -309,15 +310,6 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
           >
             <ExternalLink size={16} />
             Ouvrir le tableau
-          </button>
-
-          {/* NEW: détacher du plan */}
-          <button
-            onClick={() => onDelete?.(position)}
-            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
-            title="Détacher du plan"
-          >
-            <Trash2 size={16} />
           </button>
         </div>
       </div>
@@ -334,7 +326,9 @@ const PlacementModeIndicator = ({ board, onCancel }) => (
       </div>
       <div>
         <p className="font-semibold">Mode placement actif</p>
-        <p className="text-blue-200 text-sm">Cliquez sur le plan pour placer <span className="font-mono">{board.code}</span></p>
+        <p className="text-blue-200 text-sm">
+          Cliquez sur le plan pour placer <span className="font-mono">{board.code}</span>
+        </p>
       </div>
       <button
         onClick={onCancel}
@@ -381,9 +375,9 @@ export default function SwitchboardMap() {
   const [pageSize, setPageSize] = useState({ w: 800, h: 600 });
   const [zoom, setZoom] = useState(1);
 
-  // Drag state
-  const [draggingPos, setDraggingPos] = useState(null); // { position, xFrac, yFrac }
-  const dragMoveRef = useRef(null);
+  // Confirm modal state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmPayload, setConfirmPayload] = useState(null);
 
   // Refs
   const containerRef = useRef(null);
@@ -391,8 +385,17 @@ export default function SwitchboardMap() {
   const pdfDocRef = useRef(null);
 
   // Zoom focus / pinch refs
-  const zoomFocusRef = useRef(null); // { xFrac, yFrac, prevZoom }
-  const pinchRef = useRef({ active: false, startDist: 0, startZoom: 1, mid: { xFrac: 0.5, yFrac: 0.5 } });
+  const zoomFocusRef = useRef(null); // { xFrac, yFrac }
+  const pinchRef = useRef({
+    active: false,
+    startDist: 0,
+    startZoom: 1,
+    mid: { xFrac: 0.5, yFrac: 0.5 },
+  });
+
+  // throttle zoom updates (mobile)
+  const rafZoomRef = useRef(null);
+  const pendingZoomRef = useRef(zoom);
 
   const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
@@ -401,13 +404,11 @@ export default function SwitchboardMap() {
   // Responsive
   useEffect(() => {
     const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth < 768) {
-        setShowSidebar(false);
-      }
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) setShowSidebar(false);
     };
     window.addEventListener('resize', handleResize);
-    handleResize();
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
@@ -423,17 +424,13 @@ export default function SwitchboardMap() {
 
   // Load positions when plan/page changes
   useEffect(() => {
-    if (selectedPlan) {
-      loadPositions();
-    }
+    if (selectedPlan) loadPositions();
   }, [selectedPlan, pageIndex]);
 
   // Render PDF when plan/page/zoom changes
   useEffect(() => {
-    if (selectedPlan) {
-      renderPdfPage();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (selectedPlan) renderPdfPage();
+    // eslint-disable-next-line
   }, [selectedPlan, pageIndex, zoom]);
 
   // ==================== API CALLS ====================
@@ -454,17 +451,6 @@ export default function SwitchboardMap() {
     }
   };
 
-  const refreshPlacedIds = async () => {
-    try {
-      const placedRes = await api.switchboardMaps.placedIds();
-      const ids = placedRes?.placed_ids || placedRes || [];
-      setPlacedIds(new Set(ids));
-    } catch (e) {
-      console.error("Erreur chargement placements:", e);
-      setPlacedIds(new Set());
-    }
-  };
-
   const loadSwitchboards = async () => {
     setLoadingSwitchboards(true);
     try {
@@ -472,8 +458,14 @@ export default function SwitchboardMap() {
       const list = res?.data || [];
       setSwitchboards(list);
 
-      // Global placed IDs only (reliable)
-      await refreshPlacedIds();
+      // Load placed IDs
+      try {
+        const placedRes = await api.switchboardMaps.placedIds();
+        const ids = placedRes?.placed_ids || [];
+        setPlacedIds(new Set(ids));
+      } catch (e) {
+        console.error("Erreur chargement placements:", e);
+      }
     } catch (err) {
       console.error("Erreur chargement switchboards:", err);
     } finally {
@@ -489,7 +481,10 @@ export default function SwitchboardMap() {
       const posList = res?.positions || [];
       setPositions(posList);
 
-      // IMPORTANT: ne pas toucher placedIds ici (sinon faux "non placé")
+      // Update placed IDs
+      const newPlacedIds = new Set(placedIds);
+      posList.forEach(p => newPlacedIds.add(p.switchboard_id));
+      setPlacedIds(newPlacedIds);
     } catch (err) {
       console.error("Erreur chargement positions:", err);
     } finally {
@@ -497,12 +492,12 @@ export default function SwitchboardMap() {
     }
   };
 
-  const handleSetPositionById = async (switchboardId, xFrac, yFrac) => {
-    if (!selectedPlan || !switchboardId) return;
+  const handleSetPosition = async (board, xFrac, yFrac) => {
+    if (!selectedPlan || !board) return;
 
     try {
       await api.switchboardMaps.setPosition({
-        switchboard_id: switchboardId,
+        switchboard_id: board.id,
         logical_name: selectedPlan.logical_name,
         plan_id: selectedPlan.id || null,
         page_index: pageIndex,
@@ -511,8 +506,7 @@ export default function SwitchboardMap() {
       });
 
       await loadPositions();
-      await refreshPlacedIds();
-
+      setPlacedIds(prev => new Set([...prev, board.id]));
       setPlacementMode(null);
 
     } catch (err) {
@@ -521,14 +515,12 @@ export default function SwitchboardMap() {
     }
   };
 
-  const handleSetPosition = async (board, xFrac, yFrac) => {
-    if (!selectedPlan || !board) return;
-    return handleSetPositionById(board.id, xFrac, yFrac);
+  const askDeletePosition = (position) => {
+    setConfirmPayload(position);
+    setConfirmOpen(true);
   };
 
   const handleDeletePosition = async (position) => {
-    if (!confirm(`Supprimer le placement de ${position.code || position.name} ?`)) return;
-
     try {
       const response = await fetch(`${api.baseURL}/api/switchboard/maps/positions/${position.id}`, {
         method: 'DELETE',
@@ -542,7 +534,6 @@ export default function SwitchboardMap() {
       if (!response.ok) throw new Error('Delete failed');
 
       await loadPositions();
-      await refreshPlacedIds();
 
       if (selectedPosition?.id === position.id) {
         setSelectedPosition(null);
@@ -585,15 +576,15 @@ export default function SwitchboardMap() {
       const scaleX = (containerWidth - 40) / baseViewport.width;
       const scaleY = (containerHeight - 40) / baseViewport.height;
       const baseScale = Math.min(scaleX, scaleY);
-      const finalScale = baseScale * zoom;
 
+      const finalScale = baseScale * zoom;
       const viewport = page.getViewport({ scale: finalScale });
 
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
       const dpr = window.devicePixelRatio || 1;
 
-      // NEW: netteté parfaite
+      // netteté OK
       ctx.imageSmoothingEnabled = true;
       canvas.style.imageRendering = "auto";
 
@@ -607,18 +598,14 @@ export default function SwitchboardMap() {
 
       await page.render({ canvasContext: ctx, viewport }).promise;
 
-      // NEW: zoom focus recenter (sur pointeur)
+      // recentrage sur focus (pointeur / pinch)
       const focus = zoomFocusRef.current;
       if (focus && containerRef.current) {
-        const { xFrac, yFrac } = focus;
         const cont = containerRef.current;
-
-        const targetX = viewport.width * xFrac;
-        const targetY = viewport.height * yFrac;
-
-        cont.scrollLeft = targetX - (cont.clientWidth / 2);
-        cont.scrollTop = targetY - (cont.clientHeight / 2);
-
+        const targetX = viewport.width * focus.xFrac;
+        const targetY = viewport.height * focus.yFrac;
+        cont.scrollLeft = targetX - cont.clientWidth / 2;
+        cont.scrollTop = targetY - cont.clientHeight / 2;
         zoomFocusRef.current = null;
       }
 
@@ -631,8 +618,9 @@ export default function SwitchboardMap() {
     }
   };
 
-  // ==================== ZOOM HANDLERS (PC + Mobile) ====================
+  // ==================== ZOOM HANDLERS ====================
 
+  // ✅ PC : Ctrl/Cmd + wheel => zoom sur pointeur
   const handleWheelZoom = useCallback((e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -646,13 +634,30 @@ export default function SwitchboardMap() {
     const xFrac = clamp(mouseX / rect.width, 0, 1);
     const yFrac = clamp(mouseY / rect.height, 0, 1);
 
-    const prevZoom = zoom;
-    const delta = e.deltaY > 0 ? -0.15 : 0.15;
-    const nextZoom = clamp(prevZoom + delta, 0.5, 5);
+    zoomFocusRef.current = { xFrac, yFrac };
 
-    zoomFocusRef.current = { xFrac, yFrac, prevZoom };
-    setZoom(nextZoom);
+    const delta = -e.deltaY;
+    const step = delta > 0 ? 0.2 : -0.2;
+    const newZoom = clamp(zoom + step, 0.5, 3);
+
+    setZoom(newZoom);
   }, [zoom]);
+
+  // ✅ Mobile : pinch stable (throttle + focus)
+  const getTouchDist = (t1, t2) => {
+    const dx = t1.clientX - t2.clientX;
+    const dy = t1.clientY - t2.clientY;
+    return Math.hypot(dx, dy);
+  };
+
+  const scheduleZoomUpdate = (value) => {
+    pendingZoomRef.current = value;
+    if (rafZoomRef.current) return;
+    rafZoomRef.current = requestAnimationFrame(() => {
+      rafZoomRef.current = null;
+      setZoom(pendingZoomRef.current);
+    });
+  };
 
   const handleTouchStart = (e) => {
     if (e.touches.length === 2) {
@@ -661,93 +666,41 @@ export default function SwitchboardMap() {
 
       const t1 = e.touches[0];
       const t2 = e.touches[1];
-
-      const dx = t2.clientX - t1.clientX;
-      const dy = t2.clientY - t1.clientY;
-      const dist = Math.hypot(dx, dy);
+      const dist = getTouchDist(t1, t2);
 
       const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
       const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+
+      const xFrac = clamp(midX / rect.width, 0, 1);
+      const yFrac = clamp(midY / rect.height, 0, 1);
 
       pinchRef.current = {
         active: true,
         startDist: dist,
         startZoom: zoom,
-        mid: {
-          xFrac: clamp(midX / rect.width, 0, 1),
-          yFrac: clamp(midY / rect.height, 0, 1),
-        },
+        mid: { xFrac, yFrac },
       };
+
+      zoomFocusRef.current = { xFrac, yFrac };
     }
   };
 
   const handleTouchMove = (e) => {
     if (!pinchRef.current.active || e.touches.length !== 2) return;
-
     e.preventDefault();
 
-    const t1 = e.touches[0];
-    const t2 = e.touches[1];
+    const dist = getTouchDist(e.touches[0], e.touches[1]);
+    const ratio = dist / (pinchRef.current.startDist || 1);
+    const next = clamp(pinchRef.current.startZoom * ratio, 0.5, 3);
 
-    const dx = t2.clientX - t1.clientX;
-    const dy = t2.clientY - t1.clientY;
-    const dist = Math.hypot(dx, dy);
-
-    const ratio = dist / pinchRef.current.startDist;
-    const nextZoom = clamp(pinchRef.current.startZoom * ratio, 0.5, 5);
-
-    zoomFocusRef.current = {
-      xFrac: pinchRef.current.mid.xFrac,
-      yFrac: pinchRef.current.mid.yFrac,
-      prevZoom: zoom
-    };
-
-    setZoom(nextZoom);
+    zoomFocusRef.current = pinchRef.current.mid;
+    scheduleZoomUpdate(next);
   };
 
-  const handleTouchEnd = () => {
-    pinchRef.current.active = false;
-  };
-
-  // ==================== DRAG MARKERS ====================
-
-  const startDragMarker = (position, e) => {
-    if (placementMode) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    setDraggingPos({
-      position,
-      xFrac: position.x_frac,
-      yFrac: position.y_frac
-    });
-
-    dragMoveRef.current = (evt) => {
-      const r = canvasRef.current?.getBoundingClientRect();
-      if (!r) return;
-
-      const x = clamp((evt.clientX - r.left) / r.width, 0, 1);
-      const y = clamp((evt.clientY - r.top) / r.height, 0, 1);
-
-      setDraggingPos((cur) => cur ? ({ ...cur, xFrac: x, yFrac: y }) : cur);
-    };
-
-    const stop = async () => {
-      window.removeEventListener("mousemove", dragMoveRef.current);
-      window.removeEventListener("mouseup", stop);
-
-      setDraggingPos((cur) => {
-        if (!cur) return null;
-        handleSetPositionById(cur.position.switchboard_id, cur.xFrac, cur.yFrac);
-        return null;
-      });
-    };
-
-    window.addEventListener("mousemove", dragMoveRef.current);
-    window.addEventListener("mouseup", stop);
+  const handleTouchEnd = (e) => {
+    if (e.touches.length < 2) {
+      pinchRef.current.active = false;
+    }
   };
 
   // ==================== EVENT HANDLERS ====================
@@ -790,9 +743,7 @@ export default function SwitchboardMap() {
     setPlacementMode(board);
     setSelectedPosition(null);
     setSelectedBoard(null);
-    if (isMobile) {
-      setShowSidebar(false);
-    }
+    if (isMobile) setShowSidebar(false);
   };
 
   const handleNavigateToBoard = (boardId) => {
@@ -800,11 +751,6 @@ export default function SwitchboardMap() {
   };
 
   // ==================== FILTERED DATA ====================
-
-  const currentPlanIds = useMemo(
-    () => new Set(positions.map(p => p.switchboard_id)),
-    [positions]
-  );
 
   const filteredSwitchboards = useMemo(() => {
     let filtered = switchboards;
@@ -854,6 +800,23 @@ export default function SwitchboardMap() {
           animation: slideRight 0.3s ease-out forwards;
         }
       `}</style>
+
+      {/* ✅ Confirm modal */}
+      <ConfirmModal
+        open={confirmOpen}
+        danger
+        title="Supprimer le placement"
+        message={confirmPayload ? `Supprimer le placement de ${confirmPayload.code || confirmPayload.name || 'ce tableau'} ?` : ""}
+        confirmLabel="Supprimer"
+        cancelLabel="Annuler"
+        onCancel={() => { setConfirmOpen(false); setConfirmPayload(null); }}
+        onConfirm={async () => {
+          const p = confirmPayload;
+          setConfirmOpen(false);
+          setConfirmPayload(null);
+          if (p) await handleDeletePosition(p);
+        }}
+      />
 
       {/* Header */}
       <div className="bg-white border-b shadow-sm z-20">
@@ -925,7 +888,7 @@ export default function SwitchboardMap() {
                 </div>
               )}
 
-              {/* Zoom controls (desktop) */}
+              {/* Zoom controls */}
               <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-xl p-1">
                 <button
                   onClick={() => setZoom(Math.max(0.5, zoom - 0.25))}
@@ -938,7 +901,7 @@ export default function SwitchboardMap() {
                   {Math.round(zoom * 100)}%
                 </span>
                 <button
-                  onClick={() => setZoom(Math.min(5, zoom + 0.25))}
+                  onClick={() => setZoom(Math.min(3, zoom + 0.25))}
                   className="p-1.5 rounded-lg hover:bg-white transition-colors"
                   title="Zoom +"
                 >
@@ -975,7 +938,7 @@ export default function SwitchboardMap() {
         <div
           ref={containerRef}
           onWheel={handleWheelZoom}
-          className="flex-1 relative overflow-auto bg-gray-200"
+          className="flex-1 relative overflow-auto bg-gray-200 touch-pan-x touch-pan-y"
         >
           {/* Loading overlay */}
           {(isRenderingPdf || loadingPositions) && (
@@ -992,7 +955,7 @@ export default function SwitchboardMap() {
           {/* No plan selected */}
           {!selectedPlan && !loadingPlans && (
             <EmptyState
-              icon={MapPin}
+              icon={Map}
               title="Aucun plan sélectionné"
               description="Sélectionnez un plan dans la liste ci-dessus pour commencer"
             />
@@ -1003,9 +966,8 @@ export default function SwitchboardMap() {
             <div className="min-h-full flex items-center justify-center p-4">
               <div
                 className="relative bg-white shadow-xl rounded-lg overflow-hidden"
-                style={{ width: pageSize.w, height: pageSize.h }}
+                style={{ width: pageSize.w, height: pageSize.h, touchAction: "none" }}
               >
-                {/* Canvas */}
                 <canvas
                   ref={canvasRef}
                   onClick={handleCanvasClick}
@@ -1016,23 +978,16 @@ export default function SwitchboardMap() {
                 />
 
                 {/* Position Markers */}
-                {positions.map(position => {
-                  const isDragging = draggingPos?.position?.id === position.id;
-                  return (
-                    <PositionMarker
-                      key={position.id}
-                      position={position}
-                      isSelected={selectedPosition?.switchboard_id === position.switchboard_id}
-                      isFocused={selectedPosition?.id === position.id}
-                      isDragging={isDragging}
-                      draggingFrac={isDragging ? { xFrac: draggingPos.xFrac, yFrac: draggingPos.yFrac } : null}
-                      onClick={handlePositionClick}
-                      onDelete={handleDeletePosition}
-                      onStartDrag={startDragMarker}
-                      scale={zoom}
-                    />
-                  );
-                })}
+                {positions.map(position => (
+                  <PositionMarker
+                    key={position.id}
+                    position={position}
+                    isSelected={selectedPosition?.switchboard_id === position.switchboard_id}
+                    isFocused={selectedPosition?.id === position.id}
+                    onClick={handlePositionClick}
+                    onDelete={askDeletePosition}
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -1051,7 +1006,6 @@ export default function SwitchboardMap() {
               position={selectedPosition}
               board={selectedBoard}
               onClose={() => { setSelectedPosition(null); setSelectedBoard(null); }}
-              onDelete={handleDeletePosition}
               onNavigate={handleNavigateToBoard}
             />
           )}
@@ -1110,7 +1064,9 @@ export default function SwitchboardMap() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Rechercher..."
-                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-xl text-sm
+                             focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                             bg-white text-gray-900 placeholder-gray-400"
                 />
               </div>
 
@@ -1149,28 +1105,20 @@ export default function SwitchboardMap() {
                   description={searchQuery ? "Essayez une autre recherche" : "Aucun tableau disponible"}
                 />
               ) : (
-                filteredSwitchboards.map((board, index) => {
-                  const isPlacedSomewhere = placedIds.has(board.id);
-                  const isPlacedHere = currentPlanIds.has(board.id);
-                  const isPlacedElsewhere = isPlacedSomewhere && !isPlacedHere;
-
-                  return (
-                    <AnimatedCard key={board.id} delay={index * 30}>
-                      <SwitchboardCard
-                        board={board}
-                        isPlacedHere={isPlacedHere}
-                        isPlacedSomewhere={isPlacedSomewhere}
-                        isPlacedElsewhere={isPlacedElsewhere}
-                        isSelected={selectedPosition?.switchboard_id === board.id}
-                        onClick={() => {
-                          const pos = positions.find(p => p.switchboard_id === board.id);
-                          if (pos) handlePositionClick(pos);
-                        }}
-                        onPlace={handlePlaceBoard}
-                      />
-                    </AnimatedCard>
-                  );
-                })
+                filteredSwitchboards.map((board, index) => (
+                  <AnimatedCard key={board.id} delay={index * 30}>
+                    <SwitchboardCard
+                      board={board}
+                      isPlaced={placedIds.has(board.id)}
+                      isSelected={selectedPosition?.switchboard_id === board.id}
+                      onClick={() => {
+                        const pos = positions.find(p => p.switchboard_id === board.id);
+                        if (pos) handlePositionClick(pos);
+                      }}
+                      onPlace={handlePlaceBoard}
+                    />
+                  </AnimatedCard>
+                ))
               )}
             </div>
 
