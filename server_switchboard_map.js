@@ -885,6 +885,37 @@ app.get("/api/switchboard/maps/missing", async (req, res) => {
   }
 });
 
+// Alias explicite : /api/switchboard-map/placed-ids (utilisé par certains fronts)
+app.get("/api/switchboard-map/placed-ids", async (req, res) => {
+  try {
+    const site = getSite(req);
+
+    const { rows } = await pool.query(
+      `SELECT switchboard_id,
+              COUNT(*) as position_count,
+              array_agg(DISTINCT logical_name) as plans
+       FROM switchboard_positions
+       WHERE site = $1
+       GROUP BY switchboard_id`,
+      [site]
+    );
+
+    const placedIds = rows.map((r) => Number(r.switchboard_id));
+    const placedDetails = {};
+    rows.forEach((r) => {
+      placedDetails[r.switchboard_id] = {
+        position_count: Number(r.position_count),
+        plans: r.plans || [],
+      };
+    });
+
+    res.json({ ok: true, placed_ids: placedIds, placed_details: placedDetails });
+  } catch (e) {
+    console.error("[swb-map] Get placed-ids alias error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // -------------------------------------------------
 // Initialisation et démarrage
 // -------------------------------------------------
