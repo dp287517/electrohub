@@ -45,6 +45,10 @@ import {
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
+/* ----------------------------- LocalStorage Keys ----------------------------- */
+const STORAGE_KEY_PLAN = "switchboard_map_selected_plan";
+const STORAGE_KEY_PAGE = "switchboard_map_page_index";
+
 /* ----------------------------- Helpers EXACT VSD ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(
@@ -220,6 +224,39 @@ function ConfirmModal({
           </Btn>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Context Menu (Mobile + Desktop) ----------------------------- */
+function ContextMenu({ x, y, onDelete, onClose }) {
+  useEffect(() => {
+    const handleClick = () => onClose();
+    const handleScroll = () => onClose();
+    window.addEventListener("click", handleClick);
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed bg-white rounded-xl shadow-2xl border py-1 z-[6000] min-w-[160px] animate-slideUp"
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Trash2 size={16} />
+        Détacher du plan
+      </button>
     </div>
   );
 }
@@ -428,17 +465,19 @@ const PlacementModeIndicator = ({ board, onCancel }) => (
   </div>
 );
 
-/* ----------------------------- Leaflet Viewer (EXACT VSD PATTERN) ----------------------------- */
+/* ----------------------------- Leaflet Viewer (ENHANCED) ----------------------------- */
 const SwitchboardLeafletViewer = forwardRef(
   (
     {
       fileUrl,
       pageIndex = 0,
       initialPoints = [],
+      selectedId = null,
       onReady,
       onMovePoint,
       onClickPoint,
       onCreatePoint,
+      onContextMenu,
       disabled = false,
       placementActive = false,
     },
@@ -448,11 +487,14 @@ const SwitchboardLeafletViewer = forwardRef(
     const mapRef = useRef(null);
     const imageLayerRef = useRef(null);
     const markersLayerRef = useRef(null);
+    const markersMapRef = useRef(new Map()); // switchboard_id -> marker
 
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
     const [picker, setPicker] = useState(null);
 
     const pointsRef = useRef(initialPoints);
+    const selectedIdRef = useRef(selectedId);
+    const placementActiveRef = useRef(placementActive);
     const aliveRef = useRef(true);
 
     // Zoom persistant (exact VSD)
@@ -464,16 +506,44 @@ const SwitchboardLeafletViewer = forwardRef(
     const loadingTaskRef = useRef(null);
     const renderTaskRef = useRef(null);
 
+    // Long press pour mobile
+    const longPressTimerRef = useRef(null);
+    const longPressTriggeredRef = useRef(false);
+
     const ICON_PX = 22;
+    const ICON_PX_SELECTED = 30;
     const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
 
-    function makeSwitchboardIcon(isPrincipal = false) {
-      const s = ICON_PX;
-      const bg = isPrincipal
-        ? "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);"
-        : "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
+    // Keep refs in sync
+    useEffect(() => {
+      placementActiveRef.current = placementActive;
+    }, [placementActive]);
+
+    // Update selectedIdRef when prop changes
+    useEffect(() => {
+      selectedIdRef.current = selectedId;
+      // Re-draw markers to update selection state
+      if (mapRef.current && imgSize.w > 0) {
+        drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+      }
+    }, [selectedId]);
+
+    function makeSwitchboardIcon(isPrincipal = false, isSelected = false) {
+      const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+      
+      let bg;
+      if (isSelected) {
+        // Violet/bleu pulsant pour la sélection
+        bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+      } else if (isPrincipal) {
+        bg = "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);";
+      } else {
+        bg = "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
+      }
+      
+      const animClass = isSelected ? "sb-marker-selected" : "";
       const html = `
-        <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
+        <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
           <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" xmlns="http://www.w3.org/2000/svg">
             <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
           </svg>
@@ -495,6 +565,7 @@ const SwitchboardLeafletViewer = forwardRef(
 
         pointsRef.current = list;
         g.clearLayers();
+        markersMapRef.current.clear();
 
         (list || []).forEach((p) => {
           const x = Number(p.x_frac ?? p.x ?? 0) * w;
@@ -502,11 +573,12 @@ const SwitchboardLeafletViewer = forwardRef(
           if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
           const latlng = L.latLng(y, x);
-          const icon = makeSwitchboardIcon(!!p.is_principal);
+          const isSelected = p.switchboard_id === selectedIdRef.current;
+          const icon = makeSwitchboardIcon(!!p.is_principal, isSelected);
 
           const mk = L.marker(latlng, {
             icon,
-            draggable: !disabled && !placementActive,
+            draggable: !disabled && !placementActiveRef.current,
             autoPan: true,
             bubblingMouseEvents: false,
             keyboard: false,
@@ -527,11 +599,18 @@ const SwitchboardLeafletViewer = forwardRef(
             regime_neutral: p.regime_neutral,
           };
 
-          mk.on("click", () => {
+          // Click handler
+          mk.on("click", (e) => {
+            L.DomEvent.stopPropagation(e);
+            if (longPressTriggeredRef.current) {
+              longPressTriggeredRef.current = false;
+              return;
+            }
             setPicker(null);
             onClickPoint?.(mk.__meta);
           });
 
+          // Drag handler
           mk.on("dragend", () => {
             if (!onMovePoint) return;
             const ll = mk.getLatLng();
@@ -542,11 +621,71 @@ const SwitchboardLeafletViewer = forwardRef(
             onMovePoint(mk.__meta.switchboard_id, { x: xf, y: yf });
           });
 
+          // Context menu (right click - desktop)
+          mk.on("contextmenu", (e) => {
+            L.DomEvent.stopPropagation(e);
+            L.DomEvent.preventDefault(e);
+            const containerPoint = map.latLngToContainerPoint(e.latlng);
+            const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+            onContextMenu?.(mk.__meta, {
+              x: rect.left + containerPoint.x,
+              y: rect.top + containerPoint.y,
+            });
+          });
+
           mk.addTo(g);
+          markersMapRef.current.set(p.switchboard_id, mk);
+
+          // Setup long press after marker is added
+          setTimeout(() => {
+            const el = mk.getElement();
+            if (!el) return;
+
+            const startLongPress = (clientX, clientY) => {
+              longPressTriggeredRef.current = false;
+              longPressTimerRef.current = setTimeout(() => {
+                longPressTriggeredRef.current = true;
+                onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
+              }, 600);
+            };
+
+            const cancelLongPress = () => {
+              if (longPressTimerRef.current) {
+                clearTimeout(longPressTimerRef.current);
+                longPressTimerRef.current = null;
+              }
+            };
+
+            el.addEventListener("touchstart", (e) => {
+              const touch = e.touches[0];
+              startLongPress(touch.clientX, touch.clientY);
+            }, { passive: true });
+
+            el.addEventListener("touchend", cancelLongPress, { passive: true });
+            el.addEventListener("touchcancel", cancelLongPress, { passive: true });
+            el.addEventListener("touchmove", cancelLongPress, { passive: true });
+          }, 50);
         });
       },
-      [onClickPoint, onMovePoint, disabled, placementActive]
+      [onClickPoint, onMovePoint, onContextMenu, disabled]
     );
+
+    // Highlight a specific marker (for navigation from sidebar)
+    const highlightMarker = useCallback((switchboardId) => {
+      const mk = markersMapRef.current.get(switchboardId);
+      if (!mk || !mapRef.current) return;
+
+      // Center on marker
+      const ll = mk.getLatLng();
+      mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+      // Flash animation
+      const el = mk.getElement();
+      if (el) {
+        el.classList.add("sb-marker-flash");
+        setTimeout(() => el.classList.remove("sb-marker-flash"), 2000);
+      }
+    }, []);
 
     useEffect(() => {
       if (disabled) return;
@@ -580,6 +719,7 @@ const SwitchboardLeafletViewer = forwardRef(
           } catch {}
           markersLayerRef.current = null;
         }
+        markersMapRef.current.clear();
         initialFitDoneRef.current = false;
         userViewTouchedRef.current = false;
       };
@@ -636,7 +776,7 @@ const SwitchboardLeafletViewer = forwardRef(
             markerZoomAnimation: false,
             scrollWheelZoom: true,
             touchZoom: true,
-            tap: true,
+            tap: false, // Disable tap to prevent issues with long press
             preferCanvas: true,
             center: lastViewRef.current.center,
             zoom: lastViewRef.current.zoom,
@@ -683,12 +823,12 @@ const SwitchboardLeafletViewer = forwardRef(
           // Créer le layer group pour les markers
           markersLayerRef.current = L.layerGroup().addTo(m);
 
-          // Handler de clic sur la carte (exact VSD pattern)
+          // Handler de clic sur la carte
           m.on("click", (e) => {
             if (!aliveRef.current) return;
 
             // Mode placement : créer un point
-            if (placementActive && onCreatePoint) {
+            if (placementActiveRef.current && onCreatePoint) {
               const ll = e.latlng;
               const xFrac = clamp(ll.lng / canvas.width, 0, 1);
               const yFrac = clamp(ll.lat / canvas.height, 0, 1);
@@ -713,6 +853,11 @@ const SwitchboardLeafletViewer = forwardRef(
             } else {
               setPicker(null);
             }
+          });
+
+          // Disable context menu on map (to allow marker context menu)
+          m.on("contextmenu", (e) => {
+            L.DomEvent.preventDefault(e);
           });
 
           m.on("zoomstart", () => {
@@ -779,9 +924,9 @@ const SwitchboardLeafletViewer = forwardRef(
         cleanupMap();
         cleanupPdf();
       };
-    }, [fileUrl, pageIndex, disabled]);
+    }, [fileUrl, pageIndex, disabled, onCreatePoint]);
 
-    // Synchroniser les points quand initialPoints change (EXACT VSD)
+    // Synchroniser les points quand initialPoints change
     useEffect(() => {
       pointsRef.current = initialPoints;
       if (mapRef.current && imgSize.w > 0) {
@@ -819,6 +964,7 @@ const SwitchboardLeafletViewer = forwardRef(
     useImperativeHandle(ref, () => ({
       adjust,
       drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
+      highlightMarker,
     }));
 
     const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -853,7 +999,7 @@ const SwitchboardLeafletViewer = forwardRef(
           style={{ height: wrapperHeight }}
         />
 
-        {/* Picker pour sélection multiple (exact VSD) */}
+        {/* Picker pour sélection multiple */}
         {picker && (
           <div
             className="absolute bg-white border rounded-xl shadow-xl p-2 z-50"
@@ -898,13 +1044,23 @@ const SwitchboardLeafletViewer = forwardRef(
             />
             Principal
           </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="w-3 h-3 rounded-full"
+              style={{
+                background:
+                  "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)",
+              }}
+            />
+            Sélectionné
+          </span>
         </div>
       </div>
     );
   }
 );
 
-/* ----------------------------- Hook de gestion des positions (EXACT VSD) ----------------------------- */
+/* ----------------------------- Hook de gestion des positions ----------------------------- */
 function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
   const reloadPositionsRef = useRef(null);
   const latestPositionsRef = useRef([]);
@@ -952,7 +1108,7 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
     reloadPositionsRef.current = loadPositions;
   }, [loadPositions]);
 
-  // Rafraîchissement périodique (exact VSD)
+  // Rafraîchissement périodique
   useEffect(() => {
     if (!stableSelectedPlan) return;
 
@@ -1003,6 +1159,7 @@ export default function SwitchboardMap() {
   const [switchboards, setSwitchboards] = useState([]);
   const [loadingSwitchboards, setLoadingSwitchboards] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // switchboard_id -> { plans: [...] }
 
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
@@ -1013,6 +1170,9 @@ export default function SwitchboardMap() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null); // { position, x, y }
+
   // confirm modal state
   const [confirmState, setConfirmState] = useState({
     open: false,
@@ -1021,10 +1181,10 @@ export default function SwitchboardMap() {
 
   const viewerRef = useRef(null);
 
-  // Stabiliser le plan sélectionné (exact VSD)
+  // Stabiliser le plan sélectionné
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
 
-  // Stable plan URL (exact VSD pattern)
+  // Stable plan URL
   const stableFileUrl = useMemo(() => {
     if (!stableSelectedPlan) return null;
     return api.switchboardMaps.planFileUrlAuto(stableSelectedPlan, {
@@ -1032,12 +1192,17 @@ export default function SwitchboardMap() {
     });
   }, [stableSelectedPlan]);
 
-  // Hook de gestion des positions (exact VSD pattern)
+  // Hook de gestion des positions
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(
     stableSelectedPlan,
     pageIndex,
     viewerRef
   );
+
+  // Selected switchboard ID for highlighting
+  const selectedSwitchboardId = useMemo(() => {
+    return selectedPosition?.switchboard_id || null;
+  }, [selectedPosition]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1049,10 +1214,43 @@ export default function SwitchboardMap() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // Load initial data
   useEffect(() => {
     loadPlans();
     loadSwitchboards();
   }, []);
+
+  // Restore plan from localStorage after plans loaded
+  useEffect(() => {
+    if (plans.length > 0 && !selectedPlan) {
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+      
+      let planToSelect = null;
+      if (savedPlanKey) {
+        planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      }
+      if (!planToSelect) {
+        planToSelect = plans[0];
+      }
+      
+      setSelectedPlan(planToSelect);
+      if (savedPageIndex && planToSelect?.logical_name === savedPlanKey) {
+        setPageIndex(Number(savedPageIndex) || 0);
+      }
+    }
+  }, [plans]);
+
+  // Save plan to localStorage
+  useEffect(() => {
+    if (selectedPlan?.logical_name) {
+      localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);
+    }
+  }, [selectedPlan]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
+  }, [pageIndex]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -1060,9 +1258,6 @@ export default function SwitchboardMap() {
       const res = await api.switchboardMaps.listPlans();
       const plansArr = res?.plans || res || [];
       setPlans(plansArr);
-      if (plansArr.length > 0 && !selectedPlan) {
-        setSelectedPlan(plansArr[0]);
-      }
     } catch (err) {
       console.error("Erreur chargement plans:", err);
     } finally {
@@ -1074,10 +1269,13 @@ export default function SwitchboardMap() {
     try {
       const placedRes = await api.switchboardMaps.placedIds();
       const ids = placedRes?.placed_ids || placedRes || [];
+      const details = placedRes?.placed_details || {};
       setPlacedIds(new Set(ids));
+      setPlacedDetails(details);
     } catch (e) {
       console.error("Erreur chargement placements:", e);
       setPlacedIds(new Set());
+      setPlacedDetails({});
     }
   };
 
@@ -1107,7 +1305,8 @@ export default function SwitchboardMap() {
         y_frac: yFrac,
       });
 
-      await refreshPositions(stableSelectedPlan, pageIndex);
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
       await refreshPlacedIds();
       setPlacementMode(null);
     } catch (err) {
@@ -1121,6 +1320,7 @@ export default function SwitchboardMap() {
   };
 
   const askDeletePosition = (position) => {
+    setContextMenu(null);
     setConfirmState({ open: true, position });
   };
 
@@ -1140,7 +1340,8 @@ export default function SwitchboardMap() {
       );
       if (!response.ok) throw new Error("Delete failed");
 
-      await refreshPositions(stableSelectedPlan, pageIndex);
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
       await refreshPlacedIds();
 
       if (selectedPosition?.id === position.id) {
@@ -1154,6 +1355,7 @@ export default function SwitchboardMap() {
 
   const handlePositionClick = useCallback(
     async (positionMeta) => {
+      setContextMenu(null);
       const positions = getLatestPositions();
       const pos =
         positions.find(
@@ -1173,10 +1375,19 @@ export default function SwitchboardMap() {
     [getLatestPositions]
   );
 
+  const handleContextMenu = useCallback((positionMeta, coords) => {
+    setContextMenu({
+      position: positionMeta,
+      x: coords.x,
+      y: coords.y,
+    });
+  }, []);
+
   const handlePlaceBoard = (board) => {
     setPlacementMode(board);
     setSelectedPosition(null);
     setSelectedBoard(null);
+    setContextMenu(null);
     if (isMobile) setShowSidebar(false);
   };
 
@@ -1184,12 +1395,7 @@ export default function SwitchboardMap() {
     navigate(`/app/switchboards?board=${boardId}`);
   };
 
-  // Callback pour PDF prêt (exact VSD)
-  const handlePdfReady = useCallback(() => {
-    setPdfReady(true);
-  }, []);
-
-  // Callback stable pour déplacement de marker (exact VSD)
+  // Callback stable pour déplacement de marker
   const handleMovePoint = useCallback(
     async (switchboardId, xy) => {
       if (!stableSelectedPlan) return;
@@ -1198,11 +1404,11 @@ export default function SwitchboardMap() {
     [stableSelectedPlan, pageIndex]
   );
 
-  // Callback stable pour création de point (exact VSD)
+  // Callback stable pour création de point (mode placement)
   const handleCreatePoint = useCallback(
-    (xFrac, yFrac) => {
-      if (!placementMode) return;
-      handleSetPosition(placementMode, xFrac, yFrac);
+    async (xFrac, yFrac) => {
+      if (!placementMode || !stableSelectedPlan) return;
+      await handleSetPosition(placementMode, xFrac, yFrac);
     },
     [placementMode, stableSelectedPlan, pageIndex]
   );
@@ -1243,13 +1449,14 @@ export default function SwitchboardMap() {
     [switchboards, placedIds]
   );
 
-  // Gestion du changement de plan (exact VSD)
+  // Gestion du changement de plan
   const handlePlanChange = useCallback(
     async (plan) => {
       setSelectedPlan(plan);
       setPageIndex(0);
       setSelectedPosition(null);
       setSelectedBoard(null);
+      setContextMenu(null);
       setPdfReady(false);
       setInitialPoints([]);
       if (plan) {
@@ -1258,6 +1465,61 @@ export default function SwitchboardMap() {
       }
     },
     [refreshPositions]
+  );
+
+  // Navigate to switchboard's plan (from sidebar click)
+  const handleSwitchboardClick = useCallback(
+    async (board) => {
+      setContextMenu(null);
+      
+      // Check if this switchboard is placed somewhere
+      const details = placedDetails[board.id];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0]; // First plan where it's placed
+        
+        // Find the plan
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+        if (targetPlan) {
+          // If we're not on that plan, switch to it
+          if (stableSelectedPlan?.logical_name !== targetPlanKey) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(0);
+            setPdfReady(false);
+            setInitialPoints([]);
+            
+            // Wait for plan to load, then highlight
+            const positions = await refreshPositions(targetPlan, 0);
+            setInitialPoints(positions || []);
+            
+            // Small delay to let viewer render
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(board.id);
+              // Also set as selected
+              const pos = positions?.find(p => p.switchboard_id === board.id);
+              if (pos) {
+                setSelectedPosition(pos);
+                api.switchboard.getBoard(board.id).then(setSelectedBoard).catch(() => {});
+              }
+            }, 500);
+          } else {
+            // Same plan - just highlight and select
+            viewerRef.current?.highlightMarker(board.id);
+            const positions = getLatestPositions();
+            const pos = positions.find(p => p.switchboard_id === board.id);
+            if (pos) {
+              handlePositionClick(pos);
+            }
+          }
+        }
+      } else {
+        // Not placed - just show board info
+        setSelectedPosition(null);
+        setSelectedBoard(board);
+      }
+      
+      if (isMobile) setShowSidebar(false);
+    },
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, getLatestPositions, handlePositionClick, isMobile]
   );
 
   return (
@@ -1271,8 +1533,43 @@ export default function SwitchboardMap() {
           from { opacity: 0; transform: translateX(-20px); }
           to { opacity: 1; transform: translateX(0); }
         }
+        @keyframes pulse-selected {
+          0%, 100% { 
+            transform: scale(1); 
+            box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7);
+          }
+          50% { 
+            transform: scale(1.15); 
+            box-shadow: 0 0 0 8px rgba(139, 92, 246, 0);
+          }
+        }
+        @keyframes flash-marker {
+          0%, 100% { 
+            transform: scale(1); 
+            filter: brightness(1);
+          }
+          25% { 
+            transform: scale(1.3); 
+            filter: brightness(1.3);
+          }
+          50% { 
+            transform: scale(1); 
+            filter: brightness(1);
+          }
+          75% { 
+            transform: scale(1.3); 
+            filter: brightness(1.3);
+          }
+        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
         .animate-slideRight { animation: slideRight .3s ease-out forwards; }
+        .sb-marker-selected > div {
+          animation: pulse-selected 1.5s ease-in-out infinite;
+        }
+        .sb-marker-flash > div {
+          animation: flash-marker 2s ease-in-out;
+        }
+        .sb-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}
@@ -1394,17 +1691,7 @@ export default function SwitchboardMap() {
                       isPlacedSomewhere={isPlacedSomewhere}
                       isPlacedElsewhere={isPlacedElsewhere}
                       isSelected={isSelected}
-                      onClick={() => {
-                        const positions = getLatestPositions();
-                        const pos = positions.find(
-                          (p) => p.switchboard_id === b.id
-                        );
-                        if (pos) handlePositionClick(pos);
-                        else {
-                          setSelectedPosition(null);
-                          setSelectedBoard(b);
-                        }
-                      }}
+                      onClick={() => handleSwitchboardClick(b)}
                       onPlace={handlePlaceBoard}
                     />
                   );
@@ -1466,7 +1753,8 @@ export default function SwitchboardMap() {
                 variant="ghost"
                 onClick={async () => {
                   await loadPlans();
-                  await refreshPositions(stableSelectedPlan, pageIndex);
+                  const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+                  setInitialPoints(positions || []);
                   await refreshPlacedIds();
                 }}
                 title="Rafraîchir"
@@ -1493,7 +1781,7 @@ export default function SwitchboardMap() {
               />
             ) : (
               <div className="relative h-full">
-                {/* Loading overlay (exact VSD) */}
+                {/* Loading overlay */}
                 {!pdfReady && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none rounded-2xl">
                     <div className="flex flex-col items-center gap-3 text-gray-700">
@@ -1511,6 +1799,7 @@ export default function SwitchboardMap() {
                   fileUrl={stableFileUrl}
                   pageIndex={pageIndex}
                   initialPoints={initialPoints}
+                  selectedId={selectedSwitchboardId}
                   placementActive={!!placementMode}
                   onReady={() => {
                     setPdfReady(true);
@@ -1529,8 +1818,19 @@ export default function SwitchboardMap() {
                   onClickPoint={handlePositionClick}
                   onMovePoint={handleMovePoint}
                   onCreatePoint={handleCreatePoint}
+                  onContextMenu={handleContextMenu}
                 />
               </div>
+            )}
+
+            {/* Context Menu */}
+            {contextMenu && (
+              <ContextMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                onDelete={() => askDeletePosition(contextMenu.position)}
+                onClose={() => setContextMenu(null)}
+              />
             )}
 
             {/* detail panel */}
