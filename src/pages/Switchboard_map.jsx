@@ -510,6 +510,9 @@ const SwitchboardLeafletViewer = forwardRef(
     const longPressTimerRef = useRef(null);
     const longPressTriggeredRef = useRef(false);
 
+    // Ref pour onCreatePoint (éviter rechargement du PDF quand le callback change)
+    const onCreatePointRef = useRef(onCreatePoint);
+
     const ICON_PX = 22;
     const ICON_PX_SELECTED = 30;
     const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
@@ -518,6 +521,11 @@ const SwitchboardLeafletViewer = forwardRef(
     useEffect(() => {
       placementActiveRef.current = placementActive;
     }, [placementActive]);
+
+    // Keep onCreatePoint ref in sync
+    useEffect(() => {
+      onCreatePointRef.current = onCreatePoint;
+    }, [onCreatePoint]);
 
     // Update selectedIdRef when prop changes
     useEffect(() => {
@@ -823,16 +831,16 @@ const SwitchboardLeafletViewer = forwardRef(
           // Créer le layer group pour les markers
           markersLayerRef.current = L.layerGroup().addTo(m);
 
-          // Handler de clic sur la carte
+          // Handler de clic sur la carte - utilise la ref pour onCreatePoint
           m.on("click", (e) => {
             if (!aliveRef.current) return;
 
-            // Mode placement : créer un point
-            if (placementActiveRef.current && onCreatePoint) {
+            // Mode placement : créer un point (utilise la ref!)
+            if (placementActiveRef.current && onCreatePointRef.current) {
               const ll = e.latlng;
               const xFrac = clamp(ll.lng / canvas.width, 0, 1);
               const yFrac = clamp(ll.lat / canvas.height, 0, 1);
-              onCreatePoint(xFrac, yFrac);
+              onCreatePointRef.current(xFrac, yFrac);
               return;
             }
 
@@ -924,7 +932,7 @@ const SwitchboardLeafletViewer = forwardRef(
         cleanupMap();
         cleanupPdf();
       };
-    }, [fileUrl, pageIndex, disabled, onCreatePoint]);
+    }, [fileUrl, pageIndex, disabled]); // <-- onCreatePoint retiré des dépendances!
 
     // Synchroniser les points quand initialPoints change
     useEffect(() => {
