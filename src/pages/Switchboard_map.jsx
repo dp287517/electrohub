@@ -1285,7 +1285,7 @@ export default function SwitchboardMap() {
   const refreshPlacedIds = async () => {
     try {
       const placedRes = await api.switchboardMaps.placedIds();
-      const ids = placedRes?.placed_ids || placedRes || [];
+      const ids = (placedRes?.placed_ids || placedRes || []).map((id) => Number(id));
       const details = placedRes?.placed_details || {};
       setPlacedIds(new Set(ids));
       setPlacedDetails(details);
@@ -1488,6 +1488,7 @@ export default function SwitchboardMap() {
   const handleSwitchboardClick = useCallback(
     async (board) => {
       setContextMenu(null);
+      setSelectedBoard(board);
       
       // Check if this switchboard is placed somewhere
       const details = placedDetails[board.id];
@@ -1512,7 +1513,7 @@ export default function SwitchboardMap() {
             setTimeout(() => {
               viewerRef.current?.highlightMarker(board.id);
               // Also set as selected
-              const pos = positions?.find(p => p.switchboard_id === board.id);
+              const pos = positions?.find(p => Number(p.switchboard_id) === Number(board.id));
               if (pos) {
                 setSelectedPosition(pos);
                 api.switchboard.getBoard(board.id).then(setSelectedBoard).catch(() => {});
@@ -1522,7 +1523,7 @@ export default function SwitchboardMap() {
             // Same plan - just highlight and select
             viewerRef.current?.highlightMarker(board.id);
             const positions = getLatestPositions();
-            const pos = positions.find(p => p.switchboard_id === board.id);
+            const pos = positions.find(p => Number(p.switchboard_id) === Number(board.id));
             if (pos) {
               handlePositionClick(pos);
             }
