@@ -854,18 +854,31 @@ app.delete("/api/switchboard/maps/bulk/clearPlan", async (req, res) => {
 // -------------------------------------------------
 
 // Alias: GET /api/switchboard/maps/missing -> placed_ids (compatibilité)
+// Also returns placed_details for navigation from sidebar
 app.get("/api/switchboard/maps/missing", async (req, res) => {
   try {
     const site = getSite(req);
 
     const { rows } = await pool.query(
-      `SELECT DISTINCT switchboard_id FROM switchboard_positions WHERE site = $1`,
+      `SELECT switchboard_id, 
+              COUNT(*) as position_count,
+              array_agg(DISTINCT logical_name) as plans
+       FROM switchboard_positions 
+       WHERE site = $1
+       GROUP BY switchboard_id`,
       [site]
     );
 
     const placedIds = rows.map(r => r.switchboard_id);
+    const placedDetails = {};
+    rows.forEach(r => {
+      placedDetails[r.switchboard_id] = {
+        position_count: Number(r.position_count),
+        plans: r.plans || [],
+      };
+    });
 
-    res.json({ ok: true, placed_ids: placedIds });
+    res.json({ ok: true, placed_ids: placedIds, placed_details: placedDetails });
   } catch (e) {
     console.error("[swb-map] Get missing (compat) error:", e);
     res.status(500).json({ ok: false, error: e.message });
@@ -889,4 +902,3 @@ if (process.env.START_SWB_MAP === "true") {
     console.log(`[switchboard-map] Switchboard service: ${SWITCHBOARD_BASE}`);
   });
 }
-
