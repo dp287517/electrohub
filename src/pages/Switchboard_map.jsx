@@ -1341,6 +1341,7 @@ export default function SwitchboardMap() {
     setConfirmState({ open: true, position });
   };
 
+  // REMPLACER handleDeletePosition:
   const handleDeletePosition = async (position) => {
     try {
       const response = await fetch(
@@ -1357,14 +1358,19 @@ export default function SwitchboardMap() {
       );
       if (!response.ok) throw new Error("Delete failed");
 
-      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
-      setInitialPoints(positions || []);
-      await refreshPlacedIds();
-
+      // Clear selection first to avoid stale state
       if (selectedPosition?.id === position.id) {
         setSelectedPosition(null);
         setSelectedBoard(null);
       }
+
+      // Refresh in parallel, not sequentially
+      const [positions] = await Promise.all([
+        refreshPositions(stableSelectedPlan, pageIndex),
+        refreshPlacedIds()
+      ]);
+      
+      setInitialPoints(positions || []);
     } catch (err) {
       console.error("Erreur suppression:", err);
     }
