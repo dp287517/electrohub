@@ -256,6 +256,7 @@ ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA]', e.message));
 
 // Helper: Check if device is complete
 function checkDeviceComplete(device) {
+  if (!device || typeof device !== 'object') return false;
   return !!(device.manufacturer && device.reference && device.in_amps && Number(device.in_amps) > 0);
 }
 
@@ -1109,6 +1110,10 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const b = req.body || {};
+    if (!b || Object.keys(b).length === 0) {
+      console.warn('[SWITCHBOARD UPDATE] Empty body received');
+      return res.status(400).json({ error: 'Request body is empty or invalid' });
+    }
     const name = String(b.name || '').trim();
     const code = String(b.code || '').trim();
     if (!name || !code) return res.status(400).json({ error: 'Missing name/code' });
@@ -1239,6 +1244,7 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
 
 // ==================== DEVICE COUNTS ====================
 
+// REMPLACER la route POST /api/switchboard/devices-count:
 app.post('/api/switchboard/devices-count', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1246,16 +1252,21 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
 
     const boardIds = req.body?.board_ids || [];
     
+    // Set a query timeout
+    const timeoutMs = 10000; // 10 seconds
+    
     if (!boardIds.length) {
-      const { rows } = await pool.query(
-        `SELECT d.switchboard_id, 
+      const { rows } = await pool.query({
+        text: `SELECT d.switchboard_id, 
                 COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE d.is_complete = true)::int AS complete
          FROM devices d 
          JOIN switchboards sb ON d.switchboard_id = sb.id
          WHERE sb.site = $1 
-         GROUP BY d.switchboard_id`, [site]
-      );
+         GROUP BY d.switchboard_id`,
+        values: [site],
+        timeout: timeoutMs
+      });
       const counts = {};
       rows.forEach(r => {
         counts[r.switchboard_id] = { total: r.total, complete: r.complete };
@@ -1266,14 +1277,16 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
     const ids = boardIds.map(Number).filter(Boolean);
     if (!ids.length) return res.json({ counts: {} });
 
-    const { rows } = await pool.query(
-      `SELECT switchboard_id, 
+    const { rows } = await pool.query({
+      text: `SELECT switchboard_id, 
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE is_complete = true)::int AS complete
        FROM devices
        WHERE switchboard_id = ANY($1::int[])
-       GROUP BY switchboard_id`, [ids]
-    );
+       GROUP BY switchboard_id`,
+      values: [ids],
+      timeout: timeoutMs
+    });
     
     const counts = {};
     rows.forEach(r => {
@@ -1287,7 +1300,8 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
     res.json({ counts });
   } catch (e) {
     console.error('[DEVICES COUNT] error:', e.message);
-    res.status(500).json({ error: 'Count failed' });
+    // Return empty counts instead of 500 error to prevent UI blocking
+    res.json({ counts: {}, error: e.message });
   }
 });
 
@@ -1409,6 +1423,10 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const b = req.body || {};
+    if (!b || Object.keys(b).length === 0) {
+      console.warn('[DEVICES UPDATE] Empty body received');
+      return res.status(400).json({ error: 'Request body is empty or invalid' });
+    }
     
     const is_complete = checkDeviceComplete(b);
     const is_differential = !!b.is_differential;
