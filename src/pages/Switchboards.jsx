@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
-  Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers, DoorOpen,
+  Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Phone, Mail, Database, History, Star
+  MapPin, Database, History, Star
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -50,6 +50,27 @@ const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
         className="transition-all duration-500"
       />
     </svg>
+  );
+};
+
+// Toast Notification Component
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bgColor = type === 'success' ? 'bg-emerald-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+  const Icon = type === 'success' ? CheckCircle : type === 'error' ? AlertCircle : Info;
+
+  return (
+    <div className={`fixed bottom-4 right-4 z-[200] ${bgColor} text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slideUp`}>
+      <Icon size={20} />
+      <span className="font-medium">{message}</span>
+      <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+        <X size={16} />
+      </button>
+    </div>
   );
 };
 
@@ -156,13 +177,14 @@ const ImportResultModal = ({ isOpen, onClose, result }) => {
 // ==================== MODAL COMPONENTS ====================
 
 // Site Settings Modal (Logo & Company Info)
-const SiteSettingsModal = ({ isOpen, onClose }) => {
+const SiteSettingsModal = ({ isOpen, onClose, showToast }) => {
   const [settings, setSettings] = useState({
     company_name: '', company_address: '', company_phone: '', company_email: ''
   });
   const [hasLogo, setHasLogo] = useState(false);
   const [logoPreview, setLogoPreview] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -170,6 +192,7 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
   }, [isOpen]);
 
   const loadSettings = async () => {
+    setIsLoading(true);
     try {
       const data = await api.switchboard.getSettings();
       setSettings({
@@ -186,20 +209,23 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
       }
     } catch (e) {
       console.error("Failed to load settings", e);
+      showToast?.('Erreur lors du chargement des paramètres', 'error');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleSave = async () => {
-    setIsLoading(true);
+    setIsSaving(true);
     try {
       await api.switchboard.updateSettings(settings);
-      alert('Paramètres enregistrés ! Ils apparaîtront sur les exports PDF.');
+      showToast?.('Paramètres enregistrés !', 'success');
       onClose();
     } catch (e) {
       console.error("Failed to save", e);
-      alert("Erreur lors de l'enregistrement");
+      showToast?.("Erreur lors de l'enregistrement", 'error');
     } finally {
-      setIsLoading(false);
+      setIsSaving(false);
     }
   };
 
@@ -207,6 +233,7 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
     const file = e.target.files[0];
     if (!file) return;
     
+    // Preview immediately
     const reader = new FileReader();
     reader.onload = (ev) => setLogoPreview(ev.target.result);
     reader.readAsDataURL(file);
@@ -214,9 +241,11 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
     try {
       await api.switchboard.uploadLogo(file);
       setHasLogo(true);
+      showToast?.('Logo uploadé !', 'success');
     } catch (err) {
       console.error("Logo upload failed", err);
-      alert("Erreur lors de l'upload du logo");
+      showToast?.("Erreur lors de l'upload du logo", 'error');
+      setLogoPreview(null);
     }
   };
 
@@ -226,8 +255,10 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
       await api.switchboard.deleteLogo();
       setHasLogo(false);
       setLogoPreview(null);
+      showToast?.('Logo supprimé', 'success');
     } catch (e) {
       console.error("Delete logo failed", e);
+      showToast?.('Erreur lors de la suppression', 'error');
     }
   };
 
@@ -248,92 +279,102 @@ const SiteSettingsModal = ({ isOpen, onClose }) => {
           </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Logo Section */}
-          <div className="flex items-center gap-6">
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-gray-50 transition-all relative overflow-hidden group"
-            >
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-              {logoPreview ? (
-                <img src={logoPreview} alt="Logo" className="w-full h-full object-contain p-1" />
-              ) : (
-                <div className="text-center text-gray-400">
-                  <ImagePlus size={24} className="mx-auto mb-1" />
-                  <span className="text-[10px]">Logo</span>
+        {isLoading ? (
+          <div className="p-12 flex items-center justify-center">
+            <RefreshCw size={32} className="animate-spin text-gray-400" />
+          </div>
+        ) : (
+          <div className="p-6 space-y-6">
+            {/* Logo Section */}
+            <div className="flex items-center gap-6">
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-gray-50 transition-all relative overflow-hidden group"
+              >
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                {logoPreview ? (
+                  <img src={logoPreview} alt="Logo" className="w-full h-full object-contain p-1" />
+                ) : (
+                  <div className="text-center text-gray-400">
+                    <ImagePlus size={24} className="mx-auto mb-1" />
+                    <span className="text-[10px]">Logo</span>
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                  <Edit3 size={16} className="text-white" />
                 </div>
-              )}
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                <Edit3 size={16} className="text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-medium text-gray-900">Logo de l'entreprise</h3>
+                <p className="text-sm text-gray-500 mb-2">Sera affiché en haut à gauche des PDF.</p>
+                {hasLogo && (
+                  <button 
+                    onClick={handleDeleteLogo}
+                    className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+                  >
+                    <Trash2 size={12} /> Supprimer le logo
+                  </button>
+                )}
               </div>
             </div>
-            <div className="flex-1">
-              <h3 className="font-medium text-gray-900">Logo de l'entreprise</h3>
-              <p className="text-sm text-gray-500 mb-2">Sera affiché en haut à gauche des PDF.</p>
-              {hasLogo && (
-                <button 
-                  onClick={handleDeleteLogo}
-                  className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
-                >
-                  <Trash2 size={12} /> Supprimer le logo
-                </button>
-              )}
-            </div>
-          </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nom de l'entreprise</label>
-              <input 
-                type="text" 
-                value={settings.company_name} 
-                onChange={e => setSettings(s => ({...s, company_name: e.target.value}))}
-                className={inputBaseClass}
-                placeholder="Ex: Mon Electricien SA"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
-              <input 
-                type="text" 
-                value={settings.company_address} 
-                onChange={e => setSettings(s => ({...s, company_address: e.target.value}))}
-                className={inputBaseClass}
-                placeholder="Ex: 12 Rue des Disjoncteurs, 75000 Paris"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Téléphone</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nom de l'entreprise</label>
                 <input 
                   type="text" 
-                  value={settings.company_phone} 
-                  onChange={e => setSettings(s => ({...s, company_phone: e.target.value}))}
+                  value={settings.company_name} 
+                  onChange={e => setSettings(s => ({...s, company_name: e.target.value}))}
                   className={inputBaseClass}
-                  placeholder="01 23 45 67 89"
+                  placeholder="Ex: Mon Electricien SA"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
                 <input 
-                  type="email" 
-                  value={settings.company_email} 
-                  onChange={e => setSettings(s => ({...s, company_email: e.target.value}))}
+                  type="text" 
+                  value={settings.company_address} 
+                  onChange={e => setSettings(s => ({...s, company_address: e.target.value}))}
                   className={inputBaseClass}
-                  placeholder="contact@example.com"
+                  placeholder="Ex: 12 Rue des Disjoncteurs, 75000 Paris"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Téléphone</label>
+                  <input 
+                    type="text" 
+                    value={settings.company_phone} 
+                    onChange={e => setSettings(s => ({...s, company_phone: e.target.value}))}
+                    className={inputBaseClass}
+                    placeholder="01 23 45 67 89"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input 
+                    type="email" 
+                    value={settings.company_email} 
+                    onChange={e => setSettings(s => ({...s, company_email: e.target.value}))}
+                    className={inputBaseClass}
+                    placeholder="contact@example.com"
+                  />
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         <div className="border-t p-4 flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler
           </button>
-          <button onClick={handleSave} disabled={isLoading} className="flex-1 py-3 px-4 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
-            {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+          <button 
+            onClick={handleSave} 
+            disabled={isSaving || isLoading} 
+            className="flex-1 py-3 px-4 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
             Enregistrer
           </button>
         </div>
@@ -348,13 +389,17 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
+  useEffect(() => {
+    if (!isOpen) setFile(null);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile?.name.endsWith('.xlsx') || droppedFile?.name.endsWith('.xls')) {
+    if (droppedFile?.name.match(/\.xlsx?$/i)) {
       setFile(droppedFile);
     }
   };
@@ -472,7 +517,7 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
 };
 
 // Delete Confirm Modal
-const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = 'tableau', isLoading }) => {
+const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = 'tableau', isLoading, deviceCount = 0 }) => {
   if (!isOpen) return null;
 
   return (
@@ -496,10 +541,10 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = '
           <p className="text-gray-700">
             Êtes-vous sûr de vouloir supprimer le {itemType} <span className="font-semibold text-gray-900">"{itemName}"</span> ?
           </p>
-          {itemType === 'tableau' && (
+          {itemType === 'tableau' && deviceCount > 0 && (
             <p className="mt-2 text-sm text-amber-600 bg-amber-50 p-3 rounded-lg flex items-start gap-2">
               <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-              Tous les disjoncteurs associés seront également supprimés.
+              <span><strong>{deviceCount}</strong> disjoncteur{deviceCount > 1 ? 's' : ''} ser{deviceCount > 1 ? 'ont' : 'a'} également supprimé{deviceCount > 1 ? 's' : ''}.</span>
             </p>
           )}
         </div>
@@ -610,8 +655,8 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
   );
 };
 
-// AI Photo Wizard - Enhanced with Cache Suggestions
-const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
+// AI Photo Wizard - FIXED: Proper query construction
+const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
   const [step, setStep] = useState(1);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -668,21 +713,38 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
     }
   };
 
+  // FIXED: Build search query from manufacturer + reference instead of non-existent quick_ai_query
   const searchSpecs = async () => {
-    if (!photoResult?.quick_ai_query) return;
+    if (!photoResult) return;
+    
+    // Build search query from available data
+    const queryParts = [];
+    if (photoResult.manufacturer) queryParts.push(photoResult.manufacturer);
+    if (photoResult.reference) queryParts.push(photoResult.reference);
+    if (photoResult.in_amps) queryParts.push(`${photoResult.in_amps}A`);
+    
+    if (queryParts.length === 0) {
+      setError('Pas assez d\'informations pour rechercher les spécifications');
+      return;
+    }
+    
+    const searchQuery = queryParts.join(' ');
+    
     setIsLoading(true);
     setError(null);
     try {
-      const specs = await api.switchboard.searchDevice(photoResult.quick_ai_query);
+      const specs = await api.switchboard.searchDevice(searchQuery);
       if (specs.error) {
         setError(specs.error);
       } else {
-        // Merge photo results with specs
+        // Merge photo results with specs (photo takes priority for detected fields)
         setDeviceSpecs({
           ...specs,
           manufacturer: photoResult.manufacturer || specs.manufacturer,
           reference: photoResult.reference || specs.reference,
-          is_differential: photoResult.is_differential || specs.is_differential
+          is_differential: photoResult.is_differential ?? specs.is_differential,
+          in_amps: photoResult.in_amps || specs.in_amps,
+          poles: photoResult.poles || specs.poles
         });
         setStep(3);
       }
@@ -691,6 +753,24 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Skip specs search and use only photo result
+  const usePhotoResultOnly = () => {
+    setDeviceSpecs({
+      manufacturer: photoResult.manufacturer || '',
+      reference: photoResult.reference || '',
+      device_type: 'Low Voltage Circuit Breaker',
+      in_amps: photoResult.in_amps || null,
+      is_differential: photoResult.is_differential || false,
+      poles: photoResult.poles || null,
+      icu_ka: null,
+      ics_ka: null,
+      voltage_v: null,
+      trip_unit: null,
+      settings: {}
+    });
+    setStep(3);
   };
 
   // Use cached product suggestion
@@ -705,6 +785,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
       poles: product.poles,
       voltage_v: product.voltage_v,
       is_differential: product.is_differential,
+      trip_unit: product.trip_unit || null,
       settings: product.settings || {}
     });
     setStep(3);
@@ -713,6 +794,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   const handleComplete = () => {
     if (deviceSpecs) {
       onComplete(deviceSpecs);
+      showToast?.('Données appliquées au formulaire', 'success');
     }
     onClose();
   };
@@ -845,6 +927,12 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
                     <span className="font-semibold text-gray-900">{photoResult.in_amps}A</span>
                   </div>
                 )}
+                {photoResult.poles && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Pôles</span>
+                    <span className="font-semibold text-gray-900">{photoResult.poles}P</span>
+                  </div>
+                )}
               </div>
 
               {/* Manufacturer clues */}
@@ -911,7 +999,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
             <div className="space-y-4">
               <div className="text-center">
                 <h3 className="font-semibold text-gray-900">Étape 3 : Spécifications complètes</h3>
-                <p className="text-sm text-gray-500 mt-1">Données techniques récupérées par l'IA</p>
+                <p className="text-sm text-gray-500 mt-1">Données techniques récupérées</p>
               </div>
 
               <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 space-y-2 max-h-64 overflow-y-auto">
@@ -982,14 +1070,22 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
           )}
           
           {step === 2 && (
-            <button
-              onClick={searchSpecs}
-              disabled={isLoading}
-              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Search size={18} />}
-              Rechercher specs
-            </button>
+            <div className="flex gap-2 flex-1">
+              <button
+                onClick={usePhotoResultOnly}
+                className="flex-1 py-3 px-4 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
+              >
+                Utiliser tel quel
+              </button>
+              <button
+                onClick={searchSpecs}
+                disabled={isLoading || (!photoResult.manufacturer && !photoResult.reference)}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Search size={18} />}
+                Rechercher specs
+              </button>
+            </div>
           )}
           
           {step === 3 && (
@@ -1007,8 +1103,8 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   );
 };
 
-// Mobile Tree Drawer - CORRECTED: Display CODE instead of NAME
-const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, deviceCounts, getProgress, placedBoardIds }) => {
+// Mobile Tree Drawer - Display CODE in tree
+const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, getProgress, placedBoardIds }) => {
   if (!isOpen) return null;
 
   const isBoardPlaced = (boardId) => placedBoardIds.has(boardId);
@@ -1079,8 +1175,8 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
                                     <MapPin size={8} />
                                   </span>
                                 )}
-                                {deviceCounts[board.id]?.total > 0 && (
-                                  <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
+                                {(board.device_count || 0) > 0 && (
+                                  <ProgressRing progress={getProgress(board)} size={20} strokeWidth={2} />
                                 )}
                               </button>
                             ))}
@@ -1109,15 +1205,19 @@ export default function Switchboards() {
   // State
   const [boards, setBoards] = useState([]);
   const [devices, setDevices] = useState([]);
-  const [deviceCounts, setDeviceCounts] = useState({});
   const [selectedBoard, setSelectedBoard] = useState(null);
-  const [selectedDevice, setSelectedDevice] = useState(null);
   const [expandedBuildings, setExpandedBuildings] = useState({});
   const [expandedFloors, setExpandedFloors] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+  
+  // Toast state
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+  }, []);
   
   // ========== PLACEMENT STATE ==========
   const [placedBoardIds, setPlacedBoardIds] = useState(new Set());
@@ -1136,6 +1236,7 @@ export default function Switchboards() {
   });
   const [editingBoardId, setEditingBoardId] = useState(null);
   const [editingDeviceId, setEditingDeviceId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Downstream Search State
   const [downstreamSearch, setDownstreamSearch] = useState('');
@@ -1186,7 +1287,10 @@ export default function Switchboards() {
               setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
             }
           })
-          .catch(console.error);
+          .catch(err => {
+            console.error('Failed to load board from URL:', err);
+            showToast('Tableau non trouvé', 'error');
+          });
       }
     } else {
       if (selectedBoard) {
@@ -1199,7 +1303,7 @@ export default function Switchboards() {
     if (selectedBoard) {
       loadDevices(selectedBoard.id);
     }
-  }, [selectedBoard]);
+  }, [selectedBoard?.id]);
 
   // Downstream Search Effect
   useEffect(() => {
@@ -1219,7 +1323,7 @@ export default function Switchboards() {
     
     const debounce = setTimeout(search, 300);
     return () => clearTimeout(debounce);
-  }, [downstreamSearch, selectedBoard]);
+  }, [downstreamSearch, selectedBoard?.id]);
 
   // ========== LOAD PLACEMENTS (useCallback for stability) ==========
   const loadPlacements = useCallback(async () => {
@@ -1258,35 +1362,20 @@ export default function Switchboards() {
     };
   }, [loadPlacements]);
 
-  // API calls - OPTIMIZED with Promise.allSettled
+  // ========== OPTIMIZED loadBoards - Backend V2 returns counts directly ==========
   const loadBoards = async () => {
     setIsLoading(true);
     try {
+      // Backend V2 returns device_count and complete_count directly in each board
       const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
       
-      // Load counts and placements in parallel, don't fail if one times out
-      const [countsRes, placementsRes] = await Promise.allSettled([
-        res.data?.length ? api.switchboard.getDeviceCounts(res.data.map(b => b.id)) : Promise.resolve({ counts: {} }),
-        api.switchboardMaps.placedIds()
-      ]);
+      // Load placements in parallel (doesn't affect boards loading)
+      loadPlacements().catch(console.warn);
       
-      if (countsRes.status === 'fulfilled') {
-        setDeviceCounts(countsRes.value.counts || {});
-      } else {
-        console.warn('Failed to load device counts:', countsRes.reason);
-      }
-      
-      if (placementsRes.status === 'fulfilled') {
-        const ids = (placementsRes.value?.placed_ids || []).map((id) => Number(id));
-        const details = placementsRes.value?.placed_details || {};
-        setPlacedBoardIds(new Set(ids));
-        setPlacedDetails(details);
-      } else {
-        console.warn('Failed to load placements:', placementsRes.reason);
-      }
     } catch (err) {
       console.error('Load boards error:', err);
+      showToast('Erreur lors du chargement des tableaux', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -1298,6 +1387,7 @@ export default function Switchboards() {
       setDevices(res.data || []);
     } catch (err) {
       console.error('Load devices error:', err);
+      showToast('Erreur lors du chargement des disjoncteurs', 'error');
     }
   };
 
@@ -1314,6 +1404,7 @@ export default function Switchboards() {
 
   const handleCloseBoard = () => {
     setSelectedBoard(null);
+    setDevices([]);
     setSearchParams({});
   };
 
@@ -1339,6 +1430,12 @@ export default function Switchboards() {
 
   // Board handlers
   const handleSaveBoard = async () => {
+    if (!boardForm.name || !boardForm.code) {
+      showToast('Nom et code requis', 'error');
+      return;
+    }
+    
+    setIsSaving(true);
     try {
       const payload = {
         name: boardForm.name,
@@ -1351,8 +1448,10 @@ export default function Switchboards() {
       let newBoard;
       if (editingBoardId) {
         newBoard = await api.switchboard.updateBoard(editingBoardId, payload);
+        showToast('Tableau modifié !', 'success');
       } else {
         newBoard = await api.switchboard.createBoard(payload);
+        showToast('Tableau créé !', 'success');
       }
       
       await loadBoards();
@@ -1363,6 +1462,9 @@ export default function Switchboards() {
       resetBoardForm();
     } catch (err) {
       console.error('Save board error:', err);
+      showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1371,15 +1473,16 @@ export default function Switchboards() {
     setIsDeleting(true);
     try {
       await api.switchboard.deleteBoard(deleteTarget.id);
+      showToast(`Tableau "${deleteTarget.code}" supprimé`, 'success');
       if (selectedBoard?.id === deleteTarget.id) {
         handleCloseBoard();
-        setDevices([]);
       }
       await loadBoards();
       setShowDeleteModal(false);
       setDeleteTarget(null);
     } catch (err) {
       console.error('Delete board error:', err);
+      showToast('Erreur lors de la suppression', 'error');
     } finally {
       setIsDeleting(false);
     }
@@ -1392,14 +1495,18 @@ export default function Switchboards() {
       await api.switchboard.uploadBoardPhoto(selectedBoard.id, file);
       await loadBoards();
       setSelectedBoard(prev => ({ ...prev, has_photo: true }));
+      showToast('Photo uploadée !', 'success');
     } catch (err) {
       console.error('Photo upload error:', err);
+      showToast('Erreur lors de l\'upload', 'error');
     }
   };
 
   // Device handlers
   const handleSaveDevice = async () => {
     if (!selectedBoard) return;
+    
+    setIsSaving(true);
     try {
       const payload = {
         ...deviceForm,
@@ -1414,25 +1521,68 @@ export default function Switchboards() {
       
       if (editingDeviceId) {
         await api.switchboard.updateDevice(editingDeviceId, payload);
+        showToast('Disjoncteur modifié !', 'success');
       } else {
         await api.switchboard.createDevice(payload);
+        showToast('Disjoncteur créé !', 'success');
+        
+        // Save to scanned products cache if has reference
+        if (payload.reference && payload.manufacturer) {
+          try {
+            await api.switchboard.saveScannedProduct({
+              reference: payload.reference,
+              manufacturer: payload.manufacturer,
+              device_type: payload.device_type,
+              in_amps: payload.in_amps,
+              icu_ka: payload.icu_ka,
+              ics_ka: payload.ics_ka,
+              poles: payload.poles,
+              voltage_v: payload.voltage_v,
+              trip_unit: payload.trip_unit,
+              is_differential: payload.is_differential,
+              settings: payload.settings,
+              source: 'manual_entry'
+            });
+          } catch (cacheErr) {
+            console.warn('Failed to cache product:', cacheErr);
+          }
+        }
       }
       
       await loadDevices(selectedBoard.id);
+      // Reload boards to update counts (trigger has updated them)
       await loadBoards();
+      // Update selectedBoard with new counts
+      if (selectedBoard) {
+        const updated = await api.switchboard.getBoard(selectedBoard.id);
+        setSelectedBoard(updated);
+      }
       resetDeviceForm();
     } catch (err) {
       console.error('Save device error:', err);
+      showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleDeleteDevice = async (deviceId) => {
+    if (!confirm('Supprimer ce disjoncteur ?')) return;
+    
     try {
       await api.switchboard.deleteDevice(deviceId);
+      showToast('Disjoncteur supprimé', 'success');
       await loadDevices(selectedBoard.id);
+      // Reload boards to update counts
       await loadBoards();
+      // Update selectedBoard
+      if (selectedBoard) {
+        const updated = await api.switchboard.getBoard(selectedBoard.id);
+        setSelectedBoard(updated);
+      }
     } catch (err) {
       console.error('Delete device error:', err);
+      showToast('Erreur lors de la suppression', 'error');
     }
   };
 
@@ -1441,14 +1591,7 @@ export default function Switchboards() {
     if (!selectedBoard) return;
     setIsPrinting(true);
     try {
-      const response = await fetch(`${api.baseURL}/api/switchboard/boards/${selectedBoard.id}/pdf?site=${api.site}`, {
-        method: 'GET',
-        headers: { 'X-Site': api.site }
-      });
-      
-      if (!response.ok) throw new Error('PDF generation failed');
-      
-      const blob = await response.blob();
+      const blob = await api.switchboard.downloadPdf(selectedBoard.id);
       const url = URL.createObjectURL(blob);
       
       const a = document.createElement('a');
@@ -1456,15 +1599,16 @@ export default function Switchboards() {
       a.download = `${selectedBoard.code || selectedBoard.name}_listing.pdf`;
       a.click();
       URL.revokeObjectURL(url);
+      showToast('PDF téléchargé !', 'success');
     } catch (err) {
       console.error('Print PDF error:', err);
-      alert('Erreur lors de la génération du PDF.');
+      showToast('Erreur lors de la génération du PDF', 'error');
     } finally {
       setIsPrinting(false);
     }
   };
 
-  // Import Excel - ENHANCED with result modal
+  // Import Excel
   const handleImportExcel = async (file) => {
     setIsImporting(true);
     try {
@@ -1478,13 +1622,13 @@ export default function Switchboards() {
         
         setShowImportModal(false);
         
-        // Show result modal instead of simple alert
+        // Show result modal
         setImportResult(result);
         setShowImportResult(true);
       }
     } catch (err) {
       console.error('Import error:', err);
-      alert('Erreur lors de l\'import: ' + (err.message || 'Erreur inconnue'));
+      showToast('Erreur lors de l\'import: ' + (err.message || 'Erreur inconnue'), 'error');
     } finally {
       setIsImporting(false);
     }
@@ -1503,8 +1647,8 @@ export default function Switchboards() {
       poles: specs.poles || prev.poles,
       voltage_v: specs.voltage_v || prev.voltage_v,
       trip_unit: specs.trip_unit || prev.trip_unit,
-      is_differential: specs.is_differential || prev.is_differential,
-      settings: specs.settings || prev.settings
+      is_differential: specs.is_differential ?? prev.is_differential,
+      settings: specs.settings && Object.keys(specs.settings).length > 0 ? specs.settings : prev.settings
     }));
   };
 
@@ -1525,6 +1669,7 @@ export default function Switchboards() {
     });
     setEditingDeviceId(null);
     setDownstreamSearch('');
+    setShowDownstreamResults(false);
     setShowDeviceForm(false);
   };
 
@@ -1559,7 +1704,7 @@ export default function Switchboards() {
       is_differential: device.is_differential || false,
       is_main_incoming: device.is_main_incoming || false,
       downstream_switchboard_id: device.downstream_switchboard_id || null,
-      downstream_name: device.downstream_switchboard_name || '',
+      downstream_name: device.downstream_switchboard_code || device.downstream_switchboard_name || '',
       settings: device.settings || { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
     });
     setEditingDeviceId(device.id);
@@ -1588,12 +1733,13 @@ export default function Switchboards() {
 
   const tree = buildTree();
 
-  // Calculate progress
-  const getProgress = (boardId) => {
-    const counts = deviceCounts[boardId];
-    if (!counts || counts.total === 0) return 0;
-    return Math.round((counts.complete / counts.total) * 100);
-  };
+  // ========== OPTIMIZED: Calculate progress from board directly (Backend V2) ==========
+  const getProgress = useCallback((board) => {
+    const total = board.device_count || 0;
+    const complete = board.complete_count || 0;
+    if (total === 0) return 0;
+    return Math.round((complete / total) * 100);
+  }, []);
 
   // ========== CHECK IF BOARD IS PLACED ==========
   const isBoardPlacedOnMap = useCallback((board) => {
@@ -1656,8 +1802,8 @@ export default function Switchboards() {
                             </span>
                           )}
 
-                          {deviceCounts[board.id]?.total > 0 && (
-                            <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
+                          {(board.device_count || 0) > 0 && (
+                            <ProgressRing progress={getProgress(board)} size={20} strokeWidth={2} />
                           )}
                         </button>
                       ))}
@@ -1680,8 +1826,7 @@ export default function Switchboards() {
         b.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         b.code?.toLowerCase().includes(searchQuery.toLowerCase())
       ).map((board, index) => {
-        const counts = deviceCounts[board.id];
-        const progress = getProgress(board.id);
+        const progress = getProgress(board);
         const isPlaced = isBoardPlacedOnMap(board);
         
         return (
@@ -1735,12 +1880,12 @@ export default function Switchboards() {
                 <div className="text-right">
                   <ProgressRing progress={progress} size={44} strokeWidth={4} />
                   <p className={`text-xs mt-1 ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
-                    {counts?.complete || 0}/{counts?.total || 0}
+                    {board.complete_count || 0}/{board.device_count || 0}
                   </p>
                 </div>
               </div>
               
-              {counts?.total > 0 && (
+              {(board.device_count || 0) > 0 && (
                 <div className={`mt-3 h-1.5 rounded-full overflow-hidden ${selectedBoard?.id === board.id ? 'bg-white/20' : 'bg-gray-100'}`}>
                   <div 
                     className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-500"
@@ -1962,10 +2107,10 @@ export default function Switchboards() {
           </button>
           <button
             onClick={handleSaveBoard}
-            disabled={!boardForm.name || !boardForm.code}
+            disabled={!boardForm.name || !boardForm.code || isSaving}
             className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-medium hover:from-blue-600 hover:to-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            <Save size={18} />
+            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
             {editingBoardId ? 'Enregistrer' : 'Créer'}
           </button>
         </div>
@@ -2046,6 +2191,7 @@ export default function Switchboards() {
                       value={downstreamSearch}
                       onChange={(e) => { setDownstreamSearch(e.target.value); setShowDownstreamResults(true); }}
                       onFocus={() => setShowDownstreamResults(true)}
+                      onBlur={() => setTimeout(() => setShowDownstreamResults(false), 200)}
                       className={inputBaseClass}
                       placeholder="Rechercher un tableau aval (ex: T1-2)..."
                     />
@@ -2247,9 +2393,10 @@ export default function Switchboards() {
           </button>
           <button
             onClick={handleSaveDevice}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium hover:from-indigo-600 hover:to-purple-700 transition-all flex items-center justify-center gap-2"
+            disabled={isSaving}
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium hover:from-indigo-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            <Save size={18} />
+            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
             {editingDeviceId ? 'Enregistrer' : 'Créer'}
           </button>
         </div>
@@ -2339,6 +2486,13 @@ export default function Switchboards() {
         </div>
       </div>
 
+      {/* Loading Overlay */}
+      {isLoading && boards.length === 0 && (
+        <div className="flex items-center justify-center h-64">
+          <RefreshCw size={32} className="animate-spin text-blue-500" />
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="max-w-7xl mx-auto flex">
         {/* Sidebar (Desktop) */}
@@ -2372,7 +2526,7 @@ export default function Switchboards() {
                     />
                     {selectedBoard.has_photo ? (
                       <img 
-                        src={`${api.baseURL}/api/switchboard/boards/${selectedBoard.id}/photo?site=${api.site}`}
+                        src={api.switchboard.boardPhotoUrl(selectedBoard.id, { bust: true })}
                         alt={selectedBoard.name}
                         className="w-full h-full object-cover"
                       />
@@ -2515,19 +2669,19 @@ export default function Switchboards() {
                       </div>
                     </div>
 
-                    {/* Progress */}
-                    {deviceCounts[selectedBoard.id]?.total > 0 && (
+                    {/* Progress - Using selectedBoard counts directly */}
+                    {(selectedBoard.device_count || 0) > 0 && (
                       <div className="mt-3">
                         <div className="flex items-center justify-between text-sm mb-1">
                           <span className="text-gray-500">Complétion</span>
                           <span className="font-medium text-gray-700">
-                            {deviceCounts[selectedBoard.id]?.complete || 0}/{deviceCounts[selectedBoard.id]?.total || 0} ({getProgress(selectedBoard.id)}%)
+                            {selectedBoard.complete_count || 0}/{selectedBoard.device_count || 0} ({getProgress(selectedBoard)}%)
                           </span>
                         </div>
                         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                           <div 
                             className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-500"
-                            style={{ width: `${getProgress(selectedBoard.id)}%` }}
+                            style={{ width: `${getProgress(selectedBoard)}%` }}
                           />
                         </div>
                       </div>
@@ -2596,7 +2750,6 @@ export default function Switchboards() {
         setExpandedFloors={setExpandedFloors}
         selectedBoard={selectedBoard}
         onSelectBoard={handleSelectBoard}
-        deviceCounts={deviceCounts}
         getProgress={getProgress}
         placedBoardIds={placedBoardIds}
       />
@@ -2618,15 +2771,17 @@ export default function Switchboards() {
       <SiteSettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
+        showToast={showToast}
       />
 
       <DeleteConfirmModal
         isOpen={showDeleteModal}
         onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }}
         onConfirm={handleDeleteBoard}
-        itemName={deleteTarget?.name}
+        itemName={deleteTarget?.code || deleteTarget?.name}
         itemType="tableau"
         isLoading={isDeleting}
+        deviceCount={deleteTarget?.device_count || 0}
       />
 
       <ShareLinkModal
@@ -2639,10 +2794,20 @@ export default function Switchboards() {
         isOpen={showAIWizard}
         onClose={() => setShowAIWizard(false)}
         onComplete={handleAIComplete}
+        showToast={showToast}
       />
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}
+
+      {/* Toast Notification */}
+      {toast && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast(null)} 
+        />
+      )}
     </div>
   );
 }
