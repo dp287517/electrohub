@@ -1008,8 +1008,10 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
 };
 
 // Mobile Tree Drawer - CORRECTED: Display CODE instead of NAME
-const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, deviceCounts, getProgress }) => {
+const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, deviceCounts, getProgress, placedBoardIds }) => {
   if (!isOpen) return null;
+
+  const isBoardPlaced = (boardId) => placedBoardIds.has(boardId);
   
   return (
     <div className="fixed inset-0 z-50">
@@ -1071,8 +1073,12 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
                                     : 'text-gray-600 hover:bg-gray-100'}`}
                               >
                                 <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
-                                {/* ========== CHANGED: Display CODE instead of NAME ========== */}
                                 <span className="text-sm font-mono truncate flex-1">{board.code}</span>
+                                {!isBoardPlaced(board.id) && (
+                                  <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[9px] rounded-full flex items-center gap-0.5">
+                                    <MapPin size={8} />
+                                  </span>
+                                )}
                                 {deviceCounts[board.id]?.total > 0 && (
                                   <ProgressRing progress={getProgress(board.id)} size={20} strokeWidth={2} />
                                 )}
@@ -1112,7 +1118,10 @@ export default function Switchboards() {
   const [isLoading, setIsLoading] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
-  const [placedBoardIds, setPlacedBoardIds] = useState([]);
+  
+  // ========== PLACEMENT STATE (FIXED) ==========
+  const [placedBoardIds, setPlacedBoardIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // { boardId: { plans: [...], position_count } }
   
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
@@ -1212,26 +1221,35 @@ export default function Switchboards() {
     return () => clearTimeout(debounce);
   }, [downstreamSearch, selectedBoard]);
 
+  // ========== LOAD PLACEMENTS (FIXED) ==========
+  const loadPlacements = useCallback(async () => {
+    try {
+      const response = await api.switchboardMaps.placedIds();
+      // Response format: { ok: true, placed_ids: [...], placed_details: {...} }
+      const ids = response?.placed_ids || [];
+      const details = response?.placed_details || {};
+      setPlacedBoardIds(new Set(ids));
+      setPlacedDetails(details);
+    } catch (e) {
+      console.error("Load placements error:", e);
+      setPlacedBoardIds(new Set());
+      setPlacedDetails({});
+    }
+  }, []);
+
   // API calls
   const loadBoards = async () => {
     setIsLoading(true);
     try {
-      const res = await api.switchboard.listBoards({ pageSize: 100 });
+      const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
       if (res.data?.length) {
         const counts = await api.switchboard.getDeviceCounts(res.data.map(b => b.id));
         setDeviceCounts(counts.counts || {});
       }
 
-      // NEW: récupère les switchboards déjà placés sur au moins un plan
-      try {
-        const placed = await api.switchboardMaps.placedIds();
-        setPlacedBoardIds(placed || []);
-      } catch (e) {
-        console.error("Load placements error:", e);
-        setPlacedBoardIds([]); // fallback
-      }
-
+      // Load placements
+      await loadPlacements();
     } catch (err) {
       console.error('Load boards error:', err);
     } finally {
@@ -1262,6 +1280,26 @@ export default function Switchboards() {
   const handleCloseBoard = () => {
     setSelectedBoard(null);
     setSearchParams({});
+  };
+
+  // ========== NAVIGATE TO MAP (NEW) ==========
+  const handleNavigateToMap = (board) => {
+    const boardId = board?.id || selectedBoard?.id;
+    if (!boardId) {
+      navigate('/app/switchboards/map');
+      return;
+    }
+
+    // Check if board is placed
+    const details = placedDetails[boardId];
+    if (details?.plans?.length > 0) {
+      // Navigate to map with switchboard param to highlight it
+      const planKey = details.plans[0]; // First plan where it's placed
+      navigate(`/app/switchboards/map?switchboard=${boardId}&plan=${encodeURIComponent(planKey)}`);
+    } else {
+      // Not placed - just go to map
+      navigate('/app/switchboards/map');
+    }
   };
 
   // Board handlers
@@ -1521,13 +1559,15 @@ export default function Switchboards() {
     if (!counts || counts.total === 0) return 0;
     return Math.round((counts.complete / counts.total) * 100);
   };
-    const isBoardPlacedOnMap = (board) => {
-    return placedBoardIds.includes(board.id);
-  };
+
+  // ========== CHECK IF BOARD IS PLACED (FIXED) ==========
+  const isBoardPlacedOnMap = useCallback((board) => {
+    return placedBoardIds.has(board.id);
+  }, [placedBoardIds]);
 
   // ==================== RENDER ====================
 
-  // Sidebar Tree (Desktop) - CORRECTED: Display CODE instead of NAME
+  // Sidebar Tree (Desktop)
   const renderTree = () => (
     <div className="space-y-1">
       {Object.entries(tree).map(([building, floors]) => (
@@ -1570,16 +1610,14 @@ export default function Switchboards() {
                               : 'text-gray-600 hover:bg-gray-100'}`}
                         >
                           <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
-                          {/* ========== CHANGED: Display CODE instead of NAME ========== */}
                           <span className="text-sm font-mono truncate flex-1">{board.code}</span>
 
                           {!isBoardPlacedOnMap(board) && (
                             <span
-                              className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
+                              className="ml-1 px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full font-medium flex items-center gap-0.5"
                               title="Ce tableau n'est pas encore placé sur un plan"
                             >
-                              <MapPin size={10} />
-                              Non placé
+                              <MapPin size={8} />
                             </span>
                           )}
 
@@ -1599,7 +1637,7 @@ export default function Switchboards() {
     </div>
   );
 
-  // Mobile Board Cards - ENHANCED: Show CODE prominently
+  // Mobile Board Cards
   const renderMobileCards = () => (
     <div className="grid grid-cols-1 gap-3 p-4">
       {boards.filter(b => 
@@ -1609,6 +1647,7 @@ export default function Switchboards() {
       ).map((board, index) => {
         const counts = deviceCounts[board.id];
         const progress = getProgress(board.id);
+        const isPlaced = isBoardPlacedOnMap(board);
         
         return (
           <AnimatedCard key={board.id} delay={index * 50}>
@@ -1621,14 +1660,14 @@ export default function Switchboards() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {board.is_principal && (
                       <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">
                         Principal
                       </span>
                     )}
 
-                    {!isBoardPlacedOnMap(board) && (
+                    {!isPlaced && (
                       <span
                         className={`px-2 py-0.5 text-[10px] rounded-full font-medium flex items-center gap-1 ${
                           selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'
@@ -1640,12 +1679,10 @@ export default function Switchboards() {
                       </span>
                     )}
 
-                    {/* ========== CHANGED: CODE is now the main title ========== */}
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
                     </span>
                   </div>
-                  {/* Name is now secondary */}
                   <h3 className={`text-sm mt-1 ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
                     {board.name}
                   </h3>
@@ -2324,17 +2361,25 @@ export default function Switchboards() {
                               Principal
                             </span>
                           )}
-                          {/* CODE is now prominent */}
                           <span className="text-lg font-mono font-bold text-gray-900">{selectedBoard.code}</span>
-                            {!isBoardPlacedOnMap(selectedBoard) && (
-                          <span
-                            className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
-                            title="Ce tableau n'est pas encore placé sur un plan"
-                          >
-                            <MapPin size={10} />
-                            Non placé
-                          </span>
-                        )}
+                          {!isBoardPlacedOnMap(selectedBoard) && (
+                            <span
+                              className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
+                              title="Ce tableau n'est pas encore placé sur un plan"
+                            >
+                              <MapPin size={10} />
+                              Non placé
+                            </span>
+                          )}
+                          {isBoardPlacedOnMap(selectedBoard) && (
+                            <span
+                              className="ml-2 px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] rounded-full font-medium flex items-center gap-1"
+                              title="Ce tableau est placé sur un plan"
+                            >
+                              <CheckCircle size={10} />
+                              Placé
+                            </span>
+                          )}
                         </div>
                         <h2 className="text-base text-gray-600 mt-1">{selectedBoard.name}</h2>
                         
@@ -2384,13 +2429,18 @@ export default function Switchboards() {
                         >
                           <Link size={18} />
                         </button>
+                        {/* ========== PLANS BUTTON (ENHANCED) ========== */}
                         <button
-                          onClick={() => navigate('/app/switchboards/map')}
-                          className="px-3 py-2 rounded-xl bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors text-sm font-medium flex items-center gap-2"
-                          title="Voir les plans des switchboards"
+                          onClick={() => handleNavigateToMap(selectedBoard)}
+                          className={`px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${
+                            isBoardPlacedOnMap(selectedBoard)
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                              : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                          }`}
+                          title={isBoardPlacedOnMap(selectedBoard) ? "Voir sur le plan" : "Placer sur un plan"}
                         >
                           <MapPin size={16} />
-                          Plans
+                          {isBoardPlacedOnMap(selectedBoard) ? 'Voir plan' : 'Plans'}
                         </button>
                         <button
                           onClick={handlePrintPDF}
@@ -2513,6 +2563,7 @@ export default function Switchboards() {
         onSelectBoard={handleSelectBoard}
         deviceCounts={deviceCounts}
         getProgress={getProgress}
+        placedBoardIds={placedBoardIds}
       />
 
       {/* Modals */}
