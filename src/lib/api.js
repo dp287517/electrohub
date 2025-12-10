@@ -101,6 +101,7 @@ function isNumericId(s) {
 }
 
 /** Fetch JSON with automatic X-Site + Identity headers */
+// REMPLACER la fonction jsonFetch par:
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
   const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
@@ -113,20 +114,36 @@ async function jsonFetch(url, options = {}) {
   ) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(finalUrl, {
-    credentials: "include",
-    ...options,
-    headers,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    const msg =
-      text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
-    throw new Error(msg);
+  
+  // Add timeout controller
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+  
+  try {
+    const res = await fetch(finalUrl, {
+      credentials: "include",
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const msg =
+        text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
+      throw new Error(msg);
+    }
+    const ct = res.headers.get("content-type") || "";
+    if (res.status === 204) return null;
+    return ct.includes("application/json") ? res.json() : null;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Request timeout - server took too long to respond');
+    }
+    throw err;
   }
-  const ct = res.headers.get("content-type") || "";
-  if (res.status === 204) return null;
-  return ct.includes("application/json") ? res.json() : null;
 }
 
 /** Utilitaire bas niveau pour appels JSON "bruts" */
