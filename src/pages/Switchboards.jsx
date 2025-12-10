@@ -1226,7 +1226,7 @@ export default function Switchboards() {
     try {
       const response = await api.switchboardMaps.placedIds();
       // Response format: { ok: true, placed_ids: [...], placed_details: {...} }
-      const ids = response?.placed_ids || [];
+      const ids = (response?.placed_ids || []).map((id) => Number(id));
       const details = response?.placed_details || {};
       setPlacedBoardIds(new Set(ids));
       setPlacedDetails(details);
