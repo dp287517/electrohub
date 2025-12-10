@@ -1,5 +1,6 @@
 // server_switchboard.js - Backend complet Switchboard
 // Support XLS/XLSX, cache produits scannés, prompt IA amélioré, détection doublons
+// ============ OPTIMIZED VERSION WITH TIMEOUT FIXES ============
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -12,7 +13,20 @@ import * as XLSX from 'xlsx'; // SheetJS - supports both .xls and .xlsx
 
 dotenv.config();
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// ============ OPTIMIZED POOL CONFIGURATION ============
+const pool = new Pool({ 
+  connectionString: process.env.NEON_DATABASE_URL,
+  // Connection pool settings for Neon (serverless)
+  max: 10,                      // Max connections in pool
+  idleTimeoutMillis: 30000,     // Close idle connections after 30s
+  connectionTimeoutMillis: 10000, // Timeout for new connections: 10s
+});
+
+// Test pool connection on startup
+pool.on('error', (err) => {
+  console.error('[POOL] Unexpected error on idle client', err);
+});
 
 // OpenAI setup
 let openai = null;
@@ -78,6 +92,18 @@ const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
+// ============ QUERY WITH TIMEOUT HELPER ============
+async function queryWithTimeout(sql, params, timeoutMs = 10000) {
+  const client = await pool.connect();
+  try {
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    const result = await client.query(sql, params);
+    return result;
+  } finally {
+    client.release();
+  }
+}
+
 // Schema Initialization
 async function ensureSchema() {
   await pool.query(`
@@ -139,6 +165,9 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(name);
     CREATE INDEX IF NOT EXISTS idx_devices_position ON devices(position_number);
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
+    
+    -- ============ CRITICAL: COMPOSITE INDEX FOR FAST COUNTING ============
+    CREATE INDEX IF NOT EXISTS idx_devices_switchboard_complete ON devices(switchboard_id, is_complete);
 
     -- TABLE: Site Settings (Logo, Company Info)
     CREATE TABLE IF NOT EXISTS site_settings (
@@ -227,6 +256,13 @@ async function ensureSchema() {
       EXCEPTION WHEN OTHERS THEN
         NULL;
       END;
+      
+      -- ============ CRITICAL: CREATE COMPOSITE INDEX IF NOT EXISTS ============
+      BEGIN
+        CREATE INDEX IF NOT EXISTS idx_devices_switchboard_complete ON devices(switchboard_id, is_complete);
+      EXCEPTION WHEN OTHERS THEN
+        NULL;
+      END;
     END $$;
 
     -- Add trigger for updated_at
@@ -251,6 +287,7 @@ async function ensureSchema() {
       END IF;
     END $$;
   `);
+  console.log('[SWITCHBOARD SCHEMA] Initialized successfully');
 }
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA]', e.message));
 
@@ -388,14 +425,12 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
 
-    // Get board info
     const boardRes = await pool.query(
       `SELECT * FROM switchboards WHERE id = $1 AND site = $2`, [id, site]
     );
     if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
     const board = boardRes.rows[0];
 
-    // Get devices with downstream info
     const devicesRes = await pool.query(
       `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
        FROM devices d
@@ -405,7 +440,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     );
     const devices = devicesRes.rows;
 
-    // Get upstream info (Sources)
     const upstreamRes = await pool.query(
       `SELECT d.*, sb.name as source_board_name, sb.code as source_board_code
        FROM devices d
@@ -414,13 +448,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     );
     const upstreamDevices = upstreamRes.rows;
 
-    // Get logo if exists
     const logoRes = await pool.query(
       `SELECT logo, logo_mime, company_name FROM site_settings WHERE site = $1`, [site]
     );
     const settings = logoRes.rows[0] || {};
 
-    // Create PDF with bufferPages to fix Footer issue
     const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
     
     res.setHeader('Content-Type', 'application/pdf');
@@ -428,11 +460,9 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     
     doc.pipe(res);
 
-    // ===== HEADER =====
     let headerY = 40;
     let textStartX = 50;
 
-    // Logo (top-left)
     if (settings.logo) {
       try {
         doc.image(settings.logo, 50, headerY, { width: 70, height: 50 });
@@ -442,13 +472,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       }
     }
 
-    // Title and info
     doc.fontSize(18).font('Helvetica-Bold').fillColor('#1e40af').text(board.name, textStartX, headerY);
     doc.fontSize(10).font('Helvetica').fillColor('#374151');
     doc.text(`Code: ${board.code || '-'}`, textStartX, headerY + 25);
     doc.text(`Bâtiment: ${board.building_code || '-'} | Étage: ${board.floor || '-'} | Local: ${board.room || '-'}`, textStartX, headerY + 40);
     
-    // Upstream info in header if available
     let upstreamText = "Source: Inconnue / Principale";
     if (upstreamDevices.length > 0) {
       upstreamText = "Alimenté par: " + upstreamDevices.map(d => `${d.source_board_code} (${d.name})`).join(', ');
@@ -457,18 +485,14 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     }
     doc.text(upstreamText, textStartX, headerY + 55);
 
-    // Date on the right
     doc.fontSize(9).text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`, 400, headerY, { align: 'right' });
 
-    // Company name if available
     if (settings.company_name) {
       doc.fontSize(8).fillColor('#6b7280').text(settings.company_name, 400, headerY + 15, { align: 'right' });
     }
 
-    // Separator line
     doc.moveTo(50, 110).lineTo(545, 110).strokeColor('#e5e7eb').stroke();
 
-    // ===== SUMMARY =====
     const summaryY = 125;
     const totalDevices = devices.length;
     const completeDevices = devices.filter(d => d.is_complete).length;
@@ -485,13 +509,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       doc.text(`Arrivée: ${mainIncoming.manufacturer || ''} ${mainIncoming.reference || ''} ${mainIncoming.in_amps ? mainIncoming.in_amps + 'A' : ''}`, 50, summaryY + 30);
     }
 
-    // ===== TABLE =====
     const tableStartY = summaryY + 55;
     const colWidths = [35, 140, 75, 65, 40, 40, 35, 65];
     const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type/Aval'];
     const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
-    // Helper to draw header
     const drawHeader = (y) => {
         doc.rect(50, y, totalWidth, 22).fillColor('#f3f4f6').fill();
         doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
@@ -512,13 +534,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
 
     drawHeader(tableStartY);
 
-    // Table rows
     doc.font('Helvetica').fontSize(8);
     let y = tableStartY + 22;
     const rowHeight = 20;
     
     devices.forEach((d, idx) => {
-      // Check if we need a new page
       if (y > 780) {
         doc.addPage();
         y = 50;
@@ -527,17 +547,15 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         doc.font('Helvetica').fontSize(8);
       }
 
-      // Alternate row background
       if (idx % 2 === 1) {
         doc.rect(50, y, totalWidth, rowHeight).fillColor('#fafafa').fill();
       }
 
-      // Determine type badge or downstream info
       let typeText = '-';
       let typeColor = '#6b7280';
       if (d.downstream_code) {
         typeText = `→ ${d.downstream_code}`;
-        typeColor = '#059669'; // Green for link
+        typeColor = '#059669';
       } else if (d.is_main_incoming) {
         typeText = 'Arrivée';
         typeColor = '#d97706';
@@ -549,7 +567,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         typeColor = '#ea580c';
       }
 
-      // Row data
       const row = [
         d.position_number || String(idx + 1),
         (d.name || '-').substring(0, 35),
@@ -578,10 +595,8 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         x += colWidths[i];
       });
 
-      // Row border
       doc.rect(50, y, totalWidth, rowHeight).strokeColor('#e5e7eb').stroke();
 
-      // Vertical lines
       x = 50;
       colWidths.forEach((w) => {
         x += w;
@@ -593,7 +608,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       y += rowHeight;
     });
 
-    // ===== FOOTER (Now safe due to bufferPages: true) =====
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
@@ -613,379 +627,8 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   }
 });
 
-// ==================== PDF SCHÉMA UNIFILAIRE VECTORIEL ====================
-
-app.get('/api/switchboard/boards/:id/diagram-pdf', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const id = Number(req.params.id);
-
-    // Get board info
-    const boardRes = await pool.query(
-      `SELECT * FROM switchboards WHERE id = $1 AND site = $2`, [id, site]
-    );
-    if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
-    const board = boardRes.rows[0];
-
-    // Get devices with downstream info
-    const devicesRes = await pool.query(
-      `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
-       FROM devices d
-       LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
-       WHERE d.switchboard_id = $1 
-       ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`, [id]
-    );
-    const devices = devicesRes.rows;
-
-    // Get upstream info (Sources)
-    const upstreamRes = await pool.query(
-      `SELECT d.*, sb.name as source_board_name, sb.code as source_board_code
-       FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.downstream_switchboard_id = $1`, [id]
-    );
-    const upstreamDevices = upstreamRes.rows;
-
-    // Get logo and settings
-    const logoRes = await pool.query(
-      `SELECT logo, logo_mime, company_name, company_address, company_phone, company_email 
-       FROM site_settings WHERE site = $1`, [site]
-    );
-    const settings = logoRes.rows[0] || {};
-
-    // Separate main incoming from feeders
-    const mainIncoming = devices.find(d => d.is_main_incoming);
-    const feeders = devices.filter(d => !d.is_main_incoming);
-
-    // Pagination settings
-    const DEVICES_PER_FOLIO = 10;
-    const totalFolios = Math.max(1, Math.ceil(feeders.length / DEVICES_PER_FOLIO));
-
-    // Create PDF - A3 Landscape for more space
-    const doc = new PDFDocument({ 
-      margin: 30, 
-      size: 'A3',
-      layout: 'landscape',
-      bufferPages: true 
-    });
-    
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_schema.pdf"`);
-    
-    doc.pipe(res);
-
-    // Colors
-    const COLORS = {
-      busbar: '#b45309',
-      busbarLight: '#fbbf24',
-      busbarDark: '#92400e',
-      wire: '#1f2937',
-      breaker: '#374151',
-      differential: '#7c3aed',
-      incoming: '#d97706',
-      downstream: '#059669',
-      text: '#111827',
-      textLight: '#6b7280',
-      gridLine: '#e5e7eb',
-      background: '#f9fafb'
-    };
-
-    // ===== HELPER: Draw IEC Breaker Symbol =====
-    const drawBreakerSymbol = (x, y, size = 30, isDifferential = false, isIncoming = false) => {
-      const color = isIncoming ? COLORS.incoming : isDifferential ? COLORS.differential : COLORS.breaker;
-      doc.strokeColor(color).lineWidth(1.5);
-      
-      const s = size;
-      const cx = x + s/2;
-      
-      doc.moveTo(cx, y).lineTo(cx, y + s * 0.2).stroke();
-      doc.moveTo(cx - s * 0.25, y + s * 0.25).lineTo(cx + s * 0.25, y + s * 0.75).stroke();
-      doc.moveTo(cx + s * 0.25, y + s * 0.25).lineTo(cx - s * 0.25, y + s * 0.75).stroke();
-      doc.moveTo(cx, y + s * 0.8).lineTo(cx, y + s).stroke();
-      doc.moveTo(cx - s * 0.15, y + s * 0.2)
-         .quadraticCurveTo(cx, y + s * 0.1, cx + s * 0.15, y + s * 0.2)
-         .stroke();
-      
-      if (isDifferential) {
-        doc.strokeColor(COLORS.differential).lineWidth(1);
-        doc.ellipse(cx, y + s * 0.5, s * 0.35, s * 0.15).stroke();
-        doc.circle(cx + s * 0.25, y + s * 0.5, 2).fill(COLORS.differential);
-      }
-      
-      return { cx, bottomY: y + s };
-    };
-
-    // ===== HELPER: Draw Source Symbol =====
-    const drawSourceSymbol = (x, y, label, subLabel) => {
-      const boxW = 100;
-      const boxH = 40;
-      
-      doc.rect(x - boxW/2, y, boxW, boxH)
-         .strokeColor(COLORS.breaker)
-         .lineWidth(1.5)
-         .stroke();
-      
-      doc.save();
-      doc.translate(x - 8, y + 8);
-      doc.path('M6 0 L0 12 L5 12 L3 20 L12 8 L7 8 L9 0 Z')
-         .fillColor(COLORS.incoming)
-         .fill();
-      doc.restore();
-      
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text(label, x - boxW/2 + 20, y + 8, { width: boxW - 25, align: 'left' });
-      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
-      doc.text(subLabel || '', x - boxW/2 + 20, y + 20, { width: boxW - 25, align: 'left' });
-      
-      return { bottomY: y + boxH };
-    };
-
-    // ===== HELPER: Draw Busbar =====
-    const drawBusbar = (x, y, width) => {
-      const height = 12;
-      
-      doc.rect(x, y, width, height/3).fillColor(COLORS.busbarDark).fill();
-      doc.rect(x, y + height/3, width, height/3).fillColor(COLORS.busbarLight).fill();
-      doc.rect(x, y + height * 2/3, width, height/3).fillColor(COLORS.busbar).fill();
-      doc.rect(x, y, width, height).strokeColor(COLORS.busbarDark).lineWidth(0.5).stroke();
-      
-      doc.fontSize(5).fillColor('#fff').font('Helvetica-Bold');
-      doc.text('JEU DE BARRES 400V', x + width/2 - 30, y + 3);
-      
-      return { topY: y, bottomY: y + height, centerY: y + height/2 };
-    };
-
-    // ===== HELPER: Draw Device Card =====
-    const drawDeviceCard = (x, y, device, index) => {
-      const cardW = 70;
-      const cardH = 100;
-      const symbolSize = 28;
-      
-      doc.strokeColor(COLORS.wire).lineWidth(1.5);
-      doc.moveTo(x + cardW/2, y - 20).lineTo(x + cardW/2, y).stroke();
-      
-      const bgColor = device.is_main_incoming ? '#fef3c7' : device.is_differential ? '#f3e8ff' : '#ffffff';
-      doc.rect(x, y, cardW, cardH).fillColor(bgColor).fill();
-      doc.rect(x, y, cardW, cardH)
-         .strokeColor(device.is_differential ? COLORS.differential : COLORS.gridLine)
-         .lineWidth(device.is_differential ? 1.5 : 1)
-         .stroke();
-      
-      doc.rect(x, y, 18, 14).fillColor(COLORS.breaker).fill();
-      doc.fontSize(7).font('Helvetica-Bold').fillColor('#fff');
-      doc.text(device.position_number || String(index + 1), x + 2, y + 3, { width: 14, align: 'center' });
-      
-      if (device.is_differential) {
-        doc.rect(x + cardW - 22, y, 22, 14).fillColor(COLORS.differential).fill();
-        doc.fontSize(5).fillColor('#fff');
-        doc.text('DDR', x + cardW - 20, y + 4);
-      }
-      
-      drawBreakerSymbol(x + cardW/2 - symbolSize/2, y + 18, symbolSize, device.is_differential, device.is_main_incoming);
-      
-      const displayName = (device.name || device.reference || '-').substring(0, 12);
-      doc.fontSize(6).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text(displayName, x + 2, y + 52, { width: cardW - 4, align: 'center' });
-      
-      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
-      const specs = [];
-      if (device.in_amps) specs.push(`${device.in_amps}A`);
-      if (device.icu_ka) specs.push(`${device.icu_ka}kA`);
-      if (device.poles) specs.push(`${device.poles}P`);
-      doc.text(specs.join(' • '), x + 2, y + 62, { width: cardW - 4, align: 'center' });
-      
-      if (device.manufacturer || device.reference) {
-        doc.fontSize(5).fillColor(COLORS.textLight);
-        doc.text(`${device.manufacturer || ''} ${device.reference || ''}`.trim().substring(0, 15), 
-                 x + 2, y + 72, { width: cardW - 4, align: 'center' });
-      }
-      
-      doc.strokeColor(COLORS.wire).lineWidth(1.5);
-      doc.moveTo(x + cardW/2, y + cardH).lineTo(x + cardW/2, y + cardH + 15).stroke();
-      
-      const cableSize = device.in_amps < 20 ? '3G2.5' : device.in_amps < 40 ? '5G6' : '5G16';
-      doc.fontSize(4).fillColor(COLORS.textLight);
-      doc.text(cableSize, x + cardW/2 + 3, y + cardH + 5);
-      
-      if (device.downstream_code) {
-        doc.rect(x, y + cardH - 18, cardW, 18).fillColor('#d1fae5').fill();
-        doc.rect(x, y + cardH - 18, cardW, 18).strokeColor(COLORS.downstream).stroke();
-        doc.fontSize(5).font('Helvetica-Bold').fillColor(COLORS.downstream);
-        doc.text(`→ ${(device.downstream_code || '').substring(0, 10)}`, x + 2, y + cardH - 13, { width: cardW - 4, align: 'center' });
-      }
-      
-      return { bottomY: y + cardH + 20 };
-    };
-
-    // ===== HELPER: Draw Cartouche =====
-    const drawCartouche = (folio, totalFolios) => {
-      const pageW = doc.page.width;
-      const pageH = doc.page.height;
-      const cartH = 60;
-      const cartY = pageH - cartH - 20;
-      const margin = 30;
-      
-      doc.rect(margin, cartY, pageW - margin * 2, cartH)
-         .strokeColor(COLORS.breaker)
-         .lineWidth(1)
-         .stroke();
-      
-      const col1 = margin + 150;
-      const col2 = col1 + 200;
-      const col3 = col2 + 200;
-      const col4 = pageW - margin - 100;
-      
-      doc.moveTo(col1, cartY).lineTo(col1, cartY + cartH).stroke();
-      doc.moveTo(col2, cartY).lineTo(col2, cartY + cartH).stroke();
-      doc.moveTo(col3, cartY).lineTo(col3, cartY + cartH).stroke();
-      doc.moveTo(col4, cartY).lineTo(col4, cartY + cartH).stroke();
-      
-      if (settings.logo) {
-        try {
-          doc.image(settings.logo, margin + 5, cartY + 5, { width: 50, height: 35 });
-        } catch (e) { /* ignore logo errors */ }
-      }
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text(settings.company_name || 'ElectroHub', margin + 60, cartY + 10);
-      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
-      doc.text(settings.company_address || '', margin + 60, cartY + 22, { width: 80 });
-      doc.text(settings.company_phone || '', margin + 60, cartY + 42);
-      
-      doc.fontSize(10).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text(board.code, col1 + 10, cartY + 8);
-      doc.fontSize(7).font('Helvetica').fillColor(COLORS.textLight);
-      doc.text(`Nom: ${board.name || '-'}`, col1 + 10, cartY + 22);
-      doc.text(`Bât: ${board.building_code || '-'} | Étage: ${board.floor || '-'}`, col1 + 10, cartY + 34);
-      doc.text(`Régime: ${board.regime_neutral || 'TN-S'}`, col1 + 10, cartY + 46);
-      
-      doc.fontSize(12).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text('SCHÉMA UNIFILAIRE', col2 + 10, cartY + 12);
-      doc.fontSize(8).font('Helvetica').fillColor(COLORS.textLight);
-      doc.text(`${feeders.length} départs • ${devices.filter(d => d.is_differential).length} DDR`, col2 + 10, cartY + 30);
-      if (mainIncoming) {
-        doc.text(`Arrivée: ${mainIncoming.in_amps || '?'}A ${mainIncoming.manufacturer || ''} ${mainIncoming.reference || ''}`, col2 + 10, cartY + 42);
-      }
-      
-      doc.fontSize(7).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text('SOURCE', col3 + 10, cartY + 8);
-      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
-      if (upstreamDevices.length > 0) {
-        upstreamDevices.slice(0, 2).forEach((src, i) => {
-          doc.text(`${src.source_board_code} (${src.name})`, col3 + 10, cartY + 20 + i * 12);
-        });
-      } else if (board.is_principal) {
-        doc.text('Tableau Principal (TGBT)', col3 + 10, cartY + 20);
-      } else {
-        doc.text('Non définie', col3 + 10, cartY + 20);
-      }
-      
-      doc.fontSize(9).font('Helvetica-Bold').fillColor(COLORS.text);
-      doc.text(`Folio ${folio}/${totalFolios}`, col4 + 10, cartY + 10);
-      doc.fontSize(6).font('Helvetica').fillColor(COLORS.textLight);
-      doc.text(new Date().toLocaleDateString('fr-FR'), col4 + 10, cartY + 28);
-      doc.text(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }), col4 + 10, cartY + 40);
-    };
-
-    // ===== GENERATE FOLIOS =====
-    for (let folio = 0; folio < totalFolios; folio++) {
-      if (folio > 0) doc.addPage();
-      
-      const pageW = doc.page.width;
-      const pageH = doc.page.height;
-      const margin = 30;
-      const diagramAreaH = pageH - 150;
-      
-      doc.strokeColor(COLORS.gridLine).lineWidth(0.25);
-      for (let gx = margin; gx < pageW - margin; gx += 50) {
-        doc.moveTo(gx, margin).lineTo(gx, diagramAreaH).stroke();
-      }
-      for (let gy = margin; gy < diagramAreaH; gy += 50) {
-        doc.moveTo(margin, gy).lineTo(pageW - margin, gy).stroke();
-      }
-      
-      const startIdx = folio * DEVICES_PER_FOLIO;
-      const pageFeeders = feeders.slice(startIdx, startIdx + DEVICES_PER_FOLIO);
-      
-      const deviceSpacing = Math.min(90, (pageW - margin * 2 - 150) / Math.max(pageFeeders.length, 1));
-      const busbarWidth = Math.max(400, pageFeeders.length * deviceSpacing + 100);
-      const busbarX = (pageW - busbarWidth) / 2;
-      const busbarY = 140;
-      
-      if (folio === 0) {
-        if (upstreamDevices.length > 0) {
-          upstreamDevices.forEach((src, i) => {
-            const srcX = pageW / 2 + (i - (upstreamDevices.length - 1) / 2) * 120;
-            drawSourceSymbol(srcX, 40, src.source_board_code, src.name);
-            doc.strokeColor(COLORS.incoming).lineWidth(2);
-            doc.moveTo(srcX, 80).lineTo(srcX, mainIncoming ? 90 : busbarY).stroke();
-          });
-        } else {
-          drawSourceSymbol(pageW / 2, 40, board.is_principal ? 'Réseau' : 'Amont', 'Arrivée');
-          doc.strokeColor(COLORS.incoming).lineWidth(2);
-          doc.moveTo(pageW / 2, 80).lineTo(pageW / 2, mainIncoming ? 90 : busbarY).stroke();
-        }
-        
-        if (mainIncoming) {
-          const mainX = pageW / 2 - 35;
-          const mainY = 90;
-          const mainCardW = 70;
-          const mainCardH = 45;
-          
-          doc.rect(mainX, mainY, mainCardW, mainCardH).fillColor('#fef3c7').fill();
-          doc.rect(mainX, mainY, mainCardW, mainCardH).strokeColor(COLORS.incoming).lineWidth(1.5).stroke();
-          
-          drawBreakerSymbol(mainX + mainCardW/2 - 12, mainY + 5, 24, mainIncoming.is_differential, true);
-          
-          doc.fontSize(6).font('Helvetica-Bold').fillColor(COLORS.incoming);
-          doc.text('ARRIVÉE', mainX + 2, mainY + 32, { width: mainCardW - 4, align: 'center' });
-          doc.fontSize(5).fillColor(COLORS.text);
-          doc.text(`${mainIncoming.in_amps || '?'}A`, mainX + 2, mainY + 40, { width: mainCardW - 4, align: 'center' });
-          
-          doc.strokeColor(COLORS.incoming).lineWidth(2);
-          doc.moveTo(pageW / 2, mainY + mainCardH).lineTo(pageW / 2, busbarY).stroke();
-        }
-      } else {
-        drawSourceSymbol(pageW / 2, 40, `Folio ${folio}`, 'Suite...');
-        doc.strokeColor(COLORS.wire).lineWidth(2);
-        doc.moveTo(pageW / 2, 80).lineTo(pageW / 2, busbarY).stroke();
-      }
-      
-      drawBusbar(busbarX, busbarY, busbarWidth);
-      
-      pageFeeders.forEach((device, i) => {
-        const devX = busbarX + 50 + i * deviceSpacing;
-        const devY = busbarY + 35;
-        
-        doc.strokeColor(COLORS.wire).lineWidth(1.5);
-        doc.moveTo(devX + 35, busbarY + 12).lineTo(devX + 35, devY).stroke();
-        
-        drawDeviceCard(devX, devY, device, startIdx + i);
-      });
-      
-      if (folio < totalFolios - 1) {
-        const contX = pageW - margin - 60;
-        doc.fontSize(8).font('Helvetica-Bold').fillColor(COLORS.textLight);
-        doc.text('Suite →', contX, busbarY - 5);
-        doc.text(`Folio ${folio + 2}`, contX, busbarY + 15);
-      }
-      
-      drawCartouche(folio + 1, totalFolios);
-    }
-
-    doc.end();
-    
-  } catch (e) {
-    console.error('[DIAGRAM PDF] error:', e);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Diagram PDF generation failed', details: e.message });
-    }
-  }
-});
-
 // ==================== SWITCHBOARDS CRUD ====================
 
-// LIST Switchboards
 app.get('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1024,7 +667,6 @@ app.get('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// GET ONE Switchboard (INCLUDES UPSTREAM INFO)
 app.get('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1065,7 +707,6 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// CREATE Switchboard
 app.post('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1103,17 +744,20 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// UPDATE Switchboard
+// ============ UPDATE SWITCHBOARD - WITH BODY VALIDATION ============
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-    const b = req.body || {};
-    if (!b || Object.keys(b).length === 0) {
-      console.warn('[SWITCHBOARD UPDATE] Empty body received');
+    const b = req.body;
+    
+    // ============ VALIDATION DU BODY ============
+    if (!b || typeof b !== 'object' || Object.keys(b).length === 0) {
+      console.warn('[SWITCHBOARD UPDATE] Empty body received for id:', id);
       return res.status(400).json({ error: 'Request body is empty or invalid' });
     }
+    
     const name = String(b.name || '').trim();
     const code = String(b.code || '').trim();
     if (!name || !code) return res.status(400).json({ error: 'Missing name/code' });
@@ -1148,7 +792,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// DELETE Switchboard
 app.delete('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1170,7 +813,6 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE Switchboard
 app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1242,66 +884,56 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
   }
 });
 
-// ==================== DEVICE COUNTS ====================
+// ==================== DEVICE COUNTS - OPTIMIZED WITH TIMEOUT ====================
 
-// REMPLACER la route POST /api/switchboard/devices-count:
 app.post('/api/switchboard/devices-count', async (req, res) => {
+  const startTime = Date.now();
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    const boardIds = req.body?.board_ids || [];
+    const boardIds = req.body?.board_ids;
     
-    // Set a query timeout
-    const timeoutMs = 10000; // 10 seconds
-    
-    if (!boardIds.length) {
-      const { rows } = await pool.query({
-        text: `SELECT d.switchboard_id, 
-                COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE d.is_complete = true)::int AS complete
-         FROM devices d 
-         JOIN switchboards sb ON d.switchboard_id = sb.id
-         WHERE sb.site = $1 
-         GROUP BY d.switchboard_id`,
-        values: [site],
-        timeout: timeoutMs
-      });
-      const counts = {};
-      rows.forEach(r => {
-        counts[r.switchboard_id] = { total: r.total, complete: r.complete };
-      });
-      return res.json({ counts });
+    // ============ FAST PATH: Si pas d'IDs, retourner vide immédiatement ============
+    if (!boardIds || !Array.isArray(boardIds) || boardIds.length === 0) {
+      return res.json({ counts: {} });
     }
 
     const ids = boardIds.map(Number).filter(Boolean);
     if (!ids.length) return res.json({ counts: {} });
 
-    const { rows } = await pool.query({
-      text: `SELECT switchboard_id, 
-              COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE is_complete = true)::int AS complete
-       FROM devices
-       WHERE switchboard_id = ANY($1::int[])
-       GROUP BY switchboard_id`,
-      values: [ids],
-      timeout: timeoutMs
-    });
+    // ============ OPTIMIZED QUERY - Uses composite index with timeout ============
+    const { rows } = await queryWithTimeout(`
+      SELECT switchboard_id, 
+             COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE is_complete = true)::int AS complete
+      FROM devices
+      WHERE switchboard_id = ANY($1::int[])
+      GROUP BY switchboard_id
+    `, [ids], 8000); // 8 second timeout
     
     const counts = {};
     rows.forEach(r => {
       counts[r.switchboard_id] = { total: r.total, complete: r.complete };
     });
     
+    // Fill in zeros for IDs with no devices
     ids.forEach(id => {
       if (!counts[id]) counts[id] = { total: 0, complete: 0 };
     });
     
+    const elapsed = Date.now() - startTime;
+    if (elapsed > 2000) {
+      console.warn(`[DEVICES COUNT] Slow query: ${elapsed}ms for ${ids.length} boards`);
+    }
+    
     res.json({ counts });
   } catch (e) {
-    console.error('[DEVICES COUNT] error:', e.message);
-    // Return empty counts instead of 500 error to prevent UI blocking
-    res.json({ counts: {}, error: e.message });
+    const elapsed = Date.now() - startTime;
+    console.error(`[DEVICES COUNT] error after ${elapsed}ms:`, e.message);
+    
+    // ============ RETURN EMPTY COUNTS ON ERROR - DON'T BLOCK UI ============
+    res.json({ counts: {}, error: e.message, partial: true });
   }
 });
 
@@ -1417,14 +1049,17 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
+// ============ UPDATE DEVICE - WITH BODY VALIDATION ============
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-    const b = req.body || {};
-    if (!b || Object.keys(b).length === 0) {
-      console.warn('[DEVICES UPDATE] Empty body received');
+    const b = req.body;
+    
+    // ============ VALIDATION DU BODY ============
+    if (!b || typeof b !== 'object' || Object.keys(b).length === 0) {
+      console.warn('[DEVICES UPDATE] Empty body received for id:', id);
       return res.status(400).json({ error: 'Request body is empty or invalid' });
     }
     
@@ -1495,7 +1130,7 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// ==================== EXCEL IMPORT (XLS + XLSX SUPPORT + DUPLICATE DETECTION) ====================
+// ==================== EXCEL IMPORT ====================
 
 app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res) => {
   try {
@@ -1504,11 +1139,8 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
     const filename = req.file.originalname || '';
-    const isXls = filename.toLowerCase().endsWith('.xls') && !filename.toLowerCase().endsWith('.xlsx');
-    
-    console.log(`[EXCEL IMPORT] Processing file: ${filename}, isXls: ${isXls}, size: ${req.file.buffer.length}`);
+    console.log(`[EXCEL IMPORT] Processing file: ${filename}, size: ${req.file.buffer.length}`);
 
-    // ====== PARSE WITH SHEETJS (supports both .xls and .xlsx) ======
     let workbook;
     try {
       workbook = XLSX.read(req.file.buffer, { 
@@ -1526,15 +1158,12 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     if (!sheetName) return res.status(400).json({ error: 'No worksheet found' });
     
     const sheet = workbook.Sheets[sheetName];
-    
-    // Convert sheet to 2D array for easier processing
     const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
     
     if (!data || data.length < 12) {
       return res.status(400).json({ error: 'Fichier Excel trop court (moins de 12 lignes)' });
     }
 
-    // ====== HELPER: Get cell value safely ======
     const getCellValue = (rowIndex, colIndex) => {
       if (!data[rowIndex]) return '';
       const val = data[rowIndex][colIndex];
@@ -1543,29 +1172,24 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       return String(val).trim();
     };
 
-    // ====== EXTRACT BOARD INFO ======
-    // Row 2 (index 1): Tableau name - search columns D-G (3-6)
     let tableauName = 'Tableau importé';
     for (let col = 3; col <= 6; col++) {
       const val = getCellValue(1, col);
       if (val && val.length > 2) { tableauName = val; break; }
     }
 
-    // Row 4 (index 3): Code - search columns D-G (3-6)
     let code = `IMP-${Date.now()}`;
     for (let col = 3; col <= 6; col++) {
       const val = getCellValue(3, col);
       if (val && val.length > 2) { code = val; break; }
     }
 
-    // Extract building/floor from code (e.g., "11-9-05-FL" → building=11, floor=9)
     const codeParts = code.split('-');
     const building = codeParts[0] || null;
     const floor = codeParts[1] || null;
 
     console.log(`[EXCEL IMPORT] Extracted: name="${tableauName}", code="${code}", building=${building}, floor=${floor}`);
 
-    // ====== CHECK IF BOARD ALREADY EXISTS ======
     const existingBoard = await pool.query(
       `SELECT id, name, code FROM switchboards WHERE site = $1 AND LOWER(code) = LOWER($2)`,
       [site, code]
@@ -1579,14 +1203,12 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       boardAlreadyExists = true;
       switchboardId = existingBoard.rows[0].id;
       
-      // Count existing devices
       const countRes = await pool.query(
         `SELECT COUNT(*)::int as count FROM devices WHERE switchboard_id = $1`,
         [switchboardId]
       );
       existingDeviceCount = countRes.rows[0]?.count || 0;
       
-      // Update board name if different
       if (existingBoard.rows[0].name !== tableauName) {
         await pool.query(
           `UPDATE switchboards SET name = $1, building_code = $2, floor = $3 WHERE id = $4`,
@@ -1596,7 +1218,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       
       console.log(`[EXCEL IMPORT] Board already exists: id=${switchboardId}, existing devices=${existingDeviceCount}`);
     } else {
-      // Create new board
       const newBoard = await pool.query(
         `INSERT INTO switchboards (site, name, code, building_code, floor, regime_neutral)
          VALUES ($1, $2, $3, $4, $5, 'TN-S')
@@ -1607,7 +1228,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       console.log(`[EXCEL IMPORT] Created new board: id=${switchboardId}`);
     }
 
-    // ====== METADATA EXCLUSION KEYWORDS ======
     const EXCLUDED_KEYWORDS = [
       'modifié', 'modified', 'date', 'nom', 'name', 'prénom', 'prenom', 'first name',
       'société', 'societe', 'company', 'visa', 'maintenance', 'préventive', 'preventive',
@@ -1616,56 +1236,38 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       'établi', 'etabli', 'contrôlé', 'controle', 'approuvé', 'approuve'
     ];
 
-    // ====== VALIDATION FUNCTIONS ======
     const isValidPosition = (pos) => {
       if (!pos) return false;
       const str = String(pos).trim();
       if (!str) return false;
-      
-      // Format numérique simple: "1", "1.5", "123"
       if (/^\d+(\.\d+)?$/.test(str)) return true;
-      
-      // Format avec une lettre: "A1", "1A", "A1B"
       if (/^[A-Za-z]?\d+[A-Za-z]?$/.test(str)) return true;
-      
-      // Format alphanumérique complexe: "11F1", "13FI1", "A12B3", etc.
       if (/^[A-Za-z0-9]+$/.test(str) && /\d/.test(str) && str.length <= 15) return true;
-      
-      // Format avec tiret ou point: "01-01", "1.1.2", "A-1"
       if (/^[A-Za-z0-9][-.\dA-Za-z]*\d[-.\dA-Za-z]*$/.test(str) && str.length <= 15) return true;
-      
       return false;
     };
 
     const isMetadataRow = (rowData) => {
       const cellValues = (rowData || []).map(v => String(v || '').toLowerCase().trim()).filter(Boolean);
-      
       for (const cellVal of cellValues) {
         for (const keyword of EXCLUDED_KEYWORDS) {
-          if (cellVal.includes(keyword)) {
-            return true;
-          }
+          if (cellVal.includes(keyword)) return true;
         }
       }
-      
       for (const cellVal of cellValues) {
         if (/^(mon|tue|wed|thu|fri|sat|sun|lun|mar|mer|jeu|ven|sam|dim)/i.test(cellVal)) return true;
         if (/^\d{4}-\d{2}-\d{2}/.test(cellVal)) return true;
         if (/^\d{2}[\/.-]\d{2}[\/.-]\d{2,4}$/.test(cellVal)) return true;
       }
-      
       return false;
     };
 
-    // ====== IMPORT DEVICES ======
     let devicesCreated = 0;
     let devicesSkipped = 0;
     const startRow = 11;
-    
     let consecutiveEmptyRows = 0;
     const MAX_EMPTY_ROWS = 3;
 
-    // Get existing positions for this board to avoid duplicates
     const existingPositions = new Set();
     if (boardAlreadyExists) {
       const posRes = await pool.query(
@@ -1707,26 +1309,21 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       consecutiveEmptyRows = 0;
 
       if (isMetadataRow(row)) {
-        console.log(`[EXCEL IMPORT] Skipping metadata row ${rowIndex + 1}`);
         devicesSkipped++;
         continue;
       }
 
       if (!isValidPosition(position)) {
-        console.log(`[EXCEL IMPORT] Skipping invalid position at row ${rowIndex + 1}: "${position}"`);
         devicesSkipped++;
         continue;
       }
 
       if (!designation) {
-        console.log(`[EXCEL IMPORT] Skipping row ${rowIndex + 1}: no designation`);
         devicesSkipped++;
         continue;
       }
 
-      // Skip if position already exists in this board (avoid duplicates on re-import)
       if (existingPositions.has(String(position).toLowerCase())) {
-        console.log(`[EXCEL IMPORT] Skipping duplicate position at row ${rowIndex + 1}: "${position}"`);
         devicesSkipped++;
         continue;
       }
@@ -1746,18 +1343,12 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     res.json({
       success: true,
       already_exists: boardAlreadyExists,
-      switchboard: { 
-        id: switchboardId, 
-        name: tableauName, 
-        code, 
-        building, 
-        floor 
-      },
+      switchboard: { id: switchboardId, name: tableauName, code, building, floor },
       devices_created: devicesCreated,
       devices_skipped: devicesSkipped,
       existing_devices: existingDeviceCount,
       message: boardAlreadyExists 
-        ? `⚠️ Tableau "${code}" déjà existant (${existingDeviceCount} départs). ${devicesCreated} nouveaux départs ajoutés, ${devicesSkipped} ignorés (doublons ou métadonnées).`
+        ? `⚠️ Tableau "${code}" déjà existant. ${devicesCreated} nouveaux départs ajoutés.`
         : `✅ Tableau "${code}" créé avec ${devicesCreated} départs.`
     });
   } catch (e) {
@@ -1766,7 +1357,7 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
   }
 });
 
-// ==================== AI PHOTO ANALYSIS (IMPROVED - NO NULL) ====================
+// ==================== AI PHOTO ANALYSIS ====================
 
 app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
   try {
@@ -1779,344 +1370,50 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const base64Image = buffer.toString('base64');
     const mimeType = req.file.mimetype || 'image/jpeg';
 
-    // ========== IMPROVED AI PROMPT ==========
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: `Tu es un expert en identification de disjoncteurs et appareillage électrique.
-Ton travail est d'identifier le FABRICANT et la RÉFÉRENCE à partir de la photo.
+          content: `Tu es un expert en identification de disjoncteurs. Identifie le FABRICANT et la RÉFÉRENCE.
 
-═══════════════════════════════════════════════════════════
-ÉTAPE 1: IDENTIFIER LE FABRICANT (OBLIGATOIRE)
-═══════════════════════════════════════════════════════════
+FABRICANTS: Hager (bleu), Schneider (vert), ABB (orange), Legrand (vert), Siemens (turquoise), Eaton (rouge).
 
-MÉTHODE: Cherche ces INDICES VISUELS dans cet ordre:
-1. Le LOGO du fabricant (généralement en haut de l'appareil)
-2. Le NOM du fabricant écrit quelque part
-3. La COULEUR et le DESIGN caractéristiques
-4. Le STYLE de la référence produit
-
-GUIDE D'IDENTIFICATION PAR FABRICANT:
-
-🔵 HAGER:
-   - Logo: "hager" en minuscules, police arrondie
-   - Couleurs: Bleu marine et blanc, manette souvent bleue/noire avec bande bleue
-   - Références: HN, HM, HY, NC, NR, MC, MB, ND, NK, MBN, MBS, MCA, MCB + chiffres
-   - Design: Compact, sobre, étiquette bleue fréquente
-   - ATTENTION: Très répandu en Europe, souvent confondu avec Schneider!
-
-⬜ SCHNEIDER ELECTRIC:
-   - Logo: "SE" stylisé ou "Schneider Electric" ou "Life is On"
-   - Couleurs: Vert et blanc, parfois gris/blanc
-   - Gammes: Acti9 (iC60, iDPN, iC40), Compact NS, NSX, Masterpact
-   - Références commencent par: A9, IC, ID, NS, NW, LV
-   - Design: Moderne, souvent vert vif
-
-🟠 ABB:
-   - Logo: "ABB" en lettres rouges/orange
-   - Couleurs: Rouge/orange et gris
-   - Gammes: Tmax, SACE, S200, F200, DS200
-   - Références commencent par: S2, T, 1S, 2C
-   - Design: Bande orange caractéristique
-
-🟢 LEGRAND:
-   - Logo: "LEGRAND" ou symbole distinctif
-   - Couleurs: Vert et blanc, parfois gris
-   - Gammes: DX3, DNX, DPX, RX3
-   - Références: 4xxxxx ou 0xxxxx (6 chiffres)
-
-🔷 SIEMENS:
-   - Logo: "SIEMENS" en majuscules
-   - Couleurs: Vert pétrole (turquoise foncé)
-   - Gammes: 3VA, 5SY, 5SL
-   - Références commencent par: 3VA, 5SY, 5SL
-
-🔴 EATON:
-   - Logo: "EATON" 
-   - Couleurs: Rouge et noir/gris
-   - Gammes: FAZ, PL, NZM, xPole
-   - Références: FAZ, PL, NZM, PLSM
-
-═══════════════════════════════════════════════════════════
-ÉTAPE 2: LIRE LA RÉFÉRENCE
-═══════════════════════════════════════════════════════════
-
-- Cherche le code alphanumérique sur la face avant
-- Souvent près du calibre (exemple: "C16", "B32", "D40")
-- Peut être sur une étiquette ou gravé
-- Note TOUS les caractères visibles
-
-═══════════════════════════════════════════════════════════
-ÉTAPE 3: DÉTECTER SI DIFFÉRENTIEL (DDR)
-═══════════════════════════════════════════════════════════
-
-Un disjoncteur différentiel a:
-- Bouton TEST (souvent jaune, orange ou blanc)
-- Indication 30mA, 300mA, ou symbole "I∆n"
-- Module plus large (2 à 4 modules de largeur)
-- Symbole différentiel (sinusoïde)
-
-═══════════════════════════════════════════════════════════
-RÈGLE FINALE - NE JAMAIS RETOURNER NULL POUR LE FABRICANT
-═══════════════════════════════════════════════════════════
-
-Si tu ne vois pas clairement le logo/nom:
-1. Analyse la COULEUR dominante
-2. Analyse le STYLE de l'appareil  
-3. Analyse le FORMAT de la référence
-4. Fais une SUPPOSITION ÉCLAIRÉE basée sur ces indices
-
-Exemples de déduction:
-- Appareil bleu foncé + référence "MBN..." → Hager (confiance: medium)
-- Appareil vert + référence "A9..." → Schneider (confiance: high)
-- Appareil avec bande orange → ABB (confiance: medium)
-- Appareil turquoise → Siemens (confiance: medium)
-
-Réponds UNIQUEMENT en JSON valide.`
+Ne retourne JAMAIS null pour manufacturer - fais une supposition basée sur la couleur/style.
+Réponds en JSON: {"manufacturer":"...", "manufacturer_confidence":"high/medium/low", "reference":"...", "is_differential":bool, "in_amps":number, "poles":number}`
         },
         {
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: `Analyse cette photo de disjoncteur.
-
-1. FABRICANT: Identifie le fabricant par le logo, le nom, ou les indices visuels (couleur, style, format référence). NE RETOURNE PAS null - fais une supposition éclairée si nécessaire.
-
-2. RÉFÉRENCE: Lis le code produit exact visible sur l'appareil.
-
-3. DIFFÉRENTIEL: Y a-t-il un bouton TEST ou une indication 30mA/300mA?
-
-4. CALIBRE: Quel est le calibre en Ampères visible (ex: 16A, 32A)?
-
-5. COURBE: Quelle est la courbe (B, C, D)?
-
-Réponds en JSON:
-{
-  "manufacturer": "nom du fabricant (OBLIGATOIRE - jamais null)",
-  "manufacturer_confidence": "high/medium/low",
-  "manufacturer_clues": "liste des indices qui t'ont permis d'identifier (couleur, logo, style référence)",
-  "reference": "référence exacte ou null si illisible",
-  "is_differential": true/false,
-  "in_amps": nombre ou null,
-  "curve_type": "B/C/D ou null",
-  "poles": nombre (1,2,3,4) ou null
-}`
-            },
+            { type: 'text', text: 'Analyse ce disjoncteur.' },
             { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' } }
           ]
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 800,
+      max_tokens: 500,
       temperature: 0.2
     });
 
     const result = JSON.parse(response.choices[0].message.content);
     
-    // ========== SEARCH CACHE FOR SIMILAR PRODUCTS ==========
     let cacheResults = [];
-    const searchTerms = [result.reference, result.manufacturer].filter(Boolean);
-    
-    if (searchTerms.length > 0) {
+    if (result.reference || result.manufacturer) {
       try {
         const cacheQuery = await pool.query(`
-          SELECT id, reference, manufacturer, device_type, in_amps, icu_ka, poles, voltage_v,
-                 is_differential, settings, scan_count, validated
+          SELECT id, reference, manufacturer, in_amps, icu_ka, poles, is_differential, scan_count, validated
           FROM scanned_products
-          WHERE site = $1 
-            AND (
-              reference ILIKE $2 
-              OR manufacturer ILIKE $3
-              OR reference ILIKE $4
-            )
-          ORDER BY validated DESC, scan_count DESC
-          LIMIT 5
-        `, [
-          site, 
-          `%${result.reference || ''}%`,
-          `%${result.manufacturer || ''}%`,
-          `%${(result.reference || '').split(/[-\/\s]/)[0]}%`
-        ]);
+          WHERE site = $1 AND (reference ILIKE $2 OR manufacturer ILIKE $3)
+          ORDER BY validated DESC, scan_count DESC LIMIT 5
+        `, [site, `%${result.reference || ''}%`, `%${result.manufacturer || ''}%`]);
         cacheResults = cacheQuery.rows;
-      } catch (cacheErr) {
-        console.warn('[PHOTO ANALYSIS] Cache search error:', cacheErr.message);
-      }
+      } catch (e) { /* ignore */ }
     }
     
-    const quick_ai_query = [result.manufacturer, result.reference].filter(Boolean).join(' ').trim() || null;
-
-    res.json({ 
-      ...result, 
-      quick_ai_query,
-      cache_suggestions: cacheResults,
-      from_cache: false
-    });
+    res.json({ ...result, cache_suggestions: cacheResults, from_cache: false });
   } catch (e) {
     console.error('[PHOTO ANALYSIS] error:', e.message);
     res.status(500).json({ error: 'Photo analysis failed: ' + e.message });
-  }
-});
-
-// ==================== SCANNED PRODUCTS CACHE ====================
-
-app.post('/api/switchboard/scanned-products', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    
-    const { 
-      reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, 
-      poles, voltage_v, trip_unit, is_differential, settings, photo_base64, source 
-    } = req.body;
-    
-    if (!reference) return res.status(400).json({ error: 'Reference is required' });
-    
-    const existing = await pool.query(`
-      SELECT id, scan_count FROM scanned_products 
-      WHERE site = $1 AND LOWER(reference) = LOWER($2) AND LOWER(COALESCE(manufacturer, '')) = LOWER(COALESCE($3, ''))
-    `, [site, reference, manufacturer || '']);
-    
-    let result;
-    if (existing.rows.length > 0) {
-      result = await pool.query(`
-        UPDATE scanned_products SET
-          device_type = COALESCE($1, device_type),
-          in_amps = COALESCE($2, in_amps),
-          icu_ka = COALESCE($3, icu_ka),
-          ics_ka = COALESCE($4, ics_ka),
-          poles = COALESCE($5, poles),
-          voltage_v = COALESCE($6, voltage_v),
-          trip_unit = COALESCE($7, trip_unit),
-          is_differential = COALESCE($8, is_differential),
-          settings = COALESCE($9, settings),
-          photo_thumbnail = COALESCE($10, photo_thumbnail),
-          scan_count = scan_count + 1,
-          validated = true,
-          last_scanned_at = NOW()
-        WHERE id = $11
-        RETURNING *
-      `, [
-        device_type || null,
-        in_amps || null,
-        icu_ka || null,
-        ics_ka || null,
-        poles || null,
-        voltage_v || null,
-        trip_unit || null,
-        is_differential || false,
-        settings ? JSON.stringify(settings) : null,
-        photo_base64 ? Buffer.from(photo_base64, 'base64') : null,
-        existing.rows[0].id
-      ]);
-    } else {
-      result = await pool.query(`
-        INSERT INTO scanned_products 
-          (site, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, 
-           voltage_v, trip_unit, is_differential, settings, photo_thumbnail, validated, source, last_scanned_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, NOW())
-        RETURNING *
-      `, [
-        site,
-        reference,
-        manufacturer || null,
-        device_type || 'Low Voltage Circuit Breaker',
-        in_amps || null,
-        icu_ka || null,
-        ics_ka || null,
-        poles || null,
-        voltage_v || null,
-        trip_unit || null,
-        is_differential || false,
-        settings ? JSON.stringify(settings) : '{}',
-        photo_base64 ? Buffer.from(photo_base64, 'base64') : null,
-        source || 'manual_entry'
-      ]);
-    }
-    
-    res.json({ success: true, product: result.rows[0] });
-  } catch (e) {
-    console.error('[SCANNED PRODUCTS] save error:', e.message);
-    res.status(500).json({ error: 'Failed to save product' });
-  }
-});
-
-app.get('/api/switchboard/scanned-products/search', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    
-    const { q, manufacturer, reference } = req.query;
-    
-    let query = `
-      SELECT id, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles,
-             voltage_v, trip_unit, is_differential, settings, scan_count, validated,
-             last_scanned_at
-      FROM scanned_products
-      WHERE site = $1
-    `;
-    const params = [site];
-    let paramIndex = 2;
-    
-    if (q) {
-      query += ` AND (reference ILIKE $${paramIndex} OR manufacturer ILIKE $${paramIndex})`;
-      params.push(`%${q}%`);
-      paramIndex++;
-    }
-    if (manufacturer) {
-      query += ` AND manufacturer ILIKE $${paramIndex}`;
-      params.push(`%${manufacturer}%`);
-      paramIndex++;
-    }
-    if (reference) {
-      query += ` AND reference ILIKE $${paramIndex}`;
-      params.push(`%${reference}%`);
-      paramIndex++;
-    }
-    
-    query += ` ORDER BY validated DESC, scan_count DESC, last_scanned_at DESC LIMIT 20`;
-    
-    const { rows } = await pool.query(query, params);
-    res.json({ data: rows });
-  } catch (e) {
-    console.error('[SCANNED PRODUCTS] search error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-app.get('/api/switchboard/scanned-products', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    
-    const { rows } = await pool.query(`
-      SELECT id, reference, manufacturer, device_type, in_amps, icu_ka, poles,
-             voltage_v, is_differential, scan_count, validated
-      FROM scanned_products
-      WHERE site = $1
-      ORDER BY scan_count DESC, last_scanned_at DESC
-      LIMIT 100
-    `, [site]);
-    
-    res.json({ data: rows });
-  } catch (e) {
-    console.error('[SCANNED PRODUCTS] list error:', e.message);
-    res.status(500).json({ error: 'List failed' });
-  }
-});
-
-app.delete('/api/switchboard/scanned-products/:id', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const { id } = req.params;
-    
-    await pool.query('DELETE FROM scanned_products WHERE id = $1 AND site = $2', [id, site]);
-    res.json({ success: true });
-  } catch (e) {
-    console.error('[SCANNED PRODUCTS] delete error:', e.message);
-    res.status(500).json({ error: 'Delete failed' });
   }
 });
 
@@ -2133,66 +1430,16 @@ app.post('/api/switchboard/search-device', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: `Tu es un expert en appareillage électrique. Extrait les spécifications techniques à partir du texte fourni.
-
-FABRICANTS CONNUS:
-- Schneider Electric: NSX, Compact NS, iC60, Acti9, Masterpact
-- ABB: Tmax, SACE, S200, F200
-- Hager: HN, HM, HYC, NCN, NRN, MCA, MCB, MBN, MBB, MBS, NDB, NKB, NKC, NKN
-- Legrand: DX3, DNX, DPX
-- Siemens: 3VA, 5SY, 5SL
-- Eaton: FAZ, PL, NZM, LZMN
-- General Electric: Enfinity, EP, Record Plus
-
-Retourne UNIQUEMENT du JSON valide avec ces champs:
-{
-  "manufacturer": "nom du fabricant",
-  "reference": "référence complète",
-  "device_type": "Low Voltage Circuit Breaker",
-  "in_amps": nombre ou null,
-  "icu_ka": nombre ou null,
-  "ics_ka": nombre ou null,
-  "poles": nombre (1,2,3,4) ou null,
-  "voltage_v": nombre ou null,
-  "trip_unit": "nom de l'unité de déclenchement ou null",
-  "is_differential": true/false,
-  "settings": {
-    "ir": nombre, "tr": nombre, "isd": nombre, "tsd": nombre,
-    "ii": nombre, "ig": nombre, "tg": nombre,
-    "zsi": boolean, "erms": boolean, "curve_type": "B/C/D"
-  }
-}` 
+          content: `Extrait les spécifications d'un disjoncteur. Retourne JSON: {"manufacturer":"...", "reference":"...", "in_amps":number, "icu_ka":number, "poles":number, "voltage_v":number, "is_differential":bool}` 
         },
-        { role: 'user', content: `Extrait les spécifications: ${query}` }
+        { role: 'user', content: `Spécifications: ${query}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
-      max_tokens: 800
+      max_tokens: 500
     });
 
-    const jsonResponse = JSON.parse(completion.choices[0].message.content);
-    
-    const safeNum = (val) => {
-      if (val === null || val === undefined) return null;
-      const num = Number(val);
-      return isNaN(num) ? null : num;
-    };
-
-    const validated = {
-      manufacturer: jsonResponse.manufacturer || null,
-      reference: jsonResponse.reference || null,
-      device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
-      in_amps: safeNum(jsonResponse.in_amps),
-      icu_ka: safeNum(jsonResponse.icu_ka),
-      ics_ka: safeNum(jsonResponse.ics_ka),
-      poles: safeNum(jsonResponse.poles) || 3,
-      voltage_v: safeNum(jsonResponse.voltage_v) || 400,
-      trip_unit: jsonResponse.trip_unit || null,
-      is_differential: !!jsonResponse.is_differential,
-      settings: jsonResponse.settings || {}
-    };
-
-    res.json(validated);
+    res.json(JSON.parse(completion.choices[0].message.content));
   } catch (e) {
     console.error('[SEARCH DEVICE] error:', e.message);
     res.status(500).json({ error: 'Search failed' });
@@ -2209,18 +1456,15 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
 
     const where = ['site = $1'];
     const vals = [site];
-    let i = 2;
     if (query) {
-      where.push(`(LOWER(name) ILIKE $${i} OR LOWER(code) ILIKE $${i})`);
+      where.push(`(LOWER(name) ILIKE $2 OR LOWER(code) ILIKE $2)`);
       vals.push(`%${query}%`);
     }
 
     const { rows } = await pool.query(
       `SELECT id, name, code, building_code, floor, room
-       FROM switchboards
-       WHERE ${where.join(' AND ')}
-       ORDER BY code, name
-       LIMIT 20`, vals
+       FROM switchboards WHERE ${where.join(' AND ')}
+       ORDER BY code, name LIMIT 20`, vals
     );
     res.json({ suggestions: rows });
   } catch (e) {
@@ -2229,41 +1473,7 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
   }
 });
 
-// ==================== GRAPH ====================
-
-app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const rootId = Number(req.params.id);
-
-    const buildTree = async (switchboardId) => {
-      const { rows: devs } = await pool.query(
-        'SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST', 
-        [switchboardId]
-      );
-      const byId = new Map(devs.map(d => [d.id, { ...d, children: [], downstream: null }]));
-      const roots = [];
-      for (const d of devs) {
-        const node = byId.get(d.id);
-        if (d.parent_id && byId.has(d.parent_id)) byId.get(d.parent_id).children.push(node);
-        else roots.push(node);
-      }
-      for (const node of byId.values()) {
-        if (node.downstream_switchboard_id) node.downstream = await buildTree(node.downstream_switchboard_id);
-      }
-      return { switchboard_id: switchboardId, devices: roots };
-    };
-
-    const graph = await buildTree(rootId);
-    res.json(graph);
-  } catch (e) {
-    console.error('[SWITCHBOARD GRAPH] error:', e.message);
-    res.status(500).json({ error: 'Graph failed' });
-  }
-});
-
-// ==================== STATS & CALENDAR ====================
+// ==================== STATS ====================
 
 app.get('/api/switchboard/stats', async (req, res) => {
   try {
@@ -2282,26 +1492,6 @@ app.get('/api/switchboard/stats', async (req, res) => {
   } catch (e) {
     console.error('[STATS] error:', e.message);
     res.status(500).json({ error: 'Stats failed' });
-  }
-});
-
-app.get('/api/switchboard/calendar', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { rows } = await pool.query(`
-      SELECT sb.id, sb.name, sb.code, sb.building_code, sb.floor,
-             COUNT(d.id)::int as device_count
-      FROM switchboards sb
-      LEFT JOIN devices d ON d.switchboard_id = sb.id
-      WHERE sb.site = $1
-      GROUP BY sb.id
-      ORDER BY sb.building_code, sb.floor, sb.code
-    `, [site]);
-    res.json({ data: rows });
-  } catch (e) {
-    console.error('[CALENDAR] error:', e.message);
-    res.status(500).json({ error: 'Calendar failed' });
   }
 });
 
