@@ -1119,7 +1119,7 @@ export default function Switchboards() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
   
-  // ========== PLACEMENT STATE (FIXED) ==========
+  // ========== PLACEMENT STATE ==========
   const [placedBoardIds, setPlacedBoardIds] = useState(new Set());
   const [placedDetails, setPlacedDetails] = useState({}); // { boardId: { plans: [...], position_count } }
   
@@ -1221,7 +1221,7 @@ export default function Switchboards() {
     return () => clearTimeout(debounce);
   }, [downstreamSearch, selectedBoard]);
 
-  // ========== LOAD PLACEMENTS (FIXED) ==========
+  // ========== LOAD PLACEMENTS (useCallback for stability) ==========
   const loadPlacements = useCallback(async () => {
     try {
       const response = await api.switchboardMaps.placedIds();
@@ -1237,7 +1237,28 @@ export default function Switchboards() {
     }
   }, []);
 
-  // API calls
+  // ========== BUG 2 FIX: Refresh placements on page focus/visibility ==========
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadPlacements();
+      }
+    };
+    
+    const handleFocus = () => {
+      loadPlacements();
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [loadPlacements]);
+
+  // API calls - OPTIMIZED with Promise.allSettled
   const loadBoards = async () => {
     setIsLoading(true);
     try {
@@ -1296,7 +1317,7 @@ export default function Switchboards() {
     setSearchParams({});
   };
 
-  // ========== NAVIGATE TO MAP (NEW) ==========
+  // ========== NAVIGATE TO MAP ==========
   const handleNavigateToMap = (board) => {
     const boardId = board?.id || selectedBoard?.id;
     if (!boardId) {
@@ -1574,7 +1595,7 @@ export default function Switchboards() {
     return Math.round((counts.complete / counts.total) * 100);
   };
 
-  // ========== CHECK IF BOARD IS PLACED (FIXED) ==========
+  // ========== CHECK IF BOARD IS PLACED ==========
   const isBoardPlacedOnMap = useCallback((board) => {
     return placedBoardIds.has(board.id);
   }, [placedBoardIds]);
@@ -2443,7 +2464,7 @@ export default function Switchboards() {
                         >
                           <Link size={18} />
                         </button>
-                        {/* ========== PLANS BUTTON (ENHANCED) ========== */}
+                        {/* ========== PLANS BUTTON ==========*/}
                         <button
                           onClick={() => handleNavigateToMap(selectedBoard)}
                           className={`px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${
