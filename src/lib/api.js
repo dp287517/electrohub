@@ -464,7 +464,14 @@ export const api = {
     return get("/api/switchboard/maps/positions", { logical_name: key, page_index });
   },
   setPosition: (payload) => post("/api/switchboard/maps/setPosition", payload),
-  placedIds: () => get("/api/switchboard/maps/placed"),
+    placedIds: async () => {
+    try {
+      return await get("/api/switchboard-map/placed-ids");
+    } catch (e) {
+      // Compat: anciens backends exposent uniquement /api/switchboard/maps/placed
+      return get("/api/switchboard/maps/placed");
+    }
+  },
 },
 
   /** --- COMP-EXT --- */
