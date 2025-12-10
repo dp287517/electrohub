@@ -96,7 +96,6 @@ function userHeaders() {
 }
 
 function pdfDocOpts(url) {
-  // EXACTEMENT comme VSD
   return {
     url,
     withCredentials: true,
@@ -429,7 +428,7 @@ const PlacementModeIndicator = ({ board, onCancel }) => (
   </div>
 );
 
-/* ----------------------------- Leaflet Viewer (copié VSD + icon jaune) ----------------------------- */
+/* ----------------------------- Leaflet Viewer (EXACT VSD PATTERN) ----------------------------- */
 const SwitchboardLeafletViewer = forwardRef(
   (
     {
@@ -442,7 +441,6 @@ const SwitchboardLeafletViewer = forwardRef(
       onCreatePoint,
       disabled = false,
       placementActive = false,
-      markerPickRadiusPx = 20,
     },
     ref
   ) => {
@@ -452,6 +450,7 @@ const SwitchboardLeafletViewer = forwardRef(
     const markersLayerRef = useRef(null);
 
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+    const [picker, setPicker] = useState(null);
 
     const pointsRef = useRef(initialPoints);
     const aliveRef = useRef(true);
@@ -466,17 +465,16 @@ const SwitchboardLeafletViewer = forwardRef(
     const renderTaskRef = useRef(null);
 
     const ICON_PX = 22;
+    const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
 
     function makeSwitchboardIcon(isPrincipal = false) {
       const s = ICON_PX;
       const bg = isPrincipal
         ? "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);"
-        : "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);"; // jaune elec
+        : "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
       const html = `
         <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
-          <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${
-        s * 0.55
-      }" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" xmlns="http://www.w3.org/2000/svg">
             <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
           </svg>
         </div>`;
@@ -529,7 +527,10 @@ const SwitchboardLeafletViewer = forwardRef(
             regime_neutral: p.regime_neutral,
           };
 
-          mk.on("click", () => onClickPoint?.(mk.__meta));
+          mk.on("click", () => {
+            setPicker(null);
+            onClickPoint?.(mk.__meta);
+          });
 
           mk.on("dragend", () => {
             if (!onMovePoint) return;
@@ -679,13 +680,14 @@ const SwitchboardLeafletViewer = forwardRef(
           m.setMaxZoom(fitZoom + 6);
           m.setMaxBounds(bounds.pad(0.5));
 
-          if (!markersLayerRef.current) {
-            markersLayerRef.current = L.layerGroup().addTo(m);
-          }
+          // Créer le layer group pour les markers
+          markersLayerRef.current = L.layerGroup().addTo(m);
 
+          // Handler de clic sur la carte (exact VSD pattern)
           m.on("click", (e) => {
             if (!aliveRef.current) return;
 
+            // Mode placement : créer un point
             if (placementActive && onCreatePoint) {
               const ll = e.latlng;
               const xFrac = clamp(ll.lng / canvas.width, 0, 1);
@@ -694,28 +696,31 @@ const SwitchboardLeafletViewer = forwardRef(
               return;
             }
 
+            // Mode normal : chercher un marker proche
             const clicked = e.containerPoint;
-            let nearest = null;
-            let nearestDist = Infinity;
+            const near = [];
 
             markersLayerRef.current?.eachLayer((mk) => {
               const mp = m.latLngToContainerPoint(mk.getLatLng());
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-              if (dist < nearestDist) {
-                nearestDist = dist;
-                nearest = mk.__meta;
-              }
+              if (dist <= PICK_RADIUS) near.push(mk.__meta);
             });
 
-            if (nearest && nearestDist <= markerPickRadiusPx) {
-              onClickPoint?.(nearest);
+            if (near.length === 1 && onClickPoint) {
+              onClickPoint(near[0]);
+            } else if (near.length > 1) {
+              setPicker({ x: clicked.x, y: clicked.y, items: near });
+            } else {
+              setPicker(null);
             }
           });
 
           m.on("zoomstart", () => {
+            setPicker(null);
             userViewTouchedRef.current = true;
           });
           m.on("movestart", () => {
+            setPicker(null);
             userViewTouchedRef.current = true;
           });
           m.on("zoomend", () => {
@@ -725,6 +730,7 @@ const SwitchboardLeafletViewer = forwardRef(
             lastViewRef.current.center = m.getCenter();
           });
 
+          // Dessiner les markers avec les points initiaux
           drawMarkers(pointsRef.current, canvas.width, canvas.height);
 
           try {
@@ -773,18 +779,9 @@ const SwitchboardLeafletViewer = forwardRef(
         cleanupMap();
         cleanupPdf();
       };
-    }, [
-      fileUrl,
-      pageIndex,
-      disabled,
-      placementActive,
-      drawMarkers,
-      markerPickRadiusPx,
-      onCreatePoint,
-      onReady,
-      onClickPoint,
-    ]);
+    }, [fileUrl, pageIndex, disabled]);
 
+    // Synchroniser les points quand initialPoints change (EXACT VSD)
     useEffect(() => {
       pointsRef.current = initialPoints;
       if (mapRef.current && imgSize.w > 0) {
@@ -830,10 +827,22 @@ const SwitchboardLeafletViewer = forwardRef(
       Math.min(imgSize.h || 720, viewportH - 180)
     );
 
+    const onPickEquipment = useCallback(
+      (it) => {
+        setPicker(null);
+        onClickPoint?.(it);
+      },
+      [onClickPoint]
+    );
+
     return (
       <div className="mt-3 relative">
         <div className="flex items-center justify-end gap-2 mb-2">
-          <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>
+          <Btn
+            variant="ghost"
+            aria-label="Ajuster le zoom au plan"
+            onClick={adjust}
+          >
             Ajuster
           </Btn>
         </div>
@@ -843,6 +852,30 @@ const SwitchboardLeafletViewer = forwardRef(
           className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
           style={{ height: wrapperHeight }}
         />
+
+        {/* Picker pour sélection multiple (exact VSD) */}
+        {picker && (
+          <div
+            className="absolute bg-white border rounded-xl shadow-xl p-2 z-50"
+            style={{
+              left: Math.max(8, picker.x - 120),
+              top: Math.max(8, picker.y - 8),
+            }}
+          >
+            {picker.items.slice(0, 8).map((it) => (
+              <button
+                key={it.switchboard_id || it.id}
+                className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded-lg truncate"
+                onClick={() => onPickEquipment(it)}
+              >
+                {it.code || it.name || it.switchboard_id}
+              </button>
+            ))}
+            {picker.items.length > 8 && (
+              <div className="text-xs text-gray-500 px-3 py-1">…</div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
           <span className="inline-flex items-center gap-1">
@@ -855,11 +888,101 @@ const SwitchboardLeafletViewer = forwardRef(
             />
             Tableau
           </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="w-3 h-3 rounded-full"
+              style={{
+                background:
+                  "radial-gradient(circle at 30% 30%, #34d399, #0ea5a4)",
+              }}
+            />
+            Principal
+          </span>
         </div>
       </div>
     );
   }
 );
+
+/* ----------------------------- Hook de gestion des positions (EXACT VSD) ----------------------------- */
+function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
+  const reloadPositionsRef = useRef(null);
+  const latestPositionsRef = useRef([]);
+
+  const loadPositions = useCallback(
+    async (plan, pageIdx = 0) => {
+      if (!plan) return [];
+      const key = plan.id || plan.logical_name || "";
+      try {
+        const r = await api.switchboardMaps
+          .positionsAuto(key, pageIdx)
+          .catch(() => ({}));
+        const list = Array.isArray(r?.positions)
+          ? r.positions.map((item) => ({
+              id: item.id,
+              switchboard_id: item.switchboard_id,
+              name: item.name || `Tableau #${item.switchboard_id}`,
+              code: item.code || "",
+              x_frac: Number(item.x_frac ?? item.x ?? 0),
+              y_frac: Number(item.y_frac ?? item.y ?? 0),
+              x: Number(item.x_frac ?? item.x ?? 0),
+              y: Number(item.y_frac ?? item.y ?? 0),
+              building: item.building || "",
+              floor: item.floor || "",
+              room: item.room || "",
+              is_principal: item.is_principal || false,
+              regime_neutral: item.regime_neutral || "",
+            }))
+          : [];
+
+        latestPositionsRef.current = list;
+        viewerRef.current?.drawMarkers(list);
+        return list;
+      } catch (e) {
+        console.error("Erreur chargement positions", e);
+        latestPositionsRef.current = [];
+        viewerRef.current?.drawMarkers([]);
+        return [];
+      }
+    },
+    [viewerRef]
+  );
+
+  useEffect(() => {
+    reloadPositionsRef.current = loadPositions;
+  }, [loadPositions]);
+
+  // Rafraîchissement périodique (exact VSD)
+  useEffect(() => {
+    if (!stableSelectedPlan) return;
+
+    const tick = () =>
+      reloadPositionsRef.current?.(stableSelectedPlan, pageIndex);
+
+    tick();
+
+    const iv = setInterval(tick, 8000);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [stableSelectedPlan, pageIndex]);
+
+  const refreshPositions = useCallback((p, idx = 0) => {
+    return reloadPositionsRef.current?.(p, idx);
+  }, []);
+
+  const getLatestPositions = useCallback(() => {
+    return latestPositionsRef.current;
+  }, []);
+
+  return { refreshPositions, getLatestPositions };
+}
 
 /* ----------------------------- Main Page ----------------------------- */
 export default function SwitchboardMap() {
@@ -872,9 +995,9 @@ export default function SwitchboardMap() {
   const [numPages, setNumPages] = useState(1);
   const [loadingPlans, setLoadingPlans] = useState(false);
 
-  // Positions
-  const [positions, setPositions] = useState([]);
-  const [loadingPositions, setLoadingPositions] = useState(false);
+  // Positions (state initial pour le viewer)
+  const [initialPoints, setInitialPoints] = useState([]);
+  const [pdfReady, setPdfReady] = useState(false);
 
   // Switchboards
   const [switchboards, setSwitchboards] = useState([]);
@@ -898,11 +1021,23 @@ export default function SwitchboardMap() {
 
   const viewerRef = useRef(null);
 
-  // Stable plan URL (comme VSD)
+  // Stabiliser le plan sélectionné (exact VSD)
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
+
+  // Stable plan URL (exact VSD pattern)
   const stableFileUrl = useMemo(() => {
-    if (!selectedPlan) return null;
-    return api.switchboardMaps.planFileUrlAuto(selectedPlan, { bust: true });
-  }, [selectedPlan]);
+    if (!stableSelectedPlan) return null;
+    return api.switchboardMaps.planFileUrlAuto(stableSelectedPlan, {
+      bust: true,
+    });
+  }, [stableSelectedPlan]);
+
+  // Hook de gestion des positions (exact VSD pattern)
+  const { refreshPositions, getLatestPositions } = useMapUpdateLogic(
+    stableSelectedPlan,
+    pageIndex,
+    viewerRef
+  );
 
   useEffect(() => {
     const handleResize = () => {
@@ -918,10 +1053,6 @@ export default function SwitchboardMap() {
     loadPlans();
     loadSwitchboards();
   }, []);
-
-  useEffect(() => {
-    if (selectedPlan) loadPositions();
-  }, [selectedPlan, pageIndex]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -964,37 +1095,19 @@ export default function SwitchboardMap() {
     }
   };
 
-  const loadPositions = async () => {
-    if (!selectedPlan) return;
-    setLoadingPositions(true);
-    try {
-      const res = await api.switchboardMaps.positionsAuto(
-        selectedPlan,
-        pageIndex
-      );
-      const posList = res?.positions || [];
-      setPositions(posList);
-      viewerRef.current?.drawMarkers(posList);
-    } catch (err) {
-      console.error("Erreur chargement positions:", err);
-    } finally {
-      setLoadingPositions(false);
-    }
-  };
-
   const handleSetPositionById = async (switchboardId, xFrac, yFrac) => {
-    if (!selectedPlan || !switchboardId) return;
+    if (!stableSelectedPlan || !switchboardId) return;
     try {
       await api.switchboardMaps.setPosition({
         switchboard_id: switchboardId,
-        logical_name: selectedPlan.logical_name,
-        plan_id: selectedPlan.id || null,
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id || null,
         page_index: pageIndex,
         x_frac: xFrac,
         y_frac: yFrac,
       });
 
-      await loadPositions();
+      await refreshPositions(stableSelectedPlan, pageIndex);
       await refreshPlacedIds();
       setPlacementMode(null);
     } catch (err) {
@@ -1003,7 +1116,7 @@ export default function SwitchboardMap() {
   };
 
   const handleSetPosition = async (board, xFrac, yFrac) => {
-    if (!selectedPlan || !board) return;
+    if (!stableSelectedPlan || !board) return;
     return handleSetPositionById(board.id, xFrac, yFrac);
   };
 
@@ -1027,7 +1140,7 @@ export default function SwitchboardMap() {
       );
       if (!response.ok) throw new Error("Delete failed");
 
-      await loadPositions();
+      await refreshPositions(stableSelectedPlan, pageIndex);
       await refreshPlacedIds();
 
       if (selectedPosition?.id === position.id) {
@@ -1039,22 +1152,26 @@ export default function SwitchboardMap() {
     }
   };
 
-  const handlePositionClick = async (positionMeta) => {
-    const pos =
-      positions.find(
-        (p) => p.switchboard_id === positionMeta.switchboard_id
-      ) || positionMeta;
+  const handlePositionClick = useCallback(
+    async (positionMeta) => {
+      const positions = getLatestPositions();
+      const pos =
+        positions.find(
+          (p) => p.switchboard_id === positionMeta.switchboard_id
+        ) || positionMeta;
 
-    setSelectedPosition(pos);
+      setSelectedPosition(pos);
 
-    try {
-      const board = await api.switchboard.getBoard(pos.switchboard_id);
-      setSelectedBoard(board);
-    } catch (err) {
-      console.error("Erreur chargement détails:", err);
-      setSelectedBoard(null);
-    }
-  };
+      try {
+        const board = await api.switchboard.getBoard(pos.switchboard_id);
+        setSelectedBoard(board);
+      } catch (err) {
+        console.error("Erreur chargement détails:", err);
+        setSelectedBoard(null);
+      }
+    },
+    [getLatestPositions]
+  );
 
   const handlePlaceBoard = (board) => {
     setPlacementMode(board);
@@ -1067,10 +1184,33 @@ export default function SwitchboardMap() {
     navigate(`/app/switchboards?board=${boardId}`);
   };
 
-  const currentPlanIds = useMemo(
-    () => new Set(positions.map((p) => p.switchboard_id)),
-    [positions]
+  // Callback pour PDF prêt (exact VSD)
+  const handlePdfReady = useCallback(() => {
+    setPdfReady(true);
+  }, []);
+
+  // Callback stable pour déplacement de marker (exact VSD)
+  const handleMovePoint = useCallback(
+    async (switchboardId, xy) => {
+      if (!stableSelectedPlan) return;
+      await handleSetPositionById(switchboardId, xy.x, xy.y);
+    },
+    [stableSelectedPlan, pageIndex]
   );
+
+  // Callback stable pour création de point (exact VSD)
+  const handleCreatePoint = useCallback(
+    (xFrac, yFrac) => {
+      if (!placementMode) return;
+      handleSetPosition(placementMode, xFrac, yFrac);
+    },
+    [placementMode, stableSelectedPlan, pageIndex]
+  );
+
+  const currentPlanIds = useMemo(() => {
+    const positions = getLatestPositions();
+    return new Set(positions.map((p) => p.switchboard_id));
+  }, [getLatestPositions, initialPoints]);
 
   const filteredSwitchboards = useMemo(() => {
     let filtered = switchboards;
@@ -1101,6 +1241,23 @@ export default function SwitchboardMap() {
       unplaced: switchboards.filter((b) => !placedIds.has(b.id)).length,
     }),
     [switchboards, placedIds]
+  );
+
+  // Gestion du changement de plan (exact VSD)
+  const handlePlanChange = useCallback(
+    async (plan) => {
+      setSelectedPlan(plan);
+      setPageIndex(0);
+      setSelectedPosition(null);
+      setSelectedBoard(null);
+      setPdfReady(false);
+      setInitialPoints([]);
+      if (plan) {
+        const positions = await refreshPositions(plan, 0);
+        setInitialPoints(positions || []);
+      }
+    },
+    [refreshPositions]
   );
 
   return (
@@ -1224,8 +1381,7 @@ export default function SwitchboardMap() {
                 filteredSwitchboards.map((b) => {
                   const isPlacedHere = currentPlanIds.has(b.id);
                   const isPlacedSomewhere = placedIds.has(b.id);
-                  const isPlacedElsewhere =
-                    isPlacedSomewhere && !isPlacedHere;
+                  const isPlacedElsewhere = isPlacedSomewhere && !isPlacedHere;
                   const isSelected =
                     selectedPosition?.switchboard_id === b.id ||
                     selectedBoard?.id === b.id;
@@ -1239,6 +1395,7 @@ export default function SwitchboardMap() {
                       isPlacedElsewhere={isPlacedElsewhere}
                       isSelected={isSelected}
                       onClick={() => {
+                        const positions = getLatestPositions();
                         const pos = positions.find(
                           (p) => p.switchboard_id === b.id
                         );
@@ -1269,15 +1426,12 @@ export default function SwitchboardMap() {
                   const p = plans.find(
                     (x) => x.logical_name === e.target.value
                   );
-                  setSelectedPlan(p || null);
-                  setPageIndex(0);
-                  setSelectedPosition(null);
-                  setSelectedBoard(null);
+                  handlePlanChange(p || null);
                 }}
               >
                 {plans.map((p) => (
                   <option key={p.logical_name} value={p.logical_name}>
-                    {p.logical_name}
+                    {p.display_name || p.logical_name}
                   </option>
                 ))}
               </select>
@@ -1285,9 +1439,7 @@ export default function SwitchboardMap() {
               <div className="flex items-center gap-1">
                 <Btn
                   variant="ghost"
-                  onClick={() =>
-                    setPageIndex((i) => Math.max(0, i - 1))
-                  }
+                  onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
                   disabled={pageIndex <= 0}
                   title="Page précédente"
                 >
@@ -1299,9 +1451,7 @@ export default function SwitchboardMap() {
                 <Btn
                   variant="ghost"
                   onClick={() =>
-                    setPageIndex((i) =>
-                      Math.min(numPages - 1, i + 1)
-                    )
+                    setPageIndex((i) => Math.min(numPages - 1, i + 1))
                   }
                   disabled={pageIndex >= numPages - 1}
                   title="Page suivante"
@@ -1314,10 +1464,10 @@ export default function SwitchboardMap() {
             <div className="flex items-center gap-2">
               <Btn
                 variant="ghost"
-                onClick={() => {
-                  loadPlans();
-                  loadPositions();
-                  refreshPlacedIds();
+                onClick={async () => {
+                  await loadPlans();
+                  await refreshPositions(stableSelectedPlan, pageIndex);
+                  await refreshPlacedIds();
                 }}
                 title="Rafraîchir"
               >
@@ -1342,37 +1492,45 @@ export default function SwitchboardMap() {
                 description="Aucun plan disponible."
               />
             ) : (
-              <SwitchboardLeafletViewer
-                ref={viewerRef}
-                fileUrl={stableFileUrl}
-                pageIndex={pageIndex}
-                initialPoints={positions}
-                placementActive={!!placementMode}
-                onReady={() => {
-                  (async () => {
-                    try {
-                      const t = pdfjsLib.getDocument(
-                        pdfDocOpts(stableFileUrl)
-                      );
-                      const pdf = await t.promise;
-                      setNumPages(pdf.numPages || 1);
-                      await t.destroy();
-                    } catch {}
-                  })();
-                }}
-                onClickPoint={handlePositionClick}
-                onMovePoint={async (switchboardId, xy) => {
-                  await handleSetPositionById(
-                    switchboardId,
-                    xy.x,
-                    xy.y
-                  );
-                }}
-                onCreatePoint={(xFrac, yFrac) => {
-                  if (!placementMode) return;
-                  handleSetPosition(placementMode, xFrac, yFrac);
-                }}
-              />
+              <div className="relative h-full">
+                {/* Loading overlay (exact VSD) */}
+                {!pdfReady && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none rounded-2xl">
+                    <div className="flex flex-col items-center gap-3 text-gray-700">
+                      <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+                      <div className="text-sm font-medium">
+                        Chargement du plan…
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <SwitchboardLeafletViewer
+                  ref={viewerRef}
+                  key={stableSelectedPlan?.logical_name || "none"}
+                  fileUrl={stableFileUrl}
+                  pageIndex={pageIndex}
+                  initialPoints={initialPoints}
+                  placementActive={!!placementMode}
+                  onReady={() => {
+                    setPdfReady(true);
+                    // Charger le nombre de pages
+                    (async () => {
+                      try {
+                        const t = pdfjsLib.getDocument(
+                          pdfDocOpts(stableFileUrl)
+                        );
+                        const pdf = await t.promise;
+                        setNumPages(pdf.numPages || 1);
+                        await t.destroy();
+                      } catch {}
+                    })();
+                  }}
+                  onClickPoint={handlePositionClick}
+                  onMovePoint={handleMovePoint}
+                  onCreatePoint={handleCreatePoint}
+                />
+              </div>
             )}
 
             {/* detail panel */}
@@ -1397,17 +1555,14 @@ export default function SwitchboardMap() {
         message={
           confirmState.position
             ? `Supprimer le placement de ${
-                confirmState.position.code ||
-                confirmState.position.name
+                confirmState.position.code || confirmState.position.name
               } ?`
             : ""
         }
         confirmText="Détacher"
         cancelText="Annuler"
         danger
-        onCancel={() =>
-          setConfirmState({ open: false, position: null })
-        }
+        onCancel={() => setConfirmState({ open: false, position: null })}
         onConfirm={async () => {
           const pos = confirmState.position;
           setConfirmState({ open: false, position: null });
