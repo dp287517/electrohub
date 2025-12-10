@@ -1243,13 +1243,27 @@ export default function Switchboards() {
     try {
       const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
-      if (res.data?.length) {
-        const counts = await api.switchboard.getDeviceCounts(res.data.map(b => b.id));
-        setDeviceCounts(counts.counts || {});
+      
+      // Load counts and placements in parallel, don't fail if one times out
+      const [countsRes, placementsRes] = await Promise.allSettled([
+        res.data?.length ? api.switchboard.getDeviceCounts(res.data.map(b => b.id)) : Promise.resolve({ counts: {} }),
+        api.switchboardMaps.placedIds()
+      ]);
+      
+      if (countsRes.status === 'fulfilled') {
+        setDeviceCounts(countsRes.value.counts || {});
+      } else {
+        console.warn('Failed to load device counts:', countsRes.reason);
       }
-
-      // Load placements
-      await loadPlacements();
+      
+      if (placementsRes.status === 'fulfilled') {
+        const ids = (placementsRes.value?.placed_ids || []).map((id) => Number(id));
+        const details = placementsRes.value?.placed_details || {};
+        setPlacedBoardIds(new Set(ids));
+        setPlacedDetails(details);
+      } else {
+        console.warn('Failed to load placements:', placementsRes.reason);
+      }
     } catch (err) {
       console.error('Load boards error:', err);
     } finally {
