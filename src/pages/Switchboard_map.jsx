@@ -1242,9 +1242,18 @@ export default function SwitchboardMap() {
         planToSelect = plans[0];
       }
       
+      const pageIdx = (savedPageIndex && planToSelect?.logical_name === savedPlanKey) 
+        ? Number(savedPageIndex) || 0 
+        : 0;
+      
       setSelectedPlan(planToSelect);
-      if (savedPageIndex && planToSelect?.logical_name === savedPlanKey) {
-        setPageIndex(Number(savedPageIndex) || 0);
+      setPageIndex(pageIdx);
+      
+      // ✅ AJOUT : Charger les positions pour mettre à jour currentPlanIds
+      if (planToSelect) {
+        refreshPositions(planToSelect, pageIdx).then(positions => {
+          setInitialPoints(positions || []);
+        });
       }
     }
   }, [plans]);
