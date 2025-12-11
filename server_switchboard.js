@@ -1,11 +1,11 @@
 // server_switchboard.js - Backend complet Switchboard
-// VERSION 2.1 - FIX TIMEOUTS & PERFORMANCE
+// VERSION 2.2 - FIX TRIGGERS + PERFORMANCE
 // =======================================================
 // 
-// CHANGEMENTS v2.1:
-// 1. quickQuery avec timeout par défaut (15s)
-// 2. Transactions pour les opérations critiques
-// 3. Meilleure gestion des erreurs avec retry
+// CHANGEMENTS v2.2:
+// 1. TRIGGER OPTIMISÉ: incréments/décréments au lieu de COUNT(*)
+// 2. Statement timeout remis (5s pour éviter les blocages infinis)
+// 3. Retry automatique sur timeout
 // 4. Logs améliorés pour debug
 //
 import express from 'express';
@@ -28,7 +28,6 @@ const pool = new Pool({
   connectionString: process.env.NEON_DATABASE_URL,
   max: 10,
   idleTimeoutMillis: 30000,
-  // 👇 IMPORTANT : on remet un timeout de connexion raisonnable (10s)
   connectionTimeoutMillis: 10000
 });
 
@@ -38,20 +37,22 @@ pool.on('error', (err) => {
 });
 
 // Pool monitoring
-let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0 };
+let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0, retries: 0 };
 
 // ============================================================
-// QUERY HELPER - SANS STATEMENT_TIMEOUT
+// QUERY HELPER - AVEC STATEMENT_TIMEOUT RAISONNABLE
 // ============================================================
 async function query(sql, params = [], options = {}) {
   const startTime = Date.now();
   const label = options.label || 'QUERY';
+  const timeoutMs = options.timeout || 8000; // 8s par défaut
 
   poolStats.queries++;
 
   const client = await pool.connect();
   try {
-    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ✅ REMIS: statement_timeout pour éviter les blocages infinis
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
     const result = await client.query(sql, params);
 
     const elapsed = Date.now() - startTime;
@@ -72,15 +73,16 @@ async function query(sql, params = [], options = {}) {
 }
 
 // ============================================================
-// QUICK QUERY - AUCUN STATEMENT_TIMEOUT
+// QUICK QUERY - AVEC TIMEOUT + RETRY
 // ============================================================
-async function quickQuery(sql, params = []) {
+async function quickQuery(sql, params = [], retries = 1) {
   const startTime = Date.now();
   poolStats.queries++;
 
   const client = await pool.connect();
   try {
-    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ✅ REMIS: timeout de 5s pour les requêtes simples
+    await client.query('SET statement_timeout = 5000');
     const result = await client.query(sql, params);
 
     const elapsed = Date.now() - startTime;
@@ -94,6 +96,16 @@ async function quickQuery(sql, params = []) {
     poolStats.errors++;
     const elapsed = Date.now() - startTime;
     console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
+    
+    // Retry sur timeout
+    if (retries > 0 && (err.message?.includes('timeout') || err.message?.includes('canceling'))) {
+      poolStats.retries++;
+      console.log(`[QUICK] Retrying... (${retries} left)`);
+      client.release();
+      await new Promise(r => setTimeout(r, 100)); // petit délai
+      return quickQuery(sql, params, retries - 1);
+    }
+    
     throw err;
   } finally {
     client.release();
@@ -183,7 +195,7 @@ function checkDeviceComplete(device) {
 app.get('/api/switchboard/health', async (req, res) => {
   try {
     const dbStart = Date.now();
-    await quickQuery('SELECT 1', [], 2000);
+    await quickQuery('SELECT 1');
     const dbTime = Date.now() - dbStart;
     
     res.json({ 
@@ -208,7 +220,7 @@ app.get('/api/switchboard/health', async (req, res) => {
 });
 
 // ============================================================
-// SCHEMA INITIALIZATION - AVEC TRIGGERS POUR COUNTS AUTOMATIQUES
+// SCHEMA INITIALIZATION - TRIGGERS OPTIMISÉS
 // ============================================================
 async function ensureSchema() {
   await pool.query(`
@@ -229,7 +241,6 @@ async function ensureSchema() {
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
       diagram_data JSONB DEFAULT '{}'::jsonb,
-      -- COLONNES DE CACHE POUR ÉVITER LES REQUÊTES COUNT
       device_count INTEGER DEFAULT 0,
       complete_count INTEGER DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -278,7 +289,6 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_downstream ON devices(downstream_switchboard_id);
     CREATE INDEX IF NOT EXISTS idx_devices_manufacturer ON devices(manufacturer);
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
-    -- Index composite CRITIQUE pour les counts
     CREATE INDEX IF NOT EXISTS idx_devices_switchboard_complete ON devices(switchboard_id, is_complete);
 
     -- =======================================================
@@ -331,7 +341,6 @@ async function ensureSchema() {
     -- =======================================================
     DO $$
     BEGIN
-      -- Switchboards columns
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'photo') THEN
         ALTER TABLE switchboards ADD COLUMN photo BYTEA;
       END IF;
@@ -350,7 +359,6 @@ async function ensureSchema() {
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'diagram_data') THEN
         ALTER TABLE switchboards ADD COLUMN diagram_data JSONB DEFAULT '{}'::jsonb;
       END IF;
-      -- NOUVELLES COLONNES POUR CACHE DES COUNTS
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'device_count') THEN
         ALTER TABLE switchboards ADD COLUMN device_count INTEGER DEFAULT 0;
       END IF;
@@ -358,7 +366,6 @@ async function ensureSchema() {
         ALTER TABLE switchboards ADD COLUMN complete_count INTEGER DEFAULT 0;
       END IF;
       
-      -- Devices columns
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'name') THEN
         ALTER TABLE devices ADD COLUMN name TEXT;
       END IF;
@@ -401,62 +408,78 @@ async function ensureSchema() {
     END $$;
 
     -- =======================================================
-    -- TRIGGER: Mise à jour automatique des counts switchboard
-    -- VERSION OPTIMISÉE - Évite les deadlocks
+    -- 🔥 TRIGGER OPTIMISÉ: INCRÉMENTS AU LIEU DE COUNT(*)
     -- =======================================================
-    CREATE OR REPLACE FUNCTION update_switchboard_counts() RETURNS TRIGGER AS $$
-    DECLARE
-      target_switchboard_id INTEGER;
+    -- Supprimer l'ancien trigger problématique
+    DROP TRIGGER IF EXISTS trigger_update_switchboard_counts ON devices;
+    DROP FUNCTION IF EXISTS update_switchboard_counts();
+
+    -- Nouveau trigger OPTIMISÉ: O(1) au lieu de O(n)
+    CREATE OR REPLACE FUNCTION update_switchboard_counts_optimized() RETURNS TRIGGER AS $$
     BEGIN
-      -- Déterminer quel switchboard mettre à jour
-      IF TG_OP = 'DELETE' THEN
-        target_switchboard_id := OLD.switchboard_id;
-      ELSE
-        target_switchboard_id := NEW.switchboard_id;
-      END IF;
-      
-      -- Si changement de switchboard sur UPDATE
-      IF TG_OP = 'UPDATE' AND OLD.switchboard_id IS DISTINCT FROM NEW.switchboard_id THEN
-        -- Mettre à jour l'ancien switchboard
-        IF OLD.switchboard_id IS NOT NULL THEN
-          UPDATE switchboards SET
-            device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id), 0),
-            complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id AND is_complete = true), 0)
-          WHERE id = OLD.switchboard_id;
-        END IF;
-      END IF;
-      
-      -- Mettre à jour le switchboard cible
-      IF target_switchboard_id IS NOT NULL THEN
+      -- INSERT: incrémenter les compteurs
+      IF TG_OP = 'INSERT' THEN
         UPDATE switchboards SET
-          device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id), 0),
-          complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id AND is_complete = true), 0)
-        WHERE id = target_switchboard_id;
-      END IF;
-      
-      IF TG_OP = 'DELETE' THEN
-        RETURN OLD;
-      ELSE
+          device_count = device_count + 1,
+          complete_count = complete_count + (CASE WHEN NEW.is_complete THEN 1 ELSE 0 END)
+        WHERE id = NEW.switchboard_id;
         RETURN NEW;
       END IF;
+      
+      -- DELETE: décrémenter les compteurs
+      IF TG_OP = 'DELETE' THEN
+        UPDATE switchboards SET
+          device_count = GREATEST(0, device_count - 1),
+          complete_count = GREATEST(0, complete_count - (CASE WHEN OLD.is_complete THEN 1 ELSE 0 END))
+        WHERE id = OLD.switchboard_id;
+        RETURN OLD;
+      END IF;
+      
+      -- UPDATE: gérer le changement de is_complete et/ou switchboard_id
+      IF TG_OP = 'UPDATE' THEN
+        -- Cas 1: changement de switchboard
+        IF OLD.switchboard_id IS DISTINCT FROM NEW.switchboard_id THEN
+          -- Décrémenter l'ancien
+          IF OLD.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = GREATEST(0, device_count - 1),
+              complete_count = GREATEST(0, complete_count - (CASE WHEN OLD.is_complete THEN 1 ELSE 0 END))
+            WHERE id = OLD.switchboard_id;
+          END IF;
+          -- Incrémenter le nouveau
+          IF NEW.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = device_count + 1,
+              complete_count = complete_count + (CASE WHEN NEW.is_complete THEN 1 ELSE 0 END)
+            WHERE id = NEW.switchboard_id;
+          END IF;
+        -- Cas 2: même switchboard, mais is_complete a changé
+        ELSIF OLD.is_complete IS DISTINCT FROM NEW.is_complete THEN
+          UPDATE switchboards SET
+            complete_count = complete_count + (CASE WHEN NEW.is_complete THEN 1 ELSE -1 END)
+          WHERE id = NEW.switchboard_id;
+        END IF;
+        RETURN NEW;
+      END IF;
+      
+      RETURN NULL;
     END;
     $$ LANGUAGE plpgsql;
 
-    -- Supprimer l'ancien trigger si existe et recréer
-    DROP TRIGGER IF EXISTS trigger_update_switchboard_counts ON devices;
-    CREATE TRIGGER trigger_update_switchboard_counts
+    -- Créer le nouveau trigger
+    CREATE TRIGGER trigger_update_switchboard_counts_opt
     AFTER INSERT OR UPDATE OR DELETE ON devices
-    FOR EACH ROW EXECUTE FUNCTION update_switchboard_counts();
+    FOR EACH ROW EXECUTE FUNCTION update_switchboard_counts_optimized();
 
     -- =======================================================
-    -- RECALCULER TOUS LES COUNTS EXISTANTS (migration one-time)
+    -- RECALCULER TOUS LES COUNTS EXISTANTS (une seule fois)
     -- =======================================================
     UPDATE switchboards s SET
       device_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id), 0),
       complete_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0);
   `);
   
-  console.log('[SWITCHBOARD SCHEMA] Initialized with auto-count triggers');
+  console.log('[SWITCHBOARD SCHEMA] Initialized with OPTIMIZED triggers (increments)');
 }
 
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA ERROR]', e.message));
@@ -562,7 +585,6 @@ app.delete('/api/switchboard/settings/logo', async (req, res) => {
 // SWITCHBOARDS CRUD
 // ============================================================
 
-// GET /boards - RETOURNE MAINTENANT LES COUNTS DIRECTEMENT (plus besoin de devices-count)
 app.get('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -581,7 +603,6 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const limit = Math.min(parseInt(pageSize, 10) || 100, 500);
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
-    // REQUÊTE OPTIMISÉE: inclut device_count et complete_count directement
     const sql = `
       SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
              modes, quality, diagram_data, created_at, 
@@ -596,7 +617,6 @@ app.get('/api/switchboard/boards', async (req, res) => {
     
     const { rows } = await query(sql, vals, { label: 'LIST_BOARDS', timeout: 8000 });
     
-    // Count total (rapide avec index)
     const countRes = await quickQuery(`SELECT COUNT(*)::int AS total FROM switchboards WHERE ${where.join(' AND ')}`, vals);
     
     const data = rows.map(r => ({
@@ -611,7 +631,6 @@ app.get('/api/switchboard/boards', async (req, res) => {
       modes: r.modes || {}, 
       quality: r.quality || {}, 
       created_at: r.created_at,
-      // COUNTS INCLUS DIRECTEMENT - Plus besoin d'appel séparé!
       device_count: r.device_count,
       complete_count: r.complete_count
     }));
@@ -623,7 +642,6 @@ app.get('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// GET /boards/:id
 app.get('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -641,7 +659,6 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     const sb = r.rows[0];
 
-    // Get upstream sources (what feeds this board)
     const upstream = await quickQuery(
       `SELECT d.id, d.name, d.position_number, d.in_amps, 
               s.id as source_switchboard_id,
@@ -674,7 +691,6 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// POST /boards - Create
 app.post('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -711,7 +727,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// PUT /boards/:id - Update - VERSION FIXÉE AVEC TIMEOUT
+// PUT /boards/:id - CORRIGÉ avec retry
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   const startTime = Date.now();
   try {
@@ -723,13 +739,10 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     
     const b = req.body;
     
-    // VALIDATION DU BODY - Critique pour éviter les erreurs silencieuses
     if (!b || typeof b !== 'object') {
-      console.warn('[UPDATE BOARD] Invalid body type for id:', id);
       return res.status(400).json({ error: 'Request body must be an object' });
     }
     if (Object.keys(b).length === 0) {
-      console.warn('[UPDATE BOARD] Empty body for id:', id);
       return res.status(400).json({ error: 'Request body is empty' });
     }
     
@@ -739,8 +752,9 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
-    console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
+    console.log(`[UPDATE BOARD] id=${id}, site=${site}`);
     
+    // Utiliser quickQuery avec retry automatique
     const r = await quickQuery(
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
@@ -751,14 +765,14 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
                  device_count, complete_count`,
       [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
        b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       id, site]
-      // plus de 3ème argument → timeout = 15000ms par défaut
+       id, site],
+      2 // 2 retries
     );
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     
     const elapsed = Date.now() - startTime;
-    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms for id=${id}`);
+    console.log(`[UPDATE BOARD] OK in ${elapsed}ms`);
     
     const sb = r.rows[0];
     res.json({
@@ -774,7 +788,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE BOARD] Error after ${elapsed}ms:`, e.message);
     
-    // Message d'erreur plus explicite pour les timeouts
     if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
       res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
     } else {
@@ -783,7 +796,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// DELETE /boards/:id
 app.delete('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -792,7 +804,6 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
     
-    // Get device count before delete (for response)
     const countRes = await quickQuery(`SELECT device_count FROM switchboards WHERE id = $1 AND site = $2`, [id, site]);
     const deviceCount = countRes.rows[0]?.device_count || 0;
     
@@ -806,7 +817,6 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// POST /boards/:id/duplicate
 app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -856,8 +866,7 @@ app.post('/api/switchboard/boards/:id/photo', upload.single('photo'), async (req
 
     const r = await quickQuery(
       `UPDATE switchboards SET photo = $1 WHERE id = $2 AND site = $3 RETURNING id`,
-      [req.file.buffer, id, site],
-      10000 // 10s pour l'upload
+      [req.file.buffer, id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     
@@ -880,7 +889,6 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
     if (!r.rows.length || !r.rows[0].photo) return res.status(404).json({ error: 'Photo not found' });
 
     res.set('Content-Type', 'image/jpeg');
-    // Cache la photo pendant 1 heure - évite les recharges inutiles
     res.set('Cache-Control', 'public, max-age=3600');
     res.send(r.rows[0].photo);
   } catch (e) {
@@ -890,8 +898,7 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
 });
 
 // ============================================================
-// DEVICE COUNTS - LEGACY ENDPOINT (pour compatibilité)
-// Maintenant optimisé avec fallback gracieux
+// DEVICE COUNTS - LEGACY ENDPOINT
 // ============================================================
 
 app.post('/api/switchboard/devices-count', async (req, res) => {
@@ -902,7 +909,6 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
 
     const boardIds = req.body?.board_ids;
     
-    // Fast path
     if (!boardIds || !Array.isArray(boardIds) || boardIds.length === 0) {
       return res.json({ counts: {} });
     }
@@ -910,21 +916,19 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
     const ids = boardIds.map(Number).filter(id => id && !isNaN(id));
     if (!ids.length) return res.json({ counts: {} });
 
-    // MÉTHODE OPTIMISÉE: Lire depuis la table switchboards (colonnes cache)
     const { rows } = await quickQuery(`
       SELECT id, 
              COALESCE(device_count, 0) as total,
              COALESCE(complete_count, 0) as complete
       FROM switchboards
       WHERE id = ANY($1::int[]) AND site = $2
-    `, [ids, site], 5000);
+    `, [ids, site]);
     
     const counts = {};
     rows.forEach(r => {
       counts[r.id] = { total: r.total, complete: r.complete };
     });
     
-    // Fill zeros for missing IDs
     ids.forEach(id => {
       if (!counts[id]) counts[id] = { total: 0, complete: 0 };
     });
@@ -938,7 +942,6 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
   } catch (e) {
     const elapsed = Date.now() - startTime;
     console.error(`[DEVICES COUNT] Error after ${elapsed}ms:`, e.message);
-    // Graceful fallback - return empty instead of error
     res.json({ counts: {}, error: e.message, partial: true });
   }
 });
@@ -947,7 +950,6 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
 // DEVICES CRUD
 // ============================================================
 
-// GET /boards/:boardId/devices
 app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -958,7 +960,6 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
       return res.status(400).json({ error: 'Invalid switchboard ID' });
     }
 
-    // Verify board exists
     const sbCheck = await quickQuery('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
@@ -984,7 +985,6 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
   }
 });
 
-// GET /devices/:id
 app.get('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1011,7 +1011,6 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// POST /devices - Create
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1024,7 +1023,6 @@ app.post('/api/switchboard/devices', async (req, res) => {
       return res.status(400).json({ error: 'Missing or invalid switchboard_id' });
     }
 
-    // Verify board exists
     const sbCheck = await quickQuery('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
@@ -1062,8 +1060,6 @@ app.post('/api/switchboard/devices', async (req, res) => {
       ]
     );
     
-    // Le trigger met à jour automatiquement device_count et complete_count
-    
     res.status(201).json(rows[0]);
   } catch (e) {
     console.error('[CREATE DEVICE]', e.message);
@@ -1071,7 +1067,7 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// PUT /devices/:id - Update - VERSION FIXÉE AVEC TIMEOUT
+// PUT /devices/:id - CORRIGÉ avec retry
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1083,19 +1079,16 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     
     const b = req.body;
     
-    // VALIDATION DU BODY
     if (!b || typeof b !== 'object') {
-      console.warn('[UPDATE DEVICE] Invalid body type for id:', id);
       return res.status(400).json({ error: 'Request body must be an object' });
     }
     if (Object.keys(b).length === 0) {
-      console.warn('[UPDATE DEVICE] Empty body for id:', id);
       return res.status(400).json({ error: 'Request body is empty' });
     }
     
     const is_complete = checkDeviceComplete(b);
 
-    console.log(`[UPDATE DEVICE] Starting update for id=${id}`);
+    console.log(`[UPDATE DEVICE] id=${id}`);
 
     const { rows } = await quickQuery(
       `UPDATE devices SET
@@ -1128,14 +1121,14 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.diagram_data || {},
         id,
         site
-      ]
-      // timeout par défaut = 15000ms
+      ],
+      2 // 2 retries
     );
     
     if (!rows.length) return res.status(404).json({ error: 'Device not found' });
     
     const elapsed = Date.now() - startTime;
-    console.log(`[UPDATE DEVICE] Completed in ${elapsed}ms for id=${id}`);
+    console.log(`[UPDATE DEVICE] OK in ${elapsed}ms`);
     
     res.json(rows[0]);
   } catch (e) {
@@ -1150,7 +1143,6 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// DELETE /devices/:id
 app.delete('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1168,8 +1160,6 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
     );
     
     if (r.rowCount === 0) return res.status(404).json({ error: 'Device not found' });
-    
-    // Le trigger met à jour automatiquement device_count et complete_count
     
     res.json({ success: true, deleted: id });
   } catch (e) {
@@ -1215,7 +1205,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       return String(val).trim();
     };
 
-    // Extract board name and code
     let tableauName = 'Tableau importé';
     for (let col = 3; col <= 6; col++) {
       const val = getCellValue(1, col);
@@ -1232,7 +1221,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     const building = codeParts[0] || null;
     const floor = codeParts[1] || null;
 
-    // Check if board already exists
     const existingBoard = await quickQuery(
       `SELECT id, name, code, device_count FROM switchboards WHERE site = $1 AND LOWER(code) = LOWER($2)`,
       [site, code]
@@ -1247,7 +1235,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       switchboardId = existingBoard.rows[0].id;
       existingDeviceCount = existingBoard.rows[0].device_count || 0;
       
-      // Update name if different
       if (existingBoard.rows[0].name !== tableauName) {
         await quickQuery(
           `UPDATE switchboards SET name = $1, building_code = $2, floor = $3 WHERE id = $4`,
@@ -1263,7 +1250,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       switchboardId = newBoard.rows[0].id;
     }
 
-    // Validation helpers
     const EXCLUDED_KEYWORDS = [
       'modifié', 'modified', 'date', 'nom', 'name', 'société', 'company', 
       'visa', 'maintenance', 'signature', 'revision', 'révision', 'version'
@@ -1290,7 +1276,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       return false;
     };
 
-    // Get existing positions to avoid duplicates
     const existingPositions = new Set();
     if (boardAlreadyExists) {
       const posRes = await quickQuery(
@@ -1300,7 +1285,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       posRes.rows.forEach(r => existingPositions.add(String(r.position_number).toLowerCase()));
     }
 
-    // Parse and insert devices
     let devicesCreated = 0;
     let devicesSkipped = 0;
     let consecutiveEmptyRows = 0;
@@ -1318,10 +1302,8 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
         if (val && val.length > 1) { designation = val; break; }
       }
 
-      // Skip header rows
       if (position.toLowerCase().includes('repère') || position.toLowerCase().includes('départ')) continue;
 
-      // Check for empty rows
       if (!position && !designation) {
         consecutiveEmptyRows++;
         if (consecutiveEmptyRows >= MAX_EMPTY_ROWS) break;
@@ -1329,19 +1311,16 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       }
       consecutiveEmptyRows = 0;
 
-      // Skip invalid rows
       if (isMetadataRow(row) || !isValidPosition(position) || !designation) {
         devicesSkipped++;
         continue;
       }
 
-      // Skip duplicates
       if (existingPositions.has(String(position).toLowerCase())) {
         devicesSkipped++;
         continue;
       }
 
-      // Insert device (trigger will update counts)
       await quickQuery(
         `INSERT INTO devices (site, switchboard_id, name, device_type, position_number, is_differential, is_complete)
          VALUES ($1, $2, $3, $4, $5, false, false)`,
@@ -1410,7 +1389,6 @@ Réponds uniquement en JSON: {"manufacturer":"...", "manufacturer_confidence":"h
 
     const result = JSON.parse(response.choices[0].message.content);
     
-    // Check cache for similar products
     let cacheResults = [];
     if (result.reference || result.manufacturer) {
       try {
@@ -1502,7 +1480,6 @@ app.get('/api/switchboard/stats', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    // Optimized: use cached counts from switchboards table
     const stats = await quickQuery(`
       SELECT 
         COUNT(*)::int as total_boards,
@@ -1558,7 +1535,6 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
     const rootId = Number(req.params.id);
     if (!rootId || isNaN(rootId)) return res.status(400).json({ error: 'Invalid board ID' });
 
-    // Limit recursion depth to prevent infinite loops
     const MAX_DEPTH = 5;
     
     const buildTree = async (switchboardId, depth = 0) => {
@@ -1581,7 +1557,6 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
         }
       }
       
-      // Build downstream trees
       for (const node of byId.values()) {
         if (node.downstream_switchboard_id) {
           node.downstream = await buildTree(node.downstream_switchboard_id, depth + 1);
@@ -1611,7 +1586,6 @@ app.post('/api/switchboard/scanned-products', async (req, res) => {
     const { reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, photo_base64, source } = req.body;
     if (!reference) return res.status(400).json({ error: 'Reference required' });
     
-    // Check if exists
     const existing = await quickQuery(`
       SELECT id, scan_count FROM scanned_products 
       WHERE site = $1 AND LOWER(reference) = LOWER($2) AND LOWER(COALESCE(manufacturer, '')) = LOWER(COALESCE($3, ''))
@@ -1744,7 +1718,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_listing.pdf"`);
     doc.pipe(res);
 
-    // Header
     let headerY = 40, textStartX = 50;
     if (settings.logo) {
       try { doc.image(settings.logo, 50, headerY, { width: 70, height: 50 }); textStartX = 130; } catch (e) {}
@@ -1766,7 +1739,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     if (settings.company_name) doc.fontSize(8).fillColor('#6b7280').text(settings.company_name, 400, headerY + 15, { align: 'right' });
     doc.moveTo(50, 110).lineTo(545, 110).strokeColor('#e5e7eb').stroke();
 
-    // Summary
     const summaryY = 125;
     const totalDevices = devices.length;
     const completeDevices = devices.filter(d => d.is_complete).length;
@@ -1780,7 +1752,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     doc.text(`DDR: ${differentialDevices}`, 300, summaryY + 15);
     if (mainIncoming) doc.text(`Arrivée: ${mainIncoming.manufacturer || ''} ${mainIncoming.in_amps || ''}A`, 50, summaryY + 30);
 
-    // Table
     const tableStartY = summaryY + 55;
     const colWidths = [35, 140, 75, 65, 40, 40, 35, 65];
     const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
@@ -1828,7 +1799,6 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       y += rowHeight;
     });
 
-    // Page numbers
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
@@ -1848,5 +1818,5 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
 const port = process.env.SWITCHBOARD_PORT || 3003;
 app.listen(port, () => {
   console.log(`[SWITCHBOARD] Server running on port ${port}`);
-  console.log('[SWITCHBOARD] Features: Cached counts, Auto-triggers, Timeout protection');
+  console.log('[SWITCHBOARD] Features: OPTIMIZED triggers (O(1) increments), statement_timeout, retry on timeout');
 });
