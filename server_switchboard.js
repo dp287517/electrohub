@@ -418,43 +418,63 @@ async function ensureSchema() {
 
     -- =======================================================
     -- TRIGGER: Mise à jour automatique des counts switchboard
-    -- VERSION OPTIMISÉE - Évite les deadlocks
+    -- VERSION OPTIMISÉE V2 - Compteurs incrémentaux (pas de SELECT COUNT)
     -- =======================================================
     CREATE OR REPLACE FUNCTION update_switchboard_counts() RETURNS TRIGGER AS $$
-    DECLARE
-      target_switchboard_id INTEGER;
     BEGIN
-      -- Déterminer quel switchboard mettre à jour
-      IF TG_OP = 'DELETE' THEN
-        target_switchboard_id := OLD.switchboard_id;
-      ELSE
-        target_switchboard_id := NEW.switchboard_id;
-      END IF;
-      
-      -- Si changement de switchboard sur UPDATE
-      IF TG_OP = 'UPDATE' AND OLD.switchboard_id IS DISTINCT FROM NEW.switchboard_id THEN
-        -- Mettre à jour l'ancien switchboard
-        IF OLD.switchboard_id IS NOT NULL THEN
+      -- INSERT: Ajouter +1 au switchboard cible
+      IF TG_OP = 'INSERT' THEN
+        IF NEW.switchboard_id IS NOT NULL THEN
           UPDATE switchboards SET
-            device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id), 0),
-            complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id AND is_complete = true), 0)
-          WHERE id = OLD.switchboard_id;
+            device_count = COALESCE(device_count, 0) + 1,
+            complete_count = COALESCE(complete_count, 0) + CASE WHEN NEW.is_complete THEN 1 ELSE 0 END
+          WHERE id = NEW.switchboard_id;
         END IF;
-      END IF;
-      
-      -- Mettre à jour le switchboard cible
-      IF target_switchboard_id IS NOT NULL THEN
-        UPDATE switchboards SET
-          device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id), 0),
-          complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id AND is_complete = true), 0)
-        WHERE id = target_switchboard_id;
-      END IF;
-      
-      IF TG_OP = 'DELETE' THEN
-        RETURN OLD;
-      ELSE
         RETURN NEW;
       END IF;
+
+      -- DELETE: Retirer -1 du switchboard source
+      IF TG_OP = 'DELETE' THEN
+        IF OLD.switchboard_id IS NOT NULL THEN
+          UPDATE switchboards SET
+            device_count = GREATEST(0, COALESCE(device_count, 0) - 1),
+            complete_count = GREATEST(0, COALESCE(complete_count, 0) - CASE WHEN OLD.is_complete THEN 1 ELSE 0 END)
+          WHERE id = OLD.switchboard_id;
+        END IF;
+        RETURN OLD;
+      END IF;
+
+      -- UPDATE: Ne rien faire si aucun changement pertinent
+      IF TG_OP = 'UPDATE' THEN
+        -- Cas 1: Changement de switchboard
+        IF OLD.switchboard_id IS DISTINCT FROM NEW.switchboard_id THEN
+          -- Retirer de l'ancien
+          IF OLD.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = GREATEST(0, COALESCE(device_count, 0) - 1),
+              complete_count = GREATEST(0, COALESCE(complete_count, 0) - CASE WHEN OLD.is_complete THEN 1 ELSE 0 END)
+            WHERE id = OLD.switchboard_id;
+          END IF;
+          -- Ajouter au nouveau
+          IF NEW.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = COALESCE(device_count, 0) + 1,
+              complete_count = COALESCE(complete_count, 0) + CASE WHEN NEW.is_complete THEN 1 ELSE 0 END
+            WHERE id = NEW.switchboard_id;
+          END IF;
+        -- Cas 2: Même switchboard, mais is_complete a changé
+        ELSIF OLD.is_complete IS DISTINCT FROM NEW.is_complete THEN
+          IF NEW.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              complete_count = GREATEST(0, COALESCE(complete_count, 0) + CASE WHEN NEW.is_complete THEN 1 ELSE -1 END)
+            WHERE id = NEW.switchboard_id;
+          END IF;
+        END IF;
+        -- Cas 3: Autre UPDATE (nom, manufacturer, etc.) = NE RIEN FAIRE (rapide!)
+        RETURN NEW;
+      END IF;
+
+      RETURN NULL;
     END;
     $$ LANGUAGE plpgsql;
 
