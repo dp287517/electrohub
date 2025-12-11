@@ -46,12 +46,14 @@ let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0 };
 async function query(sql, params = [], options = {}) {
   const startTime = Date.now();
   const label = options.label || 'QUERY';
+  const timeoutMs = options.timeout || 30000;
 
   poolStats.queries++;
 
   const client = await pool.connect();
   try {
-    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ✅ TIMEOUT REMIS
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
     const result = await client.query(sql, params);
 
     const elapsed = Date.now() - startTime;
@@ -74,13 +76,14 @@ async function query(sql, params = [], options = {}) {
 // ============================================================
 // QUICK QUERY - AUCUN STATEMENT_TIMEOUT
 // ============================================================
-async function quickQuery(sql, params = []) {
+async function quickQuery(sql, params = [], timeoutMs = 30000) {
   const startTime = Date.now();
   poolStats.queries++;
 
   const client = await pool.connect();
   try {
-    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ✅ TIMEOUT REMIS - 30s par défaut, évite les requêtes infinies
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
     const result = await client.query(sql, params);
 
     const elapsed = Date.now() - startTime;
@@ -402,47 +405,60 @@ async function ensureSchema() {
 
     -- =======================================================
     -- TRIGGER: Mise à jour automatique des counts switchboard
-    -- VERSION OPTIMISÉE - Évite les deadlocks
+    -- VERSION V2 OPTIMISÉE - O(1) avec incréments atomiques
     -- =======================================================
     CREATE OR REPLACE FUNCTION update_switchboard_counts() RETURNS TRIGGER AS $$
-    DECLARE
-      target_switchboard_id INTEGER;
     BEGIN
-      -- Déterminer quel switchboard mettre à jour
-      IF TG_OP = 'DELETE' THEN
-        target_switchboard_id := OLD.switchboard_id;
-      ELSE
-        target_switchboard_id := NEW.switchboard_id;
-      END IF;
-      
-      -- Si changement de switchboard sur UPDATE
-      IF TG_OP = 'UPDATE' AND OLD.switchboard_id IS DISTINCT FROM NEW.switchboard_id THEN
-        -- Mettre à jour l'ancien switchboard
-        IF OLD.switchboard_id IS NOT NULL THEN
-          UPDATE switchboards SET
-            device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id), 0),
-            complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = OLD.switchboard_id AND is_complete = true), 0)
-          WHERE id = OLD.switchboard_id;
-        END IF;
-      END IF;
-      
-      -- Mettre à jour le switchboard cible
-      IF target_switchboard_id IS NOT NULL THEN
+      -- INSERT: incrémenter les compteurs
+      IF TG_OP = 'INSERT' THEN
         UPDATE switchboards SET
-          device_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id), 0),
-          complete_count = COALESCE((SELECT COUNT(*) FROM devices WHERE switchboard_id = target_switchboard_id AND is_complete = true), 0)
-        WHERE id = target_switchboard_id;
-      END IF;
+          device_count = device_count + 1,
+          complete_count = complete_count + CASE WHEN NEW.is_complete THEN 1 ELSE 0 END
+        WHERE id = NEW.switchboard_id;
+        RETURN NEW;
       
-      IF TG_OP = 'DELETE' THEN
+      -- DELETE: décrémenter les compteurs
+      ELSIF TG_OP = 'DELETE' THEN
+        UPDATE switchboards SET
+          device_count = GREATEST(0, device_count - 1),
+          complete_count = GREATEST(0, complete_count - CASE WHEN OLD.is_complete THEN 1 ELSE 0 END)
+        WHERE id = OLD.switchboard_id;
         RETURN OLD;
-      ELSE
+      
+      -- UPDATE: gérer les changements
+      ELSIF TG_OP = 'UPDATE' THEN
+        -- Cas 1: même switchboard, seul is_complete change
+        IF OLD.switchboard_id = NEW.switchboard_id THEN
+          IF OLD.is_complete IS DISTINCT FROM NEW.is_complete THEN
+            UPDATE switchboards SET
+              complete_count = GREATEST(0, complete_count + CASE WHEN NEW.is_complete THEN 1 ELSE -1 END)
+            WHERE id = NEW.switchboard_id;
+          END IF;
+        -- Cas 2: changement de switchboard (rare)
+        ELSE
+          -- Décrémenter l'ancien
+          IF OLD.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = GREATEST(0, device_count - 1),
+              complete_count = GREATEST(0, complete_count - CASE WHEN OLD.is_complete THEN 1 ELSE 0 END)
+            WHERE id = OLD.switchboard_id;
+          END IF;
+          -- Incrémenter le nouveau
+          IF NEW.switchboard_id IS NOT NULL THEN
+            UPDATE switchboards SET
+              device_count = device_count + 1,
+              complete_count = complete_count + CASE WHEN NEW.is_complete THEN 1 ELSE 0 END
+            WHERE id = NEW.switchboard_id;
+          END IF;
+        END IF;
         RETURN NEW;
       END IF;
+      
+      RETURN NULL;
     END;
     $$ LANGUAGE plpgsql;
 
-    -- Supprimer l'ancien trigger si existe et recréer
+    -- Supprimer l'ancien trigger et recréer
     DROP TRIGGER IF EXISTS trigger_update_switchboard_counts ON devices;
     CREATE TRIGGER trigger_update_switchboard_counts
     AFTER INSERT OR UPDATE OR DELETE ON devices
@@ -450,13 +466,18 @@ async function ensureSchema() {
 
     -- =======================================================
     -- RECALCULER TOUS LES COUNTS EXISTANTS (migration one-time)
+    -- Note: s'exécute à chaque démarrage mais très rapide si déjà correct
     -- =======================================================
     UPDATE switchboards s SET
       device_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id), 0),
-      complete_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0);
+      complete_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0)
+    WHERE device_count IS NULL 
+       OR complete_count IS NULL
+       OR device_count < 0 
+       OR complete_count < 0;
   `);
   
-  console.log('[SWITCHBOARD SCHEMA] Initialized with auto-count triggers');
+  console.log('[SWITCHBOARD SCHEMA] Initialized with O(1) auto-count triggers v2');
 }
 
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA ERROR]', e.message));
@@ -714,6 +735,10 @@ app.post('/api/switchboard/boards', async (req, res) => {
 // PUT /boards/:id - Update - VERSION FIXÉE AVEC TIMEOUT
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   const startTime = Date.now();
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('Request timeout (25s)')), 25000)
+  );
+  
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
@@ -741,19 +766,23 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
 
     console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
     
-    const r = await quickQuery(
-      `UPDATE switchboards SET
-        name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
-        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10
-       WHERE id=$11 AND site=$12
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
-                 modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
-                 device_count, complete_count`,
-      [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
-       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       id, site]
-      // plus de 3ème argument → timeout = 15000ms par défaut
-    );
+    // CORRIGÉ: Promise.race avec timeoutPromise + timeout SQL de 20s
+    const r = await Promise.race([
+      quickQuery(
+        `UPDATE switchboards SET
+          name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
+          regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10
+        WHERE id=$11 AND site=$12
+        RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
+                  modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
+                  device_count, complete_count`,
+        [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
+         b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
+         id, site],
+        20000  // ← 3ème argument: timeout SQL de 20s
+      ),
+      timeoutPromise  // ← AJOUTÉ: timeout applicatif de 25s
+    ]);
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     
