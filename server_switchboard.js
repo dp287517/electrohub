@@ -3,7 +3,7 @@
 // =======================================================
 // 
 // CHANGEMENTS v2.1:
-// 1. quickQuery avec timeout par défaut (5s)
+// 1. quickQuery avec timeout par défaut (15s)
 // 2. Transactions pour les opérations critiques
 // 3. Meilleure gestion des erreurs avec retry
 // 4. Logs améliorés pour debug
@@ -29,7 +29,6 @@ const pool = new Pool({
   max: 10,                       // Max connections
   idleTimeoutMillis: 30000,      // Close idle after 30s
   connectionTimeoutMillis: 10000, // 10s to get connection
-  statement_timeout: 15000,       // 15s max per query (DEFAULT)
 });
 
 // Pool error handling
@@ -83,14 +82,16 @@ async function query(sql, params = [], options = {}) {
 // ============================================================
 // QUICK QUERY - MAINTENANT AVEC TIMEOUT PAR DÉFAUT (5s)
 // ============================================================
-async function quickQuery(sql, params = [], timeoutMs = 5000) {
+async function quickQuery(sql, params = [], timeoutMs = 15000) {
   const startTime = Date.now();
   poolStats.queries++;
   
   const client = await pool.connect();
   try {
-    // IMPORTANT: Set timeout même pour quick queries
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // On laisse un timeout, mais beaucoup plus large
+    if (timeoutMs && timeoutMs > 0) {
+      await client.query(`SET statement_timeout = ${timeoutMs}`);
+    }
     const result = await client.query(sql, params);
     
     const elapsed = Date.now() - startTime;
@@ -757,7 +758,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
 
     console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
     
-    // UTILISER quickQuery avec timeout explicite (5 secondes max)
     const r = await quickQuery(
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
@@ -768,8 +768,8 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
                  device_count, complete_count`,
       [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
        b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       id, site],
-      5000 // 5s timeout explicite
+       id, site]
+      // plus de 3ème argument → timeout = 15000ms par défaut
     );
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
@@ -1145,8 +1145,8 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.diagram_data || {},
         id,
         site
-      ],
-      5000 // 5s timeout explicite
+      ]
+      // timeout par défaut = 15000ms
     );
     
     if (!rows.length) return res.status(404).json({ error: 'Device not found' });
