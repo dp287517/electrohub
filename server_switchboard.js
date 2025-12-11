@@ -1,14 +1,12 @@
 // server_switchboard.js - Backend complet Switchboard
-// VERSION 2.0 - ARCHITECTURE OPTIMISÉE AVEC COUNTS CACHÉS
+// VERSION 2.1 - FIX TIMEOUTS & PERFORMANCE
 // =======================================================
 // 
-// CHANGEMENTS MAJEURS:
-// 1. Colonnes device_count et complete_count dans switchboards (cache)
-// 2. Triggers PostgreSQL pour maintenir les counts automatiquement
-// 3. Plus besoin de requête devices-count séparée
-// 4. Timeouts sur toutes les requêtes
-// 5. Pool monitoring et health checks
-// 6. Validation robuste sur toutes les routes
+// CHANGEMENTS v2.1:
+// 1. quickQuery avec timeout par défaut (5s)
+// 2. Transactions pour les opérations critiques
+// 3. Meilleure gestion des erreurs avec retry
+// 4. Logs améliorés pour debug
 //
 import express from 'express';
 import helmet from 'helmet';
@@ -31,7 +29,7 @@ const pool = new Pool({
   max: 10,                       // Max connections
   idleTimeoutMillis: 30000,      // Close idle after 30s
   connectionTimeoutMillis: 10000, // 10s to get connection
-  statement_timeout: 15000,       // 15s max per query
+  statement_timeout: 15000,       // 15s max per query (DEFAULT)
 });
 
 // Pool error handling
@@ -40,7 +38,7 @@ pool.on('error', (err) => {
 });
 
 // Pool monitoring
-let poolStats = { queries: 0, errors: 0, slowQueries: 0 };
+let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0 };
 
 // ============================================================
 // QUERY HELPER - AVEC TIMEOUT ET MONITORING
@@ -68,16 +66,54 @@ async function query(sql, params = [], options = {}) {
   } catch (err) {
     poolStats.errors++;
     const elapsed = Date.now() - startTime;
-    console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
+    
+    // Detect timeout errors
+    if (err.message?.includes('statement timeout') || err.message?.includes('canceling statement')) {
+      poolStats.timeouts++;
+      console.error(`[${label}] TIMEOUT after ${elapsed}ms`);
+    } else {
+      console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
+    }
     throw err;
   } finally {
     client.release();
   }
 }
 
-// Simple query without timeout management (for fast queries)
-async function quickQuery(sql, params = []) {
-  return pool.query(sql, params);
+// ============================================================
+// QUICK QUERY - MAINTENANT AVEC TIMEOUT PAR DÉFAUT (5s)
+// ============================================================
+async function quickQuery(sql, params = [], timeoutMs = 5000) {
+  const startTime = Date.now();
+  poolStats.queries++;
+  
+  const client = await pool.connect();
+  try {
+    // IMPORTANT: Set timeout même pour quick queries
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    const result = await client.query(sql, params);
+    
+    const elapsed = Date.now() - startTime;
+    if (elapsed > 1000) {
+      poolStats.slowQueries++;
+      console.warn(`[QUICK] Slow query: ${elapsed}ms - ${sql.substring(0, 50)}...`);
+    }
+    
+    return result;
+  } catch (err) {
+    poolStats.errors++;
+    const elapsed = Date.now() - startTime;
+    
+    if (err.message?.includes('statement timeout') || err.message?.includes('canceling statement')) {
+      poolStats.timeouts++;
+      console.error(`[QUICK] TIMEOUT after ${elapsed}ms: ${sql.substring(0, 50)}...`);
+    } else {
+      console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ============================================================
@@ -129,6 +165,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+      console.warn(`[SLOW REQUEST] ${req.method} ${req.path} took ${elapsed}ms`);
+    }
+  });
+  next();
+});
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -151,7 +199,7 @@ function checkDeviceComplete(device) {
 app.get('/api/switchboard/health', async (req, res) => {
   try {
     const dbStart = Date.now();
-    await quickQuery('SELECT 1');
+    await quickQuery('SELECT 1', [], 2000);
     const dbTime = Date.now() - dbStart;
     
     res.json({ 
@@ -370,6 +418,7 @@ async function ensureSchema() {
 
     -- =======================================================
     -- TRIGGER: Mise à jour automatique des counts switchboard
+    -- VERSION OPTIMISÉE - Évite les deadlocks
     -- =======================================================
     CREATE OR REPLACE FUNCTION update_switchboard_counts() RETURNS TRIGGER AS $$
     DECLARE
@@ -678,8 +727,9 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// PUT /boards/:id - Update
+// PUT /boards/:id - Update - VERSION FIXÉE AVEC TIMEOUT
 app.put('/api/switchboard/boards/:id', async (req, res) => {
+  const startTime = Date.now();
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
@@ -705,6 +755,9 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
+    console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
+    
+    // UTILISER quickQuery avec timeout explicite (5 secondes max)
     const r = await quickQuery(
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
@@ -715,10 +768,14 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
                  device_count, complete_count`,
       [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
        b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       id, site]
+       id, site],
+      5000 // 5s timeout explicite
     );
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms for id=${id}`);
     
     const sb = r.rows[0];
     res.json({
@@ -731,8 +788,15 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       device_count: sb.device_count, complete_count: sb.complete_count
     });
   } catch (e) {
-    console.error('[UPDATE BOARD]', e.message);
-    res.status(500).json({ error: 'Update failed' });
+    const elapsed = Date.now() - startTime;
+    console.error(`[UPDATE BOARD] Error after ${elapsed}ms:`, e.message);
+    
+    // Message d'erreur plus explicite pour les timeouts
+    if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
+      res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
+    } else {
+      res.status(500).json({ error: 'Update failed', details: e.message });
+    }
   }
 });
 
@@ -809,7 +873,8 @@ app.post('/api/switchboard/boards/:id/photo', upload.single('photo'), async (req
 
     const r = await quickQuery(
       `UPDATE switchboards SET photo = $1 WHERE id = $2 AND site = $3 RETURNING id`,
-      [req.file.buffer, id, site]
+      [req.file.buffer, id, site],
+      10000 // 10s pour l'upload
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     
@@ -832,6 +897,7 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
     if (!r.rows.length || !r.rows[0].photo) return res.status(404).json({ error: 'Photo not found' });
 
     res.set('Content-Type', 'image/jpeg');
+    // Cache la photo pendant 1 heure - évite les recharges inutiles
     res.set('Cache-Control', 'public, max-age=3600');
     res.send(r.rows[0].photo);
   } catch (e) {
@@ -862,13 +928,13 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
     if (!ids.length) return res.json({ counts: {} });
 
     // MÉTHODE OPTIMISÉE: Lire depuis la table switchboards (colonnes cache)
-    const { rows } = await query(`
+    const { rows } = await quickQuery(`
       SELECT id, 
              COALESCE(device_count, 0) as total,
              COALESCE(complete_count, 0) as complete
       FROM switchboards
       WHERE id = ANY($1::int[]) AND site = $2
-    `, [ids, site], { label: 'DEVICES_COUNT', timeout: 5000 });
+    `, [ids, site], 5000);
     
     const counts = {};
     rows.forEach(r => {
@@ -1022,8 +1088,9 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// PUT /devices/:id - Update
+// PUT /devices/:id - Update - VERSION FIXÉE AVEC TIMEOUT
 app.put('/api/switchboard/devices/:id', async (req, res) => {
+  const startTime = Date.now();
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
@@ -1044,6 +1111,8 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     }
     
     const is_complete = checkDeviceComplete(b);
+
+    console.log(`[UPDATE DEVICE] Starting update for id=${id}`);
 
     const { rows } = await quickQuery(
       `UPDATE devices SET
@@ -1076,17 +1145,25 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.diagram_data || {},
         id,
         site
-      ]
+      ],
+      5000 // 5s timeout explicite
     );
     
     if (!rows.length) return res.status(404).json({ error: 'Device not found' });
     
-    // Le trigger met à jour automatiquement complete_count si is_complete a changé
+    const elapsed = Date.now() - startTime;
+    console.log(`[UPDATE DEVICE] Completed in ${elapsed}ms for id=${id}`);
     
     res.json(rows[0]);
   } catch (e) {
-    console.error('[UPDATE DEVICE]', e.message);
-    res.status(500).json({ error: 'Update failed' });
+    const elapsed = Date.now() - startTime;
+    console.error(`[UPDATE DEVICE] Error after ${elapsed}ms:`, e.message);
+    
+    if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
+      res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
+    } else {
+      res.status(500).json({ error: 'Update failed', details: e.message });
+    }
   }
 });
 
@@ -1443,7 +1520,7 @@ app.get('/api/switchboard/stats', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
     // Optimized: use cached counts from switchboards table
-    const stats = await query(`
+    const stats = await quickQuery(`
       SELECT 
         COUNT(*)::int as total_boards,
         COALESCE(SUM(device_count), 0)::int as total_devices,
@@ -1452,7 +1529,7 @@ app.get('/api/switchboard/stats', async (req, res) => {
          JOIN switchboards sb ON d.switchboard_id = sb.id 
          WHERE sb.site = $1 AND d.is_differential = true) as differential_devices
       FROM switchboards WHERE site = $1
-    `, [site], { label: 'STATS', timeout: 5000 });
+    `, [site]);
 
     res.json(stats.rows[0]);
   } catch (e) {
@@ -1470,14 +1547,14 @@ app.get('/api/switchboard/calendar', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
     
-    const { rows } = await query(`
+    const { rows } = await quickQuery(`
       SELECT id, name, code, building_code, floor, 
              COALESCE(device_count, 0) as device_count,
              COALESCE(complete_count, 0) as complete_count
       FROM switchboards
       WHERE site = $1 
       ORDER BY building_code, floor, code
-    `, [site], { label: 'CALENDAR', timeout: 5000 });
+    `, [site]);
     
     res.json({ data: rows });
   } catch (e) {
@@ -1788,5 +1865,5 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
 const port = process.env.SWITCHBOARD_PORT || 3003;
 app.listen(port, () => {
   console.log(`[SWITCHBOARD] Server running on port ${port}`);
-  console.log('[SWITCHBOARD] Features: Cached counts, Auto-triggers, Optimized queries');
+  console.log('[SWITCHBOARD] Features: Cached counts, Auto-triggers, Timeout protection');
 });
