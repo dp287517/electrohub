@@ -27,8 +27,9 @@ const { Pool } = pg;
 const pool = new Pool({ 
   connectionString: process.env.NEON_DATABASE_URL,
   max: 10,
-  idleTimeoutMillis: 30000
-  // plus de connectionTimeoutMillis → timeout géré par Neon lui-même
+  idleTimeoutMillis: 30000,
+  // 👇 IMPORTANT : on remet un timeout de connexion raisonnable (10s)
+  connectionTimeoutMillis: 10000
 });
 
 // Pool error handling
