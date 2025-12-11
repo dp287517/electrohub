@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
@@ -21,8 +21,8 @@ const AnimatedCard = ({ children, delay = 0, className = '' }) => (
   </div>
 );
 
-// Progress Ring Component
-const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
+// Progress Ring Component - Memoized
+const ProgressRing = React.memo(({ progress, size = 40, strokeWidth = 4 }) => {
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
   const offset = circumference - (progress / 100) * circumference;
@@ -51,7 +51,7 @@ const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
       />
     </svg>
   );
-};
+});
 
 // Toast Notification Component
 const Toast = ({ message, type = 'success', onClose }) => {
@@ -109,7 +109,6 @@ const ImportResultModal = ({ isOpen, onClose, result }) => {
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Board Info */}
           <div className="bg-gray-50 rounded-xl p-4">
             <h3 className="font-semibold text-gray-900 mb-2">{result.switchboard?.name}</h3>
             <div className="grid grid-cols-2 gap-2 text-sm">
@@ -121,14 +120,9 @@ const ImportResultModal = ({ isOpen, onClose, result }) => {
                 <span className="text-gray-500">Bâtiment :</span>
                 <span className="ml-1 text-gray-900">{result.switchboard?.building || '-'}</span>
               </div>
-              <div>
-                <span className="text-gray-500">Étage :</span>
-                <span className="ml-1 text-gray-900">{result.switchboard?.floor || '-'}</span>
-              </div>
             </div>
           </div>
 
-          {/* Stats */}
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-emerald-50 rounded-xl p-3 text-center">
               <p className="text-2xl font-bold text-emerald-600">{result.devices_created}</p>
@@ -146,12 +140,11 @@ const ImportResultModal = ({ isOpen, onClose, result }) => {
             )}
           </div>
 
-          {/* Message */}
           {isWarning && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
               <p className="flex items-start gap-2">
                 <Info size={16} className="flex-shrink-0 mt-0.5" />
-                Le tableau existait déjà. Les départs avec des positions déjà présentes ont été ignorés pour éviter les doublons.
+                Le tableau existait déjà. Les départs avec des positions déjà présentes ont été ignorés.
               </p>
             </div>
           )}
@@ -203,7 +196,7 @@ const SiteSettingsModal = ({ isOpen, onClose, showToast }) => {
       });
       setHasLogo(data.has_logo);
       if (data.has_logo) {
-        setLogoPreview(api.switchboard.logoUrl({ bust: true }));
+        setLogoPreview(api.switchboard.logoUrl({ bust: false }));
       } else {
         setLogoPreview(null);
       }
@@ -233,7 +226,6 @@ const SiteSettingsModal = ({ isOpen, onClose, showToast }) => {
     const file = e.target.files[0];
     if (!file) return;
     
-    // Preview immediately
     const reader = new FileReader();
     reader.onload = (ev) => setLogoPreview(ev.target.result);
     reader.readAsDataURL(file);
@@ -285,7 +277,6 @@ const SiteSettingsModal = ({ isOpen, onClose, showToast }) => {
           </div>
         ) : (
           <div className="p-6 space-y-6">
-            {/* Logo Section */}
             <div className="flex items-center gap-6">
               <div 
                 onClick={() => fileInputRef.current?.click()}
@@ -412,7 +403,6 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp">
-        {/* Header */}
         <div className="bg-gradient-to-r from-emerald-500 to-teal-600 p-6 text-white">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -420,14 +410,12 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
             </div>
             <div>
               <h2 className="text-xl font-bold">Import Excel</h2>
-              <p className="text-emerald-100 text-sm">Importez une liste de départs (.xls ou .xlsx)</p>
+              <p className="text-emerald-100 text-sm">Importez une liste de départs</p>
             </div>
           </div>
         </div>
 
-        {/* Content */}
         <div className="p-6 space-y-4">
-          {/* Drop Zone */}
           <div
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
@@ -461,42 +449,33 @@ const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
                 <Upload className="mx-auto text-gray-400" size={40} />
                 <p className="font-medium text-gray-700">Glissez votre fichier Excel ici</p>
                 <p className="text-sm text-gray-500">ou cliquez pour parcourir</p>
-                <p className="text-xs text-gray-400">Formats supportés: .xlsx et .xls (Excel 97-2003)</p>
               </div>
             )}
           </div>
 
-          {/* Features */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-2">
             <p className="text-sm font-medium text-gray-700 flex items-center gap-2">
               <Sparkles size={16} className="text-amber-500" />
-              Extraction automatique :
+              Extraction automatique
             </p>
             <ul className="text-sm text-gray-600 space-y-1 ml-6">
-              <li>• Nom du tableau (ligne 2)</li>
-              <li>• Code tableau (ligne 4)</li>
-              <li>• Bâtiment et étage depuis le code</li>
+              <li>• Nom et code du tableau</li>
               <li>• Liste des départs avec détection doublons</li>
             </ul>
-            <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
-              <Info size={12} />
-              Si le tableau existe déjà (même code), les nouveaux départs seront ajoutés
-            </p>
           </div>
         </div>
 
-        {/* Footer */}
         <div className="border-t p-4 flex gap-3">
           <button
             onClick={() => { setFile(null); onClose(); }}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
           >
             Annuler
           </button>
           <button
             onClick={() => file && onImport(file)}
             disabled={!file || isLoading}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isLoading ? (
               <>
@@ -523,7 +502,6 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = '
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
-        {/* Header */}
         <div className="bg-gradient-to-r from-red-500 to-rose-600 p-6 text-white">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -536,37 +514,31 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, itemType = '
           </div>
         </div>
 
-        {/* Content */}
         <div className="p-6">
           <p className="text-gray-700">
-            Êtes-vous sûr de vouloir supprimer le {itemType} <span className="font-semibold text-gray-900">"{itemName}"</span> ?
+            Supprimer le {itemType} <span className="font-semibold">"{itemName}"</span> ?
           </p>
           {itemType === 'tableau' && deviceCount > 0 && (
             <p className="mt-2 text-sm text-amber-600 bg-amber-50 p-3 rounded-lg flex items-start gap-2">
               <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-              <span><strong>{deviceCount}</strong> disjoncteur{deviceCount > 1 ? 's' : ''} ser{deviceCount > 1 ? 'ont' : 'a'} également supprimé{deviceCount > 1 ? 's' : ''}.</span>
+              <span><strong>{deviceCount}</strong> disjoncteur(s) seront supprimés.</span>
             </p>
           )}
         </div>
 
-        {/* Footer */}
         <div className="border-t p-4 flex gap-3">
           <button
             onClick={onClose}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
           >
             Annuler
           </button>
           <button
             onClick={onConfirm}
             disabled={isLoading}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 text-white font-medium hover:from-red-600 hover:to-rose-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 text-white font-medium hover:from-red-600 hover:to-rose-700 disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {isLoading ? (
-              <RefreshCw size={18} className="animate-spin" />
-            ) : (
-              <Trash2 size={18} />
-            )}
+            {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Trash2 size={18} />}
             Supprimer
           </button>
         </div>
@@ -589,7 +561,6 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      // Fallback
       const input = document.createElement('input');
       input.value = url;
       document.body.appendChild(input);
@@ -611,7 +582,7 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
             </div>
             <div>
               <h2 className="text-xl font-bold">Partager le lien</h2>
-              <p className="text-blue-100 text-sm">{board.code} - {board.name}</p>
+              <p className="text-blue-100 text-sm">{board.code}</p>
             </div>
           </div>
         </div>
@@ -627,25 +598,19 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
             <button
               onClick={handleCopy}
               className={`px-4 py-2 rounded-xl font-medium transition-all flex items-center gap-2 ${
-                copied 
-                  ? 'bg-emerald-100 text-emerald-700' 
-                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                copied ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
               }`}
             >
               {copied ? <CheckCircle size={18} /> : <Copy size={18} />}
               {copied ? 'Copié!' : 'Copier'}
             </button>
           </div>
-          
-          <p className="text-sm text-gray-500">
-            Ce lien ouvrira directement ce tableau électrique.
-          </p>
         </div>
         
         <div className="border-t p-4">
           <button
             onClick={onClose}
-            className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+            className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
           >
             Fermer
           </button>
@@ -655,7 +620,7 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
   );
 };
 
-// AI Photo Wizard - FIXED: Proper query construction
+// AI Photo Wizard
 const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
   const [step, setStep] = useState(1);
   const [photo, setPhoto] = useState(null);
@@ -700,8 +665,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
         setError(result.error);
       } else {
         setPhotoResult(result);
-        // Store cache suggestions if available
-        if (result.cache_suggestions && result.cache_suggestions.length > 0) {
+        if (result.cache_suggestions?.length > 0) {
           setCacheSuggestions(result.cache_suggestions);
         }
         setStep(2);
@@ -713,18 +677,16 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
     }
   };
 
-  // FIXED: Build search query from manufacturer + reference instead of non-existent quick_ai_query
   const searchSpecs = async () => {
     if (!photoResult) return;
     
-    // Build search query from available data
     const queryParts = [];
     if (photoResult.manufacturer) queryParts.push(photoResult.manufacturer);
     if (photoResult.reference) queryParts.push(photoResult.reference);
     if (photoResult.in_amps) queryParts.push(`${photoResult.in_amps}A`);
     
     if (queryParts.length === 0) {
-      setError('Pas assez d\'informations pour rechercher les spécifications');
+      setError('Pas assez d\'informations pour rechercher');
       return;
     }
     
@@ -737,7 +699,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
       if (specs.error) {
         setError(specs.error);
       } else {
-        // Merge photo results with specs (photo takes priority for detected fields)
         setDeviceSpecs({
           ...specs,
           manufacturer: photoResult.manufacturer || specs.manufacturer,
@@ -755,7 +716,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
     }
   };
 
-  // Skip specs search and use only photo result
   const usePhotoResultOnly = () => {
     setDeviceSpecs({
       manufacturer: photoResult.manufacturer || '',
@@ -765,7 +725,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
       is_differential: photoResult.is_differential || false,
       poles: photoResult.poles || null,
       icu_ka: null,
-      ics_ka: null,
       voltage_v: null,
       trip_unit: null,
       settings: {}
@@ -773,7 +732,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
     setStep(3);
   };
 
-  // Use cached product suggestion
   const useCachedProduct = (product) => {
     setDeviceSpecs({
       manufacturer: product.manufacturer,
@@ -781,7 +739,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
       device_type: product.device_type || 'Low Voltage Circuit Breaker',
       in_amps: product.in_amps,
       icu_ka: product.icu_ka,
-      ics_ka: product.ics_ka,
       poles: product.poles,
       voltage_v: product.voltage_v,
       is_differential: product.is_differential,
@@ -794,7 +751,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
   const handleComplete = () => {
     if (deviceSpecs) {
       onComplete(deviceSpecs);
-      showToast?.('Données appliquées au formulaire', 'success');
+      showToast?.('Données appliquées', 'success');
     }
     onClose();
   };
@@ -804,7 +761,6 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp">
-        {/* Header */}
         <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-600 p-6 text-white z-10">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -812,27 +768,23 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
             </div>
             <div>
               <h2 className="text-xl font-bold">Analyse IA</h2>
-              <p className="text-violet-100 text-sm">Identifiez automatiquement votre disjoncteur</p>
+              <p className="text-violet-100 text-sm">Identifiez votre disjoncteur</p>
             </div>
           </div>
           
-          {/* Progress Steps */}
           <div className="flex items-center justify-center mt-4 gap-2">
             {[1, 2, 3].map((s) => (
               <React.Fragment key={s}>
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold
                   ${step >= s ? 'bg-white text-violet-600' : 'bg-white/30 text-white'}`}>
                   {s}
                 </div>
-                {s < 3 && (
-                  <div className={`w-12 h-1 rounded transition-all ${step > s ? 'bg-white' : 'bg-white/30'}`} />
-                )}
+                {s < 3 && <div className={`w-12 h-1 rounded ${step > s ? 'bg-white' : 'bg-white/30'}`} />}
               </React.Fragment>
             ))}
           </div>
         </div>
 
-        {/* Content */}
         <div className="p-6">
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm flex items-center gap-2">
@@ -841,17 +793,15 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
             </div>
           )}
 
-          {/* Step 1: Photo */}
           {step === 1 && (
             <div className="space-y-4">
               <div className="text-center">
                 <h3 className="font-semibold text-gray-900">Étape 1 : Prenez une photo</h3>
-                <p className="text-sm text-gray-500 mt-1">Photographiez la face avant du disjoncteur</p>
               </div>
 
               <div
                 onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer
                   ${photoPreview ? 'border-violet-500 bg-violet-50' : 'border-gray-300 hover:border-violet-400'}`}
               >
                 <input
@@ -876,185 +826,95 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
                   <div className="space-y-2">
                     <Camera className="mx-auto text-gray-400" size={48} />
                     <p className="font-medium text-gray-700">Cliquez pour prendre une photo</p>
-                    <p className="text-sm text-gray-500">ou sélectionnez une image</p>
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Step 2: Photo Analysis Result + Cache Suggestions */}
           {step === 2 && photoResult && (
             <div className="space-y-4">
               <div className="text-center">
                 <h3 className="font-semibold text-gray-900">Étape 2 : Identification</h3>
-                <p className="text-sm text-gray-500 mt-1">Vérifiez les informations détectées</p>
               </div>
 
               <div className="bg-gray-50 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Fabricant</span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-900">{photoResult.manufacturer || 'Non détecté'}</span>
-                    {photoResult.manufacturer_confidence && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        photoResult.manufacturer_confidence === 'high' ? 'bg-emerald-100 text-emerald-700' :
-                        photoResult.manufacturer_confidence === 'medium' ? 'bg-amber-100 text-amber-700' :
-                        'bg-gray-100 text-gray-600'
-                      }`}>
-                        {photoResult.manufacturer_confidence === 'high' ? 'Sûr' :
-                         photoResult.manufacturer_confidence === 'medium' ? 'Probable' : 'Incertain'}
-                      </span>
-                    )}
-                  </div>
+                  <span className="font-semibold text-gray-900">{photoResult.manufacturer || 'Non détecté'}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Référence</span>
                   <span className="font-semibold text-gray-900">{photoResult.reference || 'Non détecté'}</span>
                 </div>
-                {photoResult.is_differential && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Type</span>
-                    <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium flex items-center gap-1">
-                      <ShieldCheck size={14} />
-                      Différentiel
-                    </span>
-                  </div>
-                )}
                 {photoResult.in_amps && (
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Calibre détecté</span>
+                    <span className="text-gray-600">Calibre</span>
                     <span className="font-semibold text-gray-900">{photoResult.in_amps}A</span>
-                  </div>
-                )}
-                {photoResult.poles && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Pôles</span>
-                    <span className="font-semibold text-gray-900">{photoResult.poles}P</span>
                   </div>
                 )}
               </div>
 
-              {/* Manufacturer clues */}
-              {photoResult.manufacturer_clues && (
-                <div className="bg-blue-50 rounded-xl p-3 text-sm">
-                  <p className="text-blue-700 font-medium flex items-center gap-1">
-                    <Info size={14} />
-                    Indices d'identification :
-                  </p>
-                  <p className="text-blue-600 mt-1">{photoResult.manufacturer_clues}</p>
-                </div>
-              )}
-
-              {/* Cache Suggestions */}
               {cacheSuggestions.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                  <p className="text-sm font-medium text-amber-800 flex items-center gap-2 mb-3">
+                  <p className="text-sm font-medium text-amber-800 mb-3 flex items-center gap-2">
                     <Database size={16} />
-                    Produits similaires déjà enregistrés :
+                    Produits similaires :
                   </p>
-                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
                     {cacheSuggestions.map((product, idx) => (
                       <button
                         key={product.id || idx}
                         onClick={() => useCachedProduct(product)}
-                        className="w-full text-left p-3 bg-white rounded-lg border border-amber-200 hover:border-amber-400 hover:bg-amber-50 transition-all"
+                        className="w-full text-left p-2 bg-white rounded-lg border border-amber-200 hover:bg-amber-50"
                       >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="font-medium text-gray-900">{product.manufacturer} {product.reference}</span>
-                            <div className="text-xs text-gray-500 mt-0.5">
-                              {product.in_amps && `${product.in_amps}A`}
-                              {product.icu_ka && ` • ${product.icu_ka}kA`}
-                              {product.poles && ` • ${product.poles}P`}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {product.validated && (
-                              <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <Star size={10} /> Validé
-                              </span>
-                            )}
-                            <span className="text-xs text-gray-400 flex items-center gap-1">
-                              <History size={10} /> {product.scan_count}x
-                            </span>
-                          </div>
-                        </div>
+                        <span className="font-medium text-sm">{product.manufacturer} {product.reference}</span>
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-
-              {photoPreview && (
-                <div className="flex justify-center">
-                  <img src={photoPreview} alt="Device" className="max-h-32 rounded-lg opacity-50" />
-                </div>
-              )}
             </div>
           )}
 
-          {/* Step 3: Full Specs */}
           {step === 3 && deviceSpecs && (
             <div className="space-y-4">
               <div className="text-center">
-                <h3 className="font-semibold text-gray-900">Étape 3 : Spécifications complètes</h3>
-                <p className="text-sm text-gray-500 mt-1">Données techniques récupérées</p>
+                <h3 className="font-semibold text-gray-900">Étape 3 : Spécifications</h3>
               </div>
 
-              <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 space-y-2 max-h-64 overflow-y-auto">
+              <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 space-y-2">
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Fabricant</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.manufacturer || '-'}</p>
+                    <p className="font-semibold">{deviceSpecs.manufacturer || '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Référence</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.reference || '-'}</p>
+                    <p className="font-semibold">{deviceSpecs.reference || '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Calibre</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.in_amps ? `${deviceSpecs.in_amps} A` : '-'}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-2">
-                    <span className="text-gray-500 text-xs">Icu</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.icu_ka ? `${deviceSpecs.icu_ka} kA` : '-'}</p>
+                    <p className="font-semibold">{deviceSpecs.in_amps ? `${deviceSpecs.in_amps}A` : '-'}</p>
                   </div>
                   <div className="bg-white rounded-lg p-2">
                     <span className="text-gray-500 text-xs">Pôles</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.poles || '-'}</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-2">
-                    <span className="text-gray-500 text-xs">Tension</span>
-                    <p className="font-semibold text-gray-900">{deviceSpecs.voltage_v ? `${deviceSpecs.voltage_v} V` : '-'}</p>
+                    <p className="font-semibold">{deviceSpecs.poles || '-'}</p>
                   </div>
                 </div>
-                {deviceSpecs.is_differential && (
-                  <div className="bg-purple-100 text-purple-700 rounded-lg p-2 text-center font-medium flex items-center justify-center gap-2">
-                    <ShieldCheck size={16} />
-                    Protection différentielle
-                  </div>
-                )}
               </div>
             </div>
           )}
         </div>
 
-        {/* Footer */}
         <div className="border-t p-4 flex gap-3">
           {step > 1 && (
-            <button
-              onClick={() => setStep(step - 1)}
-              className="py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors flex items-center gap-2"
-            >
+            <button onClick={() => setStep(step - 1)} className="py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 flex items-center gap-2">
               <ArrowLeft size={18} />
               Retour
             </button>
           )}
-          <button
-            onClick={onClose}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler
           </button>
           
@@ -1062,7 +922,7 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
             <button
               onClick={analyzePhoto}
               disabled={!photo || isLoading}
-              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Eye size={18} />}
               Analyser
@@ -1071,19 +931,16 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
           
           {step === 2 && (
             <div className="flex gap-2 flex-1">
-              <button
-                onClick={usePhotoResultOnly}
-                className="flex-1 py-3 px-4 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
-              >
+              <button onClick={usePhotoResultOnly} className="flex-1 py-3 px-4 rounded-xl bg-gray-100 text-gray-700 font-medium">
                 Utiliser tel quel
               </button>
               <button
                 onClick={searchSpecs}
                 disabled={isLoading || (!photoResult.manufacturer && !photoResult.reference)}
-                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium hover:from-violet-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Search size={18} />}
-                Rechercher specs
+                Rechercher
               </button>
             </div>
           )}
@@ -1091,10 +948,10 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
           {step === 3 && (
             <button
               onClick={handleComplete}
-              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 transition-all flex items-center justify-center gap-2"
+              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium flex items-center justify-center gap-2"
             >
               <CheckCircle size={18} />
-              Utiliser ces données
+              Utiliser
             </button>
           )}
         </div>
@@ -1103,37 +960,33 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
   );
 };
 
-// Mobile Tree Drawer - Display CODE in tree
-const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, getProgress, placedBoardIds }) => {
+// Mobile Tree Drawer
+const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, expandedFloors, setExpandedFloors, selectedBoard, onSelectBoard, getProgress, placedBoardIds }) => {
   if (!isOpen) return null;
 
   const isBoardPlaced = (boardId) => placedBoardIds.has(boardId);
   
   return (
     <div className="fixed inset-0 z-50">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       
-      {/* Drawer */}
       <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl animate-slideRight overflow-hidden flex flex-col">
-        {/* Header */}
         <div className="p-4 border-b bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
           <div className="flex items-center justify-between">
             <h2 className="font-bold text-lg">Arborescence</h2>
-            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
               <X size={20} />
             </button>
           </div>
         </div>
         
-        {/* Tree Content */}
         <div className="flex-1 overflow-y-auto p-4">
           <div className="space-y-1">
             {Object.entries(tree).map(([building, floors]) => (
               <div key={building}>
                 <button
                   onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
                 >
                   {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   <Building2 size={16} className="text-blue-500" />
@@ -1149,12 +1002,11 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
                       <div key={floor}>
                         <button
                           onClick={() => setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: !prev[`${building}-${floor}`] }))}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-600 hover:bg-gray-100 rounded-lg"
                         >
                           {expandedFloors[`${building}-${floor}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           <Layers size={14} className="text-amber-500" />
                           <span className="text-sm truncate flex-1">Étage {floor}</span>
-                          <span className="text-xs text-gray-400">{floorBoards.length}</span>
                         </button>
                         
                         {expandedFloors[`${building}-${floor}`] && (
@@ -1163,10 +1015,8 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
                               <button
                                 key={board.id}
                                 onClick={() => { onSelectBoard(board); onClose(); }}
-                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg transition-all
-                                  ${selectedBoard?.id === board.id 
-                                    ? 'bg-blue-100 text-blue-700 shadow-sm' 
-                                    : 'text-gray-600 hover:bg-gray-100'}`}
+                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg
+                                  ${selectedBoard?.id === board.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                               >
                                 <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
                                 <span className="text-sm font-mono truncate flex-1">{board.code}</span>
@@ -1193,12 +1043,11 @@ const MobileTreeDrawer = ({ isOpen, onClose, tree, expandedBuildings, setExpande
       </div>
     </div>
   );
-};
+});
 
 // ==================== MAIN COMPONENT ====================
 
 export default function Switchboards() {
-  // URL params for deep linking
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   
@@ -1219,9 +1068,9 @@ export default function Switchboards() {
     setToast({ message, type });
   }, []);
   
-  // ========== PLACEMENT STATE ==========
+  // Placement state
   const [placedBoardIds, setPlacedBoardIds] = useState(new Set());
-  const [placedDetails, setPlacedDetails] = useState({}); // { boardId: { plans: [...], position_count } }
+  const [placedDetails, setPlacedDetails] = useState({});
   
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
@@ -1238,7 +1087,7 @@ export default function Switchboards() {
   const [editingDeviceId, setEditingDeviceId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Downstream Search State
+  // Downstream Search
   const [downstreamSearch, setDownstreamSearch] = useState('');
   const [downstreamResults, setDownstreamResults] = useState([]);
   const [showDownstreamResults, setShowDownstreamResults] = useState(false);
@@ -1254,11 +1103,13 @@ export default function Switchboards() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
 
-  // Import result modal
+  // Import result
   const [showImportResult, setShowImportResult] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
-  // Photo upload refs
+  // Photo state - FIXED: stable timestamp for caching
+  const [photoVersion, setPhotoVersion] = useState({});
+
   const boardPhotoRef = useRef(null);
 
   // Effects
@@ -1272,30 +1123,23 @@ export default function Switchboards() {
     loadBoards();
   }, []);
 
-  // Handle URL params for deep linking
+  // URL params handling
   useEffect(() => {
     const boardId = searchParams.get('board');
-    if (boardId) {
-      if (!selectedBoard || selectedBoard.id !== Number(boardId)) {
-        api.switchboard.getBoard(boardId)
-          .then(board => {
-            if (board) {
-              setSelectedBoard(board);
-              const building = board.meta?.building_code || 'Sans bâtiment';
-              const floor = board.meta?.floor || 'Sans étage';
-              setExpandedBuildings(prev => ({ ...prev, [building]: true }));
-              setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
-            }
-          })
-          .catch(err => {
-            console.error('Failed to load board from URL:', err);
-            showToast('Tableau non trouvé', 'error');
-          });
-      }
-    } else {
-      if (selectedBoard) {
-        setSelectedBoard(null);
-      }
+    if (boardId && (!selectedBoard || selectedBoard.id !== Number(boardId))) {
+      api.switchboard.getBoard(boardId)
+        .then(board => {
+          if (board) {
+            setSelectedBoard(board);
+            const building = board.meta?.building_code || 'Sans bâtiment';
+            const floor = board.meta?.floor || 'Sans étage';
+            setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+            setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
+          }
+        })
+        .catch(() => showToast('Tableau non trouvé', 'error'));
+    } else if (!boardId && selectedBoard) {
+      setSelectedBoard(null);
     }
   }, [searchParams]);
 
@@ -1305,7 +1149,7 @@ export default function Switchboards() {
     }
   }, [selectedBoard?.id]);
 
-  // Downstream Search Effect
+  // Downstream Search
   useEffect(() => {
     const search = async () => {
       if (!downstreamSearch) {
@@ -1314,10 +1158,9 @@ export default function Switchboards() {
       }
       try {
         const res = await api.switchboard.searchDownstreams(downstreamSearch);
-        const results = (res.suggestions || []).filter(b => b.id !== selectedBoard?.id);
-        setDownstreamResults(results);
+        setDownstreamResults((res.suggestions || []).filter(b => b.id !== selectedBoard?.id));
       } catch (err) {
-        console.error('Search downstreams error:', err);
+        console.error('Search error:', err);
       }
     };
     
@@ -1325,57 +1168,41 @@ export default function Switchboards() {
     return () => clearTimeout(debounce);
   }, [downstreamSearch, selectedBoard?.id]);
 
-  // ========== LOAD PLACEMENTS (useCallback for stability) ==========
+  // Load placements
   const loadPlacements = useCallback(async () => {
     try {
       const response = await api.switchboardMaps.placedIds();
-      // Response format: { ok: true, placed_ids: [...], placed_details: {...} }
-      const ids = (response?.placed_ids || []).map((id) => Number(id));
-      const details = response?.placed_details || {};
+      const ids = (response?.placed_ids || []).map(Number);
       setPlacedBoardIds(new Set(ids));
-      setPlacedDetails(details);
+      setPlacedDetails(response?.placed_details || {});
     } catch (e) {
       console.error("Load placements error:", e);
-      setPlacedBoardIds(new Set());
-      setPlacedDetails({});
     }
   }, []);
 
-  // ========== BUG 2 FIX: Refresh placements on page focus/visibility ==========
+  // Refresh placements on visibility change
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        loadPlacements();
-      }
+    const handleVisibility = () => {
+      if (!document.hidden) loadPlacements();
     };
-    
-    const handleFocus = () => {
-      loadPlacements();
-    };
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-    
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', loadPlacements);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', loadPlacements);
     };
   }, [loadPlacements]);
 
-  // ========== OPTIMIZED loadBoards - Backend V2 returns counts directly ==========
+  // Load boards
   const loadBoards = async () => {
     setIsLoading(true);
     try {
-      // Backend V2 returns device_count and complete_count directly in each board
       const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
-      
-      // Load placements in parallel (doesn't affect boards loading)
       loadPlacements().catch(console.warn);
-      
     } catch (err) {
       console.error('Load boards error:', err);
-      showToast('Erreur lors du chargement des tableaux', 'error');
+      showToast('Erreur lors du chargement', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -1397,7 +1224,6 @@ export default function Switchboards() {
       const fullBoard = await api.switchboard.getBoard(board.id);
       setSelectedBoard(fullBoard);
     } catch (err) {
-      console.error('Failed to fetch full board details', err);
       setSelectedBoard(board);
     }
   };
@@ -1408,7 +1234,6 @@ export default function Switchboards() {
     setSearchParams({});
   };
 
-  // ========== NAVIGATE TO MAP ==========
   const handleNavigateToMap = (board) => {
     const boardId = board?.id || selectedBoard?.id;
     if (!boardId) {
@@ -1416,14 +1241,11 @@ export default function Switchboards() {
       return;
     }
 
-    // Check if board is placed
     const details = placedDetails[boardId];
     if (details?.plans?.length > 0) {
-      // Navigate to map with switchboard param to highlight it
-      const planKey = details.plans[0]; // First plan where it's placed
+      const planKey = details.plans[0];
       navigate(`/app/switchboards/map?switchboard=${boardId}&plan=${encodeURIComponent(planKey)}`);
     } else {
-      // Not placed - just go to map
       navigate('/app/switchboards/map');
     }
   };
@@ -1445,24 +1267,31 @@ export default function Switchboards() {
         is_principal: boardForm.is_principal
       };
       
-      let newBoard;
+      let savedBoard;
       if (editingBoardId) {
-        newBoard = await api.switchboard.updateBoard(editingBoardId, payload);
+        savedBoard = await api.switchboard.updateBoard(editingBoardId, payload);
         showToast('Tableau modifié !', 'success');
+        
+        // OPTIMIZED: Update local state instead of full reload
+        setBoards(prev => prev.map(b => b.id === editingBoardId ? { ...b, ...savedBoard } : b));
+        if (selectedBoard?.id === editingBoardId) {
+          setSelectedBoard(prev => ({ ...prev, ...savedBoard }));
+        }
       } else {
-        newBoard = await api.switchboard.createBoard(payload);
+        savedBoard = await api.switchboard.createBoard(payload);
         showToast('Tableau créé !', 'success');
+        setBoards(prev => [...prev, savedBoard]);
       }
       
-      await loadBoards();
-      if (editingBoardId && selectedBoard?.id === editingBoardId) {
-        const updated = await api.switchboard.getBoard(editingBoardId);
-        setSelectedBoard(updated);
-      }
       resetBoardForm();
     } catch (err) {
       console.error('Save board error:', err);
-      showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+      // Better error message for timeouts
+      if (err.message?.includes('timeout') || err.message?.includes('504')) {
+        showToast('Timeout - Réessayez', 'error');
+      } else {
+        showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1474,10 +1303,13 @@ export default function Switchboards() {
     try {
       await api.switchboard.deleteBoard(deleteTarget.id);
       showToast(`Tableau "${deleteTarget.code}" supprimé`, 'success');
+      
+      // OPTIMIZED: Update local state
+      setBoards(prev => prev.filter(b => b.id !== deleteTarget.id));
       if (selectedBoard?.id === deleteTarget.id) {
         handleCloseBoard();
       }
-      await loadBoards();
+      
       setShowDeleteModal(false);
       setDeleteTarget(null);
     } catch (err) {
@@ -1493,8 +1325,12 @@ export default function Switchboards() {
     if (!file || !selectedBoard) return;
     try {
       await api.switchboard.uploadBoardPhoto(selectedBoard.id, file);
-      await loadBoards();
+      
+      // FIXED: Update photo version to force refresh
+      setPhotoVersion(prev => ({ ...prev, [selectedBoard.id]: Date.now() }));
       setSelectedBoard(prev => ({ ...prev, has_photo: true }));
+      setBoards(prev => prev.map(b => b.id === selectedBoard.id ? { ...b, has_photo: true } : b));
+      
       showToast('Photo uploadée !', 'success');
     } catch (err) {
       console.error('Photo upload error:', err);
@@ -1520,47 +1356,55 @@ export default function Switchboards() {
       };
       
       if (editingDeviceId) {
-        await api.switchboard.updateDevice(editingDeviceId, payload);
+        const savedDevice = await api.switchboard.updateDevice(editingDeviceId, payload);
         showToast('Disjoncteur modifié !', 'success');
-      } else {
-        await api.switchboard.createDevice(payload);
-        showToast('Disjoncteur créé !', 'success');
         
-        // Save to scanned products cache if has reference
+        // OPTIMIZED: Update local state
+        setDevices(prev => prev.map(d => d.id === editingDeviceId ? savedDevice : d));
+      } else {
+        const savedDevice = await api.switchboard.createDevice(payload);
+        showToast('Disjoncteur créé !', 'success');
+        setDevices(prev => [...prev, savedDevice]);
+        
+        // Update board counts locally
+        setSelectedBoard(prev => ({
+          ...prev,
+          device_count: (prev.device_count || 0) + 1,
+          complete_count: savedDevice.is_complete ? (prev.complete_count || 0) + 1 : prev.complete_count
+        }));
+        setBoards(prev => prev.map(b => 
+          b.id === selectedBoard.id 
+            ? { 
+                ...b, 
+                device_count: (b.device_count || 0) + 1,
+                complete_count: savedDevice.is_complete ? (b.complete_count || 0) + 1 : b.complete_count
+              } 
+            : b
+        ));
+        
+        // Cache product if has reference
         if (payload.reference && payload.manufacturer) {
-          try {
-            await api.switchboard.saveScannedProduct({
-              reference: payload.reference,
-              manufacturer: payload.manufacturer,
-              device_type: payload.device_type,
-              in_amps: payload.in_amps,
-              icu_ka: payload.icu_ka,
-              ics_ka: payload.ics_ka,
-              poles: payload.poles,
-              voltage_v: payload.voltage_v,
-              trip_unit: payload.trip_unit,
-              is_differential: payload.is_differential,
-              settings: payload.settings,
-              source: 'manual_entry'
-            });
-          } catch (cacheErr) {
-            console.warn('Failed to cache product:', cacheErr);
-          }
+          api.switchboard.saveScannedProduct({
+            reference: payload.reference,
+            manufacturer: payload.manufacturer,
+            device_type: payload.device_type,
+            in_amps: payload.in_amps,
+            icu_ka: payload.icu_ka,
+            poles: payload.poles,
+            is_differential: payload.is_differential,
+            source: 'manual_entry'
+          }).catch(console.warn);
         }
       }
       
-      await loadDevices(selectedBoard.id);
-      // Reload boards to update counts (trigger has updated them)
-      await loadBoards();
-      // Update selectedBoard with new counts
-      if (selectedBoard) {
-        const updated = await api.switchboard.getBoard(selectedBoard.id);
-        setSelectedBoard(updated);
-      }
       resetDeviceForm();
     } catch (err) {
       console.error('Save device error:', err);
-      showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+      if (err.message?.includes('timeout') || err.message?.includes('504')) {
+        showToast('Timeout - Réessayez', 'error');
+      } else {
+        showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1569,16 +1413,31 @@ export default function Switchboards() {
   const handleDeleteDevice = async (deviceId) => {
     if (!confirm('Supprimer ce disjoncteur ?')) return;
     
+    const device = devices.find(d => d.id === deviceId);
+    
     try {
       await api.switchboard.deleteDevice(deviceId);
       showToast('Disjoncteur supprimé', 'success');
-      await loadDevices(selectedBoard.id);
-      // Reload boards to update counts
-      await loadBoards();
-      // Update selectedBoard
+      
+      // OPTIMIZED: Update local state
+      setDevices(prev => prev.filter(d => d.id !== deviceId));
+      
+      // Update counts locally
       if (selectedBoard) {
-        const updated = await api.switchboard.getBoard(selectedBoard.id);
-        setSelectedBoard(updated);
+        setSelectedBoard(prev => ({
+          ...prev,
+          device_count: Math.max(0, (prev.device_count || 0) - 1),
+          complete_count: device?.is_complete ? Math.max(0, (prev.complete_count || 0) - 1) : prev.complete_count
+        }));
+        setBoards(prev => prev.map(b => 
+          b.id === selectedBoard.id 
+            ? { 
+                ...b, 
+                device_count: Math.max(0, (b.device_count || 0) - 1),
+                complete_count: device?.is_complete ? Math.max(0, (b.complete_count || 0) - 1) : b.complete_count
+              } 
+            : b
+        ));
       }
     } catch (err) {
       console.error('Delete device error:', err);
@@ -1593,16 +1452,15 @@ export default function Switchboards() {
     try {
       const blob = await api.switchboard.downloadPdf(selectedBoard.id);
       const url = URL.createObjectURL(blob);
-      
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${selectedBoard.code || selectedBoard.name}_listing.pdf`;
+      a.download = `${selectedBoard.code}_listing.pdf`;
       a.click();
       URL.revokeObjectURL(url);
       showToast('PDF téléchargé !', 'success');
     } catch (err) {
       console.error('Print PDF error:', err);
-      showToast('Erreur lors de la génération du PDF', 'error');
+      showToast('Erreur lors de la génération', 'error');
     } finally {
       setIsPrinting(false);
     }
@@ -1616,19 +1474,16 @@ export default function Switchboards() {
       if (result.success) {
         await loadBoards();
         if (result.switchboard?.id) {
-           const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
-           handleSelectBoard(boardDetail);
+          const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
+          handleSelectBoard(boardDetail);
         }
-        
         setShowImportModal(false);
-        
-        // Show result modal
         setImportResult(result);
         setShowImportResult(true);
       }
     } catch (err) {
       console.error('Import error:', err);
-      showToast('Erreur lors de l\'import: ' + (err.message || 'Erreur inconnue'), 'error');
+      showToast('Erreur lors de l\'import', 'error');
     } finally {
       setIsImporting(false);
     }
@@ -1640,15 +1495,10 @@ export default function Switchboards() {
       ...prev,
       manufacturer: specs.manufacturer || prev.manufacturer,
       reference: specs.reference || prev.reference,
-      device_type: specs.device_type || prev.device_type,
       in_amps: specs.in_amps || prev.in_amps,
       icu_ka: specs.icu_ka || prev.icu_ka,
-      ics_ka: specs.ics_ka || prev.ics_ka,
       poles: specs.poles || prev.poles,
-      voltage_v: specs.voltage_v || prev.voltage_v,
-      trip_unit: specs.trip_unit || prev.trip_unit,
-      is_differential: specs.is_differential ?? prev.is_differential,
-      settings: specs.settings && Object.keys(specs.settings).length > 0 ? specs.settings : prev.settings
+      is_differential: specs.is_differential ?? prev.is_differential
     }));
   };
 
@@ -1704,17 +1554,16 @@ export default function Switchboards() {
       is_differential: device.is_differential || false,
       is_main_incoming: device.is_main_incoming || false,
       downstream_switchboard_id: device.downstream_switchboard_id || null,
-      downstream_name: device.downstream_switchboard_code || device.downstream_switchboard_name || '',
-      settings: device.settings || { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
+      downstream_name: device.downstream_switchboard_code || '',
+      settings: device.settings || {}
     });
     setEditingDeviceId(device.id);
-    setDownstreamSearch('');
     setShowDeviceForm(true);
   };
 
-  // Build tree structure
-  const buildTree = useCallback(() => {
-    const tree = {};
+  // Build tree - MEMOIZED
+  const tree = useMemo(() => {
+    const result = {};
     const filtered = boards.filter(b => 
       !searchQuery || 
       b.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1724,16 +1573,14 @@ export default function Switchboards() {
     filtered.forEach(b => {
       const building = b.meta?.building_code || 'Sans bâtiment';
       const floor = b.meta?.floor || 'Sans étage';
-      if (!tree[building]) tree[building] = {};
-      if (!tree[building][floor]) tree[building][floor] = [];
-      tree[building][floor].push(b);
+      if (!result[building]) result[building] = {};
+      if (!result[building][floor]) result[building][floor] = [];
+      result[building][floor].push(b);
     });
-    return tree;
+    return result;
   }, [boards, searchQuery]);
 
-  const tree = buildTree();
-
-  // ========== OPTIMIZED: Calculate progress from board directly (Backend V2) ==========
+  // Progress calculation - MEMOIZED
   const getProgress = useCallback((board) => {
     const total = board.device_count || 0;
     const complete = board.complete_count || 0;
@@ -1741,21 +1588,25 @@ export default function Switchboards() {
     return Math.round((complete / total) * 100);
   }, []);
 
-  // ========== CHECK IF BOARD IS PLACED ==========
   const isBoardPlacedOnMap = useCallback((board) => {
     return placedBoardIds.has(board.id);
   }, [placedBoardIds]);
 
+  // FIXED: Photo URL with stable cache busting
+  const getBoardPhotoUrl = useCallback((boardId) => {
+    const version = photoVersion[boardId] || '';
+    return api.switchboard.boardPhotoUrl(boardId, { bust: false }) + (version ? `&v=${version}` : '');
+  }, [photoVersion]);
+
   // ==================== RENDER ====================
 
-  // Sidebar Tree (Desktop)
   const renderTree = () => (
     <div className="space-y-1">
       {Object.entries(tree).map(([building, floors]) => (
         <div key={building}>
           <button
             onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
-            className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
           >
             {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             <Building2 size={16} className="text-blue-500" />
@@ -1771,12 +1622,11 @@ export default function Switchboards() {
                 <div key={floor}>
                   <button
                     onClick={() => setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: !prev[`${building}-${floor}`] }))}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-gray-600 hover:bg-gray-100 rounded-lg"
                   >
                     {expandedFloors[`${building}-${floor}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     <Layers size={14} className="text-amber-500" />
                     <span className="text-sm truncate">Étage {floor}</span>
-                    <span className="ml-auto text-xs text-gray-400">{floorBoards.length}</span>
                   </button>
                   
                   {expandedFloors[`${building}-${floor}`] && (
@@ -1785,23 +1635,16 @@ export default function Switchboards() {
                         <button
                           key={board.id}
                           onClick={() => handleSelectBoard(board)}
-                          className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg transition-all
-                            ${selectedBoard?.id === board.id 
-                              ? 'bg-blue-100 text-blue-700 shadow-sm' 
-                              : 'text-gray-600 hover:bg-gray-100'}`}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg
+                            ${selectedBoard?.id === board.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                         >
                           <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
                           <span className="text-sm font-mono truncate flex-1">{board.code}</span>
-
                           {!isBoardPlacedOnMap(board) && (
-                            <span
-                              className="ml-1 px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full font-medium flex items-center gap-0.5"
-                              title="Ce tableau n'est pas encore placé sur un plan"
-                            >
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full">
                               <MapPin size={8} />
                             </span>
                           )}
-
                           {(board.device_count || 0) > 0 && (
                             <ProgressRing progress={getProgress(board)} size={20} strokeWidth={2} />
                           )}
@@ -1818,7 +1661,6 @@ export default function Switchboards() {
     </div>
   );
 
-  // Mobile Board Cards
   const renderMobileCards = () => (
     <div className="grid grid-cols-1 gap-3 p-4">
       {boards.filter(b => 
@@ -1827,38 +1669,25 @@ export default function Switchboards() {
         b.code?.toLowerCase().includes(searchQuery.toLowerCase())
       ).map((board, index) => {
         const progress = getProgress(board);
-        const isPlaced = isBoardPlacedOnMap(board);
         
         return (
           <AnimatedCard key={board.id} delay={index * 50}>
             <button
               onClick={() => handleSelectBoard(board)}
-              className={`w-full p-4 rounded-xl text-left transition-all shadow-sm
-                ${selectedBoard?.id === board.id 
-                  ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg' 
-                  : 'bg-white hover:shadow-md'}`}
+              className={`w-full p-4 rounded-xl text-left shadow-sm
+                ${selectedBoard?.id === board.id ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg' : 'bg-white hover:shadow-md'}`}
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     {board.is_principal && (
-                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">
-                        Principal
-                      </span>
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">Principal</span>
                     )}
-
-                    {!isPlaced && (
-                      <span
-                        className={`px-2 py-0.5 text-[10px] rounded-full font-medium flex items-center gap-1 ${
-                          selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'
-                        }`}
-                        title="Ce tableau n'est pas encore placé sur un plan"
-                      >
+                    {!isBoardPlacedOnMap(board) && (
+                      <span className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}>
                         <MapPin size={10} />
-                        Non placé
                       </span>
                     )}
-
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
                     </span>
@@ -1866,16 +1695,6 @@ export default function Switchboards() {
                   <h3 className={`text-sm mt-1 ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
                     {board.name}
                   </h3>
-                  <div className={`flex items-center gap-3 mt-2 text-sm ${selectedBoard?.id === board.id ? 'text-blue-200' : 'text-gray-500'}`}>
-                    <span className="flex items-center gap-1">
-                      <Building2 size={14} />
-                      {board.meta?.building_code || '-'}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Layers size={14} />
-                      {board.meta?.floor || '-'}
-                    </span>
-                  </div>
                 </div>
                 <div className="text-right">
                   <ProgressRing progress={progress} size={44} strokeWidth={4} />
@@ -1884,15 +1703,6 @@ export default function Switchboards() {
                   </p>
                 </div>
               </div>
-              
-              {(board.device_count || 0) > 0 && (
-                <div className={`mt-3 h-1.5 rounded-full overflow-hidden ${selectedBoard?.id === board.id ? 'bg-white/20' : 'bg-gray-100'}`}>
-                  <div 
-                    className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-500"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              )}
             </button>
           </AnimatedCard>
         );
@@ -1900,111 +1710,84 @@ export default function Switchboards() {
     </div>
   );
 
-  // Device Cards
   const renderDeviceCards = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      {devices.map((device, index) => {
-        const isComplete = device.is_complete;
-        
-        return (
-          <AnimatedCard key={device.id} delay={index * 30}>
-            <div className={`p-4 rounded-xl border transition-all hover:shadow-md relative
-              ${device.is_main_incoming ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200' : 'bg-white border-gray-200'}`}
-            >
-              {/* Downstream Badge */}
-              {device.downstream_switchboard_id && (
-                <div className="absolute top-0 right-0 p-2">
-                   <span 
-                    onClick={(e) => { 
-                      e.stopPropagation(); 
-                      handleSelectBoard({ id: device.downstream_switchboard_id }); 
-                    }}
-                    className="cursor-pointer px-2 py-1 bg-green-100 text-green-700 text-xs rounded-bl-xl rounded-tr-xl font-medium flex items-center gap-1 hover:bg-green-200 transition-colors"
-                    title={`Alimente le tableau ${device.downstream_switchboard_name}`}
-                   >
-                     Vers : {device.downstream_switchboard_code || device.downstream_switchboard_name || 'Tableau'}
-                     <ArrowUpRight size={12} />
-                   </span>
-                </div>
-              )}
-
-              {/* Header */}
-              <div className="flex items-start justify-between mb-3 mt-2">
-                <div className="flex-1 pr-6">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {device.position_number && (
-                      <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full font-mono">
-                        #{device.position_number}
-                      </span>
-                    )}
-                    {device.is_main_incoming && (
-                      <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full font-medium">
-                        Arrivée
-                      </span>
-                    )}
-                    {device.is_differential && (
-                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full font-medium flex items-center gap-1">
-                        <ShieldCheck size={12} />
-                        DDR
-                      </span>
-                    )}
-                    {!isComplete && (
-                      <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full font-medium animate-pulse flex items-center gap-1">
-                        <AlertCircle size={12} />
-                        Incomplet
-                      </span>
-                    )}
-                  </div>
-                  <h4 className="font-semibold text-gray-900 mt-1 line-clamp-2">
-                    {device.name || device.reference || 'Sans nom'}
-                  </h4>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => startEditDevice(device)}
-                    className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                  >
-                    <Edit3 size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteDevice(device.id)}
-                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
+      {devices.map((device, index) => (
+        <AnimatedCard key={device.id} delay={index * 30}>
+          <div className={`p-4 rounded-xl border hover:shadow-md relative
+            ${device.is_main_incoming ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200' : 'bg-white border-gray-200'}`}
+          >
+            {device.downstream_switchboard_id && (
+              <div className="absolute top-0 right-0 p-2">
+                <span 
+                  onClick={() => handleSelectBoard({ id: device.downstream_switchboard_id })}
+                  className="cursor-pointer px-2 py-1 bg-green-100 text-green-700 text-xs rounded-bl-xl rounded-tr-xl font-medium flex items-center gap-1 hover:bg-green-200"
+                >
+                  → {device.downstream_switchboard_code}
+                </span>
               </div>
+            )}
 
-              {/* Specs */}
-              <div className="grid grid-cols-3 gap-2 text-sm">
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <span className="text-gray-500 text-xs block">In</span>
-                  <span className="font-semibold text-gray-900">{device.in_amps ? `${device.in_amps}A` : '-'}</span>
+            <div className="flex items-start justify-between mb-3 mt-2">
+              <div className="flex-1 pr-6">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {device.position_number && (
+                    <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full font-mono">#{device.position_number}</span>
+                  )}
+                  {device.is_main_incoming && (
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full">Arrivée</span>
+                  )}
+                  {device.is_differential && (
+                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full flex items-center gap-1">
+                      <ShieldCheck size={12} />DDR
+                    </span>
+                  )}
+                  {!device.is_complete && (
+                    <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full animate-pulse flex items-center gap-1">
+                      <AlertCircle size={12} />Incomplet
+                    </span>
+                  )}
                 </div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <span className="text-gray-500 text-xs block">Icu</span>
-                  <span className="font-semibold text-gray-900">{device.icu_ka ? `${device.icu_ka}kA` : '-'}</span>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <span className="text-gray-500 text-xs block">Pôles</span>
-                  <span className="font-semibold text-gray-900">{device.poles || '-'}</span>
-                </div>
+                <h4 className="font-semibold text-gray-900 mt-1 line-clamp-2">
+                  {device.name || device.reference || 'Sans nom'}
+                </h4>
               </div>
-
-              {/* Manufacturer */}
-              {(device.manufacturer || device.reference) && (
-                <div className="mt-2 text-xs text-gray-500 truncate">
-                  {device.manufacturer} {device.reference}
-                </div>
-              )}
+              <div className="flex items-center gap-1">
+                <button onClick={() => startEditDevice(device)} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg">
+                  <Edit3 size={16} />
+                </button>
+                <button onClick={() => handleDeleteDevice(device.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
-          </AnimatedCard>
-        );
-      })}
+
+            <div className="grid grid-cols-3 gap-2 text-sm">
+              <div className="bg-gray-50 rounded-lg p-2 text-center">
+                <span className="text-gray-500 text-xs block">In</span>
+                <span className="font-semibold text-gray-900">{device.in_amps ? `${device.in_amps}A` : '-'}</span>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-2 text-center">
+                <span className="text-gray-500 text-xs block">Icu</span>
+                <span className="font-semibold text-gray-900">{device.icu_ka ? `${device.icu_ka}kA` : '-'}</span>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-2 text-center">
+                <span className="text-gray-500 text-xs block">Pôles</span>
+                <span className="font-semibold text-gray-900">{device.poles || '-'}</span>
+              </div>
+            </div>
+
+            {(device.manufacturer || device.reference) && (
+              <div className="mt-2 text-xs text-gray-500 truncate">
+                {device.manufacturer} {device.reference}
+              </div>
+            )}
+          </div>
+        </AnimatedCard>
+      ))}
     </div>
   );
 
-  // Board Form Modal
   const renderBoardForm = () => (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp">
@@ -2014,7 +1797,7 @@ export default function Switchboards() {
         
         <div className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nom du tableau *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nom *</label>
             <input
               type="text"
               value={boardForm.name}
@@ -2033,7 +1816,6 @@ export default function Switchboards() {
               className={`${inputBaseClass} font-mono`}
               placeholder="ex: 11-1-04-FL"
             />
-            <p className="text-xs text-gray-500 mt-1">Le code sera affiché dans l'arborescence</p>
           </div>
           
           <div className="grid grid-cols-3 gap-3">
@@ -2044,7 +1826,6 @@ export default function Switchboards() {
                 value={boardForm.building_code}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, building_code: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="11"
               />
             </div>
             <div>
@@ -2054,7 +1835,6 @@ export default function Switchboards() {
                 value={boardForm.floor}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, floor: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="1"
               />
             </div>
             <div>
@@ -2064,7 +1844,6 @@ export default function Switchboards() {
                 value={boardForm.room}
                 onChange={(e) => setBoardForm(prev => ({ ...prev, room: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="104"
               />
             </div>
           </div>
@@ -2078,7 +1857,6 @@ export default function Switchboards() {
             >
               <option value="TN-S">TN-S</option>
               <option value="TN-C">TN-C</option>
-              <option value="TN-C-S">TN-C-S</option>
               <option value="TT">TT</option>
               <option value="IT">IT</option>
             </select>
@@ -2089,26 +1867,20 @@ export default function Switchboards() {
               type="checkbox"
               checked={boardForm.is_principal}
               onChange={(e) => setBoardForm(prev => ({ ...prev, is_principal: e.target.checked }))}
-              className="w-5 h-5 rounded text-emerald-500 focus:ring-emerald-500"
+              className="w-5 h-5 rounded text-emerald-500"
             />
-            <div>
-              <span className="font-medium text-emerald-700">Tableau principal</span>
-              <p className="text-xs text-emerald-600">Point d'alimentation principal du bâtiment</p>
-            </div>
+            <span className="font-medium text-emerald-700">Tableau principal</span>
           </label>
         </div>
         
         <div className="border-t p-4 flex gap-3">
-          <button
-            onClick={resetBoardForm}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={resetBoardForm} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler
           </button>
           <button
             onClick={handleSaveBoard}
             disabled={!boardForm.name || !boardForm.code || isSaving}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-medium hover:from-blue-600 hover:to-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
             {editingBoardId ? 'Enregistrer' : 'Créer'}
@@ -2118,26 +1890,23 @@ export default function Switchboards() {
     </div>
   );
 
-  // Device Form Modal
   const renderDeviceForm = () => (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slideUp">
         <div className="sticky top-0 bg-gradient-to-r from-indigo-500 to-purple-600 p-4 sm:p-6 text-white rounded-t-2xl z-10">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h2 className="text-lg sm:text-xl font-bold">{editingDeviceId ? 'Modifier le disjoncteur' : 'Nouveau disjoncteur'}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg sm:text-xl font-bold">{editingDeviceId ? 'Modifier' : 'Nouveau disjoncteur'}</h2>
             <button
               onClick={() => setShowAIWizard(true)}
-              className="px-3 py-1.5 sm:px-4 sm:py-2 bg-white/20 hover:bg-white/30 rounded-xl text-xs sm:text-sm font-medium flex items-center gap-2 transition-colors"
+              className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium flex items-center gap-2"
             >
               <Sparkles size={16} />
-              <span className="hidden xs:inline">Analyser photo</span>
-              <span className="xs:hidden">IA</span>
+              IA
             </button>
           </div>
         </div>
         
         <div className="p-4 sm:p-6 space-y-4">
-          {/* Basic Info */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Désignation</label>
@@ -2146,7 +1915,7 @@ export default function Switchboards() {
                 value={deviceForm.name}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, name: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="ex: Prise T15 côté Lausanne"
+                placeholder="ex: Prise T15"
               />
             </div>
             <div>
@@ -2156,69 +1925,61 @@ export default function Switchboards() {
                 value={deviceForm.position_number}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, position_number: e.target.value }))}
                 className={`${inputBaseClass} font-mono`}
-                placeholder="ex: 1, 9.1"
+                placeholder="ex: 1"
               />
             </div>
           </div>
 
-          {/* Downstream Board Link */}
           <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-             <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-               <ArrowUpRight size={16} className="text-green-600" />
-               Alimentation Aval (Optionnel)
-             </label>
-             <div className="relative">
-                {deviceForm.downstream_switchboard_id ? (
-                  <div className="flex items-center justify-between bg-green-50 border border-green-200 p-3 rounded-xl">
-                    <div className="flex items-center gap-2">
-                       <Zap className="text-green-600" size={18} />
-                       <div>
-                         <span className="text-sm font-medium text-green-800">Alimente le tableau :</span>
-                         <span className="ml-1 text-sm font-bold text-gray-800">{deviceForm.downstream_name}</span>
-                       </div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <ArrowUpRight size={16} className="text-green-600" />
+              Alimentation Aval
+            </label>
+            <div className="relative">
+              {deviceForm.downstream_switchboard_id ? (
+                <div className="flex items-center justify-between bg-green-50 border border-green-200 p-3 rounded-xl">
+                  <span className="text-sm font-medium text-green-800">→ {deviceForm.downstream_name}</span>
+                  <button 
+                    onClick={() => setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: null, downstream_name: '' }))}
+                    className="text-gray-400 hover:text-red-500"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    type="text"
+                    value={downstreamSearch}
+                    onChange={(e) => { setDownstreamSearch(e.target.value); setShowDownstreamResults(true); }}
+                    onFocus={() => setShowDownstreamResults(true)}
+                    onBlur={() => setTimeout(() => setShowDownstreamResults(false), 200)}
+                    className={inputBaseClass}
+                    placeholder="Rechercher un tableau aval..."
+                  />
+                  {showDownstreamResults && downstreamResults.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 max-h-48 overflow-y-auto">
+                      {downstreamResults.map(board => (
+                        <button
+                          key={board.id}
+                          onClick={() => {
+                            setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: board.id, downstream_name: board.code }));
+                            setDownstreamSearch('');
+                            setShowDownstreamResults(false);
+                          }}
+                          className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center justify-between"
+                        >
+                          <span className="font-mono font-medium">{board.code}</span>
+                          <span className="text-xs text-gray-500">{board.name}</span>
+                        </button>
+                      ))}
                     </div>
-                    <button 
-                      onClick={() => setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: null, downstream_name: '' }))}
-                      className="text-gray-400 hover:text-red-500 p-1"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <input
-                      type="text"
-                      value={downstreamSearch}
-                      onChange={(e) => { setDownstreamSearch(e.target.value); setShowDownstreamResults(true); }}
-                      onFocus={() => setShowDownstreamResults(true)}
-                      onBlur={() => setTimeout(() => setShowDownstreamResults(false), 200)}
-                      className={inputBaseClass}
-                      placeholder="Rechercher un tableau aval (ex: T1-2)..."
-                    />
-                    {showDownstreamResults && downstreamResults.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 max-h-48 overflow-y-auto">
-                        {downstreamResults.map(board => (
-                          <button
-                            key={board.id}
-                            onClick={() => {
-                              setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: board.id, downstream_name: board.code }));
-                              setDownstreamSearch('');
-                              setShowDownstreamResults(false);
-                            }}
-                            className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center justify-between"
-                          >
-                             <span className="font-mono font-medium text-gray-900">{board.code}</span>
-                             <span className="text-xs text-gray-500">{board.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-             </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Manufacturer & Reference */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Fabricant</label>
@@ -2242,7 +2003,6 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Electrical Specs */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Calibre (A)</label>
@@ -2251,7 +2011,6 @@ export default function Switchboards() {
                 value={deviceForm.in_amps}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, in_amps: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="63"
               />
             </div>
             <div>
@@ -2261,7 +2020,6 @@ export default function Switchboards() {
                 value={deviceForm.icu_ka}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, icu_ka: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="36"
               />
             </div>
             <div>
@@ -2284,38 +2042,23 @@ export default function Switchboards() {
                 value={deviceForm.voltage_v}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, voltage_v: e.target.value }))}
                 className={inputBaseClass}
-                placeholder="400"
               />
             </div>
           </div>
 
-          {/* Trip Unit */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Unité de déclenchement</label>
-            <input
-              type="text"
-              value={deviceForm.trip_unit}
-              onChange={(e) => setDeviceForm(prev => ({ ...prev, trip_unit: e.target.value }))}
-              className={inputBaseClass}
-              placeholder="ex: Micrologic 5.2 E"
-            />
-          </div>
-
-          {/* Checkboxes */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="flex items-center gap-3 p-3 bg-purple-50 rounded-xl cursor-pointer">
               <input
                 type="checkbox"
                 checked={deviceForm.is_differential}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, is_differential: e.target.checked }))}
-                className="w-5 h-5 rounded text-purple-500 focus:ring-purple-500 flex-shrink-0"
+                className="w-5 h-5 rounded text-purple-500"
               />
-              <div className="min-w-0">
+              <div>
                 <span className="font-medium text-purple-700 flex items-center gap-1">
                   <ShieldCheck size={16} />
                   Différentiel (DDR)
                 </span>
-                <p className="text-xs text-purple-600">Protection 30mA ou 300mA</p>
               </div>
             </label>
             
@@ -2324,77 +2067,21 @@ export default function Switchboards() {
                 type="checkbox"
                 checked={deviceForm.is_main_incoming}
                 onChange={(e) => setDeviceForm(prev => ({ ...prev, is_main_incoming: e.target.checked }))}
-                className="w-5 h-5 rounded text-amber-500 focus:ring-amber-500 flex-shrink-0"
+                className="w-5 h-5 rounded text-amber-500"
               />
-              <div className="min-w-0">
-                <span className="font-medium text-amber-700">Disjoncteur d'arrivée</span>
-                <p className="text-xs text-amber-600">Protège l'ensemble du tableau</p>
-              </div>
+              <span className="font-medium text-amber-700">Disjoncteur d'arrivée</span>
             </label>
           </div>
-
-          {/* LSIG Settings (Collapsible) */}
-          <details className="bg-gray-50 rounded-xl p-4">
-            <summary className="font-medium text-gray-700 cursor-pointer flex items-center gap-2">
-              <Settings size={16} />
-              Réglages LSIG (optionnel)
-            </summary>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Ir (×In)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={deviceForm.settings.ir}
-                  onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, ir: e.target.value }}))}
-                  className={inputSmallClass}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Tr (s)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={deviceForm.settings.tr}
-                  onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, tr: e.target.value }}))}
-                  className={inputSmallClass}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Isd (×Ir)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={deviceForm.settings.isd}
-                  onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, isd: e.target.value }}))}
-                  className={inputSmallClass}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Ii (×In)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={deviceForm.settings.ii}
-                  onChange={(e) => setDeviceForm(prev => ({ ...prev, settings: { ...prev.settings, ii: e.target.value }}))}
-                  className={inputSmallClass}
-                />
-              </div>
-            </div>
-          </details>
         </div>
         
         <div className="border-t p-4 flex gap-3">
-          <button
-            onClick={resetDeviceForm}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={resetDeviceForm} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler
           </button>
           <button
             onClick={handleSaveDevice}
             disabled={isSaving}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium hover:from-indigo-600 hover:to-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
             {editingDeviceId ? 'Enregistrer' : 'Créer'}
@@ -2407,7 +2094,6 @@ export default function Switchboards() {
   // Main Render
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* CSS for animations */}
       <style>{`
         @keyframes slideUp {
           from { opacity: 0; transform: translateY(20px); }
@@ -2417,12 +2103,8 @@ export default function Switchboards() {
           from { opacity: 0; transform: translateX(-100%); }
           to { opacity: 1; transform: translateX(0); }
         }
-        .animate-slideUp {
-          animation: slideUp 0.3s ease-out forwards;
-        }
-        .animate-slideRight {
-          animation: slideRight 0.3s ease-out forwards;
-        }
+        .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
+        .animate-slideRight { animation: slideRight 0.3s ease-out forwards; }
       `}</style>
 
       {/* Header */}
@@ -2431,10 +2113,7 @@ export default function Switchboards() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {isMobile && (
-                <button
-                  onClick={() => setShowMobileDrawer(true)}
-                  className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-                >
+                <button onClick={() => setShowMobileDrawer(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl">
                   <Menu size={24} />
                 </button>
               )}
@@ -2448,88 +2127,60 @@ export default function Switchboards() {
             </div>
             
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors"
-                title="Paramètres Site & Logo"
-              >
+              <button onClick={() => setShowSettingsModal(true)} className="p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
                 <Settings size={20} />
               </button>
-              <button
-                onClick={() => setShowImportModal(true)}
-                className="px-3 md:px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 transition-colors flex items-center gap-2"
-              >
+              <button onClick={() => setShowImportModal(true)} className="px-3 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 flex items-center gap-2">
                 <FileSpreadsheet size={18} />
-                <span className="hidden sm:inline">Import Excel</span>
+                <span className="hidden sm:inline">Import</span>
               </button>
-              <button
-                onClick={() => setShowBoardForm(true)}
-                className="px-3 md:px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 transition-all flex items-center gap-2"
-              >
+              <button onClick={() => setShowBoardForm(true)} className="px-3 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-2">
                 <Plus size={18} />
                 <span className="hidden sm:inline">Tableau</span>
               </button>
             </div>
           </div>
 
-          {/* Search */}
           <div className="mt-3 relative">
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher par code ou nom..."
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400"
+              placeholder="Rechercher..."
+              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white"
             />
           </div>
         </div>
       </div>
 
-      {/* Loading Overlay */}
       {isLoading && boards.length === 0 && (
         <div className="flex items-center justify-center h-64">
           <RefreshCw size={32} className="animate-spin text-blue-500" />
         </div>
       )}
 
-      {/* Main Content */}
       <div className="max-w-7xl mx-auto flex">
-        {/* Sidebar (Desktop) */}
         {!isMobile && (
           <div className="w-80 border-r bg-white min-h-screen p-4 sticky top-32 self-start overflow-y-auto max-h-[calc(100vh-8rem)]">
             {renderTree()}
           </div>
         )}
 
-        {/* Mobile: Board List or Detail */}
         {isMobile && !selectedBoard && renderMobileCards()}
 
-        {/* Detail Panel */}
         {selectedBoard && (
           <div className="flex-1 p-4">
-            {/* Board Header */}
             <AnimatedCard>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
                 <div className="flex flex-col sm:flex-row">
-                  {/* Photo Section */}
                   <div 
                     onClick={() => boardPhotoRef.current?.click()}
                     className="w-full sm:w-32 h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
                   >
-                    <input
-                      ref={boardPhotoRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleBoardPhotoUpload}
-                      className="hidden"
-                    />
+                    <input ref={boardPhotoRef} type="file" accept="image/*" onChange={handleBoardPhotoUpload} className="hidden" />
                     {selectedBoard.has_photo ? (
-                      <img 
-                        src={api.switchboard.boardPhotoUrl(selectedBoard.id, { bust: true })}
-                        alt={selectedBoard.name}
-                        className="w-full h-full object-cover"
-                      />
+                      <img src={getBoardPhotoUrl(selectedBoard.id)} alt={selectedBoard.name} className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-gray-400">
                         <ImagePlus size={32} />
@@ -2540,149 +2191,74 @@ export default function Switchboards() {
                     </div>
                   </div>
 
-                  {/* Info Section */}
                   <div className="flex-1 p-4">
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
                           {selectedBoard.is_principal && (
-                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">
-                              Principal
-                            </span>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">Principal</span>
                           )}
                           <span className="text-lg font-mono font-bold text-gray-900">{selectedBoard.code}</span>
                           {!isBoardPlacedOnMap(selectedBoard) && (
-                            <span
-                              className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium flex items-center gap-1"
-                              title="Ce tableau n'est pas encore placé sur un plan"
-                            >
-                              <MapPin size={10} />
-                              Non placé
-                            </span>
-                          )}
-                          {isBoardPlacedOnMap(selectedBoard) && (
-                            <span
-                              className="ml-2 px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] rounded-full font-medium flex items-center gap-1"
-                              title="Ce tableau est placé sur un plan"
-                            >
-                              <CheckCircle size={10} />
-                              Placé
+                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-1">
+                              <MapPin size={10} />Non placé
                             </span>
                           )}
                         </div>
                         <h2 className="text-base text-gray-600 mt-1">{selectedBoard.name}</h2>
                         
-                        {/* Source (Upstream) Display */}
-                        {selectedBoard.upstream_sources && selectedBoard.upstream_sources.length > 0 ? (
-                           <div className="mt-1 space-y-1">
-                             {selectedBoard.upstream_sources.map(source => (
-                               <div key={source.id} className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2 border border-amber-200">
-                                  <ArrowRight size={12} />
-                                  Alimenté par : <span className="font-semibold font-mono">{source.source_board_code}</span> (via {source.name})
-                               </div>
-                             ))}
-                           </div>
-                        ) : selectedBoard.is_principal ? (
-                           <div className="mt-1 inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
-                             <CheckCircle size={12} /> Source Principale
-                           </div>
-                        ) : (
-                           <div className="mt-1 inline-flex items-center gap-1 text-gray-400 text-xs">
-                             <AlertCircle size={12} /> Source non définie
-                           </div>
+                        {selectedBoard.upstream_sources?.length > 0 && (
+                          <div className="mt-1">
+                            {selectedBoard.upstream_sources.map(source => (
+                              <span key={source.id} className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2">
+                                ← {source.source_board_code}
+                              </span>
+                            ))}
+                          </div>
                         )}
-
-                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 flex-wrap">
-                          <span className="flex items-center gap-1">
-                            <Building2 size={14} />
-                            Bât. {selectedBoard.meta?.building_code || '-'}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Layers size={14} />
-                            Étage {selectedBoard.meta?.floor || '-'}
-                          </span>
-                          {selectedBoard.regime_neutral && (
-                            <span className="flex items-center gap-1">
-                              <Shield size={14} />
-                              {selectedBoard.regime_neutral}
-                            </span>
-                          )}
-                        </div>
                       </div>
 
                       <div className="flex items-center gap-1 flex-wrap">
-                        <button
-                          onClick={() => setShowShareModal(true)}
-                          className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
-                          title="Partager le lien"
-                        >
+                        <button onClick={() => setShowShareModal(true)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl">
                           <Link size={18} />
                         </button>
-                        {/* ========== PLANS BUTTON ==========*/}
                         <button
                           onClick={() => handleNavigateToMap(selectedBoard)}
-                          className={`px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${
-                            isBoardPlacedOnMap(selectedBoard)
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                          className={`px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 ${
+                            isBoardPlacedOnMap(selectedBoard) ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
                           }`}
-                          title={isBoardPlacedOnMap(selectedBoard) ? "Voir sur le plan" : "Placer sur un plan"}
                         >
                           <MapPin size={16} />
-                          {isBoardPlacedOnMap(selectedBoard) ? 'Voir plan' : 'Plans'}
+                          Plans
                         </button>
-                        <button
-                          onClick={handlePrintPDF}
-                          disabled={isPrinting}
-                          className="p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors disabled:opacity-50"
-                          title="Imprimer le listing PDF"
-                        >
+                        <button onClick={handlePrintPDF} disabled={isPrinting} className="p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl disabled:opacity-50">
                           {isPrinting ? <RefreshCw size={18} className="animate-spin" /> : <Printer size={18} />}
                         </button>
-                        <button
-                          onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)}
-                          className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl transition-colors"
-                          title="Schéma unifilaire"
-                        >
+                        <button onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)} className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl">
                           <GitBranch size={18} />
                         </button>
-                        <button
-                          onClick={() => startEditBoard(selectedBoard)}
-                          className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
-                        >
+                        <button onClick={() => startEditBoard(selectedBoard)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl">
                           <Edit3 size={18} />
                         </button>
-                        <button
-                          onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }}
-                          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                        >
+                        <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl">
                           <Trash2 size={18} />
                         </button>
                         {isMobile && (
-                          <button
-                            onClick={handleCloseBoard}
-                            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-                          >
+                          <button onClick={handleCloseBoard} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl">
                             <X size={18} />
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Progress - Using selectedBoard counts directly */}
                     {(selectedBoard.device_count || 0) > 0 && (
                       <div className="mt-3">
                         <div className="flex items-center justify-between text-sm mb-1">
                           <span className="text-gray-500">Complétion</span>
-                          <span className="font-medium text-gray-700">
-                            {selectedBoard.complete_count || 0}/{selectedBoard.device_count || 0} ({getProgress(selectedBoard)}%)
-                          </span>
+                          <span className="font-medium">{selectedBoard.complete_count || 0}/{selectedBoard.device_count || 0}</span>
                         </div>
                         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-500"
-                            style={{ width: `${getProgress(selectedBoard)}%` }}
-                          />
+                          <div className="h-full bg-gradient-to-r from-emerald-400 to-teal-500" style={{ width: `${getProgress(selectedBoard)}%` }} />
                         </div>
                       </div>
                     )}
@@ -2691,17 +2267,10 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
-            {/* Devices Section */}
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-gray-900">
-                Disjoncteurs ({devices.length})
-              </h3>
-              <button
-                onClick={() => setShowDeviceForm(true)}
-                className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:from-indigo-600 hover:to-purple-700 transition-all flex items-center gap-2"
-              >
-                <Plus size={18} />
-                Ajouter
+              <h3 className="font-semibold text-gray-900">Disjoncteurs ({devices.length})</h3>
+              <button onClick={() => setShowDeviceForm(true)} className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-2">
+                <Plus size={18} />Ajouter
               </button>
             </div>
 
@@ -2709,15 +2278,7 @@ export default function Switchboards() {
               <div className="bg-white rounded-2xl p-12 text-center">
                 <Zap size={48} className="mx-auto text-gray-300 mb-4" />
                 <h4 className="text-lg font-medium text-gray-700">Aucun disjoncteur</h4>
-                <p className="text-gray-500 mt-1">Ajoutez votre premier disjoncteur ou importez depuis Excel</p>
-                <div className="flex justify-center gap-3 mt-4">
-                  <button
-                    onClick={() => setShowDeviceForm(true)}
-                    className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-xl font-medium hover:bg-indigo-200 transition-colors"
-                  >
-                    Ajouter manuellement
-                  </button>
-                </div>
+                <p className="text-gray-500 mt-1">Ajoutez votre premier disjoncteur</p>
               </div>
             ) : (
               renderDeviceCards()
@@ -2725,7 +2286,6 @@ export default function Switchboards() {
           </div>
         )}
 
-        {/* Empty State (Desktop) */}
         {!isMobile && !selectedBoard && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="text-center">
@@ -2733,13 +2293,11 @@ export default function Switchboards() {
                 <Zap size={40} className="text-gray-400" />
               </div>
               <h3 className="text-lg font-medium text-gray-700">Sélectionnez un tableau</h3>
-              <p className="text-gray-500 mt-1">Choisissez un tableau dans la liste pour voir ses disjoncteurs</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Mobile Tree Drawer */}
       <MobileTreeDrawer
         isOpen={showMobileDrawer}
         onClose={() => setShowMobileDrawer(false)}
@@ -2754,60 +2312,17 @@ export default function Switchboards() {
         placedBoardIds={placedBoardIds}
       />
 
-      {/* Modals */}
-      <ImportExcelModal
-        isOpen={showImportModal}
-        onClose={() => setShowImportModal(false)}
-        onImport={handleImportExcel}
-        isLoading={isImporting}
-      />
-
-      <ImportResultModal
-        isOpen={showImportResult}
-        onClose={() => { setShowImportResult(false); setImportResult(null); }}
-        result={importResult}
-      />
-
-      <SiteSettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        showToast={showToast}
-      />
-
-      <DeleteConfirmModal
-        isOpen={showDeleteModal}
-        onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }}
-        onConfirm={handleDeleteBoard}
-        itemName={deleteTarget?.code || deleteTarget?.name}
-        itemType="tableau"
-        isLoading={isDeleting}
-        deviceCount={deleteTarget?.device_count || 0}
-      />
-
-      <ShareLinkModal
-        isOpen={showShareModal}
-        onClose={() => setShowShareModal(false)}
-        board={selectedBoard}
-      />
-
-      <AIPhotoWizard
-        isOpen={showAIWizard}
-        onClose={() => setShowAIWizard(false)}
-        onComplete={handleAIComplete}
-        showToast={showToast}
-      />
+      <ImportExcelModal isOpen={showImportModal} onClose={() => setShowImportModal(false)} onImport={handleImportExcel} isLoading={isImporting} />
+      <ImportResultModal isOpen={showImportResult} onClose={() => { setShowImportResult(false); setImportResult(null); }} result={importResult} />
+      <SiteSettingsModal isOpen={showSettingsModal} onClose={() => setShowSettingsModal(false)} showToast={showToast} />
+      <DeleteConfirmModal isOpen={showDeleteModal} onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }} onConfirm={handleDeleteBoard} itemName={deleteTarget?.code} itemType="tableau" isLoading={isDeleting} deviceCount={deleteTarget?.device_count || 0} />
+      <ShareLinkModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} board={selectedBoard} />
+      <AIPhotoWizard isOpen={showAIWizard} onClose={() => setShowAIWizard(false)} onComplete={handleAIComplete} showToast={showToast} />
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}
 
-      {/* Toast Notification */}
-      {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }
