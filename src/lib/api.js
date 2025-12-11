@@ -1,4 +1,5 @@
 /** src/lib/api.js - API complète ElectroHub */
+/** VERSION 2.2 - AVEC TIMEOUT CLIENT */
 
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -100,7 +101,9 @@ function isNumericId(s) {
   );
 }
 
-// Helper principal pour toutes les requêtes API
+// ============================================================
+// HELPER PRINCIPAL - AVEC TIMEOUT CÔTÉ CLIENT
+// ============================================================
 async function jsonFetch(path, options = {}) {
   const site = currentSite();
   const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
@@ -115,14 +118,32 @@ async function jsonFetch(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
 
+  // ✅ TIMEOUT CÔTÉ CLIENT - 30s par défaut, évite les attentes infinies
+  const timeoutMs = options.timeout || 30000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   const fetchOptions = {
     credentials: "include",
     ...options,
     headers,
+    signal: controller.signal,
   };
 
-  // ⚠️ ICI : plus de AbortController, plus de timeout maison
-  const res = await fetch(url, fetchOptions);
+  let res;
+  try {
+    res = await fetch(url, fetchOptions);
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      const error = new Error(`Timeout après ${timeoutMs/1000}s - Réessayez`);
+      error.status = 408;
+      error.isTimeout = true;
+      throw error;
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
 
   const contentType = res.headers.get("Content-Type") || "";
   let data;
@@ -224,12 +245,29 @@ export async function upload(path, formData /* FormData */) {
   const site = currentSite();
   const url = `${API_BASE}${path}`;
   const headers = identityHeaders(new Headers({ "X-Site": site }));
-  const res = await fetch(url, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-    headers,
-  });
+  
+  // ✅ Timeout pour uploads (60s pour les gros fichiers)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Upload timeout (60s) - Fichier trop volumineux ?');
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
+  
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `HTTP ${res.status}`);
