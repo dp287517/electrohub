@@ -26,9 +26,9 @@ const { Pool } = pg;
 // ============================================================
 const pool = new Pool({ 
   connectionString: process.env.NEON_DATABASE_URL,
-  max: 10,                       // Max connections
-  idleTimeoutMillis: 30000,      // Close idle after 30s
-  connectionTimeoutMillis: 10000, // 10s to get connection
+  max: 10,
+  idleTimeoutMillis: 30000
+  // plus de connectionTimeoutMillis → timeout géré par Neon lui-même
 });
 
 // Pool error handling
@@ -40,39 +40,30 @@ pool.on('error', (err) => {
 let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0 };
 
 // ============================================================
-// QUERY HELPER - AVEC TIMEOUT ET MONITORING
+// QUERY HELPER - SANS STATEMENT_TIMEOUT
 // ============================================================
 async function query(sql, params = [], options = {}) {
   const startTime = Date.now();
-  const timeoutMs = options.timeout || 10000;
   const label = options.label || 'QUERY';
-  
+
   poolStats.queries++;
-  
+
   const client = await pool.connect();
   try {
-    // Set statement timeout for this query
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
     const result = await client.query(sql, params);
-    
+
     const elapsed = Date.now() - startTime;
     if (elapsed > 2000) {
       poolStats.slowQueries++;
       console.warn(`[${label}] Slow query: ${elapsed}ms`);
     }
-    
+
     return result;
   } catch (err) {
     poolStats.errors++;
     const elapsed = Date.now() - startTime;
-    
-    // Detect timeout errors
-    if (err.message?.includes('statement timeout') || err.message?.includes('canceling statement')) {
-      poolStats.timeouts++;
-      console.error(`[${label}] TIMEOUT after ${elapsed}ms`);
-    } else {
-      console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
-    }
+    console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
     throw err;
   } finally {
     client.release();
@@ -80,37 +71,28 @@ async function query(sql, params = [], options = {}) {
 }
 
 // ============================================================
-// QUICK QUERY - MAINTENANT AVEC TIMEOUT PAR DÉFAUT (5s)
+// QUICK QUERY - AUCUN STATEMENT_TIMEOUT
 // ============================================================
-async function quickQuery(sql, params = [], timeoutMs = 15000) {
+async function quickQuery(sql, params = []) {
   const startTime = Date.now();
   poolStats.queries++;
-  
+
   const client = await pool.connect();
   try {
-    // On laisse un timeout, mais beaucoup plus large
-    if (timeoutMs && timeoutMs > 0) {
-      await client.query(`SET statement_timeout = ${timeoutMs}`);
-    }
+    // ❌ PLUS DE: await client.query(`SET statement_timeout = ${timeoutMs}`);
     const result = await client.query(sql, params);
-    
+
     const elapsed = Date.now() - startTime;
     if (elapsed > 1000) {
       poolStats.slowQueries++;
       console.warn(`[QUICK] Slow query: ${elapsed}ms - ${sql.substring(0, 50)}...`);
     }
-    
+
     return result;
   } catch (err) {
     poolStats.errors++;
     const elapsed = Date.now() - startTime;
-    
-    if (err.message?.includes('statement timeout') || err.message?.includes('canceling statement')) {
-      poolStats.timeouts++;
-      console.error(`[QUICK] TIMEOUT after ${elapsed}ms: ${sql.substring(0, 50)}...`);
-    } else {
-      console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
-    }
+    console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
     throw err;
   } finally {
     client.release();
