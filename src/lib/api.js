@@ -100,43 +100,56 @@ function isNumericId(s) {
   );
 }
 
-/** Fetch JSON with automatic X-Site + Identity headers */
-// REMPLACER la fonction jsonFetch par:
-/** Fetch JSON with automatic X-Site + Identity headers */
-async function jsonFetch(url, options = {}) {
+// Helper principal pour toutes les requêtes API
+async function jsonFetch(path, options = {}) {
   const site = currentSite();
-  const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+
+  // En‑têtes avec identité + site
   const headers = identityHeaders(new Headers(options.headers || {}));
   headers.set("X-Site", site);
 
   // JSON par défaut si on envoie un body (sauf FormData)
-  if (
-    !headers.has("Content-Type") &&
-    options.body &&
-    !(options.body instanceof FormData)
-  ) {
+  const hasBody = options.body !== undefined && options.body !== null;
+  if (!headers.has("Content-Type") && hasBody && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
-  // ⚠️ ICI : plus de AbortController, plus de timeout front
-  const res = await fetch(finalUrl, {
+  const fetchOptions = {
     credentials: "include",
     ...options,
     headers,
-  });
+  };
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    const msg =
-      text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
-    throw new Error(msg);
+  // ⚠️ ICI : plus de AbortController, plus de timeout maison
+  const res = await fetch(url, fetchOptions);
+
+  const contentType = res.headers.get("Content-Type") || "";
+  let data;
+
+  // Gestion blob (PDF, images, etc.)
+  if (options.isBlob || contentType.startsWith("image/") || contentType === "application/pdf") {
+    data = await res.blob();
+  } else if (contentType.includes("application/json")) {
+    data = await res.json();
+  } else {
+    data = await res.text();
   }
 
-  const ct = res.headers.get("content-type") || "";
-  if (res.status === 204) return null;
-  return ct.includes("application/json") ? res.json() : null;
-}
+  // Erreur HTTP → on lève une Error avec le message serveur
+  if (!res.ok) {
+    const message =
+      (data && data.error) ||
+      (data && data.message) ||
+      `HTTP ${res.status}`;
+    const error = new Error(message);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
 
+  return data;
+}
 
 /** Utilitaire bas niveau pour appels JSON "bruts" */
 export async function apiBaseFetchJSON(path, options = {}) {
