@@ -8,7 +8,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
 
 // PDF.js (comme VSD)
@@ -1151,6 +1151,11 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
 /* ----------------------------- Main Page ----------------------------- */
 export default function SwitchboardMap() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Track if we've handled URL params on initial load
+  const urlParamsHandledRef = useRef(false);
+  const targetSwitchboardIdRef = useRef(null);
 
   // Plans
   const [plans, setPlans] = useState([]);
@@ -1228,35 +1233,56 @@ export default function SwitchboardMap() {
     loadSwitchboards();
   }, []);
 
-  // Restore plan from localStorage after plans loaded
+  // Restore plan from URL params or localStorage after plans loaded
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-      
+      // Priority 1: URL params (navigation from Switchboards page)
+      const urlSwitchboardId = searchParams.get('switchboard');
+      const urlPlanKey = searchParams.get('plan');
+
       let planToSelect = null;
-      if (savedPlanKey) {
-        planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      let pageIdx = 0;
+
+      if (urlPlanKey && !urlParamsHandledRef.current) {
+        // Use URL param for plan
+        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
+        if (urlSwitchboardId) {
+          targetSwitchboardIdRef.current = Number(urlSwitchboardId);
+        }
+        urlParamsHandledRef.current = true;
+        // Clear URL params after reading
+        setSearchParams({}, { replace: true });
       }
+
+      // Priority 2: localStorage (returning to page)
+      if (!planToSelect) {
+        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+
+        if (savedPlanKey) {
+          planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+        }
+        if (planToSelect && savedPageIndex) {
+          pageIdx = Number(savedPageIndex) || 0;
+        }
+      }
+
+      // Fallback: first plan
       if (!planToSelect) {
         planToSelect = plans[0];
       }
-      
-      const pageIdx = (savedPageIndex && planToSelect?.logical_name === savedPlanKey) 
-        ? Number(savedPageIndex) || 0 
-        : 0;
-      
+
       setSelectedPlan(planToSelect);
       setPageIndex(pageIdx);
-      
-      // ✅ AJOUT : Charger les positions pour mettre à jour currentPlanIds
+
+      // Load positions
       if (planToSelect) {
         refreshPositions(planToSelect, pageIdx).then(positions => {
           setInitialPoints(positions || []);
         });
       }
     }
-  }, [plans]);
+  }, [plans, searchParams, setSearchParams]);
 
   // Save plan to localStorage
   useEffect(() => {
@@ -1268,6 +1294,34 @@ export default function SwitchboardMap() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [pageIndex]);
+
+  // ✅ Auto-highlight switchboard from URL params after PDF is ready
+  useEffect(() => {
+    if (!pdfReady || !targetSwitchboardIdRef.current) return;
+
+    const targetId = targetSwitchboardIdRef.current;
+    targetSwitchboardIdRef.current = null; // Clear after use
+
+    // Small delay to ensure markers are rendered
+    setTimeout(async () => {
+      // Highlight the marker on the map
+      viewerRef.current?.highlightMarker(targetId);
+
+      // Find and select the position
+      const positions = getLatestPositions();
+      const pos = positions.find(p => Number(p.switchboard_id) === targetId);
+
+      if (pos) {
+        setSelectedPosition(pos);
+        try {
+          const board = await api.switchboard.getBoard(targetId);
+          setSelectedBoard(board);
+        } catch (err) {
+          console.error("Erreur chargement détails:", err);
+        }
+      }
+    }, 300);
+  }, [pdfReady, getLatestPositions]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
