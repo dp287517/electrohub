@@ -97,7 +97,7 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
 function Input({ value, onChange, className = "", ...p }) {
   return (
     <input
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
+      className={`border border-gray-300 rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-blue-200 focus:border-blue-500 bg-white text-gray-900 placeholder-gray-400 transition-all ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
       {...p}
@@ -107,7 +107,7 @@ function Input({ value, onChange, className = "", ...p }) {
 function Select({ value, onChange, options = [], placeholder, className = "" }) {
   return (
     <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      className={`border border-gray-300 rounded-lg px-3 py-2 text-sm w-full focus:ring-2 focus:ring-blue-200 focus:border-blue-500 bg-white text-gray-900 transition-all cursor-pointer ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
     >
@@ -303,22 +303,37 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
     initial.zoning_dust === 20 || initial.zoning_dust === 21 || initial.zoning_dust === 22 ? String(initial.zoning_dust) : ""
   );
   return (
-    <div className="p-2 rounded-xl border bg-white shadow-lg w-[270px] space-y-2">
-      <div className="font-semibold text-sm">Zone ATEX</div>
-      <div className="text-[11px] text-gray-500">Remplissage = <b>Poussière</b> • Bordure = <b>Gaz</b></div>
-      <div className="grid gap-2">
+    <div className="rounded-2xl bg-white shadow-2xl w-[300px] overflow-hidden border border-gray-200 animate-slideUp">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-4 py-3">
+        <div className="font-bold text-sm flex items-center gap-2">
+          <span>⚠️</span> Zone ATEX
+        </div>
+        <div className="text-[11px] text-amber-100 mt-0.5">
+          Bordure = Gaz • Remplissage = Poussière
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-4 space-y-4">
+        {/* Nom */}
         <div>
-          <div className="text-xs text-gray-600 mb-1">Nom</div>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">Nom de la zone</label>
           <Input value={name} onChange={setName} placeholder="Ex: Mélangeur A" />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+
+        {/* Zonage */}
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <div className="text-xs text-gray-600 mb-1">Gaz (0/1/2)</div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1">
+              <span className="w-3 h-3 rounded-full bg-amber-400 inline-block"></span>
+              Gaz
+            </label>
             <Select
               value={gas}
               onChange={setGas}
               options={[
-                { value: "", label: "—" },
+                { value: "", label: "Non classé" },
                 { value: "0", label: "Zone 0" },
                 { value: "1", label: "Zone 1" },
                 { value: "2", label: "Zone 2" },
@@ -326,12 +341,15 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
             />
           </div>
           <div>
-            <div className="text-xs text-gray-600 mb-1">Poussière (20/21/22)</div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-1">
+              <span className="w-3 h-3 rounded-full bg-blue-400 inline-block"></span>
+              Poussière
+            </label>
             <Select
               value={dust}
               onChange={setDust}
               options={[
-                { value: "", label: "—" },
+                { value: "", label: "Non classé" },
                 { value: "20", label: "Zone 20" },
                 { value: "21", label: "Zone 21" },
                 { value: "22", label: "Zone 22" },
@@ -339,39 +357,61 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
             />
           </div>
         </div>
+
+        {/* Preview des zones sélectionnées */}
+        {(gas || dust) && (
+          <div className="flex flex-wrap gap-2">
+            {gas && (
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                💨 Gaz Zone {gas}
+              </span>
+            )}
+            {dust && (
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-300">
+                🌫️ Poussière Zone {dust}
+              </span>
+            )}
+          </div>
+        )}
       </div>
-      <div className="flex items-center justify-between pt-1">
-        <Btn variant="ghost" onClick={onCancel}>Fermer</Btn>
-        <div className="flex items-center gap-2">
-          {!!onStartGeomEdit && (
+
+      {/* Actions */}
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <Btn variant="ghost" onClick={onCancel} className="text-xs">✕ Fermer</Btn>
+          <div className="flex items-center gap-2">
+            {!!onStartGeomEdit && (
+              <Btn
+                variant="subtle"
+                className="text-xs"
+                onClick={() => {
+                  document.body.classList.add("editing-geom");
+                  onStartGeomEdit();
+                }}
+              >
+                ✏️ Forme
+              </Btn>
+            )}
             <Btn
-              variant="subtle"
-              onClick={() => {
-                document.body.classList.add("editing-geom");
-                onStartGeomEdit();
-              }}
+              className="text-xs"
+              onClick={() =>
+                onSave?.({
+                  name: name.trim(),
+                  zoning_gas: gas === "" ? null : Number(gas),
+                  zoning_dust: dust === "" ? null : Number(dust),
+                })
+              }
             >
-              Modifier la forme
+              💾 Enregistrer
             </Btn>
-          )}
-          <Btn
-            onClick={() =>
-              onSave?.({
-                name: name.trim(),
-                zoning_gas: gas === "" ? null : Number(gas),
-                zoning_dust: dust === "" ? null : Number(dust),
-              })
-            }
-          >
-            Enregistrer
+          </div>
+        </div>
+        {allowDelete && (
+          <Btn variant="danger" onClick={onDelete} className="w-full text-xs">
+            🗑️ Supprimer cette zone
           </Btn>
-        </div>
+        )}
       </div>
-      {allowDelete && (
-        <div className="flex items-center justify-end">
-          <Btn variant="danger" onClick={onDelete}>Supprimer la zone</Btn>
-        </div>
-      )}
     </div>
   );
 }

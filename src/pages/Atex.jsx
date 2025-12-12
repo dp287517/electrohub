@@ -1331,15 +1331,18 @@ function EquipmentDrawer({
   asDateInput,
   next36MonthsISO,
 }) {
-  const Badge = ({ color = "gray", children }) => {
+  const [activeSection, setActiveSection] = useState("info");
+
+  const Badge = ({ color = "gray", children, className = "" }) => {
     const map = {
       gray: "bg-gray-100 text-gray-700",
       green: "bg-emerald-100 text-emerald-700",
       orange: "bg-amber-100 text-amber-700",
       red: "bg-rose-100 text-rose-700",
       blue: "bg-blue-100 text-blue-700",
+      purple: "bg-purple-100 text-purple-700",
     };
-    return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]}`}>{children}</span>;
+    return <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
   };
 
   const statusColor = (st) => {
@@ -1351,14 +1354,28 @@ function EquipmentDrawer({
 
   const statusLabel = (st) => {
     if (st === "a_faire") return "À faire";
-    if (st === "en_cours_30") return "En cours";
+    if (st === "en_cours_30") return "≤ 90 jours";
     if (st === "en_retard") return "En retard";
     return "—";
   };
 
+  const SectionTab = ({ id, label, icon }) => (
+    <button
+      onClick={() => setActiveSection(id)}
+      className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+        activeSection === id
+          ? "bg-blue-600 text-white shadow-sm"
+          : "bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
+      }`}
+    >
+      <span>{icon}</span>
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm animate-fadeIn"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           if (!dirty || window.confirm("Des modifications non sauvegardées. Fermer quand même ?")) {
@@ -1367,302 +1384,409 @@ function EquipmentDrawer({
         }
       }}
     >
-      <div className="bg-white rounded-t-2xl sm:rounded-3xl shadow-2xl w-full sm:max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
-        {/* Header - Fixed on mobile */}
-        <div className="flex items-center justify-between p-3 sm:p-6 border-b bg-gray-50 sticky top-0 z-10">
-          <h2 className="text-base sm:text-lg font-bold truncate pr-2">{editing.id ? "Modifier" : "Nouveau"}</h2>
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {dirty && (
-              <button onClick={onSave} className="px-3 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs sm:text-sm">
-                Sauver
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden animate-slideUp">
+        {/* Header avec gradient */}
+        <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 text-white p-4 sm:p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+                <span className="text-xl sm:text-2xl">🔥</span>
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-bold">
+                  {editing.id ? (editing.name || "Équipement ATEX") : "Nouvel équipement"}
+                </h2>
+                <p className="text-blue-100 text-xs sm:text-sm">
+                  {editing.id ? `ID: ${editing.id.slice(0, 8)}...` : "Créer une nouvelle fiche"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {dirty && (
+                <button
+                  onClick={onSave}
+                  className="px-3 sm:px-4 py-2 bg-white text-blue-600 rounded-xl hover:bg-blue-50 text-sm font-semibold shadow-lg transition-all"
+                >
+                  💾 <span className="hidden sm:inline">Sauver</span>
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="w-10 h-10 flex items-center justify-center bg-white/20 hover:bg-white/30 rounded-xl transition-all"
+              >
+                ✕
               </button>
+            </div>
+          </div>
+
+          {/* Status badges in header */}
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <Badge color={statusColor(editing.status)} className="bg-white/20 text-white border border-white/30">
+              {statusLabel(editing.status)}
+            </Badge>
+            {editing.compliance_state === "conforme" ? (
+              <Badge className="bg-emerald-400/30 text-white border border-emerald-300/50">✓ Conforme</Badge>
+            ) : editing.compliance_state === "non_conforme" ? (
+              <Badge className="bg-red-400/30 text-white border border-red-300/50">✗ Non conforme</Badge>
+            ) : null}
+            {editing.zoning_gas != null && (
+              <Badge className="bg-amber-400/30 text-white border border-amber-300/50">💨 Gaz {editing.zoning_gas}</Badge>
             )}
-            <button onClick={onClose} className="p-1.5 sm:px-3 sm:py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-lg">✕</button>
+            {editing.zoning_dust != null && (
+              <Badge className="bg-orange-400/30 text-white border border-orange-300/50">🌫️ Pouss. {editing.zoning_dust}</Badge>
+            )}
           </div>
         </div>
 
+        {/* Section tabs */}
+        <div className="flex gap-2 p-3 bg-gray-50 border-b overflow-x-auto">
+          <SectionTab id="info" label="Informations" icon="📋" />
+          <SectionTab id="location" label="Localisation" icon="📍" />
+          <SectionTab id="atex" label="ATEX" icon="⚠️" />
+          <SectionTab id="dates" label="Contrôles" icon="📅" />
+          {editing.id && <SectionTab id="files" label="Fichiers" icon="📎" />}
+        </div>
+
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
-          {/* Photo */}
-          {editing.id && (
-            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-3 sm:gap-4 p-3 sm:p-4 bg-gray-50 rounded-xl">
-              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl border overflow-hidden bg-white flex items-center justify-center shrink-0">
-                {editing.photo_url ? (
-                  <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-2xl sm:text-3xl text-gray-300">📷</span>
-                )}
-              </div>
-              <div className="flex-1 w-full space-y-2">
-                <label className="block text-center sm:text-left sm:inline-block px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 cursor-pointer text-xs sm:text-sm">
-                  <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUploadPhoto(e.target.files[0])} />
-                  Changer la photo
-                </label>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <label className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 cursor-pointer text-xs sm:text-sm text-center">
-                    <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
-                    <span className="hidden sm:inline">Analyser photos (IA)</span>
-                    <span className="sm:hidden">Analyse IA</span>
-                  </label>
-                  <button onClick={onVerifyCompliance} className="px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs sm:text-sm">
-                    <span className="hidden sm:inline">Vérifier conformité (IA)</span>
-                    <span className="sm:hidden">Conformité IA</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 space-y-4 atex-scroll">
 
-          {/* Info Fields */}
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Nom</label>
-              <input
-                type="text"
-                value={editing.name || ""}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Type</label>
-              <input
-                type="text"
-                value={editing.type || ""}
-                onChange={(e) => setEditing({ ...editing, type: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Fabricant</label>
-              <input
-                type="text"
-                value={editing.manufacturer || ""}
-                onChange={(e) => setEditing({ ...editing, manufacturer: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Référence fabricant</label>
-              <input
-                type="text"
-                value={editing.manufacturer_ref || ""}
-                onChange={(e) => setEditing({ ...editing, manufacturer_ref: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
-
-          {/* ATEX Markings */}
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Marquage ATEX (gaz)</label>
-              <input
-                type="text"
-                value={editing.atex_mark_gas || ""}
-                onChange={(e) => setEditing({ ...editing, atex_mark_gas: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Ex II 2G..."
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Marquage ATEX (poussière)</label>
-              <input
-                type="text"
-                value={editing.atex_mark_dust || ""}
-                onChange={(e) => setEditing({ ...editing, atex_mark_dust: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-                placeholder="Ex II 2D..."
-              />
-            </div>
-          </div>
-
-          {/* Location */}
-          <div className="p-3 bg-gray-50 rounded-xl space-y-3">
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Bâtiment</label>
-                <input type="text" value={editing.building || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Zone</label>
-                <input type="text" value={editing.zone || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
-              </div>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Équipement</label>
-                <input
-                  type="text"
-                  value={editing.equipment || ""}
-                  onChange={(e) => setEditing({ ...editing, equipment: e.target.value })}
-                  className="w-full bg-white border rounded-lg px-3 py-2 text-sm"
-                  placeholder="Ex: Moteur, Pompe..."
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Sous-équipement</label>
-                <input
-                  type="text"
-                  value={editing.sub_equipment || ""}
-                  onChange={(e) => setEditing({ ...editing, sub_equipment: e.target.value })}
-                  className="w-full bg-white border rounded-lg px-3 py-2 text-sm"
-                  placeholder="Ex: Ventilateur, Capteur..."
-                />
-              </div>
-            </div>
-            {/* 🆕 Zonage: read-only car lié aux zones ATEX sur le plan */}
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  Zonage Gaz
-                  <span className="ml-1 text-purple-500" title="Déterminé automatiquement par la zone sur le plan">🔒</span>
-                </label>
-                <div className={`w-full border rounded-lg px-3 py-2 text-sm ${editing.zoning_gas != null ? "bg-amber-50 border-amber-200 text-amber-800 font-medium" : "bg-gray-50 text-gray-500"}`}>
-                  {editing.zoning_gas != null ? `Zone ${editing.zoning_gas}` : "Non classé"}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  Zonage Poussière
-                  <span className="ml-1 text-purple-500" title="Déterminé automatiquement par la zone sur le plan">🔒</span>
-                </label>
-                <div className={`w-full border rounded-lg px-3 py-2 text-sm ${editing.zoning_dust != null ? "bg-orange-50 border-orange-200 text-orange-800 font-medium" : "bg-gray-50 text-gray-500"}`}>
-                  {editing.zoning_dust != null ? `Zone ${editing.zoning_dust}` : "Non classé"}
-                </div>
-              </div>
-            </div>
-            <p className="text-xs text-gray-400 -mt-1">
-              💡 Le zonage est automatiquement déterminé par la position sur le plan ATEX.
-            </p>
-          </div>
-
-          {/* Dates */}
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Installation</label>
-              <input
-                type="date"
-                value={asDateInput(editing.installed_at)}
-                onChange={(e) => setEditing({ ...editing, installed_at: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Dernier contrôle</label>
-              <input
-                type="date"
-                value={asDateInput(editing.last_check_date)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setEditing({
-                    ...editing,
-                    last_check_date: v,
-                    next_check_date: next36MonthsISO(v) || editing.next_check_date,
-                  });
-                }}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Prochain contrôle</label>
-              <input
-                type="date"
-                value={asDateInput(editing.next_check_date)}
-                onChange={(e) => setEditing({ ...editing, next_check_date: e.target.value })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
-
-          {/* Status badges */}
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">Statut:</span>
-              <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">Conformité:</span>
-              {editing.compliance_state === "conforme" ? (
-                <Badge color="green">Conforme</Badge>
-              ) : editing.compliance_state === "non_conforme" ? (
-                <Badge color="red">Non conforme</Badge>
-              ) : (
-                <Badge>N/A</Badge>
-              )}
-            </div>
-          </div>
-
-          {/* Comment */}
-          <div>
-            <label className="block text-sm text-gray-600 mb-1">Commentaire</label>
-            <textarea
-              value={editing.comment || ""}
-              onChange={(e) => setEditing({ ...editing, comment: e.target.value })}
-              rows={3}
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-
-          {/* Files */}
-          {editing.id && (
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <div className="flex items-center justify-between mb-3">
-                <span className="font-medium">Pièces jointes</span>
-                <label className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 cursor-pointer text-sm">
-                  <input type="file" multiple className="hidden" onChange={(e) => e.target.files?.length && onUploadAttachments(Array.from(e.target.files))} />
-                  Ajouter
-                </label>
-              </div>
-              {files.length === 0 ? (
-                <p className="text-sm text-gray-500">Aucune pièce jointe.</p>
-              ) : (
-                <div className="space-y-1">
-                  {files.map((f) => (
-                    <a key={f.id} href={f.url} target="_blank" rel="noreferrer" className="block text-sm text-blue-600 hover:underline">
-                      {f.name}
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* History */}
-          {editing.id && history.length > 0 && (
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <span className="font-medium">Historique des contrôles</span>
-              <div className="mt-2 space-y-1">
-                {history.map((h) => (
-                  <div key={h.id} className="flex items-center gap-2 text-sm">
-                    <span className="text-gray-500">{dayjs(h.date).format("DD/MM/YYYY HH:mm")}</span>
-                    <Badge color={h.result === "conforme" ? "green" : h.result === "non_conforme" ? "red" : "gray"}>
-                      {h.result || "N/A"}
-                    </Badge>
+          {/* SECTION: Informations */}
+          {activeSection === "info" && (
+            <div className="space-y-4 animate-fadeIn">
+              {/* Photo zone */}
+              {editing.id && (
+                <div className="atex-section">
+                  <div className="atex-section-title">📸 Photo de l'équipement</div>
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl border-2 border-dashed border-gray-300 overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+                      {editing.photo_url ? (
+                        <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-4xl text-gray-300">📷</span>
+                      )}
+                    </div>
+                    <div className="flex-1 w-full space-y-2">
+                      <label className="atex-btn atex-btn-primary w-full sm:w-auto cursor-pointer">
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUploadPhoto(e.target.files[0])} />
+                        📤 Changer la photo
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <label className="atex-btn atex-btn-secondary w-full sm:w-auto cursor-pointer">
+                          <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
+                          🤖 Analyse IA
+                        </label>
+                        <button onClick={onVerifyCompliance} className="atex-btn atex-btn-secondary w-full sm:w-auto">
+                          ✅ Conformité IA
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                ))}
+                </div>
+              )}
+
+              {/* Basic info */}
+              <div className="atex-section">
+                <div className="atex-section-title">📝 Informations générales</div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Nom de l'équipement</label>
+                    <input
+                      type="text"
+                      value={editing.name || ""}
+                      onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: Moteur Zone 1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Type</label>
+                    <input
+                      type="text"
+                      value={editing.type || ""}
+                      onChange={(e) => setEditing({ ...editing, type: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: Moteur électrique"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Fabricant</label>
+                    <input
+                      type="text"
+                      value={editing.manufacturer || ""}
+                      onChange={(e) => setEditing({ ...editing, manufacturer: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: ABB, Siemens..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Référence fabricant</label>
+                    <input
+                      type="text"
+                      value={editing.manufacturer_ref || ""}
+                      onChange={(e) => setEditing({ ...editing, manufacturer_ref: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: 1LA7..."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Comment */}
+              <div className="atex-section">
+                <div className="atex-section-title">💬 Commentaire</div>
+                <textarea
+                  value={editing.comment || ""}
+                  onChange={(e) => setEditing({ ...editing, comment: e.target.value })}
+                  rows={3}
+                  className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                  placeholder="Notes, remarques, observations..."
+                />
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: Localisation */}
+          {activeSection === "location" && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="atex-section">
+                <div className="atex-section-title">🏢 Emplacement physique</div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Bâtiment</label>
+                    <input
+                      type="text"
+                      value={editing.building || ""}
+                      readOnly
+                      className="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-600 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">🔒 Défini par le plan</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Zone</label>
+                    <input
+                      type="text"
+                      value={editing.zone || ""}
+                      readOnly
+                      className="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-600 cursor-not-allowed"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">🔒 Défini par le plan</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="atex-section">
+                <div className="atex-section-title">⚙️ Hiérarchie équipement</div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Équipement principal</label>
+                    <input
+                      type="text"
+                      value={editing.equipment || ""}
+                      onChange={(e) => setEditing({ ...editing, equipment: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: Ligne de production A"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Sous-équipement</label>
+                    <input
+                      type="text"
+                      value={editing.sub_equipment || ""}
+                      onChange={(e) => setEditing({ ...editing, sub_equipment: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: Convoyeur, Broyeur..."
+                    />
+                    <p className="text-xs text-gray-400 mt-1">💡 Auto-rempli si dans une zone ATEX</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: ATEX */}
+          {activeSection === "atex" && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="atex-section">
+                <div className="atex-section-title">⚠️ Marquages ATEX</div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">💨 Marquage Gaz</label>
+                    <input
+                      type="text"
+                      value={editing.atex_mark_gas || ""}
+                      onChange={(e) => setEditing({ ...editing, atex_mark_gas: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: II 2G Ex db IIC T4 Gb"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">🌫️ Marquage Poussière</label>
+                    <input
+                      type="text"
+                      value={editing.atex_mark_dust || ""}
+                      onChange={(e) => setEditing({ ...editing, atex_mark_dust: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Ex: II 2D Ex tb IIIC T85°C Db"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="atex-section">
+                <div className="atex-section-title">🎯 Zonage ATEX (automatique)</div>
+                <p className="text-xs text-gray-500 mb-3">
+                  Le zonage est déterminé automatiquement par la position de l'équipement sur le plan ATEX.
+                </p>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded-xl border-2 ${
+                    editing.zoning_gas != null
+                      ? "bg-amber-50 border-amber-300"
+                      : "bg-gray-50 border-gray-200"
+                  }`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-2xl">💨</span>
+                      <span className="font-semibold text-gray-700">Zonage Gaz</span>
+                    </div>
+                    <div className={`text-2xl font-bold ${
+                      editing.zoning_gas != null ? "text-amber-700" : "text-gray-400"
+                    }`}>
+                      {editing.zoning_gas != null ? `Zone ${editing.zoning_gas}` : "Non classé"}
+                    </div>
+                  </div>
+                  <div className={`p-4 rounded-xl border-2 ${
+                    editing.zoning_dust != null
+                      ? "bg-orange-50 border-orange-300"
+                      : "bg-gray-50 border-gray-200"
+                  }`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-2xl">🌫️</span>
+                      <span className="font-semibold text-gray-700">Zonage Poussière</span>
+                    </div>
+                    <div className={`text-2xl font-bold ${
+                      editing.zoning_dust != null ? "text-orange-700" : "text-gray-400"
+                    }`}>
+                      {editing.zoning_dust != null ? `Zone ${editing.zoning_dust}` : "Non classé"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: Dates/Contrôles */}
+          {activeSection === "dates" && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="atex-section">
+                <div className="atex-section-title">📅 Dates importantes</div>
+                <div className="grid sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Date d'installation</label>
+                    <input
+                      type="date"
+                      value={asDateInput(editing.installed_at)}
+                      onChange={(e) => setEditing({ ...editing, installed_at: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Dernier contrôle</label>
+                    <input
+                      type="date"
+                      value={asDateInput(editing.last_check_date)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setEditing({
+                          ...editing,
+                          last_check_date: v,
+                          next_check_date: next36MonthsISO(v) || editing.next_check_date,
+                        });
+                      }}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1.5">Prochain contrôle</label>
+                    <input
+                      type="date"
+                      value={asDateInput(editing.next_check_date)}
+                      onChange={(e) => setEditing({ ...editing, next_check_date: e.target.value })}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {editing.id && history.length > 0 && (
+                <div className="atex-section">
+                  <div className="atex-section-title">📜 Historique des contrôles</div>
+                  <div className="atex-timeline">
+                    {history.map((h) => (
+                      <div key={h.id} className="atex-timeline-item">
+                        <div className="atex-timeline-date">{dayjs(h.date).format("DD/MM/YYYY à HH:mm")}</div>
+                        <div className="atex-timeline-content flex items-center gap-2">
+                          <span>Contrôle effectué</span>
+                          <Badge color={h.result === "conforme" ? "green" : h.result === "non_conforme" ? "red" : "gray"}>
+                            {h.result === "conforme" ? "✓ Conforme" : h.result === "non_conforme" ? "✗ Non conforme" : "N/A"}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SECTION: Fichiers */}
+          {activeSection === "files" && editing.id && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="atex-section">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="atex-section-title mb-0">📎 Pièces jointes</div>
+                  <label className="atex-btn atex-btn-primary cursor-pointer">
+                    <input type="file" multiple className="hidden" onChange={(e) => e.target.files?.length && onUploadAttachments(Array.from(e.target.files))} />
+                    ➕ Ajouter
+                  </label>
+                </div>
+                {files.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <span className="text-4xl block mb-2">📂</span>
+                    <p>Aucune pièce jointe</p>
+                    <p className="text-xs mt-1">Ajoutez des certificats, photos, documents...</p>
+                  </div>
+                ) : (
+                  <div className="atex-files-grid">
+                    {files.map((f) => (
+                      <a key={f.id} href={f.url} target="_blank" rel="noreferrer" className="atex-file-item">
+                        <div className="atex-file-icon">📄</div>
+                        <span className="atex-file-name">{f.name}</span>
+                        <span className="text-gray-400 text-xs">↗</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t bg-gray-50">
-          <button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">
-            Fermer
+        <div className="flex items-center justify-between p-4 border-t bg-white gap-2 flex-wrap">
+          <button onClick={onClose} className="atex-btn atex-btn-secondary">
+            ✕ Fermer
           </button>
           <div className="flex gap-2">
             {editing.id && (
-              <button onClick={onDelete} className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200">
-                Supprimer
+              <button onClick={onDelete} className="atex-btn atex-btn-danger">
+                🗑️ Supprimer
               </button>
             )}
             <button
               onClick={onSave}
               disabled={!dirty}
-              className={`px-4 py-2 rounded-lg ${dirty ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-500 cursor-not-allowed"}`}
+              className={`atex-btn ${dirty ? "atex-btn-primary" : "atex-btn-secondary opacity-50 cursor-not-allowed"}`}
             >
-              {dirty ? "Enregistrer" : "Enregistré"}
+              {dirty ? "💾 Enregistrer" : "✓ Enregistré"}
             </button>
           </div>
         </div>
