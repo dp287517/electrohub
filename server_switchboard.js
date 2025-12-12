@@ -3032,39 +3032,41 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
     let headerY = 50;
     if (siteSettings.logo) {
       try {
-        doc.image(siteSettings.logo, 50, headerY, { width: 80 });
+        doc.image(siteSettings.logo, 50, headerY, { width: 70 });
       } catch (e) { /* ignore */ }
     }
 
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT DE CONTRÔLE', 150, headerY, { align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(siteSettings.company_name || site, 150, headerY + 25, { align: 'center' });
+    // Title - centered properly
+    doc.fontSize(18).fillColor('#1e40af').text('RAPPORT DE CONTRÔLE', 140, headerY + 5, { width: 260, align: 'center' });
+    doc.fontSize(9).fillColor('#6b7280').text(siteSettings.company_name || site, 140, headerY + 28, { width: 260, align: 'center' });
 
-    // Status badge
+    // Status badge - positioned on the right with proper spacing
     const statusColors = { conform: '#059669', non_conform: '#dc2626', partial: '#d97706' };
     const statusLabels = { conform: 'CONFORME', non_conform: 'NON CONFORME', partial: 'PARTIEL' };
-    doc.rect(450, headerY, 95, 25).fill(statusColors[record.status] || '#6b7280');
-    doc.fontSize(10).fillColor('#ffffff').text(statusLabels[record.status] || record.status, 455, headerY + 7);
+    const badgeWidth = record.status === 'non_conform' ? 95 : 75;
+    doc.rect(545 - badgeWidth, headerY + 5, badgeWidth, 22).fill(statusColors[record.status] || '#6b7280');
+    doc.fontSize(9).fillColor('#ffffff').text(statusLabels[record.status] || record.status, 548 - badgeWidth, headerY + 12, { width: badgeWidth - 6, align: 'center' });
 
-    // Info box
-    let y = 120;
-    doc.rect(50, y, 495, 80).fill('#f3f4f6');
+    // Info box - moved down slightly
+    let y = 100;
+    doc.rect(50, y, 495, 85).fill('#f3f4f6');
     doc.fontSize(10).fillColor('#374151');
 
     const target = record.switchboard_id
       ? `Tableau: ${record.switchboard_code || ''} - ${record.switchboard_name || ''}`
       : `Disjoncteur: ${record.device_position || ''} - ${record.device_name || ''}`;
 
-    doc.text(target, 60, y + 10);
-    doc.text(`Modèle: ${record.template_name || '-'}`, 60, y + 25);
-    doc.text(`Contrôlé par: ${record.performed_by} (${record.performed_by_email || '-'})`, 60, y + 40);
-    doc.text(`Date: ${new Date(record.performed_at).toLocaleDateString('fr-FR')} à ${new Date(record.performed_at).toLocaleTimeString('fr-FR')}`, 60, y + 55);
+    doc.text(target, 60, y + 12);
+    doc.text(`Modèle: ${record.template_name || '-'}`, 60, y + 28);
+    doc.text(`Contrôlé par: ${record.performed_by} (${record.performed_by_email || '-'})`, 60, y + 44);
+    doc.text(`Date: ${new Date(record.performed_at).toLocaleDateString('fr-FR')} à ${new Date(record.performed_at).toLocaleTimeString('fr-FR')}`, 60, y + 60);
 
     if (record.building_code) {
-      doc.text(`Localisation: ${record.building_code} - Étage ${record.floor || '-'} - Local ${record.room || '-'}`, 300, y + 10);
+      doc.text(`Localisation: ${record.building_code} - Étage ${record.floor || '-'} - Local ${record.room || '-'}`, 300, y + 12);
     }
 
     // Checklist results
-    y = 220;
+    y = 205;
     doc.fontSize(14).fillColor('#1e40af').text('Résultats du contrôle', 50, y);
     y += 25;
 
@@ -3156,25 +3158,104 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
       y += doc.heightOfString(record.global_notes, { width: 495 }) + 10;
     }
 
-    // Photos
+    // Photos Section - Improved layout
     if (attachments.rows.length > 0) {
       const photos = attachments.rows.filter(a => a.file_type === 'photo' && a.file_data);
-      if (photos.length > 0) {
-        if (y > 600) { doc.addPage(); y = 50; }
-        doc.fontSize(12).fillColor('#1e40af').text('Photos', 50, y);
-        y += 25;
+      const documents = attachments.rows.filter(a => a.file_type === 'document');
 
-        let x = 50;
-        for (const photo of photos) {
+      if (photos.length > 0) {
+        if (y > 550) { doc.addPage(); y = 50; }
+        y += 15;
+
+        // Section header with gradient background
+        doc.rect(50, y, 495, 28).fill('#eff6ff');
+        doc.fontSize(13).fillColor('#1e40af').text('📷 Photos du Contrôle', 60, y + 7);
+        doc.fontSize(9).fillColor('#6b7280').text(`(${photos.length} photo${photos.length > 1 ? 's' : ''})`, 200, y + 9);
+        y += 38;
+
+        // Grid layout - 2 photos per row with larger size
+        const photoWidth = 235;
+        const photoHeight = 160;
+        const gap = 15;
+
+        for (let i = 0; i < photos.length; i++) {
+          const photo = photos[i];
+          const col = i % 2;
+          const x = 50 + col * (photoWidth + gap);
+
+          // Check page break - add new page if needed
+          if (i % 2 === 0 && y + photoHeight + 30 > 750) {
+            doc.addPage();
+            y = 50;
+          }
+
           try {
-            doc.image(photo.file_data, x, y, { width: 150, height: 100, fit: [150, 100] });
+            // Photo frame with shadow effect
+            doc.rect(x - 2, y - 2, photoWidth + 4, photoHeight + 4)
+               .fillAndStroke('#f8fafc', '#e2e8f0');
+
+            // Photo
+            doc.image(photo.file_data, x, y, {
+              width: photoWidth,
+              height: photoHeight,
+              fit: [photoWidth, photoHeight],
+              align: 'center',
+              valign: 'center'
+            });
+
+            // Caption below photo
             if (photo.caption) {
-              doc.fontSize(7).fillColor('#6b7280').text(photo.caption, x, y + 105, { width: 150 });
+              doc.fontSize(8).fillColor('#4b5563')
+                 .text(photo.caption, x, y + photoHeight + 4, {
+                   width: photoWidth,
+                   align: 'center',
+                   lineBreak: true
+                 });
             }
-            x += 170;
-            if (x > 400) { x = 50; y += 130; }
-            if (y > 700) { doc.addPage(); y = 50; x = 50; }
-          } catch (e) { /* ignore image errors */ }
+          } catch (e) {
+            // Show placeholder if image fails
+            doc.rect(x, y, photoWidth, photoHeight).fill('#f3f4f6');
+            doc.fontSize(10).fillColor('#9ca3af')
+               .text('Image non disponible', x, y + photoHeight/2 - 5, { width: photoWidth, align: 'center' });
+          }
+
+          // Move to next row after 2 photos
+          if (col === 1) {
+            y += photoHeight + (photos[i]?.caption ? 25 : 15);
+          }
+        }
+
+        // Handle odd number of photos
+        if (photos.length % 2 !== 0) {
+          y += photoHeight + (photos[photos.length - 1]?.caption ? 25 : 15);
+        }
+      }
+
+      // Documents Section - Links
+      if (documents.length > 0) {
+        if (y > 680) { doc.addPage(); y = 50; }
+        y += 15;
+
+        // Section header
+        doc.rect(50, y, 495, 28).fill('#fef3c7');
+        doc.fontSize(13).fillColor('#92400e').text('📎 Documents Joints', 60, y + 7);
+        doc.fontSize(9).fillColor('#78716c').text(`(${documents.length} fichier${documents.length > 1 ? 's' : ''})`, 200, y + 9);
+        y += 38;
+
+        // List documents
+        for (const doc_file of documents) {
+          if (y > 750) { doc.addPage(); y = 50; }
+
+          // Document item with icon
+          doc.rect(50, y, 495, 24).fill('#fffbeb');
+          doc.fontSize(10).fillColor('#374151')
+             .text(`📄 ${doc_file.file_name || 'Document'}`, 60, y + 7);
+
+          if (doc_file.caption) {
+            doc.fontSize(8).fillColor('#6b7280')
+               .text(doc_file.caption, 300, y + 8, { width: 230, align: 'right' });
+          }
+          y += 28;
         }
       }
     }

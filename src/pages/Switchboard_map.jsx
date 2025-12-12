@@ -268,13 +268,16 @@ const SwitchboardCard = ({
   isPlacedSomewhere,
   isPlacedElsewhere,
   isSelected,
+  controlStatus, // { status: 'ok'|'pending'|'overdue', template_name }
   onClick,
   onPlace,
 }) => {
+  const isOverdue = controlStatus?.status === 'overdue';
+
   return (
     <div
       className={`p-3 rounded-xl border transition-all cursor-pointer group
-        ${
+        ${isOverdue ? "bg-red-50 border-red-300 ring-2 ring-red-200 animate-pulse" :
           isSelected
             ? "bg-blue-50 border-blue-300 shadow-sm"
             : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"
@@ -286,6 +289,7 @@ const SwitchboardCard = ({
           <div className="flex items-center gap-2 flex-wrap">
             <span
               className={`font-mono font-semibold text-sm ${
+                isOverdue ? "text-red-700" :
                 isSelected ? "text-blue-700" : "text-gray-900"
               }`}
             >
@@ -295,9 +299,13 @@ const SwitchboardCard = ({
             {isPlacedElsewhere && (
               <Badge variant="purple">Placé ailleurs</Badge>
             )}
+            {isOverdue && (
+              <Badge variant="danger">⚠️ Contrôle en retard</Badge>
+            )}
           </div>
           <p
             className={`text-xs truncate mt-0.5 ${
+              isOverdue ? "text-red-600" :
               isSelected ? "text-blue-600" : "text-gray-500"
             }`}
           >
@@ -313,6 +321,11 @@ const SwitchboardCard = ({
               {board.meta?.floor || "-"}
             </span>
           </div>
+          {isOverdue && controlStatus?.template_name && (
+            <div className="mt-1 text-xs text-red-600 font-medium">
+              📋 {controlStatus.template_name}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-1">
@@ -473,6 +486,7 @@ const SwitchboardLeafletViewer = forwardRef(
       pageIndex = 0,
       initialPoints = [],
       selectedId = null,
+      controlStatuses = {}, // { switchboard_id: { status: 'ok'|'pending'|'overdue' } }
       onReady,
       onMovePoint,
       onClickPoint,
@@ -513,6 +527,9 @@ const SwitchboardLeafletViewer = forwardRef(
     // Ref pour onCreatePoint (éviter rechargement du PDF quand le callback change)
     const onCreatePointRef = useRef(onCreatePoint);
 
+    // Ref for control statuses
+    const controlStatusesRef = useRef(controlStatuses);
+
     const ICON_PX = 22;
     const ICON_PX_SELECTED = 30;
     const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
@@ -527,6 +544,15 @@ const SwitchboardLeafletViewer = forwardRef(
       onCreatePointRef.current = onCreatePoint;
     }, [onCreatePoint]);
 
+    // Keep controlStatuses ref in sync and redraw markers when it changes
+    useEffect(() => {
+      controlStatusesRef.current = controlStatuses;
+      // Redraw markers to update overdue status
+      if (mapRef.current && imgSize.w > 0) {
+        drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+      }
+    }, [controlStatuses]);
+
     // Update selectedIdRef when prop changes
     useEffect(() => {
       selectedIdRef.current = selectedId;
@@ -536,20 +562,30 @@ const SwitchboardLeafletViewer = forwardRef(
       }
     }, [selectedId]);
 
-    function makeSwitchboardIcon(isPrincipal = false, isSelected = false) {
+    function makeSwitchboardIcon(isPrincipal = false, isSelected = false, switchboardId = null) {
       const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-      
+
+      // Check control status for this switchboard
+      const controlStatus = switchboardId ? controlStatusesRef.current[switchboardId] : null;
+      const isOverdue = controlStatus?.status === 'overdue';
+
       let bg;
+      let animClass = "";
+
       if (isSelected) {
         // Violet/bleu pulsant pour la sélection
         bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+        animClass = "sb-marker-selected";
+      } else if (isOverdue) {
+        // ROUGE CLIGNOTANT pour contrôle en retard
+        bg = "background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);";
+        animClass = "sb-marker-overdue";
       } else if (isPrincipal) {
         bg = "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);";
       } else {
         bg = "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
       }
-      
-      const animClass = isSelected ? "sb-marker-selected" : "";
+
       const html = `
         <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
           <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" xmlns="http://www.w3.org/2000/svg">
@@ -582,7 +618,7 @@ const SwitchboardLeafletViewer = forwardRef(
 
           const latlng = L.latLng(y, x);
           const isSelected = p.switchboard_id === selectedIdRef.current;
-          const icon = makeSwitchboardIcon(!!p.is_principal, isSelected);
+          const icon = makeSwitchboardIcon(!!p.is_principal, isSelected, p.switchboard_id);
 
           const mk = L.marker(latlng, {
             icon,
@@ -1186,6 +1222,9 @@ export default function SwitchboardMap() {
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null); // { position, x, y }
 
+  // Control status for each switchboard { id: { status: 'ok'|'pending'|'overdue' } }
+  const [controlStatuses, setControlStatuses] = useState({});
+
   // confirm modal state
   const [confirmState, setConfirmState] = useState({
     open: false,
@@ -1231,6 +1270,7 @@ export default function SwitchboardMap() {
   useEffect(() => {
     loadPlans();
     loadSwitchboards();
+    loadControlStatuses();
   }, []);
 
   // Restore plan from URL params or localStorage after plans loaded
@@ -1361,6 +1401,42 @@ export default function SwitchboardMap() {
       console.error("Erreur chargement switchboards:", err);
     } finally {
       setLoadingSwitchboards(false);
+    }
+  };
+
+  // Load control statuses to show overdue switchboards in red
+  const loadControlStatuses = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/switchboard/controls/schedules`, {
+        headers: { 'X-Site': api.site, ...userHeaders() },
+        credentials: 'include'
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const schedules = data.schedules || [];
+
+      const statuses = {};
+      const now = new Date();
+      schedules.forEach(s => {
+        const boardId = s.switchboard_id;
+        if (!boardId) return;
+        const nextDue = s.next_due ? new Date(s.next_due) : null;
+        if (!nextDue) return;
+
+        const isOverdue = nextDue < now;
+        const existing = statuses[boardId];
+        // Prioritize overdue status
+        if (!existing || (isOverdue && existing.status !== 'overdue')) {
+          statuses[boardId] = {
+            status: isOverdue ? 'overdue' : 'pending',
+            next_due: nextDue,
+            template_name: s.template_name
+          };
+        }
+      });
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.warn('Load control statuses error:', e);
     }
   };
 
@@ -1647,6 +1723,21 @@ export default function SwitchboardMap() {
         .sb-marker-flash > div {
           animation: flash-marker 2s ease-in-out;
         }
+        @keyframes blink-overdue {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.15);
+            box-shadow: 0 0 12px 4px rgba(220, 38, 38, 0.5);
+            opacity: 0.85;
+          }
+        }
+        .sb-marker-overdue > div {
+          animation: blink-overdue 1s ease-in-out infinite;
+        }
         .sb-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
@@ -1681,6 +1772,22 @@ export default function SwitchboardMap() {
               <Badge variant="default">Total: {stats.total}</Badge>
               <Badge variant="success">Placés: {stats.placed}</Badge>
               <Badge variant="warning">Non placés: {stats.unplaced}</Badge>
+            </div>
+
+            {/* Légende des couleurs */}
+            <div className="hidden sm:flex items-center gap-2 text-xs border-l pl-2 ml-1">
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500" title="Principal"></span>
+                <span className="text-gray-500">Principal</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-full bg-gradient-to-br from-yellow-400 to-amber-500" title="Standard"></span>
+                <span className="text-gray-500">Standard</span>
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-3 rounded-full bg-gradient-to-br from-red-400 to-red-600 animate-pulse" title="Contrôle en retard"></span>
+                <span className="text-red-600 font-medium">En retard</span>
+              </span>
             </div>
 
             <Btn
@@ -1769,6 +1876,7 @@ export default function SwitchboardMap() {
                       isPlacedSomewhere={isPlacedSomewhere}
                       isPlacedElsewhere={isPlacedElsewhere}
                       isSelected={isSelected}
+                      controlStatus={controlStatuses[b.id]}
                       onClick={() => handleSwitchboardClick(b)}
                       onPlace={handlePlaceBoard}
                     />
@@ -1878,6 +1986,7 @@ export default function SwitchboardMap() {
                   pageIndex={pageIndex}
                   initialPoints={initialPoints}
                   selectedId={selectedSwitchboardId}
+                  controlStatuses={controlStatuses}
                   placementActive={!!placementMode}
                   onReady={() => {
                     setPdfReady(true);
