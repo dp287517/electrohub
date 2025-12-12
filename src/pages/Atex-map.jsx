@@ -156,14 +156,38 @@ function fromLatLngToFrac(latlng, baseLayer) {
   const yf = (latlng.lat - b.getSouth()) / H;
   return { xf: Math.min(1, Math.max(0, xf)), yf: Math.min(1, Math.max(0, yf)) };
 }
-function makeEquipIcon(status, isUnsaved) {
-  const s = ICON_PX;
+// 🔥 Nouveau design des marqueurs ATEX avec icône SVG et gradient (style Switchboard)
+const ICON_PX_SELECTED = 30;
+
+// Gradients par statut pour un design moderne
+const STATUS_GRADIENT = {
+  a_faire: { from: "#34d399", to: "#059669" },      // Vert emeraude
+  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
+  en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
+  fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
+};
+
+// Icône SVG flamme ATEX
+const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
+</svg>`;
+
+function makeEquipIcon(status, isUnsaved, isSelected = false) {
+  const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+
+  // Marqueur non sauvegardé (nouveau)
   if (isUnsaved) {
-    const html = `<div style="
-      width:${s}px;height:${s}px;border-radius:9999px;
-      background:#2563eb;border:2px solid #93c5fd;
-      box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
-    "></div>`;
+    const html = `
+      <div class="atex-marker-new${isSelected ? ' atex-marker-selected' : ''}" style="
+        width:${s}px;height:${s}px;border-radius:9999px;
+        background: radial-gradient(circle at 30% 30%, #93c5fd, #2563eb);
+        border:2px solid white;
+        box-shadow:0 4px 10px rgba(0,0,0,.25);
+        display:flex;align-items:center;justify-content:center;
+        transition:all 0.2s ease;
+      ">
+        ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
+      </div>`;
     return L.divIcon({
       className: "atex-marker-inline",
       html,
@@ -172,12 +196,32 @@ function makeEquipIcon(status, isUnsaved) {
       popupAnchor: [0, -Math.round(s / 2)],
     });
   }
-  const map = STATUS_COLOR[status] || STATUS_COLOR.fait;
-  const html = `<div class="${status === "en_retard" ? "blink-red" : status === "en_cours_30" ? "blink-orange" : ""}" style="
-    width:${s}px;height:${s}px;border-radius:9999px;
-    background:${map.fill};border:2px solid ${map.border};
-    box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
-  "></div>`;
+
+  // Récupère le gradient pour ce statut
+  const grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
+
+  // Classes d'animation
+  let animClass = "";
+  if (isSelected) {
+    animClass = "atex-marker-selected";
+  } else if (status === "en_retard") {
+    animClass = "atex-marker-pulse-red";
+  } else if (status === "en_cours_30") {
+    animClass = "atex-marker-pulse-orange";
+  }
+
+  const html = `
+    <div class="${animClass}" style="
+      width:${s}px;height:${s}px;border-radius:9999px;
+      background: radial-gradient(circle at 30% 30%, ${grad.from}, ${grad.to});
+      border:2px solid white;
+      box-shadow:0 4px 10px rgba(0,0,0,.25);
+      display:flex;align-items:center;justify-content:center;
+      transition:all 0.2s ease;
+    ">
+      ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
+    </div>`;
+
   return L.divIcon({
     className: "atex-marker-inline",
     html,
@@ -284,59 +328,82 @@ function addLegendControl(map) {
       );
 
       // ✅ Styles pour éviter que la légende soit rognée ou sorte du cadre
-      el.style.maxWidth = "280px";
-      el.style.marginBottom = "12px"; // espace par rapport au bas de la carte
-      el.style.marginRight = "12px";  // espace par rapport au bord droit
-      el.style.pointerEvents = "auto"; // clics sur la légende autorisés
-      el.style.overflowY = "auto"; // scroll si le contenu dépasse
-      el.style.maxHeight = "160px"; // limite la hauteur totale visible
+      el.style.maxWidth = "300px";
+      el.style.marginBottom = "12px";
+      el.style.marginRight = "12px";
+      el.style.pointerEvents = "auto";
+      el.style.overflowY = "auto";
+      el.style.maxHeight = "220px";
       el.style.borderRadius = "0.75rem";
-      el.style.boxShadow = "0 2px 6px rgba(0,0,0,0.15)";
+      el.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
 
-      // ✅ Contenu de la légende
+      // ✅ Contenu de la légende avec les nouveaux marqueurs
       el.innerHTML = `
-        <div class="text-xs font-semibold mb-1">Légende ATEX</div>
-        <div class="text-[11px] text-gray-600 mb-1">
-          Remplissage = <b>Poussière</b> • Bordure = <b>Gaz</b>
+        <div class="text-xs font-semibold mb-2">Légende ATEX</div>
+
+        <!-- Section Marqueurs avec nouveaux gradients -->
+        <div class="text-[11px] text-gray-600 mb-2 font-medium">Équipements</div>
+        <div class="flex flex-wrap items-center gap-3 mb-3 text-[11px]">
+          <span class="inline-flex items-center gap-1">
+            <span class="w-4 h-4 rounded-full flex items-center justify-center" style="background:radial-gradient(circle at 30% 30%, #34d399, #059669);">
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="white"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>
+            </span>
+            À faire
+          </span>
+          <span class="inline-flex items-center gap-1">
+            <span class="w-4 h-4 rounded-full flex items-center justify-center" style="background:radial-gradient(circle at 30% 30%, #fbbf24, #f59e0b);">
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="white"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>
+            </span>
+            ≤90j
+          </span>
+          <span class="inline-flex items-center gap-1">
+            <span class="w-4 h-4 rounded-full flex items-center justify-center" style="background:radial-gradient(circle at 30% 30%, #fb7185, #e11d48);">
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="white"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>
+            </span>
+            En retard
+          </span>
+          <span class="inline-flex items-center gap-1">
+            <span class="w-4 h-4 rounded-full flex items-center justify-center" style="background:radial-gradient(circle at 30% 30%, #60a5fa, #2563eb);">
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="white"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>
+            </span>
+            Fait
+          </span>
         </div>
+
+        <!-- Section Zones -->
+        <div class="text-[11px] text-gray-600 mb-1 font-medium">Zones (Bordure=Gaz • Remplissage=Poussière)</div>
         <div class="grid grid-cols-2 gap-2 text-[11px]">
           <div>
-            <div class="font-medium mb-1">Gaz</div>
+            <div class="font-medium mb-1 text-gray-500">Gaz</div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[0]}"></span>
+              <span class="w-3 h-3 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[0]}"></span>
               Zone 0
             </div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
+              <span class="w-3 h-3 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
               Zone 1
             </div>
             <div class="flex items-center gap-2">
-              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[2]}"></span>
+              <span class="w-3 h-3 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[2]}"></span>
               Zone 2
             </div>
           </div>
           <div>
-            <div class="font-medium mb-1">Poussière</div>
+            <div class="font-medium mb-1 text-gray-500">Poussière</div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[20]}"></span> Zone 20
+              <span class="w-3 h-3 rounded-sm" style="background:${DUST_FILL[20]}"></span> Zone 20
             </div>
             <div class="flex items-center gap-2 mb-1">
-              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[21]}"></span> Zone 21
+              <span class="w-3 h-3 rounded-sm" style="background:${DUST_FILL[21]}"></span> Zone 21
             </div>
             <div class="flex items-center gap-2">
-              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[22]}"></span> Zone 22
+              <span class="w-3 h-3 rounded-sm" style="background:${DUST_FILL[22]}"></span> Zone 22
             </div>
           </div>
         </div>
-        <div class="mt-2 text-[10px] text-gray-500">
-          Exemple : remplissage 
-          <span class="inline-block w-3 h-3 align-middle rounded-sm" style="background:${DUST_FILL[21]}"></span>
-          &nbsp;bordure 
-          <span class="inline-block w-3 h-3 align-middle rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
-        </div>
       `;
 
-      // ✅ Empêche les scrolls/clics de la légende d’impacter la carte
+      // ✅ Empêche les scrolls/clics de la légende d'impacter la carte
       L.DomEvent.disableScrollPropagation(el);
       L.DomEvent.disableClickPropagation(el);
 
@@ -581,7 +648,11 @@ export default function AtexMap({
           }
           renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
           await renderTaskRef.current.promise;
-          const dataUrl = canvas.toDataURL("image/png");
+
+          // 🚀 Optimisation : JPEG pour mobile (plus léger), PNG pour PC (meilleure qualité)
+          const format = isMobileDevice() ? "image/jpeg" : "image/png";
+          const quality = isMobileDevice() ? 0.85 : 1.0;
+          const dataUrl = canvas.toDataURL(format, quality);
           setImgSize({ w: canvas.width, h: canvas.height });
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
@@ -2134,17 +2205,32 @@ function setupHandleDrag(map, onMoveCallback) {
   // --- Modal plein écran
   return (
     <>
-      {/* Indicateur de chargement PDF */}
+      {/* Indicateur de chargement PDF - Design moderne avec icône ATEX */}
       {pdfLoading && (
-        <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-[9999]">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm mx-4">
-            <div className="text-center space-y-4">
-              <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto"></div>
-              <div className="font-medium text-gray-700">Chargement du plan...</div>
-              <div className="text-sm text-gray-500">
-                {isMobileDevice() 
-                  ? "Optimisation mobile en cours..." 
-                  : "Rendu haute qualité..."}
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4 border">
+            <div className="text-center space-y-5">
+              {/* Icône ATEX animée */}
+              <div className="relative mx-auto w-20 h-20">
+                <div className="absolute inset-0 rounded-full border-4 border-gray-200"></div>
+                <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-emerald-500 animate-spin"></div>
+                <div className="absolute inset-2 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" className="w-8 h-8 fill-white animate-pulse">
+                    <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
+                  </svg>
+                </div>
+              </div>
+              <div>
+                <div className="font-semibold text-gray-800 text-lg">Chargement du plan ATEX</div>
+                <div className="text-sm text-gray-500 mt-1">
+                  {isMobileDevice()
+                    ? "Optimisation mobile en cours..."
+                    : "Rendu haute qualité..."}
+                </div>
+              </div>
+              {/* Barre de progression simulée */}
+              <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                <div className="bg-gradient-to-r from-emerald-400 to-emerald-600 h-full rounded-full animate-progress"></div>
               </div>
             </div>
           </div>
