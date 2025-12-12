@@ -2325,6 +2325,57 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
+            {/* Control Status Section */}
+            <AnimatedCard delay={50}>
+              <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-xl ${
+                      controlStatuses[selectedBoard.id]?.status === 'overdue' ? 'bg-red-100' :
+                      controlStatuses[selectedBoard.id]?.status === 'pending' ? 'bg-blue-100' : 'bg-gray-100'
+                    }`}>
+                      <ClipboardCheck size={20} className={
+                        controlStatuses[selectedBoard.id]?.status === 'overdue' ? 'text-red-600' :
+                        controlStatuses[selectedBoard.id]?.status === 'pending' ? 'text-blue-600' : 'text-gray-400'
+                      } />
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-gray-900">Contrôles</h4>
+                      {controlStatuses[selectedBoard.id] ? (
+                        <p className={`text-sm ${
+                          controlStatuses[selectedBoard.id].status === 'overdue' ? 'text-red-600' :
+                          controlStatuses[selectedBoard.id].status === 'pending' ? 'text-blue-600' : 'text-gray-500'
+                        }`}>
+                          {controlStatuses[selectedBoard.id].status === 'overdue'
+                            ? `⚠️ En retard - ${controlStatuses[selectedBoard.id].template_name}`
+                            : `Prochain: ${new Date(controlStatuses[selectedBoard.id].next_due).toLocaleDateString('fr-FR')}`
+                          }
+                        </p>
+                      ) : (
+                        <p className="text-sm text-gray-400">Aucun contrôle planifié</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigate(`/app/switchboard-controls?tab=history&switchboard=${selectedBoard.id}`)}
+                      className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                    >
+                      <History size={14} />
+                      Historique
+                    </button>
+                    <button
+                      onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
+                      className="px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
+                    >
+                      <ClipboardCheck size={14} />
+                      Gérer
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </AnimatedCard>
+
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-gray-900">Disjoncteurs ({devices.length})</h3>
               <button onClick={() => setShowDeviceForm(true)} className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-2">
