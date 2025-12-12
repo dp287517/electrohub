@@ -51,8 +51,8 @@ const arcflashTarget     = process.env.ARCFLASH_BASE_URL      || "http://127.0.0
 const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL  || "http://127.0.0.1:3007";
 const hvTarget           = process.env.HV_BASE_URL            || "http://127.0.0.1:3008";
 const diagramTarget      = process.env.DIAGRAM_BASE_URL       || "http://127.0.0.1:3009";
-// ⚠️ Correction ici : Controls écoute chez toi sur 3011
-const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3011";
+// Controls ancien système supprimé - remplacé par switchboard-controls intégré à server_switchboard.js
+// const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3011";
 const oibtTarget         = process.env.OIBT_BASE_URL          || "http://127.0.0.1:3012";
 const projectsTarget     = process.env.PROJECTS_BASE_URL      || "http://127.0.0.1:3013";
 // 🔵 Comp-Ext (prestataires externes) — nouveau microservice sur 3014
@@ -132,7 +132,8 @@ app.use("/api/arcflash",     mkProxy(arcflashTarget));
 app.use("/api/obsolescence", mkProxy(obsolescenceTarget));
 app.use("/api/hv",           mkProxy(hvTarget));
 app.use("/api/diagram",      mkProxy(diagramTarget));
-app.use("/api/controls",     mkProxy(controlsTarget));   // <-- corrige le 404 Controls
+// Controls supprimé - switchboard-controls intégré à server_switchboard.js
+// app.use("/api/controls",     mkProxy(controlsTarget));
 app.use("/api/oibt",         mkProxy(oibtTarget));
 app.use("/api/dcf", mkProxy(dcfTarget, { withRestream: true }));
 
