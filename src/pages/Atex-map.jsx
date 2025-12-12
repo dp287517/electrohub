@@ -1010,63 +1010,57 @@ export default function AtexMap({
           const { xf, yf } = fromLatLngToFrac(ll, base);
           log("marker dragend", { id: p.id, xFrac: xf, yFrac: yf });
 
-          // 🚀 DÉTECTION DE ZONE CÔTÉ FRONTEND (instantané, pas de timeout!)
-          const containingZone = findContainingSubarea(xf, yf, subareasById);
-          log("Zone détectée côté frontend", { zone: containingZone?.name, zoning_gas: containingZone?.zoning_gas, zoning_dust: containingZone?.zoning_dust });
+          try {
+            // 1️⃣ DÉTECTION DE ZONE CÔTÉ FRONTEND (instantané)
+            const containingZone = findContainingSubarea(xf, yf, subareasById);
+            log("Zone détectée", {
+              zone: containingZone?.name,
+              zoning_gas: containingZone?.zoning_gas,
+              zoning_dust: containingZone?.zoning_dust,
+              sub_equipment: containingZone?.name
+            });
 
-          // 1️⃣ Appliquer les zones IMMÉDIATEMENT (côté frontend)
-          if (containingZone) {
-            try {
+            // 2️⃣ SAUVEGARDER LA POSITION - AWAIT comme Switchboard!
+            await api.atexMaps.setPosition(p.id, {
+              logical_name: plan?.logical_name,
+              plan_id: plan?.id,
+              page_index: pageIndex,
+              x_frac: Math.round(xf * 1e6) / 1e6,
+              y_frac: Math.round(yf * 1e6) / 1e6,
+            });
+            log("setPosition OK");
+
+            // 3️⃣ METTRE À JOUR L'ÉQUIPEMENT AVEC LES INFOS DE ZONE
+            if (containingZone) {
+              await api.atex.updateEquipment(p.id, {
+                sub_equipment: containingZone.name || null,
+                zoning_gas: containingZone.zoning_gas ?? null,
+                zoning_dust: containingZone.zoning_dust ?? null,
+                equipment: plan?.display_name || plan?.logical_name || null,
+              });
+              log("Equipment zone info updated", { sub: containingZone.name, gas: containingZone.zoning_gas, dust: containingZone.zoning_dust });
+
+              // Notifier le parent des zones appliquées
               onZonesApplied?.(p.id, {
                 zoning_gas: containingZone.zoning_gas ?? null,
                 zoning_dust: containingZone.zoning_dust ?? null,
               });
-            } catch {}
-
-            // Mettre à jour l'équipement avec les infos de zone
-            updateEquipmentMacroAndSub(p.id, containingZone.id, containingZone.name).catch(() => {});
-          }
-
-          // 2️⃣ Mettre à jour l'état LOCAL immédiatement (pas de reload backend)
-          // On met à jour positionsRef pour que le marqueur reste à sa nouvelle position
-          const posIdx = positionsRef.current.findIndex(pos => pos.id === p.id);
-          if (posIdx >= 0) {
-            positionsRef.current[posIdx] = {
-              ...positionsRef.current[posIdx],
-              x_frac: Math.round(xf * 1e6) / 1e6,
-              y_frac: Math.round(yf * 1e6) / 1e6,
-              // Mettre à jour les zones détectées localement
-              zoning_gas: containingZone?.zoning_gas ?? positionsRef.current[posIdx].zoning_gas,
-              zoning_dust: containingZone?.zoning_dust ?? positionsRef.current[posIdx].zoning_dust,
-            };
-          }
-
-          // 3️⃣ Sauvegarder la position - ATTENDRE la réponse (pas de timeout abort!)
-          const savePosition = async (retries = 3) => {
-            for (let attempt = 1; attempt <= retries; attempt++) {
-              try {
-                const resp = await api.atexMaps.setPosition(p.id, {
-                  logical_name: plan?.logical_name,
-                  plan_id: plan?.id,
-                  page_index: pageIndex,
-                  x_frac: Math.round(xf * 1e6) / 1e6,
-                  y_frac: Math.round(yf * 1e6) / 1e6,
-                });
-                log("setPosition success", { attempt, raw: safeJson(resp) });
-                return resp;
-              } catch (e) {
-                console.warn(`[ATEX] setPosition attempt ${attempt}/${retries} failed:`, e?.message || e);
-                if (attempt < retries) {
-                  await new Promise(r => setTimeout(r, 1000 * attempt)); // exponential backoff
-                }
-              }
             }
-          };
-          savePosition(); // fire and forget avec retry
 
-          // ❌ Plus de loadPositions() ici ! On garde la position locale
+            // 4️⃣ RECHARGER LES POSITIONS DEPUIS LE BACKEND (comme Switchboard!)
+            await loadPositions();
+            log("Positions rechargées après drag");
 
-          draggingRef.current = false;
+            // 5️⃣ Notifier le parent pour rafraîchir la liste des équipements
+            onMetaChanged?.();
+
+          } catch (e) {
+            console.error("[ATEX] Erreur lors du déplacement:", e);
+            // En cas d'erreur, recharger quand même pour avoir l'état correct
+            await loadPositions().catch(() => {});
+          } finally {
+            draggingRef.current = false;
+          }
         });
         mk.on("click", () => {
           onOpenEquipment?.({

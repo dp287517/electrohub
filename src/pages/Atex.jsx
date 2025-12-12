@@ -430,33 +430,54 @@ export default function Atex() {
     if (!eq?.id) return;
     setSelectedEquipmentId(eq.id);
 
-    // Si on a building/zone, trouver le plan correspondant
-    if (eq.building || eq.zone) {
-      // Charger les plans si pas encore fait
+    try {
+      // 1. Charger les plans si pas encore fait
       let availablePlans = plans;
       if (availablePlans.length === 0) {
-        try {
-          const res = await api.atexMaps.listPlans();
-          availablePlans = res?.plans || [];
-          setPlans(availablePlans);
-        } catch (e) {
-          console.warn("[ATEX] loadPlans error:", e);
-        }
+        const res = await api.atexMaps.listPlans();
+        availablePlans = res?.plans || [];
+        setPlans(availablePlans);
       }
-      // Trouver un plan correspondant
-      const matchingPlan = availablePlans.find(
-        p => p.building === eq.building && p.zone === eq.zone
-      ) || availablePlans.find(
-        p => p.building === eq.building
-      ) || availablePlans[0];
 
-      if (matchingPlan) {
-        setSelectedPlan(matchingPlan);
-        setMapRefreshTick(t => t + 1);
+      if (availablePlans.length === 0) {
+        setToast("Aucun plan ATEX disponible");
+        setActiveTab("plans");
+        return;
       }
+
+      // 2. Trouver le plan correspondant à l'équipement
+      let matchingPlan = null;
+
+      // Priorité 1: correspondance exacte building + zone
+      if (eq.building && eq.zone) {
+        matchingPlan = availablePlans.find(
+          p => p.building === eq.building && p.zone === eq.zone
+        );
+      }
+
+      // Priorité 2: correspondance building uniquement
+      if (!matchingPlan && eq.building) {
+        matchingPlan = availablePlans.find(p => p.building === eq.building);
+      }
+
+      // Priorité 3: premier plan disponible
+      if (!matchingPlan) {
+        matchingPlan = availablePlans[0];
+      }
+
+      // 3. Sélectionner le plan et forcer le refresh
+      setSelectedPlan(matchingPlan);
+      setMapRefreshTick(t => t + 1);
+
+      // 4. Basculer vers l'onglet Plans
+      setActiveTab("plans");
+      setToast(`🔍 ${eq.name || "Équipement"} sur ${matchingPlan?.display_name || matchingPlan?.logical_name || "le plan"}`);
+
+    } catch (e) {
+      console.error("[ATEX] goToEquipmentOnMap error:", e);
+      setActiveTab("plans");
+      setToast("Erreur lors de la navigation");
     }
-    setActiveTab("plans");
-    setToast(`Navigation vers ${eq.name || "l'équipement"} sur la carte`);
   }
 
   /* ----------------------------- UI Components ----------------------------- */
@@ -733,45 +754,45 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
       purple: "bg-purple-50 text-purple-800 border-purple-200",
     };
     return (
-      <div className={`rounded-xl p-4 border ${colors[color]}`}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm opacity-75">{label}</p>
-            <p className="text-3xl font-bold mt-1">{value}</p>
+      <div className={`rounded-xl p-3 sm:p-4 border ${colors[color]}`}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs sm:text-sm opacity-75 truncate">{label}</p>
+            <p className="text-xl sm:text-3xl font-bold mt-0.5 sm:mt-1">{value}</p>
           </div>
-          <span className="text-3xl">{icon}</span>
+          <span className="text-2xl sm:text-3xl shrink-0">{icon}</span>
         </div>
       </div>
     );
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total équipements" value={stats.total} color="blue" icon="📦" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
+        <StatCard label="Total" value={stats.total} color="blue" icon="📦" />
         <StatCard label="Conformes" value={stats.conforme} color="green" icon="✅" />
-        <StatCard label="Non conformes" value={stats.nonConforme} color="red" icon="⚠️" />
+        <StatCard label="Non conf." value={stats.nonConforme} color="red" icon="⚠️" />
         <StatCard label="En retard" value={stats.enRetard} color="orange" icon="🕐" />
       </div>
 
       {/* Zones Stats */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 sm:p-4">
           <div className="flex items-center gap-3">
-            <span className="text-2xl">💨</span>
+            <span className="text-xl sm:text-2xl">💨</span>
             <div>
-              <p className="text-sm text-amber-700">Zones Gaz (0/1/2)</p>
-              <p className="text-2xl font-bold text-amber-800">{stats.zonesGaz} équipements</p>
+              <p className="text-xs sm:text-sm text-amber-700">Zones Gaz (0/1/2)</p>
+              <p className="text-lg sm:text-2xl font-bold text-amber-800">{stats.zonesGaz} éq.</p>
             </div>
           </div>
         </div>
-        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 sm:p-4">
           <div className="flex items-center gap-3">
-            <span className="text-2xl">🌫️</span>
+            <span className="text-xl sm:text-2xl">🌫️</span>
             <div>
-              <p className="text-sm text-orange-700">Zones Poussière (20/21/22)</p>
-              <p className="text-2xl font-bold text-orange-800">{stats.zonesDust} équipements</p>
+              <p className="text-xs sm:text-sm text-orange-700">Zones Poussière (20/21/22)</p>
+              <p className="text-lg sm:text-2xl font-bold text-orange-800">{stats.zonesDust} éq.</p>
             </div>
           </div>
         </div>
@@ -779,29 +800,28 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
 
       {/* Overdue Alerts */}
       {overdueList.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <h3 className="font-semibold text-red-800 mb-3 flex items-center gap-2">
-            <span>⚠️</span> Contrôles en retard ({overdueList.length})
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 sm:p-4">
+          <h3 className="font-semibold text-red-800 mb-2 sm:mb-3 flex items-center gap-2 text-sm sm:text-base">
+            <span>⚠️</span> En retard ({overdueList.length})
           </h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {overdueList.slice(0, 10).map((eq) => (
-              <div key={eq.id} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
-                <div>
-                  <span className="font-medium">{eq.name || eq.type || "Équipement"}</span>
-                  <span className="mx-2 text-gray-400">•</span>
-                  <span className="text-gray-600">{eq.building || "—"} / {eq.zone || "—"}</span>
-                  {eq.next_check_date && (
-                    <span className="ml-2 text-red-600 text-sm">
-                      Dû le {dayjs(eq.next_check_date).format("DD/MM/YYYY")}
-                    </span>
-                  )}
+              <div key={eq.id} className="bg-white rounded-lg p-2.5 sm:p-3 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{eq.name || eq.type || "Équipement"}</p>
+                    <p className="text-xs text-gray-500 truncate">{eq.building || "—"} / {eq.zone || "—"}</p>
+                    {eq.next_check_date && (
+                      <p className="text-xs text-red-600 mt-0.5">Dû le {dayjs(eq.next_check_date).format("DD/MM/YY")}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => onOpenEquipment(eq)}
+                    className="w-full sm:w-auto px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-xs sm:text-sm font-medium shrink-0"
+                  >
+                    Contrôler
+                  </button>
                 </div>
-                <button
-                  onClick={() => onOpenEquipment(eq)}
-                  className="px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
-                >
-                  Contrôler
-                </button>
               </div>
             ))}
           </div>
@@ -810,27 +830,26 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
 
       {/* Upcoming */}
       {upcomingList.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <h3 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
-            <span>📅</span> Contrôles à venir (30 jours)
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 sm:p-4">
+          <h3 className="font-semibold text-blue-800 mb-2 sm:mb-3 flex items-center gap-2 text-sm sm:text-base">
+            <span>📅</span> À venir (30j)
           </h3>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {upcomingList.slice(0, 10).map((eq) => (
-              <div key={eq.id} className="flex items-center justify-between bg-white rounded-lg p-3 shadow-sm">
-                <div>
-                  <span className="font-medium">{eq.name || eq.type || "Équipement"}</span>
-                  <span className="mx-2 text-gray-400">•</span>
-                  <span className="text-gray-600">{eq.building || "—"} / {eq.zone || "—"}</span>
-                  <span className="ml-2 text-blue-600 text-sm">
-                    Prévu le {dayjs(eq.next_check_date).format("DD/MM/YYYY")}
-                  </span>
+              <div key={eq.id} className="bg-white rounded-lg p-2.5 sm:p-3 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{eq.name || eq.type || "Équipement"}</p>
+                    <p className="text-xs text-gray-500 truncate">{eq.building || "—"} / {eq.zone || "—"}</p>
+                    <p className="text-xs text-blue-600 mt-0.5">Prévu le {dayjs(eq.next_check_date).format("DD/MM/YY")}</p>
+                  </div>
+                  <button
+                    onClick={() => onOpenEquipment(eq)}
+                    className="w-full sm:w-auto px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs sm:text-sm font-medium shrink-0"
+                  >
+                    Voir
+                  </button>
                 </div>
-                <button
-                  onClick={() => onOpenEquipment(eq)}
-                  className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
-                >
-                  Voir
-                </button>
               </div>
             ))}
           </div>
