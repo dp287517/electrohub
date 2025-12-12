@@ -1082,11 +1082,14 @@ async function updateEquipmentContext({ equipment_id, logical_name, zoning_gas, 
   );
   return { plan_display_name: planDisplay, subarea_name: subName || null };
 }
+// ✅ VERSION OPTIMISÉE - réponse rapide, détection de zones en arrière-plan
 app.put("/api/atex/maps/setPosition", async (req, res) => {
   try {
     const { equipment_id, logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
+
+    // 1. Enregistrer la position immédiatement
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -1094,28 +1097,44 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
-    const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
-    const ctx = await updateEquipmentContext({
-      equipment_id,
-      logical_name,
-      zoning_gas: zones.zoning_gas,
-      zoning_dust: zones.zoning_dust,
-      subarea_id: zones.subarea_id,
-      subarea_name_hint: zones.subarea_name || null,
+
+    // 2. Répondre IMMÉDIATEMENT au frontend (UX rapide)
+    res.json({ ok: true, position_saved: true });
+
+    // 3. Mettre à jour le contexte de zone EN ARRIÈRE-PLAN (fire and forget)
+    setImmediate(async () => {
+      try {
+        const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
+        await updateEquipmentContext({
+          equipment_id,
+          logical_name,
+          zoning_gas: zones.zoning_gas,
+          zoning_dust: zones.zoning_dust,
+          subarea_id: zones.subarea_id,
+          subarea_name_hint: zones.subarea_name || null,
+        });
+      } catch (bgErr) {
+        console.error('[setPosition background] Error:', bgErr.message);
+      }
     });
-    res.json({ ok: true, zones, ...ctx });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+  } catch (e) {
+    console.error('[setPosition] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 app.post("/api/atex/maps/setPosition", async (req, res) => {
   req.method = "PUT";
   return app._router.handle(req, res);
 });
+// ✅ VERSION OPTIMISÉE - réponse rapide, zones en arrière-plan
 app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
   try {
     const equipment_id = String(req.params.equipmentId);
     const { logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
+
+    // 1. Enregistrer la position immédiatement
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -1123,43 +1142,125 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
-    const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
-    const ctx = await updateEquipmentContext({
-      equipment_id,
-      logical_name,
-      zoning_gas: zones.zoning_gas,
-      zoning_dust: zones.zoning_dust,
-      subarea_id: zones.subarea_id,
-      subarea_name_hint: zones.subarea_name || null,
+
+    // 2. Répondre IMMÉDIATEMENT
+    res.json({ ok: true, position_saved: true });
+
+    // 3. Mise à jour des zones en arrière-plan
+    setImmediate(async () => {
+      try {
+        const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
+        await updateEquipmentContext({
+          equipment_id,
+          logical_name,
+          zoning_gas: zones.zoning_gas,
+          zoning_dust: zones.zoning_dust,
+          subarea_id: zones.subarea_id,
+          subarea_name_hint: zones.subarea_name || null,
+        });
+      } catch (bgErr) {
+        console.error('[positions/:id background] Error:', bgErr.message);
+      }
     });
-    res.json({ ok: true, zones, ...ctx });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+  } catch (e) {
+    console.error('[positions/:id] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 // 🔧 Reindex (front l'appelle après modif des sous-zones)
+// ✅ VERSION OPTIMISÉE - Batch SQL au lieu de N requêtes séquentielles
 app.post("/api/atex/maps/reindexZones", async (req, res) => {
   try {
     const { logical_name, page_index = 0 } = req.body || {};
-    if (!logical_name) return res.status(400).json({ ok:false, error:"logical_name required" });
-    const { rows: pos } = await pool.query(
-      `SELECT equipment_id, x_frac, y_frac FROM atex_positions WHERE logical_name=$1 AND page_index=$2`,
-      [logical_name, Number(page_index)]
+    if (!logical_name) return res.status(400).json({ ok: false, error: "logical_name required" });
+
+    const pageIdx = Number(page_index);
+
+    // 1. Récupérer TOUTES les zones en UNE seule requête
+    const { rows: zones } = await pool.query(
+      `SELECT id, kind, x1, y1, x2, y2, cx, cy, r, points, zoning_gas, zoning_dust, name
+       FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
+      [logical_name, pageIdx]
     );
-    let updated = 0;
-    for (const p of pos) {
-      const z = await detectZonesForPoint(logical_name, Number(page_index), Number(p.x_frac), Number(p.y_frac));
-      await updateEquipmentContext({
-        equipment_id: p.equipment_id,
-        logical_name,
-        zoning_gas: z.zoning_gas,
-        zoning_dust: z.zoning_dust,
-        subarea_id: z.subarea_id,
-        subarea_name_hint: z.subarea_name || null,
-      });
-      updated++;
+
+    // 2. Récupérer TOUS les équipements positionnés en UNE seule requête
+    const { rows: positions } = await pool.query(
+      `SELECT equipment_id, x_frac, y_frac FROM atex_positions
+       WHERE logical_name=$1 AND page_index=$2`,
+      [logical_name, pageIdx]
+    );
+
+    if (positions.length === 0) {
+      return res.json({ ok: true, updated: 0 });
     }
-    await logEvent(req, "zones.reindex", { logical_name, page_index, updated });
-    res.json({ ok:true, updated });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+
+    // 3. Récupérer le display_name du plan UNE seule fois
+    const planDisplay = await getPlanDisplayName(logical_name);
+
+    // 4. Calculer les zones pour chaque position côté serveur (PAS de SQL dans la boucle)
+    const updates = [];
+    for (const p of positions) {
+      const xf = Number(p.x_frac);
+      const yf = Number(p.y_frac);
+
+      // Trouve la zone la plus petite qui contient ce point
+      const candidates = [];
+      for (const z of zones) {
+        let inside = false;
+        if (z.kind === "rect" && pointInRect(xf, yf, z.x1, z.y1, z.x2, z.y2)) inside = true;
+        else if (z.kind === "circle" && pointInCircle(xf, yf, z.cx, z.cy, z.r)) inside = true;
+        else if (z.kind === "poly" && Array.isArray(z.points) && pointInPoly(xf, yf, z.points)) inside = true;
+
+        if (inside) {
+          candidates.push({ ...z, area: getArea(z) });
+        }
+      }
+
+      // Tri par surface croissante - la plus petite zone gagne
+      candidates.sort((a, b) => a.area - b.area);
+      const winner = candidates[0] || null;
+
+      updates.push({
+        equipment_id: p.equipment_id,
+        zoning_gas: winner?.zoning_gas ?? null,
+        zoning_dust: winner?.zoning_dust ?? null,
+        subarea_name: (winner?.name || "").trim() || null
+      });
+    }
+
+    // 5. UPDATE BATCH - UNE seule requête SQL pour tous les équipements
+    if (updates.length > 0) {
+      const ids = updates.map(u => u.equipment_id);
+      const gasArr = updates.map(u => u.zoning_gas);
+      const dustArr = updates.map(u => u.zoning_dust);
+      const subNames = updates.map(u => u.subarea_name);
+
+      await pool.query(`
+        UPDATE atex_equipments e
+        SET zoning_gas = u.zoning_gas,
+            zoning_dust = u.zoning_dust,
+            equipment = $5,
+            sub_equipment = COALESCE(u.sub_name, e.sub_equipment),
+            updated_at = now()
+        FROM (
+          SELECT
+            unnest($1::uuid[]) as id,
+            unnest($2::int[]) as zoning_gas,
+            unnest($3::int[]) as zoning_dust,
+            unnest($4::text[]) as sub_name
+        ) u
+        WHERE e.id = u.id
+      `, [ids, gasArr, dustArr, subNames, planDisplay]);
+    }
+
+    // Log sans bloquer (fire and forget)
+    logEvent(req, "zones.reindex", { logical_name, page_index: pageIdx, updated: updates.length }).catch(() => {});
+
+    res.json({ ok: true, updated: updates.length });
+  } catch (e) {
+    console.error('[reindexZones] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 // ✅ Positions — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/positions", async (req, res) => {
