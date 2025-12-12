@@ -1196,7 +1196,7 @@ export default function Switchboards() {
     };
   }, [loadPlacements]);
 
-  // Load control statuses for all boards
+  // Load control statuses for all boards - now stores ALL controls per board
   const loadControlStatuses = useCallback(async () => {
     try {
       const res = await api.switchboardControls.listSchedules();
@@ -1207,14 +1207,34 @@ export default function Switchboards() {
       schedules.forEach(s => {
         if (s.switchboard_id) {
           const isOverdue = s.next_due_date && new Date(s.next_due_date) < now;
-          const existing = statuses[s.switchboard_id];
-          // Keep the worst status (overdue > pending > ok)
-          if (!existing || (isOverdue && existing.status !== 'overdue')) {
+
+          // Initialize if not exists
+          if (!statuses[s.switchboard_id]) {
             statuses[s.switchboard_id] = {
-              status: isOverdue ? 'overdue' : 'pending',
-              next_due: s.next_due_date,
-              template_name: s.template_name
+              status: 'ok',
+              controls: [],
+              overdueCount: 0,
+              pendingCount: 0
             };
+          }
+
+          const controlInfo = {
+            template_name: s.template_name,
+            next_due: s.next_due_date,
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
+          };
+
+          statuses[s.switchboard_id].controls.push(controlInfo);
+
+          if (isOverdue) {
+            statuses[s.switchboard_id].overdueCount++;
+            statuses[s.switchboard_id].status = 'overdue';
+          } else {
+            statuses[s.switchboard_id].pendingCount++;
+            if (statuses[s.switchboard_id].status !== 'overdue') {
+              statuses[s.switchboard_id].status = 'pending';
+            }
           }
         }
       });
@@ -1720,23 +1740,24 @@ export default function Switchboards() {
                         <MapPin size={10} />
                       </span>
                     )}
-                    {controlStatuses[board.id]?.status === 'overdue' && (
+                    {controlStatuses[board.id]?.overdueCount > 0 && (
                       <span
-                        className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}
-                        onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
-                        title={`Contrôle en retard: ${controlStatuses[board.id]?.template_name}`}
+                        className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer animate-pulse ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?tab=overdue&switchboard=${board.id}`); }}
+                        title={`${controlStatuses[board.id].overdueCount} contrôle(s) en retard`}
                       >
                         <AlertTriangle size={10} />
-                        Ctrl
+                        {controlStatuses[board.id].overdueCount}
                       </span>
                     )}
-                    {controlStatuses[board.id]?.status === 'pending' && (
+                    {controlStatuses[board.id]?.pendingCount > 0 && (
                       <span
                         className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'}`}
-                        onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=schedules'); }}
-                        title={`Contrôle planifié: ${controlStatuses[board.id]?.template_name}`}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?tab=schedules&switchboard=${board.id}`); }}
+                        title={`${controlStatuses[board.id].pendingCount} contrôle(s) planifié(s)`}
                       >
-                        <CheckCircle size={10} />
+                        <ClipboardCheck size={10} />
+                        {controlStatuses[board.id].pendingCount}
                       </span>
                     )}
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
@@ -2325,10 +2346,10 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
-            {/* Control Status Section */}
+            {/* Control Status Section - Enhanced to show ALL controls */}
             <AnimatedCard delay={50}>
               <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className={`p-2 rounded-xl ${
                       controlStatuses[selectedBoard.id]?.status === 'overdue' ? 'bg-red-100' :
@@ -2340,20 +2361,31 @@ export default function Switchboards() {
                       } />
                     </div>
                     <div>
-                      <h4 className="font-medium text-gray-900">Contrôles</h4>
-                      {controlStatuses[selectedBoard.id] ? (
-                        <p className={`text-sm ${
-                          controlStatuses[selectedBoard.id].status === 'overdue' ? 'text-red-600' :
-                          controlStatuses[selectedBoard.id].status === 'pending' ? 'text-blue-600' : 'text-gray-500'
-                        }`}>
-                          {controlStatuses[selectedBoard.id].status === 'overdue'
-                            ? `⚠️ En retard - ${controlStatuses[selectedBoard.id].template_name}`
-                            : `Prochain: ${new Date(controlStatuses[selectedBoard.id].next_due).toLocaleDateString('fr-FR')}`
-                          }
-                        </p>
-                      ) : (
-                        <p className="text-sm text-gray-400">Aucun contrôle planifié</p>
-                      )}
+                      <h4 className="font-medium text-gray-900">
+                        Contrôles planifiés
+                        {controlStatuses[selectedBoard.id]?.controls?.length > 0 && (
+                          <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                            {controlStatuses[selectedBoard.id].controls.length}
+                          </span>
+                        )}
+                      </h4>
+                      <div className="flex items-center gap-2 mt-1">
+                        {controlStatuses[selectedBoard.id]?.overdueCount > 0 && (
+                          <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                            <AlertTriangle size={10} />
+                            {controlStatuses[selectedBoard.id].overdueCount} en retard
+                          </span>
+                        )}
+                        {controlStatuses[selectedBoard.id]?.pendingCount > 0 && (
+                          <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full flex items-center gap-1">
+                            <CheckCircle size={10} />
+                            {controlStatuses[selectedBoard.id].pendingCount} planifié(s)
+                          </span>
+                        )}
+                        {!controlStatuses[selectedBoard.id]?.controls?.length && (
+                          <span className="text-sm text-gray-400">Aucun contrôle planifié</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -2365,7 +2397,7 @@ export default function Switchboards() {
                       Historique
                     </button>
                     <button
-                      onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
+                      onClick={() => navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`)}
                       className="px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
                     >
                       <ClipboardCheck size={14} />
@@ -2373,6 +2405,46 @@ export default function Switchboards() {
                     </button>
                   </div>
                 </div>
+
+                {/* List all controls */}
+                {controlStatuses[selectedBoard.id]?.controls?.length > 0 && (
+                  <div className="border-t pt-3 space-y-2">
+                    {controlStatuses[selectedBoard.id].controls.map((ctrl, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                          ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {ctrl.status === 'overdue' ? (
+                            <AlertTriangle size={14} className="text-red-600" />
+                          ) : (
+                            <CheckCircle size={14} className="text-blue-600" />
+                          )}
+                          <span className={ctrl.status === 'overdue' ? 'text-red-700 font-medium' : 'text-blue-700'}>
+                            {ctrl.template_name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}`}>
+                            {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
+                          </span>
+                          <button
+                            onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule=${ctrl.schedule_id}`)}
+                            className={`px-2 py-1 text-xs rounded ${
+                              ctrl.status === 'overdue'
+                                ? 'bg-red-200 text-red-700 hover:bg-red-300'
+                                : 'bg-blue-200 text-blue-700 hover:bg-blue-300'
+                            }`}
+                          >
+                            Voir
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </AnimatedCard>
 
