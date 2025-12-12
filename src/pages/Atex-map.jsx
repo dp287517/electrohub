@@ -6,7 +6,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
-import { getPDFConfig, getLazyLoadConfig, logDeviceInfo, isMobileDevice } from "../config/mobile-optimization.js";
+import { isMobileDevice } from "../config/mobile-optimization.js";
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -609,49 +609,33 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2️⃣ Rendu PDF -> image -> base overlay
+        // 2️⃣ Rendu PDF -> image (MÊME PARAMÈTRES QUE SWITCHBOARD_MAP)
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-          const dpr = Math.max(1, window.devicePixelRatio || 1);
-          
-          // 🔥 Configuration adaptative selon appareil et réseau
-          const pdfConfig = getPDFConfig();
-          logDeviceInfo();
-          
-          const targetBitmapW = Math.min(
-            pdfConfig.maxBitmapWidth,
-            Math.max(pdfConfig.minBitmapWidth, Math.floor(containerW * dpr * pdfConfig.qualityBoost))
-          );
-          
+          const dpr = window.devicePixelRatio || 1;
+
+          // 🚀 PARAMÈTRES IDENTIQUES À SWITCHBOARD_MAP (rapide et efficace)
+          const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5)));
+
           loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
           const baseVp = page.getViewport({ scale: 1 });
-          const safeScale = Math.min(
-            pdfConfig.maxScale,
-            Math.max(pdfConfig.minScale, targetBitmapW / baseVp.width)
-          );
+
+          // Scale limité comme Switchboard (0.5 à 3.0)
+          const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
           const viewport = page.getViewport({ scale: safeScale });
+
           const canvas = document.createElement("canvas");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
-          const ctx = canvas.getContext("2d", { 
-            alpha: true,
-            willReadFrequently: false 
-          });
-          ctx.imageSmoothingEnabled = pdfConfig.enableImageSmoothing;
-          
-          if (isMobileDevice()) {
-            ctx.imageSmoothingQuality = "low";
-          } else {
-            ctx.imageSmoothingQuality = "high";
-          }
-          renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
+          const ctx = canvas.getContext("2d", { alpha: true });
+
+          renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
           await renderTaskRef.current.promise;
 
-          // 🚀 ULTRA-OPTIMISATION : Toujours JPEG avec compression agressive
-          const quality = isMobileDevice() ? 0.65 : 0.80;
-          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          // PNG comme Switchboard (meilleure qualité, assez rapide)
+          const dataUrl = canvas.toDataURL("image/png");
           setImgSize({ w: canvas.width, h: canvas.height });
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
@@ -660,15 +644,19 @@ export default function AtexMap({
 
           await new Promise(requestAnimationFrame);
           m.invalidateSize(false);
-          const fitZoom2 = m.getBoundsZoom(bounds, true);
-          m.setMinZoom(fitZoom2 - 2);
-          m.setMaxZoom(fitZoom2 + 8);
-          m.setMaxBounds(bounds.pad(0.5));
-          m.fitBounds(bounds, { padding: [10, 10] });
 
-          // ✅ Marque la carte prête et recharge
+          const fitZoom2 = m.getBoundsZoom(bounds, true);
+          m.setMinZoom(fitZoom2 - 1);
+          m.setMaxZoom(fitZoom2 + 6);
+          m.setMaxBounds(bounds.pad(0.5));
+          m.fitBounds(bounds, { padding: [8, 8] });
+
+          // ✅ Marquer prêt IMMÉDIATEMENT (zones chargées en arrière-plan)
           baseReadyRef.current = true;
-          await reloadAll(); // <--- recharge formes + équipements
+          setPdfLoading(false); // Fermer le loader tout de suite
+
+          // 🚀 Charger les données en arrière-plan (non-bloquant)
+          reloadAll().catch(console.error);
 
           try { await pdf.cleanup?.(); } catch {}
         }
@@ -720,26 +708,17 @@ export default function AtexMap({
   }
   async function reloadAll() {
     if (!baseReadyRef.current || !planKey) return;
-    const end = timeStart("reloadAll");
-    const lazyConfig = getLazyLoadConfig();
-    
-    try {
-      await ensureIndexedOnce();
-      
-      // 🚀 Charger les positions en priorité (marqueurs = critiques)
-      await loadPositions();
-      
-      // ⏱️ Délai avant de charger les sous-zones sur mobile
-      if (lazyConfig.subareasLoadDelay > 0) {
-        setTimeout(() => {
-          loadSubareas().catch(console.error);
-        }, lazyConfig.subareasLoadDelay);
-      } else {
-        await loadSubareas();
-      }
-    } finally { 
-      end(); 
-    }
+
+    // 🚀 Charger positions IMMÉDIATEMENT (critique pour l'affichage)
+    loadPositions().catch(console.error);
+
+    // 🚀 Charger sous-zones en arrière-plan (non-bloquant)
+    setTimeout(() => {
+      loadSubareas().catch(console.error);
+    }, 100);
+
+    // 🚀 reindexZones en arrière-plan (fire and forget)
+    ensureIndexedOnce();
   }
     async function enrichStatuses(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
