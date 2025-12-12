@@ -1,4 +1,5 @@
 // server_switchboard_map.js — Switchboards MAP microservice (ESM)
+// VERSION 3.0 - ROBUSTE TIMEOUTS & PERFORMANCE
 // Partage les plans PDF avec VSD, gère les positions des tableaux électriques
 import express from "express";
 import cors from "cors";
@@ -66,6 +67,8 @@ function getSite(req) {
 }
 
 // -------------------------------------------------
+// POOL CONFIGURATION - VERSION 3.0 ROBUSTE
+// -------------------------------------------------
 const { Pool } = pg;
 const pool = new Pool({
   connectionString:
@@ -73,9 +76,74 @@ const pool = new Pool({
     process.env.NEON_DATABASE_URL ||
     process.env.DATABASE_URL ||
     "postgres://postgres:postgres@localhost:5432/postgres",
-  max: 10,
+  max: 15,                          // Augmenté de 10 à 15
+  min: 1,                           // Garde 1 connexion chaude minimum
+  idleTimeoutMillis: 60000,         // 60s avant de fermer une connexion idle
+  connectionTimeoutMillis: 8000,    // 8s max pour acquérir une connexion
+  allowExitOnIdle: false,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
+
+// Pool error handling
+pool.on('error', (err) => {
+  console.error('[SWB-MAP POOL] Unexpected error:', err.message);
+});
+
+// Pool stats
+let poolStats = { queries: 0, errors: 0, timeouts: 0 };
+
+// ✅ HELPER: Acquérir une connexion avec timeout strict
+async function acquireConnection(timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      poolStats.timeouts++;
+      reject(new Error(`Connection acquire timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    pool.connect()
+      .then(client => {
+        clearTimeout(timeoutId);
+        resolve(client);
+      })
+      .catch(err => {
+        clearTimeout(timeoutId);
+        reject(err);
+      });
+  });
+}
+
+// ✅ HELPER: Query avec timeout robuste
+async function quickQuery(sql, params = [], timeoutMs = 10000) {
+  poolStats.queries++;
+  let client;
+  try {
+    client = await acquireConnection(5000);
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    const result = await client.query(sql, params);
+    return result;
+  } catch (err) {
+    poolStats.errors++;
+    throw err;
+  } finally {
+    if (client) {
+      try { client.release(); } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+// ✅ KEEPALIVE pour éviter les cold starts Neon
+let keepaliveInterval = null;
+function startKeepalive() {
+  if (keepaliveInterval) return;
+  keepaliveInterval = setInterval(async () => {
+    try {
+      await pool.query('SELECT 1');
+    } catch (e) {
+      console.warn('[SWB-MAP KEEPALIVE] Ping failed:', e.message);
+    }
+  }, 4 * 60 * 1000);
+  console.log('[SWB-MAP] Keepalive started (4min interval)');
+}
 
 // -------------------------------------------------
 // DB schema : positions des switchboards sur les plans
@@ -928,8 +996,18 @@ export default app;
 // ✅ On ne démarre ce microservice SEUL que si on le demande explicitement
 if (process.env.START_SWB_MAP === "true") {
   app.listen(PORT, HOST, () => {
-    console.log(`[switchboard-map] listening on ${HOST}:${PORT}`);
+    console.log(`[switchboard-map] v3.0 listening on ${HOST}:${PORT}`);
     console.log(`[switchboard-map] VSD proxy: ${VSD_MAPS_BASE}`);
     console.log(`[switchboard-map] Switchboard service: ${SWITCHBOARD_BASE}`);
+
+    // ✅ Démarrer le keepalive pour éviter les cold starts Neon
+    startKeepalive();
+
+    // ✅ Warm up DB connection
+    pool.query('SELECT 1').then(() => {
+      console.log('[switchboard-map] Database connection warmed up');
+    }).catch(e => {
+      console.warn('[switchboard-map] Database warmup failed:', e.message);
+    });
   });
 }

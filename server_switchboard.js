@@ -1,12 +1,14 @@
 // server_switchboard.js - Backend complet Switchboard
-// VERSION 2.1 - FIX TIMEOUTS & PERFORMANCE
+// VERSION 3.0 - ROBUSTE TIMEOUTS & PERFORMANCE
 // =======================================================
-// 
-// CHANGEMENTS v2.1:
-// 1. quickQuery avec timeout par défaut (15s)
-// 2. Transactions pour les opérations critiques
-// 3. Meilleure gestion des erreurs avec retry
-// 4. Logs améliorés pour debug
+//
+// CHANGEMENTS v3.0:
+// 1. Timeout sur l'ACQUISITION de connexion (pas seulement sur la query)
+// 2. Pool plus grand (20 connexions) avec monitoring avancé
+// 3. Keepalive automatique pour éviter les cold starts Neon
+// 4. Retry automatique avec exponential backoff
+// 5. Protection contre les requêtes qui bloquent
+// 6. Logs détaillés pour debugging
 //
 import express from 'express';
 import helmet from 'helmet';
@@ -23,37 +25,111 @@ const { Pool } = pg;
 
 // ============================================================
 // POOL CONFIGURATION - OPTIMISÉ POUR NEON (SERVERLESS)
+// VERSION 3.0 - Plus robuste avec plus de connexions
 // ============================================================
-const pool = new Pool({ 
+const pool = new Pool({
   connectionString: process.env.NEON_DATABASE_URL,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  // 👇 IMPORTANT : on remet un timeout de connexion raisonnable (10s)
-  connectionTimeoutMillis: 10000
+  max: 20,                          // Augmenté de 10 à 20
+  min: 2,                           // Garde 2 connexions chaudes minimum
+  idleTimeoutMillis: 60000,         // 60s avant de fermer une connexion idle
+  connectionTimeoutMillis: 8000,    // 8s max pour acquérir une connexion
+  allowExitOnIdle: false,           // Ne pas quitter si idle
+  // Configuration SSL pour Neon
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Pool error handling
+// Pool error handling amélioré
 pool.on('error', (err) => {
   console.error('[POOL] Unexpected error on idle client:', err.message);
+  poolStats.poolErrors++;
 });
 
-// Pool monitoring
-let poolStats = { queries: 0, errors: 0, slowQueries: 0, timeouts: 0 };
+pool.on('connect', () => {
+  poolStats.connections++;
+});
+
+// Pool monitoring avancé
+let poolStats = {
+  queries: 0,
+  errors: 0,
+  slowQueries: 0,
+  timeouts: 0,
+  poolErrors: 0,
+  connections: 0,
+  acquireTimeouts: 0,
+  retries: 0
+};
 
 // ============================================================
-// QUERY HELPER - SANS STATEMENT_TIMEOUT
+// KEEPALIVE - Empêche les cold starts Neon (ping toutes les 4 min)
+// ============================================================
+let keepaliveInterval = null;
+
+function startKeepalive() {
+  if (keepaliveInterval) return;
+
+  keepaliveInterval = setInterval(async () => {
+    try {
+      const start = Date.now();
+      await pool.query('SELECT 1');
+      const elapsed = Date.now() - start;
+      if (elapsed > 500) {
+        console.log(`[KEEPALIVE] Ping took ${elapsed}ms (cold start likely)`);
+      }
+    } catch (e) {
+      console.warn('[KEEPALIVE] Ping failed:', e.message);
+    }
+  }, 4 * 60 * 1000); // Toutes les 4 minutes
+
+  console.log('[SWITCHBOARD] Keepalive started (4min interval)');
+}
+
+// ============================================================
+// HELPER: Acquérir une connexion avec timeout STRICT
+// ============================================================
+async function acquireConnection(timeoutMs = 8000) {
+  const start = Date.now();
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      poolStats.acquireTimeouts++;
+      reject(new Error(`Connection acquire timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    pool.connect()
+      .then(client => {
+        clearTimeout(timeoutId);
+        const elapsed = Date.now() - start;
+        if (elapsed > 2000) {
+          console.warn(`[POOL] Slow connection acquire: ${elapsed}ms`);
+        }
+        resolve(client);
+      })
+      .catch(err => {
+        clearTimeout(timeoutId);
+        reject(err);
+      });
+  });
+}
+
+// ============================================================
+// QUERY HELPER - AVEC TIMEOUT COMPLET (acquire + query)
 // ============================================================
 async function query(sql, params = [], options = {}) {
   const startTime = Date.now();
   const label = options.label || 'QUERY';
-  const timeoutMs = options.timeout || 30000;
+  const queryTimeoutMs = options.timeout || 15000;
+  const acquireTimeoutMs = options.acquireTimeout || 5000;
 
   poolStats.queries++;
 
-  const client = await pool.connect();
+  let client;
   try {
-    // ✅ TIMEOUT REMIS
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    // ✅ TIMEOUT sur l'acquisition de connexion
+    client = await acquireConnection(acquireTimeoutMs);
+
+    // ✅ TIMEOUT sur la requête SQL
+    await client.query(`SET statement_timeout = ${queryTimeoutMs}`);
     const result = await client.query(sql, params);
 
     const elapsed = Date.now() - startTime;
@@ -66,41 +142,85 @@ async function query(sql, params = [], options = {}) {
   } catch (err) {
     poolStats.errors++;
     const elapsed = Date.now() - startTime;
-    console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
+
+    if (err.message.includes('timeout') || err.message.includes('canceling')) {
+      poolStats.timeouts++;
+      console.error(`[${label}] TIMEOUT after ${elapsed}ms:`, err.message);
+    } else {
+      console.error(`[${label}] Error after ${elapsed}ms:`, err.message);
+    }
     throw err;
   } finally {
-    client.release();
+    if (client) {
+      try { client.release(); } catch (e) { /* ignore */ }
+    }
   }
 }
 
 // ============================================================
-// QUICK QUERY - AUCUN STATEMENT_TIMEOUT
+// QUICK QUERY - Optimisé pour requêtes simples avec retry
 // ============================================================
-async function quickQuery(sql, params = [], timeoutMs = 30000) {
+async function quickQuery(sql, params = [], timeoutMs = 15000, retries = 1) {
   const startTime = Date.now();
   poolStats.queries++;
 
-  const client = await pool.connect();
-  try {
-    // ✅ TIMEOUT REMIS - 30s par défaut, évite les requêtes infinies
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
-    const result = await client.query(sql, params);
+  let lastError;
 
-    const elapsed = Date.now() - startTime;
-    if (elapsed > 1000) {
-      poolStats.slowQueries++;
-      console.warn(`[QUICK] Slow query: ${elapsed}ms - ${sql.substring(0, 50)}...`);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let client;
+    try {
+      // ✅ TIMEOUT sur l'acquisition (5s max)
+      client = await acquireConnection(5000);
+
+      // ✅ TIMEOUT sur la requête SQL
+      await client.query(`SET statement_timeout = ${timeoutMs}`);
+      const result = await client.query(sql, params);
+
+      const elapsed = Date.now() - startTime;
+      if (elapsed > 1000) {
+        poolStats.slowQueries++;
+        console.warn(`[QUICK] Slow query: ${elapsed}ms - ${sql.substring(0, 50)}...`);
+      }
+
+      return result;
+    } catch (err) {
+      lastError = err;
+
+      if (client) {
+        try { client.release(); } catch (e) { /* ignore */ }
+        client = null;
+      }
+
+      // Retry seulement si c'est un timeout d'acquisition ou une erreur transitoire
+      const isRetryable = err.message.includes('Connection acquire timeout') ||
+                          err.message.includes('Connection terminated') ||
+                          err.message.includes('ECONNRESET');
+
+      if (attempt < retries && isRetryable) {
+        poolStats.retries++;
+        const delay = Math.min(1000 * Math.pow(2, attempt), 4000); // Exponential backoff: 1s, 2s, 4s
+        console.warn(`[QUICK] Retry ${attempt + 1}/${retries} after ${delay}ms: ${err.message}`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      poolStats.errors++;
+      const elapsed = Date.now() - startTime;
+
+      if (err.message.includes('timeout') || err.message.includes('canceling')) {
+        poolStats.timeouts++;
+      }
+
+      console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
+      throw err;
+    } finally {
+      if (client) {
+        try { client.release(); } catch (e) { /* ignore */ }
+      }
     }
-
-    return result;
-  } catch (err) {
-    poolStats.errors++;
-    const elapsed = Date.now() - startTime;
-    console.error(`[QUICK] Error after ${elapsed}ms:`, err.message);
-    throw err;
-  } finally {
-    client.release();
   }
+
+  throw lastError;
 }
 
 // ============================================================
@@ -152,15 +272,44 @@ app.use((req, res, next) => {
   next();
 });
 
-// Request logging middleware
+// ============================================================
+// MIDDLEWARE: Request timeout protection + logging
+// ============================================================
 app.use((req, res, next) => {
   const start = Date.now();
+  const requestId = Math.random().toString(36).substring(2, 10);
+
+  // ✅ TIMEOUT GLOBAL par requête (15s max pour les endpoints normaux)
+  // Les endpoints PUT/POST peuvent avoir leurs propres timeouts plus courts
+  const globalTimeout = setTimeout(() => {
+    if (!res.headersSent) {
+      const elapsed = Date.now() - start;
+      console.error(`[TIMEOUT] ${req.method} ${req.path} killed after ${elapsed}ms (request ${requestId})`);
+      res.status(504).json({
+        error: 'Request timeout - le serveur a mis trop de temps à répondre',
+        elapsed_ms: elapsed,
+        request_id: requestId
+      });
+    }
+  }, 15000);
+
+  // ✅ Cleanup du timeout quand la requête se termine
   res.on('finish', () => {
+    clearTimeout(globalTimeout);
     const elapsed = Date.now() - start;
     if (elapsed > 5000) {
-      console.warn(`[SLOW REQUEST] ${req.method} ${req.path} took ${elapsed}ms`);
+      console.warn(`[SLOW REQUEST] ${req.method} ${req.path} took ${elapsed}ms (request ${requestId})`);
     }
   });
+
+  res.on('close', () => {
+    clearTimeout(globalTimeout);
+    if (!res.writableEnded) {
+      const elapsed = Date.now() - start;
+      console.warn(`[ABORTED] ${req.method} ${req.path} closed by client after ${elapsed}ms (request ${requestId})`);
+    }
+  });
+
   next();
 });
 
@@ -181,30 +330,46 @@ function checkDeviceComplete(device) {
 }
 
 // ============================================================
-// HEALTH CHECK - ENHANCED
+// HEALTH CHECK - ENHANCED v3.0
 // ============================================================
 app.get('/api/switchboard/health', async (req, res) => {
   try {
     const dbStart = Date.now();
-    await quickQuery('SELECT 1', [], 2000);
+    await quickQuery('SELECT 1', [], 2000, 0); // No retry for health check
     const dbTime = Date.now() - dbStart;
-    
-    res.json({ 
-      ok: true, 
-      ts: Date.now(), 
+
+    res.json({
+      ok: true,
+      ts: Date.now(),
+      version: '3.0',
       openai: !!openai,
-      db: { connected: true, responseTime: dbTime },
+      db: {
+        connected: true,
+        responseTime: dbTime,
+        cold: dbTime > 500 // Indication si cold start
+      },
+      pool: {
+        totalCount: pool.totalCount,
+        idleCount: pool.idleCount,
+        waitingCount: pool.waitingCount,
+        maxConnections: 20
+      },
+      stats: {
+        ...poolStats,
+        successRate: poolStats.queries > 0
+          ? ((poolStats.queries - poolStats.errors) / poolStats.queries * 100).toFixed(1) + '%'
+          : '100%'
+      }
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e.message,
       pool: {
         totalCount: pool.totalCount,
         idleCount: pool.idleCount,
         waitingCount: pool.waitingCount
       },
-      stats: poolStats
-    });
-  } catch (e) {
-    res.status(500).json({ 
-      ok: false, 
-      error: e.message,
       stats: poolStats
     });
   }
@@ -283,6 +448,14 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
     -- Index composite CRITIQUE pour les counts
     CREATE INDEX IF NOT EXISTS idx_devices_switchboard_complete ON devices(switchboard_id, is_complete);
+
+    -- ✅ INDEX ADDITIONNELS v3.0 pour performance
+    -- Index pour tri par position_number (très utilisé)
+    CREATE INDEX IF NOT EXISTS idx_devices_switchboard_position ON devices(switchboard_id, position_number);
+    -- Index partiel pour devices incomplets (requêtes "à compléter")
+    CREATE INDEX IF NOT EXISTS idx_devices_incomplete ON devices(switchboard_id) WHERE is_complete = false;
+    -- Index pour recherche par site + switchboard (multi-tenant)
+    CREATE INDEX IF NOT EXISTS idx_devices_site_switchboard ON devices(site, switchboard_id);
 
     -- =======================================================
     -- TABLE: Site Settings
@@ -732,65 +905,64 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// PUT /boards/:id - Update - VERSION CORRIGÉE
+// PUT /boards/:id - Update - VERSION 3.0 ROBUSTE
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   const startTime = Date.now();
-  let timeoutId = null;
-  
+  const MAX_TIMEOUT = 12000; // 12s max total (client a 60s, on veut répondre avant)
+
+  // Protection: si la requête est déjà fermée, ne rien faire
+  if (res.headersSent || req.socket?.destroyed) {
+    console.warn('[UPDATE BOARD] Request already closed, aborting');
+    return;
+  }
+
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
-    
+
     const b = req.body;
-    
+
     if (!b || typeof b !== 'object') {
       return res.status(400).json({ error: 'Request body must be an object' });
     }
     if (Object.keys(b).length === 0) {
       return res.status(400).json({ error: 'Request body is empty' });
     }
-    
+
     const name = String(b.name || '').trim();
     const code = String(b.code || '').trim();
-    
+
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
-    console.log(`[UPDATE BOARD] Starting update for id=${id}`);
-    
-    // Timeout applicatif avec cleanup
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('Request timeout (25s)')), 25000);
-    });
-    
-    const r = await Promise.race([
-      quickQuery(
-        `UPDATE switchboards SET
-          name=$1, code=$2, building_code=$3, floor=$4, room=$5, 
-          regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10
-        WHERE id=$11 AND site=$12
-        RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
-                  modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
-                  device_count, complete_count`,
-        [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
-         b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-         id, site],
-        20000
-      ),
-      timeoutPromise
-    ]);
-    
-    // ✅ CLEANUP du timeout
-    if (timeoutId) clearTimeout(timeoutId);
-    
-    if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
-    
+    console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
+
+    // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
+    const r = await quickQuery(
+      `UPDATE switchboards SET
+        name=$1, code=$2, building_code=$3, floor=$4, room=$5,
+        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10
+      WHERE id=$11 AND site=$12
+      RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
+                modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
+                device_count, complete_count`,
+      [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
+       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
+       id, site],
+      10000, // 10s timeout SQL
+      1      // 1 retry si erreur transitoire
+    );
+
+    if (!r.rows.length) {
+      return res.status(404).json({ error: 'Board not found' });
+    }
+
     const elapsed = Date.now() - startTime;
-    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms`);
-    
+    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms for id=${id}`);
+
     const sb = r.rows[0];
     res.json({
       id: sb.id,
@@ -802,16 +974,27 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       device_count: sb.device_count, complete_count: sb.complete_count
     });
   } catch (e) {
-    // ✅ CLEANUP du timeout en cas d'erreur
-    if (timeoutId) clearTimeout(timeoutId);
-    
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE BOARD] Error after ${elapsed}ms:`, e.message);
-    
-    if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
-      res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
+
+    // Ne pas répondre si la connexion est déjà fermée
+    if (res.headersSent || req.socket?.destroyed) {
+      console.warn('[UPDATE BOARD] Cannot send error response - connection closed');
+      return;
+    }
+
+    if (e.message?.includes('timeout') || e.message?.includes('canceling') || e.message?.includes('acquire')) {
+      res.status(504).json({
+        error: 'Timeout - réessayez dans quelques secondes',
+        details: e.message,
+        elapsed_ms: elapsed
+      });
     } else {
-      res.status(500).json({ error: 'Update failed', details: e.message });
+      res.status(500).json({
+        error: 'Update failed',
+        details: e.message,
+        elapsed_ms: elapsed
+      });
     }
   }
 });
@@ -1153,15 +1336,15 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// PUT /devices/:id - Update - FIX: Timeout applicatif + timeout SQL
+// PUT /devices/:id - Update - VERSION 3.0 ROBUSTE
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   const startTime = Date.now();
 
-  // Timeout applicatif (35s) - protège contre requêtes bloquées trop longtemps
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error('Request timeout (35s)')), 35000);
-  });
+  // Protection: si la requête est déjà fermée, ne rien faire
+  if (res.headersSent || req.socket?.destroyed) {
+    console.warn('[UPDATE DEVICE] Request already closed, aborting');
+    return;
+  }
 
   try {
     const site = siteOf(req);
@@ -1182,13 +1365,13 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
 
     const is_complete = checkDeviceComplete(b);
 
-    console.log(`[UPDATE DEVICE] Starting update for id=${id}`);
+    console.log(`[UPDATE DEVICE] Starting update for id=${id}, site=${site}`);
 
-    // Requête SQL avec timeout SQL explicite (30s)
-    const queryPromise = quickQuery(
+    // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
+    const result = await quickQuery(
       `UPDATE devices SET
-         parent_id = $1, downstream_switchboard_id = $2, name = $3, device_type = $4, 
-         manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9, 
+         parent_id = $1, downstream_switchboard_id = $2, name = $3, device_type = $4,
+         manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9,
          poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
          is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
          diagram_data = $18, updated_at = NOW()
@@ -1217,31 +1400,41 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         id,
         site
       ],
-      30000 // timeout SQL 30s
+      10000, // 10s timeout SQL
+      1      // 1 retry si erreur transitoire
     );
 
-    // Promise.race entre la requête SQL et le timeout applicatif
-    const result = await Promise.race([queryPromise, timeoutPromise]);
-    clearTimeout(timeoutId);
-
     const rows = result.rows || [];
-    if (!rows.length) return res.status(404).json({ error: 'Device not found' });
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
 
     const elapsed = Date.now() - startTime;
     console.log(`[UPDATE DEVICE] Completed in ${elapsed}ms for id=${id}`);
 
     res.json(rows[0]);
   } catch (e) {
-    // Nettoyage du timeout si une exception survient
-    try { clearTimeout(timeoutId); } catch (_) {}
-
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE DEVICE] Error after ${elapsed}ms:`, e.message);
 
-    if (e.message?.includes('timeout') || e.message?.includes('canceling') || e.message?.includes('Request timeout')) {
-      res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
+    // Ne pas répondre si la connexion est déjà fermée
+    if (res.headersSent || req.socket?.destroyed) {
+      console.warn('[UPDATE DEVICE] Cannot send error response - connection closed');
+      return;
+    }
+
+    if (e.message?.includes('timeout') || e.message?.includes('canceling') || e.message?.includes('acquire')) {
+      res.status(504).json({
+        error: 'Timeout - réessayez dans quelques secondes',
+        details: e.message,
+        elapsed_ms: elapsed
+      });
     } else {
-      res.status(500).json({ error: 'Update failed', details: e.message });
+      res.status(500).json({
+        error: 'Update failed',
+        details: e.message,
+        elapsed_ms: elapsed
+      });
     }
   }
 });
@@ -2012,6 +2205,16 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
 
 const port = process.env.SWITCHBOARD_PORT || 3003;
 app.listen(port, () => {
-  console.log(`[SWITCHBOARD] Server running on port ${port}`);
-  console.log('[SWITCHBOARD] Features: Cached counts, Auto-triggers, Timeout protection');
+  console.log(`[SWITCHBOARD] Server v3.0 running on port ${port}`);
+  console.log('[SWITCHBOARD] Features: Robust timeouts, Keepalive, Retry, Pool monitoring');
+
+  // ✅ Démarrer le keepalive pour éviter les cold starts Neon
+  startKeepalive();
+
+  // ✅ Warm up la connexion DB au démarrage
+  pool.query('SELECT 1').then(() => {
+    console.log('[SWITCHBOARD] Database connection warmed up');
+  }).catch(e => {
+    console.warn('[SWITCHBOARD] Database warmup failed:', e.message);
+  });
 });

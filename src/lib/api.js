@@ -1,8 +1,48 @@
 /** src/lib/api.js - API complète ElectroHub */
-/** VERSION 2.2 - AVEC TIMEOUT CLIENT */
+/** VERSION 3.0 - AVEC RETRY ROBUSTE ET EXPONENTIAL BACKOFF */
 
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
+
+// ============================================================
+// RETRY CONFIG - Exponential backoff pour requêtes qui échouent
+// ============================================================
+const RETRY_CONFIG = {
+  maxRetries: 2,              // Nombre max de retries
+  baseDelayMs: 1000,          // Délai initial (1s)
+  maxDelayMs: 8000,           // Délai max (8s)
+  retryableStatuses: [408, 429, 500, 502, 503, 504], // Status HTTP à retrier
+};
+
+/**
+ * Calcule le délai avec exponential backoff + jitter
+ */
+function getRetryDelay(attempt) {
+  const delay = Math.min(
+    RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelayMs
+  );
+  // Ajoute un jitter de ±25% pour éviter les thundering herds
+  return delay * (0.75 + Math.random() * 0.5);
+}
+
+/**
+ * Vérifie si une erreur/status est retryable
+ */
+function isRetryable(error, status) {
+  // Timeout côté client
+  if (error?.name === 'AbortError' || error?.isTimeout) return true;
+
+  // Erreurs réseau
+  if (error?.message?.includes('Failed to fetch')) return true;
+  if (error?.message?.includes('NetworkError')) return true;
+  if (error?.message?.includes('ECONNRESET')) return true;
+
+  // Status HTTP retryables
+  if (status && RETRY_CONFIG.retryableStatuses.includes(status)) return true;
+
+  return false;
+}
 
 /* ---------------- Identity helpers (cookies/localStorage) ---------------- */
 function getCookie(name) {
@@ -102,7 +142,7 @@ function isNumericId(s) {
 }
 
 // ============================================================
-// HELPER PRINCIPAL - AVEC TIMEOUT CÔTÉ CLIENT
+// HELPER PRINCIPAL - VERSION 3.0 AVEC RETRY ET TIMEOUT
 // ============================================================
 async function jsonFetch(path, options = {}) {
   const site = currentSite();
@@ -118,58 +158,89 @@ async function jsonFetch(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
 
-  // ✅ TIMEOUT CÔTÉ CLIENT - 30s par défaut, évite les attentes infinies
+  // Configuration
   const timeoutMs = options.timeout || 30000;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const maxRetries = options.noRetry ? 0 : (options.retries ?? RETRY_CONFIG.maxRetries);
 
-  const fetchOptions = {
-    credentials: "include",
-    ...options,
-    headers,
-    signal: controller.signal,
-  };
+  let lastError;
 
-  let res;
-  try {
-    res = await fetch(url, fetchOptions);
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      const error = new Error(`Timeout après ${timeoutMs/1000}s - Réessayez`);
-      error.status = 408;
-      error.isTimeout = true;
-      throw error;
+  // ✅ BOUCLE DE RETRY avec exponential backoff
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const fetchOptions = {
+      credentials: "include",
+      ...options,
+      headers,
+      signal: controller.signal,
+    };
+
+    let res;
+    try {
+      res = await fetch(url, fetchOptions);
+      clearTimeout(timeoutId);
+
+      const contentType = res.headers.get("Content-Type") || "";
+      let data;
+
+      // Gestion blob (PDF, images, etc.)
+      if (options.isBlob || contentType.startsWith("image/") || contentType === "application/pdf") {
+        data = await res.blob();
+      } else if (contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        data = await res.text();
+      }
+
+      // Erreur HTTP → vérifier si retryable
+      if (!res.ok) {
+        const message = (data && data.error) || (data && data.message) || `HTTP ${res.status}`;
+        const error = new Error(message);
+        error.status = res.status;
+        error.data = data;
+
+        // ✅ Retry si status retryable et tentatives restantes
+        if (attempt < maxRetries && isRetryable(null, res.status)) {
+          const delay = getRetryDelay(attempt);
+          console.warn(`[API] Retry ${attempt + 1}/${maxRetries} for ${path} (status ${res.status}) in ${Math.round(delay)}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          lastError = error;
+          continue;
+        }
+
+        throw error;
+      }
+
+      // ✅ Succès
+      return data;
+
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastError = err;
+
+      // Créer une erreur timeout si c'est un AbortError
+      if (err.name === 'AbortError') {
+        const timeoutError = new Error(`Timeout après ${timeoutMs/1000}s - Réessayez`);
+        timeoutError.status = 408;
+        timeoutError.isTimeout = true;
+        lastError = timeoutError;
+      }
+
+      // ✅ Retry si erreur retryable et tentatives restantes
+      if (attempt < maxRetries && isRetryable(err, err?.status)) {
+        const delay = getRetryDelay(attempt);
+        console.warn(`[API] Retry ${attempt + 1}/${maxRetries} for ${path} (${err.message}) in ${Math.round(delay)}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      throw lastError;
     }
-    throw err;
-  }
-  clearTimeout(timeoutId);
-
-  const contentType = res.headers.get("Content-Type") || "";
-  let data;
-
-  // Gestion blob (PDF, images, etc.)
-  if (options.isBlob || contentType.startsWith("image/") || contentType === "application/pdf") {
-    data = await res.blob();
-  } else if (contentType.includes("application/json")) {
-    data = await res.json();
-  } else {
-    data = await res.text();
   }
 
-  // Erreur HTTP → on lève une Error avec le message serveur
-  if (!res.ok) {
-    const message =
-      (data && data.error) ||
-      (data && data.message) ||
-      `HTTP ${res.status}`;
-    const error = new Error(message);
-    error.status = res.status;
-    error.data = data;
-    throw error;
-  }
-
-  return data;
+  // Si on arrive ici, toutes les tentatives ont échoué
+  throw lastError;
 }
 
 /** Utilitaire bas niveau pour appels JSON "bruts" */
