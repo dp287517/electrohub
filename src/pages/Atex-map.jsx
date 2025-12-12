@@ -546,7 +546,7 @@ export default function AtexMap({
   const [polyTemp, setPolyTemp] = useState([]); // latlngs lors du dessin poly
   const [editorPos, setEditorPos] = useState(null);
   const [editorInit, setEditorInit] = useState({});
-  const [legendVisible, setLegendVisible] = useState(true);
+  const [legendVisible, setLegendVisible] = useState(false);  // 🆕 Caché par défaut
   const [zonesByEquip, setZonesByEquip] = useState(() => ({}));
   const [subareasById, setSubareasById] = useState(() => ({}));
   const [lastSubareaId, setLastSubareaId] = useState(null); // dernière zone créée
