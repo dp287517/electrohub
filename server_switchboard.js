@@ -732,12 +732,10 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// PUT /boards/:id - Update - VERSION FIXÉE AVEC TIMEOUT
+// PUT /boards/:id - Update - VERSION CORRIGÉE
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   const startTime = Date.now();
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error('Request timeout (25s)')), 25000)
-  );
+  let timeoutId = null;
   
   try {
     const site = siteOf(req);
@@ -748,13 +746,10 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     
     const b = req.body;
     
-    // VALIDATION DU BODY - Critique pour éviter les erreurs silencieuses
     if (!b || typeof b !== 'object') {
-      console.warn('[UPDATE BOARD] Invalid body type for id:', id);
       return res.status(400).json({ error: 'Request body must be an object' });
     }
     if (Object.keys(b).length === 0) {
-      console.warn('[UPDATE BOARD] Empty body for id:', id);
       return res.status(400).json({ error: 'Request body is empty' });
     }
     
@@ -764,9 +759,13 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
-    console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
+    console.log(`[UPDATE BOARD] Starting update for id=${id}`);
     
-    // CORRIGÉ: Promise.race avec timeoutPromise + timeout SQL de 20s
+    // Timeout applicatif avec cleanup
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('Request timeout (25s)')), 25000);
+    });
+    
     const r = await Promise.race([
       quickQuery(
         `UPDATE switchboards SET
@@ -779,15 +778,18 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
         [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
          b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
          id, site],
-        20000  // ← 3ème argument: timeout SQL de 20s
+        20000
       ),
-      timeoutPromise  // ← AJOUTÉ: timeout applicatif de 25s
+      timeoutPromise
     ]);
+    
+    // ✅ CLEANUP du timeout
+    if (timeoutId) clearTimeout(timeoutId);
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     
     const elapsed = Date.now() - startTime;
-    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms for id=${id}`);
+    console.log(`[UPDATE BOARD] Completed in ${elapsed}ms`);
     
     const sb = r.rows[0];
     res.json({
@@ -800,15 +802,66 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       device_count: sb.device_count, complete_count: sb.complete_count
     });
   } catch (e) {
+    // ✅ CLEANUP du timeout en cas d'erreur
+    if (timeoutId) clearTimeout(timeoutId);
+    
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE BOARD] Error after ${elapsed}ms:`, e.message);
     
-    // Message d'erreur plus explicite pour les timeouts
     if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
       res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
     } else {
       res.status(500).json({ error: 'Update failed', details: e.message });
     }
+  }
+});
+
+// PATCH /boards/:id - Update partiel (diagram_data, modes, quality)
+app.patch('/api/switchboard/boards/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+    
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
+    
+    const b = req.body || {};
+    const updates = [];
+    const values = [];
+    let idx = 1;
+    
+    // Seuls certains champs sont patchables
+    if (b.diagram_data !== undefined) {
+      updates.push(`diagram_data = $${idx++}`);
+      values.push(b.diagram_data);
+    }
+    if (b.modes !== undefined) {
+      updates.push(`modes = $${idx++}`);
+      values.push(b.modes);
+    }
+    if (b.quality !== undefined) {
+      updates.push(`quality = $${idx++}`);
+      values.push(b.quality);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No patchable fields provided' });
+    }
+    
+    values.push(id, site);
+    
+    const r = await quickQuery(
+      `UPDATE switchboards SET ${updates.join(', ')} WHERE id = $${idx++} AND site = $${idx} RETURNING id`,
+      values,
+      10000
+    );
+    
+    if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
+    
+    res.json({ success: true, id });
+  } catch (e) {
+    console.error('[PATCH BOARD]', e.message);
+    res.status(500).json({ error: 'Patch failed' });
   }
 });
 
@@ -1100,19 +1153,24 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// PUT /devices/:id - Update - VERSION FIXÉE AVEC TIMEOUT
+// PUT /devices/:id - Update - FIX: Timeout applicatif + timeout SQL
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   const startTime = Date.now();
+
+  // Timeout applicatif (35s) - protège contre requêtes bloquées trop longtemps
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Request timeout (35s)')), 35000);
+  });
+
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid device ID' });
-    
+
     const b = req.body;
-    
-    // VALIDATION DU BODY
     if (!b || typeof b !== 'object') {
       console.warn('[UPDATE DEVICE] Invalid body type for id:', id);
       return res.status(400).json({ error: 'Request body must be an object' });
@@ -1121,18 +1179,19 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
       console.warn('[UPDATE DEVICE] Empty body for id:', id);
       return res.status(400).json({ error: 'Request body is empty' });
     }
-    
+
     const is_complete = checkDeviceComplete(b);
 
     console.log(`[UPDATE DEVICE] Starting update for id=${id}`);
 
-    const { rows } = await quickQuery(
+    // Requête SQL avec timeout SQL explicite (30s)
+    const queryPromise = quickQuery(
       `UPDATE devices SET
-        parent_id = $1, downstream_switchboard_id = $2, name = $3, device_type = $4, 
-        manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9, 
-        poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
-        is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
-        diagram_data = $18, updated_at = NOW()
+         parent_id = $1, downstream_switchboard_id = $2, name = $3, device_type = $4, 
+         manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9, 
+         poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
+         is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
+         diagram_data = $18, updated_at = NOW()
        FROM switchboards sb
        WHERE devices.id = $19 AND devices.switchboard_id = sb.id AND sb.site = $20
        RETURNING devices.*`,
@@ -1157,21 +1216,29 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.diagram_data || {},
         id,
         site
-      ]
-      // timeout par défaut = 15000ms
+      ],
+      30000 // timeout SQL 30s
     );
-    
+
+    // Promise.race entre la requête SQL et le timeout applicatif
+    const result = await Promise.race([queryPromise, timeoutPromise]);
+    clearTimeout(timeoutId);
+
+    const rows = result.rows || [];
     if (!rows.length) return res.status(404).json({ error: 'Device not found' });
-    
+
     const elapsed = Date.now() - startTime;
     console.log(`[UPDATE DEVICE] Completed in ${elapsed}ms for id=${id}`);
-    
+
     res.json(rows[0]);
   } catch (e) {
+    // Nettoyage du timeout si une exception survient
+    try { clearTimeout(timeoutId); } catch (_) {}
+
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE DEVICE] Error after ${elapsed}ms:`, e.message);
-    
-    if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
+
+    if (e.message?.includes('timeout') || e.message?.includes('canceling') || e.message?.includes('Request timeout')) {
       res.status(504).json({ error: 'Database timeout - please try again', details: e.message });
     } else {
       res.status(500).json({ error: 'Update failed', details: e.message });
@@ -1204,6 +1271,75 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   } catch (e) {
     console.error('[DELETE DEVICE]', e.message);
     res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+// PUT /boards/:boardId/devices/bulk-positions - Mise à jour en bulk des positions
+app.put('/api/switchboard/boards/:boardId/devices/bulk-positions', async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const boardId = Number(req.params.boardId);
+    if (!boardId || isNaN(boardId)) return res.status(400).json({ error: 'Invalid board ID' });
+
+    const { devices } = req.body || {};
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return res.status(400).json({ error: 'devices array required' });
+    }
+
+    // Vérifier que le board existe
+    const boardCheck = await quickQuery('SELECT id FROM switchboards WHERE id = $1 AND site = $2', [boardId, site]);
+    if (!boardCheck.rows.length) return res.status(404).json({ error: 'Board not found' });
+
+    // Construire la requête bulk avec CASE WHEN
+    const ids = [];
+    const positionCases = [];
+    
+    devices.forEach((d, idx) => {
+      const deviceId = Number(d.id);
+      if (!deviceId || isNaN(deviceId)) return;
+      
+      ids.push(deviceId);
+      // Stocker la position dans diagram_data (JSON)
+      const posJson = JSON.stringify(d.position || { x: 0, y: 0 });
+      positionCases.push(`WHEN id = ${deviceId} THEN '${posJson.replace(/'/g, "''")}'::jsonb`);
+    });
+
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'No valid device IDs' });
+    }
+
+    // Update en une seule requête
+    const sql = `
+      UPDATE devices 
+      SET diagram_data = CASE ${positionCases.join(' ')} ELSE diagram_data END,
+          updated_at = NOW()
+      WHERE id = ANY($1::int[]) 
+        AND switchboard_id = $2
+      RETURNING id
+    `;
+
+    const result = await quickQuery(sql, [ids, boardId], 45000);
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`[BULK POSITIONS] Updated ${result.rowCount} devices in ${elapsed}ms`);
+
+    res.json({ 
+      success: true, 
+      updated: result.rowCount,
+      elapsed_ms: elapsed
+    });
+  } catch (e) {
+    const elapsed = Date.now() - startTime;
+    console.error(`[BULK POSITIONS] Error after ${elapsed}ms:`, e.message);
+    
+    if (e.message?.includes('timeout') || e.message?.includes('canceling')) {
+      res.status(504).json({ error: 'Database timeout', details: e.message });
+    } else {
+      res.status(500).json({ error: 'Bulk update failed', details: e.message });
+    }
   }
 });
 
