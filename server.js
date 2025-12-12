@@ -1,4 +1,4 @@
-// server.js — version corrigée (proxies AVANT body-parser)
+// server.js — version 3.0 avec timeouts proxy robustes
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -36,6 +36,7 @@ app.use(authMiddleware);
 
 /* =================================================================
    PROXIES AVANT TOUT BODY-PARSER  => évite que le body soit mangé
+   VERSION 3.0: Ajout de timeouts stricts pour éviter les blocages
    ================================================================= */
 const atexTarget         = process.env.ATEX_BASE_URL         || "http://127.0.0.1:3001";
 const loopcalcTarget     = process.env.LOOPCALC_BASE_URL      || "http://127.0.0.1:3002";
@@ -62,16 +63,48 @@ const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 
-// petit helper pour créer des proxys homogènes
-function mkProxy(target, { withRestream = false } = {}) {
+// ============================================================
+// PROXY HELPER v3.0 - Avec timeouts stricts
+// ============================================================
+function mkProxy(target, { withRestream = false, timeoutMs = 20000 } = {}) {
   return createProxyMiddleware({
     target,
     changeOrigin: true,
     logLevel: "warn",
+
+    // ✅ TIMEOUTS CRITIQUES pour éviter les blocages infinis
+    proxyTimeout: timeoutMs,      // Timeout réponse backend (20s par défaut)
+    timeout: timeoutMs + 5000,    // Timeout connexion total (25s par défaut)
+
+    // ✅ Gestion d'erreur améliorée
     onError(err, req, res) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Upstream unreachable", details: err.code || String(err) }));
+      console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${target}: ${err.code || err.message}`);
+
+      // Ne pas répondre si déjà envoyé
+      if (res.headersSent) return;
+
+      const isTimeout = err.code === 'ECONNRESET' ||
+                       err.code === 'ETIMEDOUT' ||
+                       err.code === 'ESOCKETTIMEDOUT' ||
+                       err.message?.includes('timeout');
+
+      if (isTimeout) {
+        res.writeHead(504, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: "Timeout - le service met trop de temps à répondre",
+          code: err.code || "TIMEOUT",
+          retry: true
+        }));
+      } else {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: "Service temporairement indisponible",
+          code: err.code || "UPSTREAM_ERROR",
+          retry: true
+        }));
+      }
     },
+
     // Re-stream du body si déjà parsé en amont (sécurité)
     onProxyReq: withRestream
       ? (proxyReq, req) => {
