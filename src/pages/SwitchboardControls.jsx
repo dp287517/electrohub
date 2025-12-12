@@ -107,6 +107,9 @@ export default function SwitchboardControls() {
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [selectedSchedule, setSelectedSchedule] = useState(null);
 
+  // Pre-selected board for schedule modal (from URL param newBoard)
+  const [preSelectedBoardId, setPreSelectedBoardId] = useState(null);
+
   // Load data
   const loadDashboard = useCallback(async () => {
     try {
@@ -170,6 +173,19 @@ export default function SwitchboardControls() {
     setSearchParams({ tab: activeTab }, { replace: true });
   }, [activeTab, setSearchParams]);
 
+  // Handle newBoard URL param - auto-open schedule modal
+  useEffect(() => {
+    const newBoardId = searchParams.get('newBoard');
+    if (newBoardId && switchboards.length > 0) {
+      setPreSelectedBoardId(Number(newBoardId));
+      setShowScheduleModal(true);
+      // Clear the URL param
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('newBoard');
+      setSearchParams(newParams, { replace: true });
+    }
+  }, [searchParams, switchboards, setSearchParams]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
@@ -184,8 +200,10 @@ export default function SwitchboardControls() {
     );
   }
 
-  const overdueCount = dashboard?.overdue_count || 0;
-  const pendingCount = dashboard?.pending_count || 0;
+  // Stats from dashboard API - structure: { stats: { pending, overdue, completed_30d, templates }, upcoming, overdue_list }
+  const overdueCount = dashboard?.stats?.overdue || 0;
+  const pendingCount = dashboard?.stats?.pending || 0;
+  const completedCount = dashboard?.stats?.completed_30d || 0;
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-20">
@@ -245,7 +263,7 @@ export default function SwitchboardControls() {
         <StatCard
           icon="✅"
           label="Effectués"
-          value={dashboard?.completed_count || 0}
+          value={completedCount}
           color="bg-green-100"
           delay={200}
           onClick={() => setActiveTab("history")}
@@ -378,12 +396,17 @@ export default function SwitchboardControls() {
         <ScheduleModal
           templates={templates}
           switchboards={switchboards}
-          onClose={() => setShowScheduleModal(false)}
-          onSave={async (data) => {
+          preSelectedBoardId={preSelectedBoardId}
+          onClose={() => { setShowScheduleModal(false); setPreSelectedBoardId(null); }}
+          onSave={async (data, shouldReload = true) => {
             await api.switchboardControls.createSchedule(data);
-            loadSchedules();
-            loadDashboard();
-            setShowScheduleModal(false);
+            // Only reload on last item to avoid too many requests
+            if (shouldReload) {
+              loadSchedules();
+              loadDashboard();
+              setShowScheduleModal(false);
+              setPreSelectedBoardId(null);
+            }
           }}
         />
       )}
@@ -986,27 +1009,78 @@ function TemplateModal({ template, onClose, onSave }) {
 // ============================================================
 // SCHEDULE MODAL - Responsive
 // ============================================================
-function ScheduleModal({ templates, switchboards, onClose, onSave }) {
+function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, onSave }) {
   const [templateId, setTemplateId] = useState("");
   const [targetType, setTargetType] = useState("switchboard");
-  const [switchboardId, setSwitchboardId] = useState("");
+  // Initialize with pre-selected board if provided
+  const [selectedIds, setSelectedIds] = useState(() => {
+    if (preSelectedBoardId) {
+      return new Set([preSelectedBoardId]);
+    }
+    return new Set();
+  });
   const [nextDueDate, setNextDueDate] = useState(new Date().toISOString().split("T")[0]);
   const [saving, setSaving] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
 
   const filteredTemplates = (templates || []).filter((t) => t.target_type === targetType);
 
+  // Filter switchboards by search
+  const filteredSwitchboards = (switchboards || []).filter(sb => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (sb.code?.toLowerCase().includes(q) || sb.name?.toLowerCase().includes(q) || sb.meta?.building_code?.toLowerCase().includes(q));
+  });
+
+  const toggleSelection = (id) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === filteredSwitchboards.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredSwitchboards.map(sb => sb.id)));
+    }
+  };
+
   const handleSave = async () => {
     if (!templateId) return alert("Sélectionnez un modèle");
-    if (targetType === "switchboard" && !switchboardId) return alert("Sélectionnez un tableau");
+    if (targetType === "switchboard" && selectedIds.size === 0) return alert("Sélectionnez au moins un tableau");
 
     setSaving(true);
+    setProgress({ current: 0, total: selectedIds.size });
+
     try {
-      await onSave({
-        template_id: Number(templateId),
-        switchboard_id: targetType === "switchboard" ? Number(switchboardId) : null,
-        device_id: null,
-        next_due_date: nextDueDate,
-      });
+      const ids = Array.from(selectedIds);
+      let successCount = 0;
+
+      // Create schedules for all selected items
+      for (let i = 0; i < ids.length; i++) {
+        try {
+          await onSave({
+            template_id: Number(templateId),
+            switchboard_id: targetType === "switchboard" ? Number(ids[i]) : null,
+            device_id: null,
+            next_due_date: nextDueDate,
+          }, i === ids.length - 1); // Only reload on last item
+          successCount++;
+        } catch (e) {
+          console.warn(`Failed to create schedule for ${ids[i]}:`, e);
+        }
+        setProgress({ current: i + 1, total: ids.length });
+      }
+
+      if (successCount > 0) {
+        alert(`✅ ${successCount} contrôle(s) planifié(s) avec succès!`);
+      }
     } finally {
       setSaving(false);
     }
@@ -1014,23 +1088,28 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 animate-fadeIn">
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl animate-slideUp">
-        <div className="p-4 sm:p-6 border-b bg-gradient-to-r from-green-500 to-emerald-600 text-white">
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl animate-slideUp max-h-[90vh] flex flex-col">
+        <div className="p-4 sm:p-6 border-b bg-gradient-to-r from-green-500 to-emerald-600 text-white flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="text-2xl">📅</span>
-              <h2 className="text-lg sm:text-xl font-bold">Planifier un contrôle</h2>
+              <div>
+                <h2 className="text-lg sm:text-xl font-bold">Planifier un contrôle</h2>
+                {selectedIds.size > 0 && (
+                  <p className="text-sm text-white/80">{selectedIds.size} tableau(x) sélectionné(s)</p>
+                )}
+              </div>
             </div>
             <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-full">✕</button>
           </div>
         </div>
 
-        <div className="p-4 sm:p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
           <div>
             <label className="block text-sm font-medium mb-1">Type de cible</label>
             <select
               value={targetType}
-              onChange={(e) => { setTargetType(e.target.value); setTemplateId(""); }}
+              onChange={(e) => { setTargetType(e.target.value); setTemplateId(""); setSelectedIds(new Set()); }}
               className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
             >
               <option value="switchboard">⚡ Tableau électrique</option>
@@ -1057,19 +1136,56 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
 
           {targetType === "switchboard" && (
             <div>
-              <label className="block text-sm font-medium mb-1">Tableau</label>
-              <select
-                value={switchboardId}
-                onChange={(e) => setSwitchboardId(e.target.value)}
-                className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
-              >
-                <option value="">-- Sélectionner un tableau --</option>
-                {(switchboards || []).map((sb) => (
-                  <option key={sb.id} value={sb.id}>
-                    {sb.code || sb.name} {sb.meta?.building_code ? `(${sb.meta.building_code})` : ""}
-                  </option>
+              <label className="block text-sm font-medium mb-1">Tableaux à contrôler</label>
+              {/* Search and Select All */}
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  placeholder="🔍 Rechercher..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+                />
+                <button
+                  onClick={selectAll}
+                  className="px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 whitespace-nowrap"
+                >
+                  {selectedIds.size === filteredSwitchboards.length ? '✓ Désélectionner' : '☐ Tout sélectionner'}
+                </button>
+              </div>
+              {/* Scrollable list with checkboxes */}
+              <div className="border rounded-xl max-h-48 overflow-y-auto divide-y">
+                {filteredSwitchboards.map((sb) => (
+                  <label
+                    key={sb.id}
+                    className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                      selectedIds.has(sb.id) ? 'bg-green-50' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(sb.id)}
+                      onChange={() => toggleSelection(sb.id)}
+                      className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{sb.code || sb.name}</p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {sb.name} {sb.meta?.building_code ? `• ${sb.meta.building_code}` : ''}
+                      </p>
+                    </div>
+                    {selectedIds.has(sb.id) && (
+                      <span className="text-green-600">✓</span>
+                    )}
+                  </label>
                 ))}
-              </select>
+                {filteredSwitchboards.length === 0 && (
+                  <p className="p-4 text-center text-gray-500 text-sm">Aucun tableau trouvé</p>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                💡 Sélectionnez plusieurs tableaux pour leur attribuer le même contrôle
+              </p>
             </div>
           )}
 
@@ -1084,16 +1200,32 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
           </div>
         </div>
 
-        <div className="p-4 sm:p-6 border-t bg-gray-50 flex gap-3">
+        {/* Progress bar when saving */}
+        {saving && progress.total > 1 && (
+          <div className="px-4 sm:px-6 py-2 bg-gray-100">
+            <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+              <span>Création en cours...</span>
+              <span>{progress.current}/{progress.total}</span>
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-green-500 transition-all"
+                style={{ width: `${(progress.current / progress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="p-4 sm:p-6 border-t bg-gray-50 flex gap-3 flex-shrink-0">
           <button onClick={onClose} className="flex-1 px-4 py-3 bg-gray-200 rounded-xl hover:bg-gray-300 font-medium">
             Annuler
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || selectedIds.size === 0}
             className="flex-1 px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-50"
           >
-            {saving ? "⏳ Création..." : "✓ Planifier"}
+            {saving ? `⏳ ${progress.current}/${progress.total}...` : `✓ Planifier (${selectedIds.size})`}
           </button>
         </div>
       </div>

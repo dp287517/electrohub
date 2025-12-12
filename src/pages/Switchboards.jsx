@@ -1110,6 +1110,10 @@ export default function Switchboards() {
   const [showImportResult, setShowImportResult] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
+  // Control setup suggestion
+  const [showControlSuggestion, setShowControlSuggestion] = useState(false);
+  const [newlyCreatedBoard, setNewlyCreatedBoard] = useState(null);
+
   // Photo state - FIXED: stable timestamp for caching
   const [photoVersion, setPhotoVersion] = useState({});
 
@@ -1333,8 +1337,12 @@ export default function Switchboards() {
         savedBoard = await api.switchboard.createBoard(payload);
         showToast('Tableau créé !', 'success');
         setBoards(prev => [...prev, savedBoard]);
+
+        // Show suggestion to set up controls for the new board
+        setNewlyCreatedBoard(savedBoard);
+        setShowControlSuggestion(true);
       }
-      
+
       resetBoardForm();
     } catch (err) {
       console.error('Save board error:', err);
@@ -1783,7 +1791,7 @@ export default function Switchboards() {
   );
 
   const renderDeviceCards = () => (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
       {devices.map((device, index) => (
         <AnimatedCard key={device.id} delay={index * 30}>
           <div className={`p-4 rounded-xl border hover:shadow-md relative
@@ -2179,55 +2187,56 @@ export default function Switchboards() {
         .animate-slideRight { animation: slideRight 0.3s ease-out forwards; }
       `}</style>
 
-      {/* Header */}
+      {/* Header - Responsive */}
       <div className="sticky top-0 z-40 bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {isMobile && (
-                <button onClick={() => setShowMobileDrawer(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl">
-                  <Menu size={24} />
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              {isMobile && !selectedBoard && (
+                <button onClick={() => setShowMobileDrawer(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl flex-shrink-0">
+                  <Menu size={22} />
                 </button>
               )}
-              <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white">
-                <Zap size={24} />
+              <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white flex-shrink-0">
+                <Zap size={20} className="sm:w-6 sm:h-6" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Tableaux électriques</h1>
-                <p className="text-sm text-gray-500">{boards.length} tableaux</p>
+              <div className="min-w-0">
+                <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">Tableaux électriques</h1>
+                <p className="text-xs sm:text-sm text-gray-500">{boards.length} tableaux</p>
               </div>
             </div>
-            
-            <div className="flex items-center gap-2">
-              <button onClick={() => setShowSettingsModal(true)} className="p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
-                <Settings size={20} />
+
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+              <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
+                <Settings size={18} className="sm:w-5 sm:h-5" />
               </button>
               <button
                 onClick={() => navigate('/app/switchboard-controls')}
-                className="px-3 py-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 flex items-center gap-2"
+                className="p-2 sm:px-3 sm:py-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 flex items-center gap-2"
+                title="Contrôles"
               >
                 <ClipboardCheck size={18} />
-                <span className="hidden sm:inline">Contrôles</span>
+                <span className="hidden md:inline">Contrôles</span>
               </button>
-              <button onClick={() => setShowImportModal(true)} className="px-3 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 flex items-center gap-2">
+              <button onClick={() => setShowImportModal(true)} className="hidden sm:flex p-2 sm:px-3 sm:py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 items-center gap-2" title="Import">
                 <FileSpreadsheet size={18} />
-                <span className="hidden sm:inline">Import</span>
+                <span className="hidden md:inline">Import</span>
               </button>
-              <button onClick={() => setShowBoardForm(true)} className="px-3 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-2">
+              <button onClick={() => setShowBoardForm(true)} className="p-2 sm:px-3 sm:py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-2" title="Nouveau tableau">
                 <Plus size={18} />
-                <span className="hidden sm:inline">Tableau</span>
+                <span className="hidden md:inline">Tableau</span>
               </button>
             </div>
           </div>
 
-          <div className="mt-3 relative">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <div className="mt-2 sm:mt-3 relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Rechercher..."
-              className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white"
+              className="w-full pl-9 sm:pl-10 pr-4 py-2 sm:py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white text-sm sm:text-base"
             />
           </div>
         </div>
@@ -2241,7 +2250,7 @@ export default function Switchboards() {
 
       <div className="max-w-7xl mx-auto flex">
         {!isMobile && (
-          <div className="w-80 border-r bg-white min-h-screen p-4 sticky top-32 self-start overflow-y-auto max-h-[calc(100vh-8rem)]">
+          <div className="w-64 lg:w-80 border-r bg-white min-h-screen p-3 lg:p-4 sticky top-28 sm:top-32 self-start overflow-y-auto max-h-[calc(100vh-7rem)] sm:max-h-[calc(100vh-8rem)] flex-shrink-0">
             {renderTree()}
           </div>
         )}
@@ -2249,13 +2258,24 @@ export default function Switchboards() {
         {isMobile && !selectedBoard && renderMobileCards()}
 
         {selectedBoard && (
-          <div className="flex-1 p-4">
+          <div className="flex-1 p-2 sm:p-4 min-w-0">
+            {/* Mobile back button */}
+            {isMobile && (
+              <button
+                onClick={handleCloseBoard}
+                className="mb-3 flex items-center gap-2 text-gray-600 hover:text-gray-900 px-3 py-2 bg-white rounded-xl shadow-sm w-full"
+              >
+                <ArrowLeft size={18} />
+                <span className="font-medium">Retour aux tableaux</span>
+              </button>
+            )}
+
             <AnimatedCard>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
                 <div className="flex flex-col sm:flex-row">
-                  <div 
+                  <div
                     onClick={() => boardPhotoRef.current?.click()}
-                    className="w-full sm:w-32 h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
+                    className="w-full sm:w-32 h-24 sm:h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
                   >
                     <input ref={boardPhotoRef} type="file" accept="image/*" onChange={handleBoardPhotoUpload} className="hidden" />
                     {selectedBoard.has_photo ? (
@@ -2499,6 +2519,71 @@ export default function Switchboards() {
       <DeleteConfirmModal isOpen={showDeleteModal} onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }} onConfirm={handleDeleteBoard} itemName={deleteTarget?.code} itemType="tableau" isLoading={isDeleting} deviceCount={deleteTarget?.device_count || 0} />
       <ShareLinkModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} board={selectedBoard} />
       <AIPhotoWizard isOpen={showAIWizard} onClose={() => setShowAIWizard(false)} onComplete={handleAIComplete} showToast={showToast} />
+
+      {/* Control Setup Suggestion Modal */}
+      {showControlSuggestion && newlyCreatedBoard && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+            <div className="p-6 bg-gradient-to-r from-amber-500 to-orange-600 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-white/20 rounded-xl">
+                  <ClipboardCheck size={28} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">Tableau créé !</h2>
+                  <p className="text-white/80 text-sm">{newlyCreatedBoard.code} - {newlyCreatedBoard.name}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+                <p className="text-amber-800 font-medium flex items-center gap-2">
+                  <AlertTriangle size={18} />
+                  N'oubliez pas de planifier les contrôles !
+                </p>
+                <p className="text-amber-700 text-sm mt-2">
+                  Les contrôles périodiques sont essentiels pour la sécurité électrique. Planifiez-les maintenant pour ne pas oublier.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    setShowControlSuggestion(false);
+                    navigate(`/app/switchboard-controls?tab=schedules&newBoard=${newlyCreatedBoard.id}`);
+                  }}
+                  className="w-full py-3 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-700 flex items-center justify-center gap-2"
+                >
+                  <ClipboardCheck size={18} />
+                  Planifier un contrôle maintenant
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowControlSuggestion(false);
+                    handleSelectBoard(newlyCreatedBoard);
+                  }}
+                  className="w-full py-3 px-4 bg-blue-100 text-blue-700 rounded-xl font-medium hover:bg-blue-200 flex items-center justify-center gap-2"
+                >
+                  <Zap size={18} />
+                  Voir le tableau
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowControlSuggestion(false);
+                    setNewlyCreatedBoard(null);
+                  }}
+                  className="w-full py-2 text-gray-500 hover:text-gray-700 text-sm"
+                >
+                  Plus tard
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}
