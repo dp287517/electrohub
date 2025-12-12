@@ -14,6 +14,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
+import sharp from "sharp";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
@@ -596,18 +597,59 @@ app.post("/api/atex/equipments/:id/photo", multerFiles.single("photo"), async (r
     res.json({ ok:true, url:`/api/atex/equipments/${id}/photo` });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
-app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
-  const id = String(req.params.id);
-  const { rows } = await pool.query(`SELECT photo_path, photo_content FROM atex_equipments WHERE id=$1`, [id]);
-  const row = rows?.[0] || null; if(!row) return res.status(404).end();
-  if (row.photo_content && row.photo_content.length) {
+// ✅ VERSION OPTIMISÉE - Génère des thumbnails si thumb=1
+app.get("/api/atex/equipments/:id/photo", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
+    const thumbSize = 200; // pixels max pour le côté le plus long
+
+    const { rows } = await pool.query(
+      `SELECT photo_path, photo_content FROM atex_equipments WHERE id=$1`,
+      [id]
+    );
+    const row = rows?.[0] || null;
+    if (!row) return res.status(404).end();
+
+    let imageBuffer = null;
+
+    // 1. Priorité au contenu binaire stocké en DB
+    if (row.photo_content && row.photo_content.length) {
+      imageBuffer = row.photo_content;
+    }
+    // 2. Sinon, lire depuis le fichier
+    else if (row.photo_path && fs.existsSync(row.photo_path)) {
+      imageBuffer = await fsp.readFile(row.photo_path);
+    }
+
+    if (!imageBuffer) return res.status(404).end();
+
+    // 3. Si thumbnail demandé, redimensionner et compresser
+    if (wantThumb) {
+      try {
+        const thumb = await sharp(imageBuffer)
+          .resize(thumbSize, thumbSize, { fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 70 })
+          .toBuffer();
+
+        res.type("image/jpeg");
+        res.set("Cache-Control", "public, max-age=3600"); // Cache 1h
+        return res.end(thumb, "binary");
+      } catch (sharpErr) {
+        console.error("[photo] Sharp error:", sharpErr.message);
+        // Fallback: envoyer l'original si sharp échoue
+      }
+    }
+
+    // 4. Envoyer l'image originale
     res.type("image/jpeg");
-    return res.end(row.photo_content, "binary");
+    res.set("Cache-Control", "public, max-age=86400"); // Cache 24h pour les originaux
+    return res.end(imageBuffer, "binary");
+  } catch (e) {
+    console.error("[photo] Error:", e.message);
+    res.status(404).end();
   }
-  const p = row.photo_path || null; if(!p) return res.status(404).end();
-  if (!fs.existsSync(p)) return res.status(404).end();
-  res.sendFile(path.resolve(p));
-} catch { res.status(404).end(); }});
+});
 app.get("/api/atex/equipments/:id/files", async (req,res)=>{ try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT * FROM atex_files WHERE equipment_id=$1 ORDER BY uploaded_at DESC`, [id]);
