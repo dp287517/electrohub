@@ -3103,7 +3103,7 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
     // Devices list (if switchboard control)
     if (record.switchboard_id) {
       const devicesRes = await quickQuery(`
-        SELECT position_number, name, manufacturer, reference, in_amps, icu_ka, pole_count
+        SELECT position_number, name, manufacturer, reference, in_amps, icu_ka, poles
         FROM devices
         WHERE switchboard_id = $1
         ORDER BY position_number::int NULLS LAST, name
@@ -3138,7 +3138,7 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
           doc.text(device.reference || '-', 295, y + 5, { width: 100 });
           doc.text(device.in_amps || '-', 400, y + 5, { width: 40 });
           doc.text(device.icu_ka || '-', 445, y + 5, { width: 40 });
-          doc.text(device.pole_count || '-', 490, y + 5, { width: 40 });
+          doc.text(device.poles || '-', 490, y + 5, { width: 40 });
           y += 18;
           if (y > 750) { doc.addPage(); y = 50; }
         });

@@ -162,6 +162,7 @@ export default function SwitchboardControls() {
         {activeTab === "schedules" && (
           <SchedulesTab
             schedules={schedules}
+            navigate={navigate}
             onStartControl={(s) => { setSelectedSchedule(s); setShowControlModal(true); }}
             onDelete={async (id) => {
               if (confirm("Supprimer cette planification ?")) {
@@ -174,11 +175,12 @@ export default function SwitchboardControls() {
         {activeTab === "overdue" && (
           <OverdueTab
             overdueList={dashboard?.overdue_list || []}
+            navigate={navigate}
             onStartControl={(s) => { setSelectedSchedule(s); setShowControlModal(true); }}
           />
         )}
         {activeTab === "history" && (
-          <HistoryTab records={records} />
+          <HistoryTab records={records} navigate={navigate} />
         )}
         {activeTab === "templates" && (
           <TemplatesTab
@@ -356,7 +358,7 @@ function StatCard({ label, value, color, icon }) {
 // SCHEDULES TAB
 // ============================================================
 
-function SchedulesTab({ schedules, onStartControl, onDelete }) {
+function SchedulesTab({ schedules, onStartControl, onDelete, navigate }) {
   return (
     <div className="space-y-4">
       {schedules.length === 0 ? (
@@ -369,6 +371,7 @@ function SchedulesTab({ schedules, onStartControl, onDelete }) {
             <tr>
               <th className="text-left p-3">Modèle</th>
               <th className="text-left p-3">Cible</th>
+              <th className="text-left p-3">Navigation</th>
               <th className="text-left p-3">Prochaine date</th>
               <th className="text-left p-3">Statut</th>
               <th className="text-left p-3">Actions</th>
@@ -382,9 +385,41 @@ function SchedulesTab({ schedules, onStartControl, onDelete }) {
                   <td className="p-3 font-medium">{s.template_name}</td>
                   <td className="p-3">
                     {s.switchboard_id ? (
-                      <span className="text-blue-600">{s.switchboard_code || s.switchboard_name}</span>
+                      <button
+                        onClick={() => navigate(`/app/switchboards?board=${s.switchboard_id}`)}
+                        className="text-blue-600 hover:underline font-medium"
+                      >
+                        {s.switchboard_code || s.switchboard_name}
+                      </button>
                     ) : (
                       <span className="text-purple-600">Disj. {s.device_position}</span>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {s.switchboard_id && (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => navigate(`/app/switchboards?board=${s.switchboard_id}`)}
+                          className="p-1.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                          title="Voir le tableau"
+                        >
+                          ⚡
+                        </button>
+                        <button
+                          onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)}
+                          className="p-1.5 bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200"
+                          title="Voir sur la carte"
+                        >
+                          🗺️
+                        </button>
+                        <button
+                          onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
+                          className="p-1.5 bg-violet-100 text-violet-700 rounded hover:bg-violet-200"
+                          title="Voir le schéma"
+                        >
+                          📊
+                        </button>
+                      </div>
                     )}
                   </td>
                   <td className="p-3">
@@ -409,7 +444,7 @@ function SchedulesTab({ schedules, onStartControl, onDelete }) {
                         onClick={() => onDelete(s.id)}
                         className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
                       >
-                        Supprimer
+                        ✕
                       </button>
                     </div>
                   </td>
@@ -427,7 +462,7 @@ function SchedulesTab({ schedules, onStartControl, onDelete }) {
 // OVERDUE TAB
 // ============================================================
 
-function OverdueTab({ overdueList, onStartControl }) {
+function OverdueTab({ overdueList, onStartControl, navigate }) {
   return (
     <div className="space-y-4">
       {overdueList.length === 0 ? (
@@ -439,15 +474,45 @@ function OverdueTab({ overdueList, onStartControl }) {
         <div className="space-y-3">
           {overdueList.map((s) => (
             <div key={s.id} className="flex items-center justify-between bg-red-50 border border-red-200 rounded-lg p-4">
-              <div>
-                <span className="font-semibold text-red-800">{s.template_name}</span>
-                <span className="mx-2 text-gray-400">•</span>
-                <span className="text-gray-700">
-                  {s.switchboard_code || s.switchboard_name || `Disj. ${s.device_position}`}
-                </span>
-                <p className="text-sm text-red-600 mt-1">
-                  En retard de {Math.ceil((new Date() - new Date(s.next_due_date)) / (1000 * 60 * 60 * 24))} jours
-                </p>
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="font-semibold text-red-800">{s.template_name}</span>
+                  <span className="mx-2 text-gray-400">•</span>
+                  <button
+                    onClick={() => s.switchboard_id && navigate(`/app/switchboards?board=${s.switchboard_id}`)}
+                    className="text-gray-700 hover:underline"
+                  >
+                    {s.switchboard_code || s.switchboard_name || `Disj. ${s.device_position}`}
+                  </button>
+                  <p className="text-sm text-red-600 mt-1">
+                    En retard de {Math.ceil((new Date() - new Date(s.next_due_date)) / (1000 * 60 * 60 * 24))} jours
+                  </p>
+                </div>
+                {s.switchboard_id && (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => navigate(`/app/switchboards?board=${s.switchboard_id}`)}
+                      className="p-1.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                      title="Voir le tableau"
+                    >
+                      ⚡
+                    </button>
+                    <button
+                      onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)}
+                      className="p-1.5 bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200"
+                      title="Voir sur la carte"
+                    >
+                      🗺️
+                    </button>
+                    <button
+                      onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
+                      className="p-1.5 bg-violet-100 text-violet-700 rounded hover:bg-violet-200"
+                      title="Voir le schéma"
+                    >
+                      📊
+                    </button>
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => onStartControl(s)}
@@ -467,7 +532,7 @@ function OverdueTab({ overdueList, onStartControl }) {
 // HISTORY TAB
 // ============================================================
 
-function HistoryTab({ records }) {
+function HistoryTab({ records, navigate }) {
   const statusColors = {
     conform: "bg-green-100 text-green-800",
     non_conform: "bg-red-100 text-red-800",
@@ -492,6 +557,7 @@ function HistoryTab({ records }) {
               <th className="text-left p-3">Date</th>
               <th className="text-left p-3">Modèle</th>
               <th className="text-left p-3">Cible</th>
+              <th className="text-left p-3">Navigation</th>
               <th className="text-left p-3">Contrôlé par</th>
               <th className="text-left p-3">Statut</th>
               <th className="text-left p-3">Actions</th>
@@ -504,9 +570,41 @@ function HistoryTab({ records }) {
                 <td className="p-3">{r.template_name || "-"}</td>
                 <td className="p-3">
                   {r.switchboard_id ? (
-                    <span className="text-blue-600">{r.switchboard_code || r.switchboard_name}</span>
+                    <button
+                      onClick={() => navigate(`/app/switchboards?board=${r.switchboard_id}`)}
+                      className="text-blue-600 hover:underline font-medium"
+                    >
+                      {r.switchboard_code || r.switchboard_name}
+                    </button>
                   ) : (
                     <span className="text-purple-600">Disj. {r.device_position}</span>
+                  )}
+                </td>
+                <td className="p-3">
+                  {r.switchboard_id && (
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => navigate(`/app/switchboards?board=${r.switchboard_id}`)}
+                        className="p-1.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                        title="Voir le tableau"
+                      >
+                        ⚡
+                      </button>
+                      <button
+                        onClick={() => navigate(`/app/switchboard-map?highlight=${r.switchboard_id}`)}
+                        className="p-1.5 bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200"
+                        title="Voir sur la carte"
+                      >
+                        🗺️
+                      </button>
+                      <button
+                        onClick={() => navigate(`/app/switchboards/${r.switchboard_id}/diagram`)}
+                        className="p-1.5 bg-violet-100 text-violet-700 rounded hover:bg-violet-200"
+                        title="Voir le schéma"
+                      >
+                        📊
+                      </button>
+                    </div>
                   )}
                 </td>
                 <td className="p-3">
