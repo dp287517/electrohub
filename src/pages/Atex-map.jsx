@@ -207,7 +207,7 @@ function findContainingSubarea(xf, yf, subareas) {
 }
 
 // 🔥 Nouveau design des marqueurs ATEX avec icône SVG et gradient (style Switchboard)
-const ICON_PX_SELECTED = 30;
+const ICON_PX_SELECTED = 34;  // 🆕 Plus grand pour meilleure visibilité
 
 // Gradients par statut pour un design moderne
 const STATUS_GRADIENT = {
@@ -215,6 +215,7 @@ const STATUS_GRADIENT = {
   en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
   en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
   fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
+  selected: { from: "#a78bfa", to: "#7c3aed" },     // 🆕 Violet pour sélection
 };
 
 // Icône SVG flamme ATEX
@@ -247,8 +248,10 @@ function makeEquipIcon(status, isUnsaved, isSelected = false) {
     });
   }
 
-  // Récupère le gradient pour ce statut
-  const grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
+  // 🆕 Utilise le gradient violet si sélectionné, sinon le gradient du statut
+  const grad = isSelected
+    ? STATUS_GRADIENT.selected
+    : (STATUS_GRADIENT[status] || STATUS_GRADIENT.fait);
 
   // Classes d'animation
   let animClass = "";
@@ -260,14 +263,19 @@ function makeEquipIcon(status, isUnsaved, isSelected = false) {
     animClass = "atex-marker-pulse-orange";
   }
 
+  // 🆕 Bordure plus visible pour sélection
+  const borderStyle = isSelected
+    ? "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);"
+    : "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
+
   const html = `
     <div class="${animClass}" style="
       width:${s}px;height:${s}px;border-radius:9999px;
       background: radial-gradient(circle at 30% 30%, ${grad.from}, ${grad.to});
-      border:2px solid white;
-      box-shadow:0 4px 10px rgba(0,0,0,.25);
+      ${borderStyle}
       display:flex;align-items:center;justify-content:center;
       transition:all 0.2s ease;
+      z-index:${isSelected ? 1000 : 1};
     ">
       ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
     </div>`;
@@ -471,6 +479,8 @@ export default function AtexMap({
   pageIndex = 0,
   onOpenEquipment,
   onZonesApplied,
+  onMetaChanged,
+  selectedEquipmentId = null,  // 🆕 Pour highlight équipement depuis liste
   inModal = true,
   autoOpenModal = true,
   title = "Plan ATEX",
@@ -501,6 +511,8 @@ export default function AtexMap({
   const [subareasById, setSubareasById] = useState(() => ({}));
   const [lastSubareaId, setLastSubareaId] = useState(null); // dernière zone créée
   const editHandlesLayerRef = useRef(null);
+  const positionsRef = useRef([]);  // 🆕 Ref pour garder les positions localement
+  const selectedEquipmentIdRef = useRef(selectedEquipmentId);  // 🆕 Ref pour highlight
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
   const [drawMenu, setDrawMenu] = useState(false);
   const drawMenuRef = useRef(null);
@@ -529,6 +541,25 @@ export default function AtexMap({
     if (api?.atexMaps?.planFileUrl) return api.atexMaps.planFileUrl(plan);
     return null;
   }, [plan]);
+
+  // 🆕 Mise à jour selectedEquipmentId et re-dessin des marqueurs
+  useEffect(() => {
+    selectedEquipmentIdRef.current = selectedEquipmentId;
+    // Re-dessiner les marqueurs avec le nouveau highlight
+    if (baseReadyRef.current && positionsRef.current?.length > 0) {
+      drawMarkers(positionsRef.current);
+      // Si un équipement est sélectionné, centrer la carte dessus
+      if (selectedEquipmentId) {
+        const selectedPos = positionsRef.current.find(p => p.id === selectedEquipmentId);
+        if (selectedPos && mapRef.current && baseLayerRef.current) {
+          const base = baseLayerRef.current;
+          const latlng = toLatLng(selectedPos.x, selectedPos.y, base);
+          mapRef.current.setView(latlng, mapRef.current.getZoom(), { animate: true });
+        }
+      }
+    }
+  }, [selectedEquipmentId]);
+
   /* ------------------------------- Outside click menu ------------------------------- */
   useEffect(() => {
     if (!drawMenu) return;
@@ -955,9 +986,13 @@ export default function AtexMap({
       const base = baseLayerRef.current;
       if (!m || !layer || !base) return;
       layer.clearLayers();
+      // 🆕 Mettre à jour positionsRef pour le re-dessin lors de changement de sélection
+      positionsRef.current = list || [];
       (list || []).forEach((p) => {
         const latlng = toLatLngFrac(p.x, p.y, base);
-        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id));
+        // 🆕 Passer isSelected pour highlight violet
+        const isSelected = p.id === selectedEquipmentIdRef.current;
+        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected);
         const mk = L.marker(latlng, {
           icon,
           draggable: true,
@@ -1006,23 +1041,28 @@ export default function AtexMap({
             };
           }
 
-          // 3️⃣ Sauvegarder la position en arrière-plan (fire and forget, timeout 5s)
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-          api.atexMaps.setPosition(p.id, {
-            logical_name: plan?.logical_name,
-            plan_id: plan?.id,
-            page_index: pageIndex,
-            x_frac: Math.round(xf * 1e6) / 1e6,
-            y_frac: Math.round(yf * 1e6) / 1e6,
-          }).then(resp => {
-            clearTimeout(timeoutId);
-            log("setPosition response", { raw: safeJson(resp) });
-          }).catch(e => {
-            clearTimeout(timeoutId);
-            console.warn("[ATEX] setPosition background error (ignored)", e?.message || e);
-          });
+          // 3️⃣ Sauvegarder la position - ATTENDRE la réponse (pas de timeout abort!)
+          const savePosition = async (retries = 3) => {
+            for (let attempt = 1; attempt <= retries; attempt++) {
+              try {
+                const resp = await api.atexMaps.setPosition(p.id, {
+                  logical_name: plan?.logical_name,
+                  plan_id: plan?.id,
+                  page_index: pageIndex,
+                  x_frac: Math.round(xf * 1e6) / 1e6,
+                  y_frac: Math.round(yf * 1e6) / 1e6,
+                });
+                log("setPosition success", { attempt, raw: safeJson(resp) });
+                return resp;
+              } catch (e) {
+                console.warn(`[ATEX] setPosition attempt ${attempt}/${retries} failed:`, e?.message || e);
+                if (attempt < retries) {
+                  await new Promise(r => setTimeout(r, 1000 * attempt)); // exponential backoff
+                }
+              }
+            }
+          };
+          savePosition(); // fire and forget avec retry
 
           // ❌ Plus de loadPositions() ici ! On garde la position locale
 
@@ -1286,7 +1326,13 @@ function setupHandleDrag(map, onMoveCallback) {
       // --- 3️⃣ Envoi au backend ---
       await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
 
-      // ✅ reindexZones supprimé - détection de zones côté frontend
+      // 🆕 RESTAURÉ: reindexZones après modification géométrie
+      api.atexMaps.reindexZones(plan?.logical_name, pageIndex)
+        .then(() => {
+          log("reindexZones après updateSubarea geom - OK");
+          onMetaChanged?.();
+        })
+        .catch(e => console.warn("[ATEX] reindexZones après geom:", e?.message));
 
       // --- 4️⃣ Feedback visuel (Ton Toast Bleu) ---
       const toast = document.createElement("div");
@@ -1583,7 +1629,14 @@ function setupHandleDrag(map, onMoveCallback) {
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
 
-            // ✅ reindexZones supprimé - détection de zones côté frontend
+            // 🆕 RESTAURÉ: Appeler reindexZones pour mettre à jour les équipements dans cette zone
+            // Fire and forget pour ne pas bloquer l'UI
+            api.atexMaps.reindexZones(plan?.logical_name, pageIndex)
+              .then(() => {
+                log("reindexZones après création zone - OK");
+                onMetaChanged?.(); // 🆕 Notifier le parent pour rafraîchir la liste
+              })
+              .catch(e => console.warn("[ATEX] reindexZones après création:", e?.message));
 
           } catch (e) {
             console.error("[ATEX] Subarea create failed", e);
@@ -1644,7 +1697,13 @@ function setupHandleDrag(map, onMoveCallback) {
             });
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
-            // ✅ reindexZones supprimé - détection de zones côté frontend
+            // 🆕 RESTAURÉ: Appeler reindexZones pour mettre à jour les équipements dans cette zone
+            api.atexMaps.reindexZones(plan?.logical_name, pageIndex)
+              .then(() => {
+                log("reindexZones après création poly - OK");
+                onMetaChanged?.();
+              })
+              .catch(e => console.warn("[ATEX] reindexZones après poly:", e?.message));
           } catch (e) {
             console.error("[ATEX] Subarea poly create failed", e);
             alert("Erreur création polygone");
@@ -1705,7 +1764,13 @@ function setupHandleDrag(map, onMoveCallback) {
           }
         }
 
-        // ✅ reindexZones supprimé - détection de zones côté frontend
+        // 🆕 RESTAURÉ: reindexZones après modification métadonnées zone
+        api.atexMaps.reindexZones(plan?.logical_name, pageIndex)
+          .then(() => {
+            log("reindexZones après updateSubarea meta - OK");
+            onMetaChanged?.();
+          })
+          .catch(e => console.warn("[ATEX] reindexZones après meta:", e?.message));
 
         setEditorPos(null);
         await reloadAll();

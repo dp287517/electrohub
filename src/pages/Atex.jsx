@@ -71,13 +71,47 @@ export default function Atex() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
 
+  // 🆕 Sélection équipement pour highlight sur carte
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState(null);
+
   // Toast
   const [toast, setToast] = useState("");
 
-  // Update URL when tab changes
+  // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
-    setSearchParams({ tab: activeTab }, { replace: true });
-  }, [activeTab, setSearchParams]);
+    const eqId = searchParams.get("eq");
+    if (eqId) {
+      setSelectedEquipmentId(eqId);
+      // Trouver le plan de l'équipement et l'afficher
+      const findEquipmentPlan = async () => {
+        try {
+          const res = await api.atex.getEquipment(eqId);
+          const eq = res?.equipment;
+          if (eq?.building || eq?.zone) {
+            // Chercher un plan correspondant
+            const plansRes = await api.atexMaps.listPlans();
+            const matchingPlan = (plansRes?.plans || []).find(
+              p => p.building === eq.building && p.zone === eq.zone
+            );
+            if (matchingPlan) {
+              setSelectedPlan(matchingPlan);
+              setActiveTab("plans");
+            }
+          }
+        } catch (e) {
+          console.warn("[ATEX] findEquipmentPlan error:", e);
+        }
+      };
+      findEquipmentPlan();
+    }
+  }, []);
+
+  // Update URL when tab or equipment changes
+  useEffect(() => {
+    const params = { tab: activeTab };
+    if (selectedEquipmentId) params.eq = selectedEquipmentId;
+    setSearchParams(params, { replace: true });
+  }, [activeTab, selectedEquipmentId, setSearchParams]);
 
   /* ----------------------------- Data Loading ----------------------------- */
   const debouncer = useRef(null);
@@ -391,6 +425,40 @@ export default function Atex() {
     );
   }
 
+  // 🆕 Fonction pour naviguer vers un équipement sur la carte
+  async function goToEquipmentOnMap(eq) {
+    if (!eq?.id) return;
+    setSelectedEquipmentId(eq.id);
+
+    // Si on a building/zone, trouver le plan correspondant
+    if (eq.building || eq.zone) {
+      // Charger les plans si pas encore fait
+      let availablePlans = plans;
+      if (availablePlans.length === 0) {
+        try {
+          const res = await api.atexMaps.listPlans();
+          availablePlans = res?.plans || [];
+          setPlans(availablePlans);
+        } catch (e) {
+          console.warn("[ATEX] loadPlans error:", e);
+        }
+      }
+      // Trouver un plan correspondant
+      const matchingPlan = availablePlans.find(
+        p => p.building === eq.building && p.zone === eq.zone
+      ) || availablePlans.find(
+        p => p.building === eq.building
+      ) || availablePlans[0];
+
+      if (matchingPlan) {
+        setSelectedPlan(matchingPlan);
+        setMapRefreshTick(t => t + 1);
+      }
+    }
+    setActiveTab("plans");
+    setToast(`Navigation vers ${eq.name || "l'équipement"} sur la carte`);
+  }
+
   /* ----------------------------- UI Components ----------------------------- */
   const dirty = isDirty();
 
@@ -579,6 +647,7 @@ export default function Atex() {
             items={items}
             loading={loading}
             onOpenEquipment={openEdit}
+            onGoToMap={goToEquipmentOnMap}
           />
         )}
 
@@ -612,6 +681,8 @@ export default function Atex() {
             editing={editing}
             setEditing={setEditing}
             setToast={setToast}
+            selectedEquipmentId={selectedEquipmentId}
+            setSelectedEquipmentId={setSelectedEquipmentId}
           />
         )}
 
@@ -781,7 +852,7 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
 // EQUIPMENTS TAB
 // ============================================================
 
-function EquipmentsTab({ items, loading, onOpenEquipment }) {
+function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
   const statusLabel = (st) => {
     if (st === "a_faire") return "À faire";
     if (st === "en_cours_30") return "En cours";
@@ -803,6 +874,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment }) {
       orange: "bg-amber-100 text-amber-700",
       red: "bg-rose-100 text-rose-700",
       blue: "bg-blue-100 text-blue-700",
+      purple: "bg-purple-100 text-purple-700",
     };
     return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]}`}>{children}</span>;
   };
@@ -825,75 +897,126 @@ function EquipmentsTab({ items, loading, onOpenEquipment }) {
     );
   }
 
+  // 🆕 Version responsive: cartes sur mobile, tableau sur desktop
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="text-left p-3 font-semibold">Équipement</th>
-            <th className="text-left p-3 font-semibold">Localisation</th>
-            <th className="text-left p-3 font-semibold">Zonage</th>
-            <th className="text-left p-3 font-semibold">Conformité</th>
-            <th className="text-left p-3 font-semibold">Statut</th>
-            <th className="text-left p-3 font-semibold">Prochain contrôle</th>
-            <th className="text-left p-3 font-semibold">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it, idx) => (
-            <tr key={it.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
-              <td className="p-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
-                    {it.photo_url ? (
-                      <img src={api.atex.photoUrl(it.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-gray-400 text-lg">📷</span>
-                    )}
-                  </div>
-                  <button className="text-blue-600 font-medium hover:underline text-left" onClick={() => onOpenEquipment(it)}>
-                    {it.name || it.type || "Équipement"}
-                  </button>
+    <div>
+      {/* Mobile: Liste de cartes */}
+      <div className="sm:hidden space-y-3">
+        {items.map((it) => (
+          <div key={it.id} className="bg-white border rounded-xl p-3 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+                {it.photo_url ? (
+                  <img src={api.atex.photoUrl(it.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-gray-400 text-2xl">📷</span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <button className="text-blue-600 font-semibold hover:underline text-left truncate w-full" onClick={() => onOpenEquipment(it)}>
+                  {it.name || it.type || "Équipement"}
+                </button>
+                <div className="text-xs text-gray-500 truncate">
+                  {it.building || "—"} / {it.zone || "—"}
                 </div>
-              </td>
-              <td className="p-3 text-gray-600">
-                {it.building || "—"} / {it.zone || "—"}
-                {it.equipment && <span className="text-gray-400"> • {it.equipment}</span>}
-              </td>
-              <td className="p-3">
-                <div className="flex gap-1">
+                <div className="flex flex-wrap gap-1 mt-1">
                   {it.zoning_gas != null && <Badge color="orange">Gaz {it.zoning_gas}</Badge>}
                   {it.zoning_dust != null && <Badge color="blue">Dust {it.zoning_dust}</Badge>}
-                  {it.zoning_gas == null && it.zoning_dust == null && <span className="text-gray-400">—</span>}
+                  <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                 </div>
-              </td>
-              <td className="p-3">
-                {it.compliance_state === "conforme" ? (
-                  <Badge color="green">Conforme</Badge>
-                ) : it.compliance_state === "non_conforme" ? (
-                  <Badge color="red">Non conforme</Badge>
-                ) : (
-                  <Badge>N/A</Badge>
-                )}
-              </td>
-              <td className="p-3">
-                <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
-              </td>
-              <td className="p-3 whitespace-nowrap text-gray-600">
-                {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : "—"}
-              </td>
-              <td className="p-3">
-                <button
-                  onClick={() => onOpenEquipment(it)}
-                  className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm"
-                >
-                  Ouvrir
+              </div>
+            </div>
+            <div className="flex gap-2 mt-3 pt-3 border-t">
+              <button onClick={() => onOpenEquipment(it)} className="flex-1 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm font-medium">
+                Modifier
+              </button>
+              {onGoToMap && (
+                <button onClick={() => onGoToMap(it)} className="flex-1 px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-sm font-medium">
+                  📍 Carte
                 </button>
-              </td>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: Tableau */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left p-3 font-semibold">Équipement</th>
+              <th className="text-left p-3 font-semibold hidden lg:table-cell">Localisation</th>
+              <th className="text-left p-3 font-semibold">Zonage</th>
+              <th className="text-left p-3 font-semibold hidden md:table-cell">Conformité</th>
+              <th className="text-left p-3 font-semibold">Statut</th>
+              <th className="text-left p-3 font-semibold hidden lg:table-cell">Prochain</th>
+              <th className="text-left p-3 font-semibold">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {items.map((it, idx) => (
+              <tr key={it.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                <td className="p-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+                      {it.photo_url ? (
+                        <img src={api.atex.photoUrl(it.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-gray-400 text-lg">📷</span>
+                      )}
+                    </div>
+                    <div>
+                      <button className="text-blue-600 font-medium hover:underline text-left" onClick={() => onOpenEquipment(it)}>
+                        {it.name || it.type || "Équipement"}
+                      </button>
+                      <div className="text-xs text-gray-400 lg:hidden">{it.building || "—"}</div>
+                    </div>
+                  </div>
+                </td>
+                <td className="p-3 text-gray-600 hidden lg:table-cell">
+                  {it.building || "—"} / {it.zone || "—"}
+                  {it.equipment && <span className="text-gray-400 block text-xs">{it.equipment}</span>}
+                </td>
+                <td className="p-3">
+                  <div className="flex flex-col gap-1">
+                    {it.zoning_gas != null && <Badge color="orange">Gaz {it.zoning_gas}</Badge>}
+                    {it.zoning_dust != null && <Badge color="blue">Dust {it.zoning_dust}</Badge>}
+                    {it.zoning_gas == null && it.zoning_dust == null && <span className="text-gray-400">—</span>}
+                  </div>
+                </td>
+                <td className="p-3 hidden md:table-cell">
+                  {it.compliance_state === "conforme" ? (
+                    <Badge color="green">Conforme</Badge>
+                  ) : it.compliance_state === "non_conforme" ? (
+                    <Badge color="red">Non conforme</Badge>
+                  ) : (
+                    <Badge>N/A</Badge>
+                  )}
+                </td>
+                <td className="p-3">
+                  <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
+                </td>
+                <td className="p-3 whitespace-nowrap text-gray-600 hidden lg:table-cell">
+                  {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YY") : "—"}
+                </td>
+                <td className="p-3">
+                  <div className="flex gap-1">
+                    <button onClick={() => onOpenEquipment(it)} className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs">
+                      Ouvrir
+                    </button>
+                    {onGoToMap && (
+                      <button onClick={() => onGoToMap(it)} className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs" title="Voir sur la carte">
+                        📍
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1030,7 +1153,7 @@ function CalendarTab({ items, onOpenEquipment }) {
 // PLANS TAB
 // ============================================================
 
-function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast }) {
+function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId }) {
   const grouped = useMemo(() => {
     const byKey = new Map();
     for (const p of plans) {
@@ -1140,9 +1263,13 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             </button>
           </div>
           <AtexMap
-            key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+            key={`${selectedPlan.logical_name}:${mapRefreshTick}:${selectedEquipmentId || ''}`}
             plan={selectedPlan}
-            onOpenEquipment={openEdit}
+            selectedEquipmentId={selectedEquipmentId}
+            onOpenEquipment={(eq) => {
+              setSelectedEquipmentId(eq?.id || null);  // 🆕 Highlight quand on clique sur marqueur
+              openEdit(eq);
+            }}
             onZonesApplied={async (id, zones) => {
               applyZonesLocally(id, zones);
               await reload();
@@ -1156,7 +1283,7 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             }}
             onMetaChanged={async () => {
               await reload();
-              setToast("Plans et équipements mis à jour");
+              setToast("Équipements mis à jour");
             }}
           />
         </div>
@@ -1365,34 +1492,30 @@ function EquipmentDrawer({
                 />
               </div>
             </div>
+            {/* 🆕 Zonage: read-only car lié aux zones ATEX sur le plan */}
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Zonage Gaz (0/1/2)</label>
-                <select
-                  value={editing.zoning_gas ?? ""}
-                  onChange={(e) => setEditing({ ...editing, zoning_gas: e.target.value === "" ? null : Number(e.target.value) })}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">Non classé</option>
-                  <option value="0">Zone 0 (permanent)</option>
-                  <option value="1">Zone 1 (occasionnel)</option>
-                  <option value="2">Zone 2 (rare)</option>
-                </select>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Zonage Gaz
+                  <span className="ml-1 text-purple-500" title="Déterminé automatiquement par la zone sur le plan">🔒</span>
+                </label>
+                <div className={`w-full border rounded-lg px-3 py-2 text-sm ${editing.zoning_gas != null ? "bg-amber-50 border-amber-200 text-amber-800 font-medium" : "bg-gray-50 text-gray-500"}`}>
+                  {editing.zoning_gas != null ? `Zone ${editing.zoning_gas}` : "Non classé"}
+                </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Zonage Poussière (20/21/22)</label>
-                <select
-                  value={editing.zoning_dust ?? ""}
-                  onChange={(e) => setEditing({ ...editing, zoning_dust: e.target.value === "" ? null : Number(e.target.value) })}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">Non classé</option>
-                  <option value="20">Zone 20 (permanent)</option>
-                  <option value="21">Zone 21 (occasionnel)</option>
-                  <option value="22">Zone 22 (rare)</option>
-                </select>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Zonage Poussière
+                  <span className="ml-1 text-purple-500" title="Déterminé automatiquement par la zone sur le plan">🔒</span>
+                </label>
+                <div className={`w-full border rounded-lg px-3 py-2 text-sm ${editing.zoning_dust != null ? "bg-orange-50 border-orange-200 text-orange-800 font-medium" : "bg-gray-50 text-gray-500"}`}>
+                  {editing.zoning_dust != null ? `Zone ${editing.zoning_dust}` : "Non classé"}
+                </div>
               </div>
             </div>
+            <p className="text-xs text-gray-400 -mt-1">
+              💡 Le zonage est automatiquement déterminé par la position sur le plan ATEX.
+            </p>
           </div>
 
           {/* Dates */}
