@@ -1585,9 +1585,21 @@ export const api = {
     /** Crée un nouveau tableau */
     createBoard: (payload) => post("/api/switchboard/boards", payload),
 
-    /** Met à jour un tableau existant */
-    updateBoard: (id, payload) =>
-      put(`/api/switchboard/boards/${encodeURIComponent(id)}`, payload),
+    // Mettre à jour un tableau (timeout élargi à 60s pour les gros diagrammes)
+    updateBoard: (id, payload, { timeout = 60000 } = {}) =>
+      jsonFetch(`/api/switchboard/boards/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: payload instanceof FormData ? payload : JSON.stringify(payload),
+        timeout
+      }),
+
+    // PATCH partiel d'un board (diagram_data, modes, quality seulement)
+    patchBoard: (id, payload, { timeout = 15000 } = {}) =>
+      jsonFetch(`/api/switchboard/boards/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+        timeout
+      }),
 
     /** Supprime un tableau et ses disjoncteurs associés */
     deleteBoard: (id) =>
@@ -1701,9 +1713,22 @@ export const api = {
     /** Crée un nouveau disjoncteur */
     createDevice: (payload) => post("/api/switchboard/devices", payload),
 
-    /** Met à jour un disjoncteur existant */
-    updateDevice: (id, payload) =>
-      put(`/api/switchboard/devices/${encodeURIComponent(id)}`, payload),
+    // Mettre à jour un disjoncteur (timeout élargi à 60s)
+    updateDevice: (id, payload, { timeout = 60000 } = {}) =>
+      jsonFetch(`/api/switchboard/devices/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: payload instanceof FormData ? payload : JSON.stringify(payload),
+        timeout
+      }),
+
+    // Mettre à jour en bulk les positions des devices d'un board
+    bulkUpdateDevicePositions: (boardId, devices, { timeout = 60000 } = {}) =>
+      jsonFetch(`/api/switchboard/boards/${encodeURIComponent(boardId)}/devices/bulk-positions`, {
+        method: 'PUT',
+        body: JSON.stringify({ devices }),
+        timeout
+      }),
+
 
     /** Supprime un disjoncteur */
     deleteDevice: (id) =>
