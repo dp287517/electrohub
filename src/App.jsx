@@ -17,7 +17,7 @@ import ArcFlash from './pages/Arc_flash.jsx';
 import Obsolescence from './pages/Obsolescence.jsx';
 import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
-import Controls from './pages/Controls.jsx';
+// Controls supprimé - sera remplacé par SwitchboardControls
 import Oibt from './pages/Oibt.jsx';
 import Project from './pages/Project.jsx';
 import Comp from './pages/Comp.jsx';
@@ -68,7 +68,7 @@ export default function App() {
           <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} />
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
-          <Route path="/app/controls" element={<ProtectedRoute><Controls /></ProtectedRoute>} />
+          {/* Route /app/controls supprimée - sera remplacée par /app/switchboard-controls */}
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
           <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
