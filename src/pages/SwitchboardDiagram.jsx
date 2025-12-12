@@ -1,19 +1,21 @@
+// src/pages/SwitchboardDiagram.jsx
+// Complete and corrected version - uses bulk positions endpoint
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import ReactFlow, { 
-  useNodesState, 
-  useEdgesState, 
-  Controls, 
+import ReactFlow, {
+  useNodesState,
+  useEdgesState,
+  Controls,
   Background,
-  Handle, 
+  Handle,
   Position,
   useReactFlow,
   ReactFlowProvider,
   Panel
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { 
-  ArrowLeft, Save, RefreshCw, Edit2, 
+import {
+  ArrowLeft, Save, RefreshCw, Edit2,
   X, Printer, Layers, AlertCircle, ArrowUpRight, Check, AlertTriangle
 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -149,7 +151,7 @@ const SourceNode = ({ data }) => {
 
 const BusbarNode = ({ data }) => (
   <div className="relative">
-    <div 
+    <div
       className="h-6 bg-gradient-to-b from-amber-600 via-amber-400 to-amber-700 shadow-md border-x-2 border-amber-800 flex items-center justify-center relative"
       style={{ width: data.width || 300, borderRadius: '2px' }}
     >
@@ -240,6 +242,42 @@ const DeviceNode = ({ data }) => {
 };
 
 const nodeTypes = { source: SourceNode, busbar: BusbarNode, breaker: DeviceNode };
+
+// ---------------------------------------------------------
+// Helper: buildPatch (AMÉLIORÉ)
+// Retourne seulement les champs modifiés.
+// Gère aussi `meta` (building_code / floor / room)
+// ---------------------------------------------------------
+const buildPatch = (original, modified) => {
+  const patch = {};
+  if (!original || !modified) return patch;
+
+  // Champs top-level simples
+  if ((modified.name || '') !== (original.name || '')) patch.name = modified.name;
+  if ((modified.code || '') !== (original.code || '')) patch.code = modified.code;
+  if ((modified.regime_neutral || '') !== (original.regime_neutral || '')) patch.regime_neutral = modified.regime_neutral;
+  if ((!!modified.is_principal) !== (!!original.is_principal)) patch.is_principal = !!modified.is_principal;
+
+  // meta (building_code, floor, room)
+  const origMeta = original.meta || {};
+  const modMeta = modified.meta || {};
+  const metaPatch = {};
+  if ((modMeta.building_code || '') !== (origMeta.building_code || '')) metaPatch.building_code = modMeta.building_code;
+  if ((modMeta.floor || '') !== (origMeta.floor || '')) metaPatch.floor = modMeta.floor;
+  if ((modMeta.room || '') !== (origMeta.room || '')) metaPatch.room = modMeta.room;
+  if (Object.keys(metaPatch).length) patch.meta = metaPatch;
+
+  // objets JSON (modes / quality)
+  if (JSON.stringify(modified.modes || {}) !== JSON.stringify(original.modes || {})) patch.modes = modified.modes;
+  if (JSON.stringify(modified.quality || {}) !== JSON.stringify(original.quality || {})) patch.quality = modified.quality;
+
+  // diagram_data: lourd → on l'envoie seulement s'il a vraiment changé
+  if (JSON.stringify(modified.diagram_data || {}) !== JSON.stringify(original.diagram_data || {})) {
+    patch.diagram_data = modified.diagram_data;
+  }
+
+  return patch;
+};
 
 // ==================== PROPERTY SIDEBAR ====================
 const inputBaseClass =
@@ -468,7 +506,6 @@ const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
 };
 
 // ==================== MAIN COMPONENT ====================
-
 const DiagramContent = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -478,6 +515,7 @@ const DiagramContent = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [board, setBoard] = useState(null);
+  const [originalBoard, setOriginalBoard] = useState(null);
   const [settings, setSettings] = useState(null);
 
   const [loading, setLoading] = useState(true);         // premier chargement
@@ -520,6 +558,9 @@ const DiagramContent = () => {
     try {
       const boardRes = await api.switchboard.getBoard(id);
       setBoard(boardRes);
+
+      // IMPORTANT : garder une copie immuable du board chargé
+      setOriginalBoard(JSON.parse(JSON.stringify(boardRes)));
 
       const devicesRes = await api.switchboard.listDevices(id);
       const devices = devicesRes.data || [];
@@ -660,6 +701,7 @@ const DiagramContent = () => {
     if (isNaN(dbId)) return;
 
     try {
+      // Ajout d'un timeout implicite du côté client (api.updateDevice gère le timeout)
       await api.switchboard.updateDevice(dbId, {
         name: newData.name,
         reference: newData.reference,
@@ -696,22 +738,56 @@ const DiagramContent = () => {
     }
   };
 
+  const handleSaveBoard = async () => {
+    if (!board || !originalBoard) {
+      alert("Aucun tableau chargé ou copie originale manquante.");
+      return;
+    }
+
+    const payload = buildPatch(originalBoard, board);
+    if (!payload || Object.keys(payload).length === 0) {
+      alert("Aucun changement à sauvegarder.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // on utilise le timeout 60s côté client (défini dans api.updateBoard)
+      await api.switchboard.updateBoard(board.id, payload, { timeout: 60000 });
+
+      // Mettre à jour originalBoard pour les prochaines comparaisons
+      setOriginalBoard(JSON.parse(JSON.stringify({ ...originalBoard, ...payload })));
+
+      alert("Tableau enregistré !");
+    } catch (e) {
+      console.error('Erreur save board:', e);
+      alert("Erreur à la sauvegarde du tableau.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // CORRIGÉ : utilise PATCH pour les updates partiels
   const handleSaveLayout = async () => {
     setSaving(true);
     try {
       const updates = nodes
         .filter(n => n.type === 'breaker')
-        .map(n => {
-          const did = parseInt(n.id.replace('dev-', ''), 10);
-          return !isNaN(did)
-            ? api.switchboard.updateDevice(did, { diagram_data: { position: n.position } })
-            : null;
-        })
-        .filter(Boolean);
+        .map(n => ({ id: parseInt(n.id.replace('dev-', ''), 10), position: n.position }))
+        .filter(u => !isNaN(u.id));
 
-      await Promise.all(updates);
-      await api.switchboard.updateBoard(id, { diagram_data: { layout: 'custom' } });
+      if (updates.length > 0) {
+        // Appel bulk pour les positions des devices
+        await api.switchboard.bulkUpdateDevicePositions(id, updates, { timeout: 60000 });
+      }
+
+      // ✅ Utiliser PATCH au lieu de PUT pour les updates partiels
+      await api.switchboard.patchBoard(id, { diagram_data: { layout: 'custom' } }, { timeout: 15000 });
+
       alert("Disposition sauvegardée !");
+    } catch (e) {
+      console.error('handleSaveLayout error', e);
+      alert("Erreur lors de la sauvegarde de la disposition.");
     } finally {
       setSaving(false);
     }
@@ -721,14 +797,8 @@ const DiagramContent = () => {
     if (!board) return;
     setIsPrinting(true);
     try {
-      const response = await fetch(
-        `${api.baseURL}/api/switchboard/boards/${board.id}/diagram-pdf?site=${api.site}`,
-        { method: 'GET', headers: { 'X-Site': api.site } }
-      );
-
-      if (!response.ok) throw new Error('PDF generation failed');
-
-      const blob = await response.blob();
+      // ✅ Utiliser la méthode API existante
+      const blob = await api.switchboard.downloadDiagramPdf(board.id);
       const url = URL.createObjectURL(blob);
 
       const a = document.createElement('a');
@@ -794,6 +864,16 @@ const DiagramContent = () => {
         </div>
 
         <div className="flex gap-2 shrink-0">
+          {/* New button: Save board metadata */}
+          <button
+            onClick={handleSaveBoard}
+            disabled={saving}
+            className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm shadow-sm transition-colors disabled:opacity-50"
+          >
+            {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+            <span className="hidden md:inline">Enregistrer le tableau</span>
+          </button>
+
           <button
             onClick={handleSaveLayout}
             disabled={saving}
