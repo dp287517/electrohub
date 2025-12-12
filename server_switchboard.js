@@ -3100,8 +3100,55 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
       if (y > 750) { doc.addPage(); y = 50; }
     });
 
+    // Devices list (if switchboard control)
+    if (record.switchboard_id) {
+      const devicesRes = await quickQuery(`
+        SELECT position_number, name, manufacturer, reference, in_amps, icu_ka, pole_count
+        FROM devices
+        WHERE switchboard_id = $1
+        ORDER BY position_number::int NULLS LAST, name
+      `, [record.switchboard_id]);
+
+      if (devicesRes.rows.length > 0) {
+        if (y > 600) { doc.addPage(); y = 50; }
+        y += 20;
+        doc.fontSize(14).fillColor('#1e40af').text(`Disjoncteurs du tableau (${devicesRes.rows.length})`, 50, y);
+        y += 25;
+
+        // Table header
+        doc.rect(50, y, 495, 20).fill('#e5e7eb');
+        doc.fontSize(8).fillColor('#374151');
+        doc.text('N°', 55, y + 6, { width: 30 });
+        doc.text('Nom', 85, y + 6, { width: 120 });
+        doc.text('Fabricant', 210, y + 6, { width: 80 });
+        doc.text('Référence', 295, y + 6, { width: 100 });
+        doc.text('In (A)', 400, y + 6, { width: 40 });
+        doc.text('Icu (kA)', 445, y + 6, { width: 40 });
+        doc.text('Pôles', 490, y + 6, { width: 40 });
+        y += 20;
+
+        // Table rows
+        devicesRes.rows.forEach((device, idx) => {
+          const bgColor = idx % 2 === 0 ? '#ffffff' : '#f9fafb';
+          doc.rect(50, y, 495, 18).fill(bgColor);
+          doc.fontSize(7).fillColor('#374151');
+          doc.text(device.position_number || '-', 55, y + 5, { width: 30 });
+          doc.text(device.name || '-', 85, y + 5, { width: 120 });
+          doc.text(device.manufacturer || '-', 210, y + 5, { width: 80 });
+          doc.text(device.reference || '-', 295, y + 5, { width: 100 });
+          doc.text(device.in_amps || '-', 400, y + 5, { width: 40 });
+          doc.text(device.icu_ka || '-', 445, y + 5, { width: 40 });
+          doc.text(device.pole_count || '-', 490, y + 5, { width: 40 });
+          y += 18;
+          if (y > 750) { doc.addPage(); y = 50; }
+        });
+        y += 10;
+      }
+    }
+
     // Notes
     if (record.global_notes) {
+      if (y > 700) { doc.addPage(); y = 50; }
       y += 20;
       doc.fontSize(12).fillColor('#1e40af').text('Observations', 50, y);
       y += 18;

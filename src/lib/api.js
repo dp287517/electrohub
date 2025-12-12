@@ -436,7 +436,7 @@ export const api = {
     listRecords: (params) => get("/api/switchboard/controls/records", params),
     getRecord: (id) => get(`/api/switchboard/controls/records/${id}`),
     createRecord: (data) => post("/api/switchboard/controls/records", data),
-    recordPdfUrl: (id) => `${API_BASE}/api/switchboard/controls/records/${id}/pdf`,
+    recordPdfUrl: (id) => `${API_BASE}/api/switchboard/controls/records/${id}/pdf?site=${currentSite()}`,
 
     // Attachments
     uploadAttachment: (recordId, file, extra = {}) => {
@@ -448,7 +448,7 @@ export const api = {
       return upload(`/api/switchboard/controls/records/${recordId}/attachments`, fd);
     },
     attachmentUrl: (id, thumbnail = false) =>
-      `${API_BASE}/api/switchboard/controls/attachments/${id}/file${thumbnail ? "?thumbnail=true" : ""}`,
+      `${API_BASE}/api/switchboard/controls/attachments/${id}/file?site=${currentSite()}${thumbnail ? "&thumbnail=true" : ""}`,
   },
 
   switchboardMaps: {

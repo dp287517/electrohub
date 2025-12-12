@@ -230,8 +230,8 @@ export default function SwitchboardControls() {
         <ControlModal
           schedule={selectedSchedule}
           onClose={() => { setShowControlModal(false); setSelectedSchedule(null); }}
-          onComplete={async (data) => {
-            await api.switchboardControls.createRecord(data);
+          onComplete={async () => {
+            // Record is created inside the modal (to handle file uploads)
             loadSchedules();
             loadRecords();
             loadDashboard();
@@ -908,6 +908,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
   const [globalNotes, setGlobalNotes] = useState("");
   const [status, setStatus] = useState("conform");
   const [saving, setSaving] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]); // { file, type: 'photo'|'document', caption }
 
   // Load template details
   useEffect(() => {
@@ -940,10 +941,32 @@ function ControlModal({ schedule, onClose, onComplete }) {
     setStatus(hasNonConform ? "non_conform" : allConform ? "conform" : "partial");
   };
 
+  const handleFileAdd = (e, fileType) => {
+    const files = Array.from(e.target.files || []);
+    const newFiles = files.map((file) => ({
+      file,
+      type: fileType,
+      caption: "",
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }));
+    setPendingFiles((prev) => [...prev, ...newFiles]);
+    e.target.value = "";
+  };
+
+  const removeFile = (index) => {
+    setPendingFiles((prev) => {
+      const updated = [...prev];
+      if (updated[index].preview) URL.revokeObjectURL(updated[index].preview);
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
+
   const handleComplete = async () => {
     setSaving(true);
     try {
-      await onComplete({
+      // 1. Create the record
+      const recordRes = await api.switchboardControls.createRecord({
         schedule_id: schedule.id,
         template_id: schedule.template_id,
         switchboard_id: schedule.switchboard_id,
@@ -952,6 +975,20 @@ function ControlModal({ schedule, onClose, onComplete }) {
         global_notes: globalNotes,
         status,
       });
+
+      // 2. Upload attachments if any
+      const recordId = recordRes?.record?.id;
+      if (recordId && pendingFiles.length > 0) {
+        for (const pf of pendingFiles) {
+          await api.switchboardControls.uploadAttachment(recordId, pf.file, {
+            file_type: pf.type,
+            caption: pf.caption,
+          });
+        }
+      }
+
+      // 3. Notify parent to refresh
+      await onComplete(null); // Pass null since we already created the record
     } finally {
       setSaving(false);
     }
@@ -1074,6 +1111,67 @@ function ControlModal({ schedule, onClose, onComplete }) {
               {status === "conform" ? "✓ Conforme" :
                status === "non_conform" ? "✗ Non conforme" : "Partiel"}
             </span>
+          </div>
+
+          {/* Photos & Documents */}
+          <div className="border rounded-lg p-4">
+            <h4 className="font-medium mb-3">📎 Pièces jointes</h4>
+            <div className="flex gap-2 mb-3">
+              <label className="px-3 py-2 bg-blue-100 text-blue-700 rounded cursor-pointer hover:bg-blue-200 text-sm flex items-center gap-1">
+                📷 Ajouter photos
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleFileAdd(e, "photo")}
+                  className="hidden"
+                />
+              </label>
+              <label className="px-3 py-2 bg-purple-100 text-purple-700 rounded cursor-pointer hover:bg-purple-200 text-sm flex items-center gap-1">
+                📄 Ajouter documents
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  multiple
+                  onChange={(e) => handleFileAdd(e, "document")}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {pendingFiles.length > 0 && (
+              <div className="space-y-2">
+                {pendingFiles.map((pf, idx) => (
+                  <div key={idx} className="flex items-center gap-3 bg-gray-50 p-2 rounded">
+                    {pf.preview ? (
+                      <img src={pf.preview} alt="" className="w-12 h-12 object-cover rounded" />
+                    ) : (
+                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-gray-500">
+                        📄
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{pf.file.name}</p>
+                      <p className="text-xs text-gray-500">
+                        {pf.type === "photo" ? "Photo" : "Document"} • {(pf.file.size / 1024).toFixed(0)} KB
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => removeFile(idx)}
+                      className="p-1 text-red-500 hover:bg-red-100 rounded"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {pendingFiles.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-2">
+                Aucune pièce jointe (optionnel)
+              </p>
+            )}
           </div>
         </div>
 
