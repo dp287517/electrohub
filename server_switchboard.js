@@ -1730,7 +1730,7 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
 });
 
 // ============================================================
-// AI PHOTO ANALYSIS
+// AI PHOTO ANALYSIS - Version 2.0 (Analyse approfondie)
 // ============================================================
 
 app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
@@ -1743,48 +1743,206 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const base64Image = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype || 'image/jpeg';
 
-    const response = await openai.chat.completions.create({
+    console.log('[PHOTO ANALYSIS v2.0] Starting comprehensive analysis...');
+
+    // ========================================
+    // ÉTAPE 1: Analyse visuelle détaillée
+    // ========================================
+    const visionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: `Tu es un expert en identification de disjoncteurs électriques.
-FABRICANTS CONNUS: Hager (bleu), Schneider (vert), ABB (orange), Legrand (vert foncé), Siemens (turquoise), Eaton (rouge).
-NE RETOURNE JAMAIS null pour manufacturer - fais une supposition basée sur la couleur/style si nécessaire.
-Réponds uniquement en JSON: {"manufacturer":"...", "manufacturer_confidence":"high/medium/low", "reference":"...", "is_differential":bool, "in_amps":number, "poles":number, "manufacturer_clues":"..."}`
+          content: `Tu es un expert électricien spécialisé en identification de disjoncteurs et appareillage électrique.
+
+FABRICANTS ET LEURS CARACTÉRISTIQUES VISUELLES:
+- Hager: Bleu clair, logo "h" stylisé, références commençant par MCA, MCN, MCS, MJN
+- Schneider Electric: Vert, logo SE carré, références iC60, iC40, Acti9, Compact NS
+- ABB: Orange/rouge, logo ABB, références S200, S800, SACE Tmax
+- Legrand: Vert foncé ou gris, logo Legrand, références DX³, DNX³, DPX³
+- Siemens: Turquoise/cyan, logo Siemens, références 5SL, 5SY, 3VA
+- Eaton: Rouge/noir, logo Eaton, références FAZ, PLSM, NZM
+- General Electric: Noir, logo GE, références EP, EP100
+- Gewiss: Bleu, logo G90, références GW92
+
+INFORMATIONS À EXTRAIRE (lis toutes les inscriptions visibles):
+1. Fabricant (couleur, logo, style)
+2. Référence complète (ex: MCA320, iC60N C16, S201 B10)
+3. Intensité nominale In (A) - souvent le plus gros chiffre
+4. Courbe de déclenchement (B, C, D, K, Z) - lettre avant l'intensité
+5. Pouvoir de coupure Icu/Icn (kA) - souvent en bas
+6. Tension d'emploi (V) - 230V, 400V, etc.
+7. Nombre de pôles (1P, 2P, 3P, 4P ou 1P+N)
+8. Différentiel (symbole Δ ou "RCCB", "RCD", sensibilité en mA)
+9. Type d'unité de déclenchement (thermique-magnétique TM, électronique)
+
+IMPORTANT: Analyse TOUT le texte visible, même les petits caractères.
+
+Réponds en JSON avec TOUS ces champs (null si non visible):
+{
+  "manufacturer": "...",
+  "manufacturer_confidence": "high/medium/low",
+  "manufacturer_clues": "couleur, logo, style observés",
+  "reference": "référence complète",
+  "in_amps": number ou null,
+  "curve_type": "B/C/D/K/Z ou null",
+  "icu_ka": number ou null,
+  "ics_ka": number ou null,
+  "voltage_v": number ou null,
+  "poles": number (1-4),
+  "is_differential": boolean,
+  "differential_sensitivity_ma": number ou null si différentiel,
+  "trip_unit": "thermique-magnétique/électronique/null",
+  "device_type": "Disjoncteur modulaire/Disjoncteur différentiel/Interrupteur différentiel/Contacteur/autre",
+  "all_visible_text": ["liste de tout le texte visible sur l'appareil"],
+  "analysis_notes": "observations complémentaires"
+}`
         },
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Identifie ce disjoncteur.' },
+            { type: 'text', text: 'Analyse ce disjoncteur en détail. Lis toutes les inscriptions visibles et identifie toutes les caractéristiques techniques.' },
             { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' } }
           ]
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 500,
-      temperature: 0.2
+      max_tokens: 1500,
+      temperature: 0.1
     });
 
-    const result = JSON.parse(response.choices[0].message.content);
-    
-    // Check cache for similar products
+    let result = JSON.parse(visionResponse.choices[0].message.content);
+    console.log('[PHOTO ANALYSIS v2.0] Vision result:', JSON.stringify(result, null, 2));
+
+    // ========================================
+    // ÉTAPE 2: Enrichissement par recherche de spécifications
+    // ========================================
+    if (result.reference && result.manufacturer) {
+      try {
+        console.log(`[PHOTO ANALYSIS v2.0] Enriching specs for ${result.manufacturer} ${result.reference}...`);
+
+        const specsResponse = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            {
+              role: 'system',
+              content: `Tu es un expert en documentation technique de disjoncteurs électriques.
+
+Pour le disjoncteur ${result.manufacturer} ${result.reference}, fournis les spécifications techniques complètes basées sur tes connaissances des catalogues fabricants.
+
+Si certaines valeurs ont déjà été identifiées visuellement, confirme-les ou corrige-les.
+Ajoute les valeurs manquantes en te basant sur les caractéristiques standards de cette référence.
+
+Réponds en JSON avec les spécifications enrichies:
+{
+  "confirmed_reference": "référence vérifiée/corrigée",
+  "in_amps": number,
+  "curve_type": "B/C/D",
+  "icu_ka": number,
+  "ics_ka": number,
+  "voltage_v": number,
+  "poles": number,
+  "is_differential": boolean,
+  "differential_sensitivity_ma": number ou null,
+  "differential_type": "AC/A/B/F ou null",
+  "trip_unit": "description",
+  "product_range": "gamme produit (ex: Acti9, DX³)",
+  "mounting_type": "rail DIN/fixe",
+  "width_modules": number,
+  "specifications_source": "catalogue/documentation/estimation",
+  "data_confidence": "high/medium/low"
+}`
+            },
+            {
+              role: 'user',
+              content: `Disjoncteur: ${result.manufacturer} ${result.reference}
+Valeurs déjà identifiées:
+- Intensité: ${result.in_amps || 'non visible'}A
+- Courbe: ${result.curve_type || 'non visible'}
+- Icu: ${result.icu_ka || 'non visible'}kA
+- Pôles: ${result.poles || 'non visible'}
+- Différentiel: ${result.is_differential ? 'oui' : 'non'}
+
+Complète les spécifications manquantes.`
+            }
+          ],
+          response_format: { type: 'json_object' },
+          max_tokens: 800,
+          temperature: 0.1
+        });
+
+        const enrichedSpecs = JSON.parse(specsResponse.choices[0].message.content);
+        console.log('[PHOTO ANALYSIS v2.0] Enriched specs:', JSON.stringify(enrichedSpecs, null, 2));
+
+        // Fusionner les résultats (priorité aux valeurs visuelles si non-null)
+        result = {
+          ...result,
+          reference: enrichedSpecs.confirmed_reference || result.reference,
+          in_amps: result.in_amps || enrichedSpecs.in_amps,
+          curve_type: result.curve_type || enrichedSpecs.curve_type,
+          icu_ka: result.icu_ka || enrichedSpecs.icu_ka,
+          ics_ka: result.ics_ka || enrichedSpecs.ics_ka,
+          voltage_v: result.voltage_v || enrichedSpecs.voltage_v,
+          poles: result.poles || enrichedSpecs.poles,
+          differential_sensitivity_ma: result.differential_sensitivity_ma || enrichedSpecs.differential_sensitivity_ma,
+          differential_type: enrichedSpecs.differential_type,
+          trip_unit: result.trip_unit || enrichedSpecs.trip_unit,
+          product_range: enrichedSpecs.product_range,
+          mounting_type: enrichedSpecs.mounting_type,
+          width_modules: enrichedSpecs.width_modules,
+          enriched: true,
+          enrichment_confidence: enrichedSpecs.data_confidence
+        };
+      } catch (enrichError) {
+        console.warn('[PHOTO ANALYSIS v2.0] Enrichment failed:', enrichError.message);
+        result.enriched = false;
+      }
+    }
+
+    // ========================================
+    // ÉTAPE 3: Vérification cache produits scannés
+    // ========================================
     let cacheResults = [];
     if (result.reference || result.manufacturer) {
       try {
         const cacheQuery = await quickQuery(`
-          SELECT id, reference, manufacturer, in_amps, icu_ka, poles, is_differential, scan_count, validated
+          SELECT id, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v,
+                 trip_unit, is_differential, scan_count, validated
           FROM scanned_products
           WHERE site = $1 AND (reference ILIKE $2 OR manufacturer ILIKE $3)
           ORDER BY validated DESC, scan_count DESC LIMIT 5
         `, [site, `%${result.reference || ''}%`, `%${result.manufacturer || ''}%`]);
         cacheResults = cacheQuery.rows;
-      } catch (e) { /* ignore */ }
+
+        // Si un produit validé existe dans le cache, l'utiliser pour compléter
+        const validatedMatch = cacheResults.find(c => c.validated &&
+          c.reference?.toLowerCase() === result.reference?.toLowerCase());
+        if (validatedMatch) {
+          console.log('[PHOTO ANALYSIS v2.0] Found validated cache match, using cached values');
+          result = {
+            ...result,
+            in_amps: result.in_amps || validatedMatch.in_amps,
+            icu_ka: result.icu_ka || validatedMatch.icu_ka,
+            ics_ka: result.ics_ka || validatedMatch.ics_ka,
+            poles: result.poles || validatedMatch.poles,
+            voltage_v: result.voltage_v || validatedMatch.voltage_v,
+            trip_unit: result.trip_unit || validatedMatch.trip_unit,
+            from_validated_cache: true
+          };
+        }
+      } catch (e) { /* ignore cache errors */ }
     }
-    
-    res.json({ ...result, cache_suggestions: cacheResults, from_cache: false });
+
+    console.log('[PHOTO ANALYSIS v2.0] Final result:', JSON.stringify(result, null, 2));
+
+    res.json({
+      ...result,
+      cache_suggestions: cacheResults,
+      from_cache: false,
+      analysis_version: '2.0'
+    });
   } catch (e) {
-    console.error('[PHOTO ANALYSIS]', e.message);
+    console.error('[PHOTO ANALYSIS v2.0]', e.message);
     res.status(500).json({ error: 'Photo analysis failed: ' + e.message });
   }
 });
