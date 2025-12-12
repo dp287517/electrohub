@@ -503,6 +503,97 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_scanned_products_manufacturer ON scanned_products(manufacturer);
 
     -- =======================================================
+    -- TABLE: Control Templates (Modèles de formulaires)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_templates (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      target_type TEXT NOT NULL DEFAULT 'switchboard', -- 'switchboard' ou 'device'
+      frequency_months INTEGER DEFAULT 12,
+      checklist_items JSONB DEFAULT '[]'::jsonb,
+      -- Format: [{ "id": "uuid", "label": "...", "type": "conform|text|value", "unit": "V|A|etc", "required": false }]
+      is_active BOOLEAN DEFAULT TRUE,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_templates_site ON control_templates(site);
+    CREATE INDEX IF NOT EXISTS idx_control_templates_type ON control_templates(target_type);
+
+    -- =======================================================
+    -- TABLE: Control Schedules (Planification des contrôles)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_schedules (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      template_id INTEGER REFERENCES control_templates(id) ON DELETE CASCADE,
+      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+      device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      next_due_date DATE,
+      last_control_date DATE,
+      last_control_id INTEGER,
+      status TEXT DEFAULT 'pending', -- 'pending', 'overdue', 'done'
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT check_target CHECK (
+        (switchboard_id IS NOT NULL AND device_id IS NULL) OR
+        (switchboard_id IS NULL AND device_id IS NOT NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_schedules_site ON control_schedules(site);
+    CREATE INDEX IF NOT EXISTS idx_control_schedules_switchboard ON control_schedules(switchboard_id);
+    CREATE INDEX IF NOT EXISTS idx_control_schedules_device ON control_schedules(device_id);
+    CREATE INDEX IF NOT EXISTS idx_control_schedules_status ON control_schedules(status);
+    CREATE INDEX IF NOT EXISTS idx_control_schedules_due ON control_schedules(next_due_date);
+
+    -- =======================================================
+    -- TABLE: Control Records (Historique des contrôles)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_records (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      schedule_id INTEGER REFERENCES control_schedules(id) ON DELETE SET NULL,
+      template_id INTEGER REFERENCES control_templates(id) ON DELETE SET NULL,
+      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+      device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      performed_by TEXT NOT NULL,
+      performed_by_email TEXT,
+      performed_at TIMESTAMPTZ DEFAULT NOW(),
+      status TEXT DEFAULT 'conform', -- 'conform', 'non_conform', 'partial'
+      checklist_results JSONB DEFAULT '[]'::jsonb,
+      -- Format: [{ "item_id": "...", "status": "conform|non_conform|na", "value": "...", "comment": "..." }]
+      global_notes TEXT,
+      signature_base64 TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_records_site ON control_records(site);
+    CREATE INDEX IF NOT EXISTS idx_control_records_switchboard ON control_records(switchboard_id);
+    CREATE INDEX IF NOT EXISTS idx_control_records_device ON control_records(device_id);
+    CREATE INDEX IF NOT EXISTS idx_control_records_date ON control_records(performed_at);
+    CREATE INDEX IF NOT EXISTS idx_control_records_status ON control_records(status);
+
+    -- =======================================================
+    -- TABLE: Control Attachments (Photos & Documents)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_attachments (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      control_record_id INTEGER REFERENCES control_records(id) ON DELETE CASCADE,
+      checklist_item_id TEXT, -- Lié à un item de checklist (optionnel)
+      file_type TEXT DEFAULT 'photo', -- 'photo', 'document'
+      file_name TEXT,
+      file_mime TEXT,
+      file_data BYTEA,
+      thumbnail BYTEA,
+      caption TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_attachments_record ON control_attachments(control_record_id);
+    CREATE INDEX IF NOT EXISTS idx_control_attachments_site ON control_attachments(site);
+
+    -- =======================================================
     -- MIGRATIONS: Ajouter colonnes manquantes
     -- =======================================================
     DO $$
@@ -2353,6 +2444,718 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     doc.end();
   } catch (e) {
     console.error('[PDF EXPORT]', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'PDF generation failed' });
+  }
+});
+
+// ============================================================
+// SWITCHBOARD CONTROLS - API v1.0
+// ============================================================
+
+// --- TEMPLATES ---
+
+// List templates
+app.get('/api/switchboard/controls/templates', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { target_type } = req.query;
+    let sql = `SELECT * FROM control_templates WHERE site = $1`;
+    const params = [site];
+
+    if (target_type) {
+      sql += ` AND target_type = $2`;
+      params.push(target_type);
+    }
+    sql += ` ORDER BY name`;
+
+    const { rows } = await quickQuery(sql, params);
+    res.json({ templates: rows });
+  } catch (e) {
+    console.error('[CONTROLS] List templates error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create template
+app.post('/api/switchboard/controls/templates', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { name, description, target_type, frequency_months, checklist_items } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name required' });
+
+    const createdBy = req.headers['x-user-email'] || req.headers['x-user-name'] || 'unknown';
+
+    const { rows } = await quickQuery(`
+      INSERT INTO control_templates (site, name, description, target_type, frequency_months, checklist_items, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [site, name, description || null, target_type || 'switchboard', frequency_months || 12,
+        JSON.stringify(checklist_items || []), createdBy]);
+
+    res.json({ template: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Create template error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update template
+app.put('/api/switchboard/controls/templates/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    const { name, description, target_type, frequency_months, checklist_items, is_active } = req.body;
+
+    const { rows } = await quickQuery(`
+      UPDATE control_templates
+      SET name = COALESCE($1, name),
+          description = COALESCE($2, description),
+          target_type = COALESCE($3, target_type),
+          frequency_months = COALESCE($4, frequency_months),
+          checklist_items = COALESCE($5, checklist_items),
+          is_active = COALESCE($6, is_active),
+          updated_at = NOW()
+      WHERE id = $7 AND site = $8
+      RETURNING *
+    `, [name, description, target_type, frequency_months,
+        checklist_items ? JSON.stringify(checklist_items) : null, is_active, id, site]);
+
+    if (!rows.length) return res.status(404).json({ error: 'Template not found' });
+    res.json({ template: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Update template error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete template
+app.delete('/api/switchboard/controls/templates/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    await quickQuery(`DELETE FROM control_templates WHERE id = $1 AND site = $2`, [id, site]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[CONTROLS] Delete template error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- SCHEDULES ---
+
+// List schedules (with filters)
+app.get('/api/switchboard/controls/schedules', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { switchboard_id, device_id, status, overdue } = req.query;
+
+    let sql = `
+      SELECT cs.*,
+             ct.name as template_name, ct.target_type, ct.frequency_months,
+             sb.name as switchboard_name, sb.code as switchboard_code,
+             d.name as device_name, d.position_number as device_position
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
+      LEFT JOIN devices d ON cs.device_id = d.id
+      WHERE cs.site = $1
+    `;
+    const params = [site];
+    let idx = 2;
+
+    if (switchboard_id) {
+      sql += ` AND cs.switchboard_id = $${idx++}`;
+      params.push(switchboard_id);
+    }
+    if (device_id) {
+      sql += ` AND cs.device_id = $${idx++}`;
+      params.push(device_id);
+    }
+    if (status) {
+      sql += ` AND cs.status = $${idx++}`;
+      params.push(status);
+    }
+    if (overdue === 'true') {
+      sql += ` AND cs.next_due_date < CURRENT_DATE`;
+    }
+
+    sql += ` ORDER BY cs.next_due_date ASC NULLS LAST`;
+
+    const { rows } = await quickQuery(sql, params);
+
+    // Update overdue status
+    const now = new Date();
+    rows.forEach(r => {
+      if (r.next_due_date && new Date(r.next_due_date) < now && r.status !== 'done') {
+        r.status = 'overdue';
+      }
+    });
+
+    res.json({ schedules: rows });
+  } catch (e) {
+    console.error('[CONTROLS] List schedules error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create schedule (assign control to switchboard/device)
+app.post('/api/switchboard/controls/schedules', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { template_id, switchboard_id, device_id, next_due_date } = req.body;
+    if (!template_id) return res.status(400).json({ error: 'Template ID required' });
+    if (!switchboard_id && !device_id) return res.status(400).json({ error: 'Switchboard or Device ID required' });
+
+    // Check if schedule already exists
+    const existing = await quickQuery(`
+      SELECT id FROM control_schedules
+      WHERE site = $1 AND template_id = $2
+        AND (switchboard_id = $3 OR device_id = $4)
+    `, [site, template_id, switchboard_id || null, device_id || null]);
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Schedule already exists for this template and target' });
+    }
+
+    const { rows } = await quickQuery(`
+      INSERT INTO control_schedules (site, template_id, switchboard_id, device_id, next_due_date, status)
+      VALUES ($1, $2, $3, $4, $5, 'pending')
+      RETURNING *
+    `, [site, template_id, switchboard_id || null, device_id || null, next_due_date || new Date()]);
+
+    res.json({ schedule: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Create schedule error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete schedule
+app.delete('/api/switchboard/controls/schedules/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    await quickQuery(`DELETE FROM control_schedules WHERE id = $1 AND site = $2`, [id, site]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[CONTROLS] Delete schedule error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- CONTROL RECORDS ---
+
+// List control history
+app.get('/api/switchboard/controls/records', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { switchboard_id, device_id, limit = 50 } = req.query;
+
+    let sql = `
+      SELECT cr.*,
+             ct.name as template_name,
+             sb.name as switchboard_name, sb.code as switchboard_code,
+             d.name as device_name, d.position_number as device_position
+      FROM control_records cr
+      LEFT JOIN control_templates ct ON cr.template_id = ct.id
+      LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
+      LEFT JOIN devices d ON cr.device_id = d.id
+      WHERE cr.site = $1
+    `;
+    const params = [site];
+    let idx = 2;
+
+    if (switchboard_id) {
+      sql += ` AND cr.switchboard_id = $${idx++}`;
+      params.push(switchboard_id);
+    }
+    if (device_id) {
+      sql += ` AND cr.device_id = $${idx++}`;
+      params.push(device_id);
+    }
+
+    sql += ` ORDER BY cr.performed_at DESC LIMIT $${idx}`;
+    params.push(Number(limit));
+
+    const { rows } = await quickQuery(sql, params);
+    res.json({ records: rows });
+  } catch (e) {
+    console.error('[CONTROLS] List records error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get single record with attachments
+app.get('/api/switchboard/controls/records/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+
+    const recordRes = await quickQuery(`
+      SELECT cr.*,
+             ct.name as template_name, ct.checklist_items as template_items,
+             sb.name as switchboard_name, sb.code as switchboard_code,
+             d.name as device_name, d.position_number as device_position
+      FROM control_records cr
+      LEFT JOIN control_templates ct ON cr.template_id = ct.id
+      LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
+      LEFT JOIN devices d ON cr.device_id = d.id
+      WHERE cr.id = $1 AND cr.site = $2
+    `, [id, site]);
+
+    if (!recordRes.rows.length) return res.status(404).json({ error: 'Record not found' });
+
+    const attachments = await quickQuery(`
+      SELECT id, checklist_item_id, file_type, file_name, file_mime, caption, created_at
+      FROM control_attachments WHERE control_record_id = $1
+    `, [id]);
+
+    res.json({ record: recordRes.rows[0], attachments: attachments.rows });
+  } catch (e) {
+    console.error('[CONTROLS] Get record error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create control record (complete a control)
+app.post('/api/switchboard/controls/records', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { schedule_id, template_id, switchboard_id, device_id,
+            checklist_results, global_notes, signature_base64, status } = req.body;
+
+    const performedBy = req.headers['x-user-name'] || 'unknown';
+    const performedByEmail = req.headers['x-user-email'] || null;
+
+    // Insert record
+    const { rows } = await quickQuery(`
+      INSERT INTO control_records
+        (site, schedule_id, template_id, switchboard_id, device_id,
+         performed_by, performed_by_email, checklist_results, global_notes, signature_base64, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [site, schedule_id || null, template_id || null, switchboard_id || null, device_id || null,
+        performedBy, performedByEmail, JSON.stringify(checklist_results || []),
+        global_notes || null, signature_base64 || null, status || 'conform']);
+
+    const record = rows[0];
+
+    // Update schedule if provided
+    if (schedule_id) {
+      // Get template frequency
+      const scheduleRes = await quickQuery(`
+        SELECT cs.*, ct.frequency_months
+        FROM control_schedules cs
+        JOIN control_templates ct ON cs.template_id = ct.id
+        WHERE cs.id = $1
+      `, [schedule_id]);
+
+      if (scheduleRes.rows.length > 0) {
+        const freq = scheduleRes.rows[0].frequency_months || 12;
+        const nextDate = new Date();
+        nextDate.setMonth(nextDate.getMonth() + freq);
+
+        await quickQuery(`
+          UPDATE control_schedules
+          SET last_control_date = CURRENT_DATE,
+              last_control_id = $1,
+              next_due_date = $2,
+              status = 'pending',
+              updated_at = NOW()
+          WHERE id = $3
+        `, [record.id, nextDate, schedule_id]);
+      }
+    }
+
+    res.json({ record, message: 'Control completed successfully' });
+  } catch (e) {
+    console.error('[CONTROLS] Create record error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- ATTACHMENTS ---
+
+// Upload attachment
+app.post('/api/switchboard/controls/records/:recordId/attachments', upload.single('file'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+    const { recordId } = req.params;
+    const { checklist_item_id, caption, file_type } = req.body;
+
+    // Generate thumbnail for images
+    let thumbnail = null;
+    if (req.file.mimetype.startsWith('image/')) {
+      try {
+        thumbnail = await sharp(req.file.buffer)
+          .resize(200, 200, { fit: 'cover' })
+          .jpeg({ quality: 70 })
+          .toBuffer();
+      } catch (e) {
+        console.warn('[CONTROLS] Thumbnail generation failed:', e.message);
+      }
+    }
+
+    const { rows } = await quickQuery(`
+      INSERT INTO control_attachments
+        (site, control_record_id, checklist_item_id, file_type, file_name, file_mime, file_data, thumbnail, caption)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id, checklist_item_id, file_type, file_name, file_mime, caption, created_at
+    `, [site, recordId, checklist_item_id || null, file_type || 'photo',
+        req.file.originalname, req.file.mimetype, req.file.buffer, thumbnail, caption || null]);
+
+    res.json({ attachment: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Upload attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get attachment file
+app.get('/api/switchboard/controls/attachments/:id/file', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    const { thumbnail } = req.query;
+
+    const column = thumbnail === 'true' ? 'thumbnail' : 'file_data';
+    const { rows } = await quickQuery(`
+      SELECT ${column} as data, file_mime, file_name FROM control_attachments WHERE id = $1 AND site = $2
+    `, [id, site]);
+
+    if (!rows.length || !rows[0].data) return res.status(404).json({ error: 'Attachment not found' });
+
+    res.set('Content-Type', rows[0].file_mime || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${rows[0].file_name}"`);
+    res.send(rows[0].data);
+  } catch (e) {
+    console.error('[CONTROLS] Get attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- DASHBOARD / STATS ---
+
+// Get control status summary
+app.get('/api/switchboard/controls/dashboard', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    // Pending controls
+    const pending = await quickQuery(`
+      SELECT COUNT(*) as count FROM control_schedules
+      WHERE site = $1 AND next_due_date >= CURRENT_DATE AND status != 'done'
+    `, [site]);
+
+    // Overdue controls
+    const overdue = await quickQuery(`
+      SELECT COUNT(*) as count FROM control_schedules
+      WHERE site = $1 AND next_due_date < CURRENT_DATE AND status != 'done'
+    `, [site]);
+
+    // Recent completions (last 30 days)
+    const recent = await quickQuery(`
+      SELECT COUNT(*) as count FROM control_records
+      WHERE site = $1 AND performed_at > NOW() - INTERVAL '30 days'
+    `, [site]);
+
+    // Templates count
+    const templates = await quickQuery(`
+      SELECT COUNT(*) as count FROM control_templates WHERE site = $1 AND is_active = true
+    `, [site]);
+
+    // Upcoming controls (next 7 days)
+    const upcoming = await quickQuery(`
+      SELECT cs.*, ct.name as template_name,
+             sb.code as switchboard_code, sb.name as switchboard_name,
+             d.position_number, d.name as device_name
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
+      LEFT JOIN devices d ON cs.device_id = d.id
+      WHERE cs.site = $1
+        AND cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+      ORDER BY cs.next_due_date ASC
+      LIMIT 10
+    `, [site]);
+
+    // Overdue list
+    const overdueList = await quickQuery(`
+      SELECT cs.*, ct.name as template_name,
+             sb.code as switchboard_code, sb.name as switchboard_name,
+             d.position_number, d.name as device_name
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
+      LEFT JOIN devices d ON cs.device_id = d.id
+      WHERE cs.site = $1 AND cs.next_due_date < CURRENT_DATE
+      ORDER BY cs.next_due_date ASC
+      LIMIT 20
+    `, [site]);
+
+    res.json({
+      stats: {
+        pending: Number(pending.rows[0]?.count || 0),
+        overdue: Number(overdue.rows[0]?.count || 0),
+        completed_30d: Number(recent.rows[0]?.count || 0),
+        templates: Number(templates.rows[0]?.count || 0)
+      },
+      upcoming: upcoming.rows,
+      overdue_list: overdueList.rows
+    });
+  } catch (e) {
+    console.error('[CONTROLS] Dashboard error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get control status for a specific switchboard/device
+app.get('/api/switchboard/controls/status', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { switchboard_id, device_id } = req.query;
+
+    let sql = `
+      SELECT cs.*, ct.name as template_name
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      WHERE cs.site = $1
+    `;
+    const params = [site];
+    let idx = 2;
+
+    if (switchboard_id) {
+      sql += ` AND cs.switchboard_id = $${idx++}`;
+      params.push(switchboard_id);
+    }
+    if (device_id) {
+      sql += ` AND cs.device_id = $${idx++}`;
+      params.push(device_id);
+    }
+
+    const { rows } = await quickQuery(sql, params);
+
+    // Calculate status
+    const now = new Date();
+    let hasOverdue = false;
+    let hasPending = false;
+
+    rows.forEach(r => {
+      if (r.next_due_date) {
+        if (new Date(r.next_due_date) < now) hasOverdue = true;
+        else hasPending = true;
+      }
+    });
+
+    res.json({
+      schedules: rows,
+      status: hasOverdue ? 'overdue' : (hasPending ? 'pending' : 'ok'),
+      has_controls: rows.length > 0
+    });
+  } catch (e) {
+    console.error('[CONTROLS] Get status error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- PDF GENERATION ---
+
+// Generate control report PDF
+app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+
+    // Get record with all details
+    const recordRes = await quickQuery(`
+      SELECT cr.*,
+             ct.name as template_name, ct.checklist_items as template_items,
+             sb.name as switchboard_name, sb.code as switchboard_code,
+             sb.building_code, sb.floor, sb.room,
+             d.name as device_name, d.position_number, d.manufacturer, d.reference
+      FROM control_records cr
+      LEFT JOIN control_templates ct ON cr.template_id = ct.id
+      LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
+      LEFT JOIN devices d ON cr.device_id = d.id
+      WHERE cr.id = $1 AND cr.site = $2
+    `, [id, site]);
+
+    if (!recordRes.rows.length) return res.status(404).json({ error: 'Record not found' });
+    const record = recordRes.rows[0];
+
+    // Get attachments
+    const attachments = await quickQuery(`
+      SELECT * FROM control_attachments WHERE control_record_id = $1
+    `, [id]);
+
+    // Get site settings for logo
+    const settings = await quickQuery(`SELECT * FROM site_settings WHERE site = $1`, [site]);
+    const siteSettings = settings.rows[0] || {};
+
+    // Create PDF
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="control_${record.switchboard_code || record.device_position || id}.pdf"`);
+    doc.pipe(res);
+
+    // Header with logo
+    let headerY = 50;
+    if (siteSettings.logo) {
+      try {
+        doc.image(siteSettings.logo, 50, headerY, { width: 80 });
+      } catch (e) { /* ignore */ }
+    }
+
+    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT DE CONTRÔLE', 150, headerY, { align: 'center' });
+    doc.fontSize(10).fillColor('#6b7280').text(siteSettings.company_name || site, 150, headerY + 25, { align: 'center' });
+
+    // Status badge
+    const statusColors = { conform: '#059669', non_conform: '#dc2626', partial: '#d97706' };
+    const statusLabels = { conform: 'CONFORME', non_conform: 'NON CONFORME', partial: 'PARTIEL' };
+    doc.rect(450, headerY, 95, 25).fill(statusColors[record.status] || '#6b7280');
+    doc.fontSize(10).fillColor('#ffffff').text(statusLabels[record.status] || record.status, 455, headerY + 7);
+
+    // Info box
+    let y = 120;
+    doc.rect(50, y, 495, 80).fill('#f3f4f6');
+    doc.fontSize(10).fillColor('#374151');
+
+    const target = record.switchboard_id
+      ? `Tableau: ${record.switchboard_code || ''} - ${record.switchboard_name || ''}`
+      : `Disjoncteur: ${record.device_position || ''} - ${record.device_name || ''}`;
+
+    doc.text(target, 60, y + 10);
+    doc.text(`Modèle: ${record.template_name || '-'}`, 60, y + 25);
+    doc.text(`Contrôlé par: ${record.performed_by} (${record.performed_by_email || '-'})`, 60, y + 40);
+    doc.text(`Date: ${new Date(record.performed_at).toLocaleDateString('fr-FR')} à ${new Date(record.performed_at).toLocaleTimeString('fr-FR')}`, 60, y + 55);
+
+    if (record.building_code) {
+      doc.text(`Localisation: ${record.building_code} - Étage ${record.floor || '-'} - Local ${record.room || '-'}`, 300, y + 10);
+    }
+
+    // Checklist results
+    y = 220;
+    doc.fontSize(14).fillColor('#1e40af').text('Résultats du contrôle', 50, y);
+    y += 25;
+
+    const checklistResults = record.checklist_results || [];
+    const templateItems = record.template_items || [];
+
+    // Create a map of template items
+    const itemMap = new Map();
+    templateItems.forEach(item => itemMap.set(item.id, item));
+
+    // Table header
+    doc.rect(50, y, 495, 22).fill('#e5e7eb');
+    doc.fontSize(9).fillColor('#374151');
+    doc.text('Point de contrôle', 55, y + 6);
+    doc.text('Résultat', 350, y + 6);
+    doc.text('Valeur', 420, y + 6);
+    y += 22;
+
+    // Table rows
+    const resultColors = { conform: '#059669', non_conform: '#dc2626', na: '#9ca3af' };
+    const resultLabels = { conform: '✓ Conforme', non_conform: '✗ Non conforme', na: '- N/A' };
+
+    checklistResults.forEach((result, idx) => {
+      const item = itemMap.get(result.item_id) || { label: `Item ${idx + 1}` };
+      const bgColor = idx % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(50, y, 495, 20).fill(bgColor);
+
+      doc.fontSize(8).fillColor('#374151').text(item.label || '-', 55, y + 6, { width: 280 });
+      doc.fillColor(resultColors[result.status] || '#374151').text(resultLabels[result.status] || result.status, 350, y + 6);
+      doc.fillColor('#374151').text(result.value ? `${result.value} ${item.unit || ''}` : '-', 420, y + 6);
+
+      y += 20;
+      if (y > 750) { doc.addPage(); y = 50; }
+    });
+
+    // Notes
+    if (record.global_notes) {
+      y += 20;
+      doc.fontSize(12).fillColor('#1e40af').text('Observations', 50, y);
+      y += 18;
+      doc.fontSize(10).fillColor('#374151').text(record.global_notes, 50, y, { width: 495 });
+      y += doc.heightOfString(record.global_notes, { width: 495 }) + 10;
+    }
+
+    // Photos
+    if (attachments.rows.length > 0) {
+      const photos = attachments.rows.filter(a => a.file_type === 'photo' && a.file_data);
+      if (photos.length > 0) {
+        if (y > 600) { doc.addPage(); y = 50; }
+        doc.fontSize(12).fillColor('#1e40af').text('Photos', 50, y);
+        y += 25;
+
+        let x = 50;
+        for (const photo of photos) {
+          try {
+            doc.image(photo.file_data, x, y, { width: 150, height: 100, fit: [150, 100] });
+            if (photo.caption) {
+              doc.fontSize(7).fillColor('#6b7280').text(photo.caption, x, y + 105, { width: 150 });
+            }
+            x += 170;
+            if (x > 400) { x = 50; y += 130; }
+            if (y > 700) { doc.addPage(); y = 50; x = 50; }
+          } catch (e) { /* ignore image errors */ }
+        }
+      }
+    }
+
+    // Signature
+    if (record.signature_base64) {
+      if (y > 650) { doc.addPage(); y = 50; }
+      y += 30;
+      doc.fontSize(10).fillColor('#374151').text('Signature:', 50, y);
+      try {
+        const sigBuffer = Buffer.from(record.signature_base64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        doc.image(sigBuffer, 50, y + 15, { width: 150 });
+      } catch (e) { /* ignore */ }
+    }
+
+    // Footer
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af').text(
+        `Contrôle ${target} - ${new Date(record.performed_at).toLocaleDateString('fr-FR')} - Page ${i + 1}/${range.count}`,
+        50, 820, { align: 'center', width: 495 }
+      );
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[CONTROLS] PDF generation error:', e.message);
     if (!res.headersSent) res.status(500).json({ error: 'PDF generation failed' });
   }
 });

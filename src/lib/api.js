@@ -415,9 +415,40 @@ export const api = {
     health: () => get(`/api/projects/health`),
   },
 
-  /** --- SWITCHBOARD CONTROLS (nouveau système v2) --- */
+  /** --- SWITCHBOARD CONTROLS v1.0 --- */
   switchboardControls: {
-    // Sera implémenté avec le nouveau système
+    // Dashboard
+    dashboard: () => get("/api/switchboard/controls/dashboard"),
+    status: (params) => get("/api/switchboard/controls/status", params),
+
+    // Templates
+    listTemplates: (params) => get("/api/switchboard/controls/templates", params),
+    createTemplate: (data) => post("/api/switchboard/controls/templates", data),
+    updateTemplate: (id, data) => put(`/api/switchboard/controls/templates/${id}`, data),
+    deleteTemplate: (id) => del(`/api/switchboard/controls/templates/${id}`),
+
+    // Schedules
+    listSchedules: (params) => get("/api/switchboard/controls/schedules", params),
+    createSchedule: (data) => post("/api/switchboard/controls/schedules", data),
+    deleteSchedule: (id) => del(`/api/switchboard/controls/schedules/${id}`),
+
+    // Records
+    listRecords: (params) => get("/api/switchboard/controls/records", params),
+    getRecord: (id) => get(`/api/switchboard/controls/records/${id}`),
+    createRecord: (data) => post("/api/switchboard/controls/records", data),
+    recordPdfUrl: (id) => `${API_BASE}/api/switchboard/controls/records/${id}/pdf`,
+
+    // Attachments
+    uploadAttachment: (recordId, file, extra = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (extra.checklist_item_id) fd.append("checklist_item_id", extra.checklist_item_id);
+      if (extra.caption) fd.append("caption", extra.caption);
+      if (extra.file_type) fd.append("file_type", extra.file_type);
+      return upload(`/api/switchboard/controls/records/${recordId}/attachments`, fd);
+    },
+    attachmentUrl: (id, thumbnail = false) =>
+      `${API_BASE}/api/switchboard/controls/attachments/${id}/file${thumbnail ? "?thumbnail=true" : ""}`,
   },
 
   switchboardMaps: {
