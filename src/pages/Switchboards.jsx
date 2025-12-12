@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { 
+import {
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Database, History, Star
+  MapPin, Database, History, Star, ClipboardCheck
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -1071,7 +1071,10 @@ export default function Switchboards() {
   // Placement state
   const [placedBoardIds, setPlacedBoardIds] = useState(new Set());
   const [placedDetails, setPlacedDetails] = useState({});
-  
+
+  // Control status state
+  const [controlStatuses, setControlStatuses] = useState({}); // { boardId: { status: 'ok|pending|overdue', next_due: Date } }
+
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [showDeviceForm, setShowDeviceForm] = useState(false);
@@ -1193,6 +1196,34 @@ export default function Switchboards() {
     };
   }, [loadPlacements]);
 
+  // Load control statuses for all boards
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const res = await api.switchboardControls.listSchedules();
+      const schedules = res.schedules || [];
+      const statuses = {};
+      const now = new Date();
+
+      schedules.forEach(s => {
+        if (s.switchboard_id) {
+          const isOverdue = s.next_due_date && new Date(s.next_due_date) < now;
+          const existing = statuses[s.switchboard_id];
+          // Keep the worst status (overdue > pending > ok)
+          if (!existing || (isOverdue && existing.status !== 'overdue')) {
+            statuses[s.switchboard_id] = {
+              status: isOverdue ? 'overdue' : 'pending',
+              next_due: s.next_due_date,
+              template_name: s.template_name
+            };
+          }
+        }
+      });
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.warn('Load control statuses error:', e);
+    }
+  }, []);
+
   // Load boards
   const loadBoards = async () => {
     setIsLoading(true);
@@ -1200,6 +1231,7 @@ export default function Switchboards() {
       const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
       loadPlacements().catch(console.warn);
+      loadControlStatuses().catch(console.warn);
     } catch (err) {
       console.error('Load boards error:', err);
       showToast('Erreur lors du chargement', 'error');
@@ -1688,6 +1720,25 @@ export default function Switchboards() {
                         <MapPin size={10} />
                       </span>
                     )}
+                    {controlStatuses[board.id]?.status === 'overdue' && (
+                      <span
+                        className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}
+                        onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
+                        title={`Contrôle en retard: ${controlStatuses[board.id]?.template_name}`}
+                      >
+                        <AlertTriangle size={10} />
+                        Ctrl
+                      </span>
+                    )}
+                    {controlStatuses[board.id]?.status === 'pending' && (
+                      <span
+                        className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer ${selectedBoard?.id === board.id ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'}`}
+                        onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=schedules'); }}
+                        title={`Contrôle planifié: ${controlStatuses[board.id]?.template_name}`}
+                      >
+                        <CheckCircle size={10} />
+                      </span>
+                    )}
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
                     </span>
@@ -2129,6 +2180,13 @@ export default function Switchboards() {
             <div className="flex items-center gap-2">
               <button onClick={() => setShowSettingsModal(true)} className="p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
                 <Settings size={20} />
+              </button>
+              <button
+                onClick={() => navigate('/app/switchboard-controls')}
+                className="px-3 py-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 flex items-center gap-2"
+              >
+                <ClipboardCheck size={18} />
+                <span className="hidden sm:inline">Contrôles</span>
               </button>
               <button onClick={() => setShowImportModal(true)} className="px-3 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 flex items-center gap-2">
                 <FileSpreadsheet size={18} />
