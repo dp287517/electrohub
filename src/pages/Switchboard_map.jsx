@@ -39,6 +39,8 @@ import {
   Map as MapIcon,
   List,
   ArrowLeft,
+  Calendar,
+  Clock,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -1222,8 +1224,11 @@ export default function SwitchboardMap() {
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null); // { position, x, y }
 
-  // Control status for each switchboard { id: { status: 'ok'|'pending'|'overdue' } }
+  // Control status for each switchboard { id: { status: 'ok'|'pending'|'overdue'|'upcoming' } }
   const [controlStatuses, setControlStatuses] = useState({});
+  // Upcoming controls in next 30 days
+  const [upcomingControls, setUpcomingControls] = useState([]);
+  const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
 
   // confirm modal state
   const [confirmState, setConfirmState] = useState({
@@ -1405,6 +1410,7 @@ export default function SwitchboardMap() {
   };
 
   // Load control statuses to show overdue switchboards in red
+  // Also tracks upcoming controls in next 30 days
   const loadControlStatuses = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/switchboard/controls/schedules`, {
@@ -1416,7 +1422,10 @@ export default function SwitchboardMap() {
       const schedules = data.schedules || [];
 
       const statuses = {};
+      const upcoming30Days = [];
       const now = new Date();
+      const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
       schedules.forEach(s => {
         const boardId = s.switchboard_id;
         if (!boardId) return;
@@ -1424,17 +1433,34 @@ export default function SwitchboardMap() {
         if (!nextDue) return;
 
         const isOverdue = nextDue < now;
+        const isUpcoming = !isOverdue && nextDue <= in30Days;
+
+        // Track upcoming in next 30 days
+        if (isUpcoming || isOverdue) {
+          upcoming30Days.push({
+            ...s,
+            isOverdue,
+            daysUntil: isOverdue
+              ? -Math.ceil((now - nextDue) / (1000 * 60 * 60 * 24))
+              : Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24))
+          });
+        }
+
         const existing = statuses[boardId];
         // Prioritize overdue status
         if (!existing || (isOverdue && existing.status !== 'overdue')) {
           statuses[boardId] = {
-            status: isOverdue ? 'overdue' : 'pending',
+            status: isOverdue ? 'overdue' : (isUpcoming ? 'upcoming' : 'pending'),
             next_due: nextDue,
             template_name: s.template_name
           };
         }
       });
+
+      // Sort by date
+      upcoming30Days.sort((a, b) => (a.next_due || 0) - (b.next_due || 0));
       setControlStatuses(statuses);
+      setUpcomingControls(upcoming30Days);
     } catch (e) {
       console.warn('Load control statuses error:', e);
     }
@@ -1790,6 +1816,29 @@ export default function SwitchboardMap() {
               </span>
             </div>
 
+            {/* Upcoming Controls Button */}
+            <button
+              onClick={() => setShowUpcomingPanel(!showUpcomingPanel)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors ${
+                showUpcomingPanel
+                  ? 'bg-amber-500 text-white'
+                  : upcomingControls.length > 0
+                  ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              title="Controles a venir (30 jours)"
+            >
+              <Calendar size={14} />
+              <span className="hidden md:inline">30j</span>
+              {upcomingControls.length > 0 && (
+                <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                  showUpcomingPanel ? 'bg-white text-amber-600' : 'bg-amber-500 text-white'
+                }`}>
+                  {upcomingControls.length}
+                </span>
+              )}
+            </button>
+
             <Btn
               variant="ghost"
               onClick={() => setShowSidebar((v) => !v)}
@@ -2031,6 +2080,120 @@ export default function SwitchboardMap() {
               onNavigate={handleNavigateToBoard}
               onDelete={(pos) => askDeletePosition(pos)}
             />
+
+            {/* Upcoming Controls Panel */}
+            {showUpcomingPanel && (
+              <div className="absolute top-4 right-4 w-80 max-h-[60vh] bg-white rounded-2xl shadow-2xl border overflow-hidden z-40 animate-slideUp">
+                <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Calendar size={18} />
+                    <span className="font-semibold">Contrôles à venir (30j)</span>
+                  </div>
+                  <button
+                    onClick={() => setShowUpcomingPanel(false)}
+                    className="p-1 hover:bg-white/20 rounded-lg transition"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="overflow-y-auto max-h-[calc(60vh-52px)]">
+                  {upcomingControls.length === 0 ? (
+                    <div className="p-6 text-center text-gray-500">
+                      <Calendar size={32} className="mx-auto mb-2 text-gray-300" />
+                      <p className="text-sm">Aucun contrôle prévu dans les 30 prochains jours</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y">
+                      {upcomingControls.map((ctrl, idx) => {
+                        const isOverdue = ctrl.isOverdue;
+                        const board = switchboards.find(b => b.id === ctrl.switchboard_id);
+
+                        return (
+                          <div
+                            key={`${ctrl.id}-${idx}`}
+                            className={`p-3 hover:bg-gray-50 cursor-pointer transition ${
+                              isOverdue ? 'bg-red-50' : ''
+                            }`}
+                            onClick={() => {
+                              if (board) {
+                                handleSwitchboardClick(board);
+                              }
+                              setShowUpcomingPanel(false);
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`font-mono font-semibold text-sm ${
+                                    isOverdue ? 'text-red-700' : 'text-gray-900'
+                                  }`}>
+                                    {ctrl.switchboard_code || board?.code || `#${ctrl.switchboard_id}`}
+                                  </span>
+                                  {isOverdue && (
+                                    <Badge variant="danger">En retard</Badge>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500 truncate mt-0.5">
+                                  {ctrl.template_name || 'Contrôle'}
+                                </p>
+                                {board && (
+                                  <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
+                                    <span className="flex items-center gap-0.5">
+                                      <Building2 size={10} />
+                                      {board.meta?.building_code || '-'}
+                                    </span>
+                                    <span className="flex items-center gap-0.5">
+                                      <Layers size={10} />
+                                      {board.meta?.floor || '-'}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className={`px-2 py-1 rounded-lg text-xs font-medium whitespace-nowrap ${
+                                isOverdue
+                                  ? 'bg-red-100 text-red-700'
+                                  : ctrl.daysUntil <= 7
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                <div className="flex items-center gap-1">
+                                  <Clock size={12} />
+                                  {isOverdue
+                                    ? `${Math.abs(ctrl.daysUntil)}j en retard`
+                                    : ctrl.daysUntil === 0
+                                    ? "Aujourd'hui"
+                                    : ctrl.daysUntil === 1
+                                    ? 'Demain'
+                                    : `${ctrl.daysUntil}j`
+                                  }
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {upcomingControls.length > 0 && (
+                  <div className="border-t px-4 py-2 bg-gray-50 text-xs text-gray-500 flex items-center justify-between">
+                    <span>
+                      {upcomingControls.filter(c => c.isOverdue).length} en retard •{' '}
+                      {upcomingControls.filter(c => !c.isOverdue).length} à venir
+                    </span>
+                    <button
+                      onClick={() => navigate('/app/switchboard-controls')}
+                      className="text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      Voir tous <ExternalLink size={10} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -6,7 +6,7 @@ import {
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Database, History, Star, ClipboardCheck
+  MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -1074,6 +1074,8 @@ export default function Switchboards() {
 
   // Control status state
   const [controlStatuses, setControlStatuses] = useState({}); // { boardId: { status: 'ok|pending|overdue', next_due: Date } }
+  const [upcomingControls, setUpcomingControls] = useState([]); // Controls in next 30 days
+  const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
 
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
@@ -1201,16 +1203,32 @@ export default function Switchboards() {
   }, [loadPlacements]);
 
   // Load control statuses for all boards - now stores ALL controls per board
+  // Also tracks upcoming controls in the next 30 days
   const loadControlStatuses = useCallback(async () => {
     try {
       const res = await api.switchboardControls.listSchedules();
       const schedules = res.schedules || [];
       const statuses = {};
+      const upcoming30Days = [];
       const now = new Date();
+      const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       schedules.forEach(s => {
         if (s.switchboard_id) {
-          const isOverdue = s.next_due_date && new Date(s.next_due_date) < now;
+          const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          const isOverdue = nextDue && nextDue < now;
+          const isUpcoming = nextDue && !isOverdue && nextDue <= in30Days;
+
+          // Track upcoming controls in next 30 days (including overdue)
+          if (nextDue && (isOverdue || isUpcoming)) {
+            upcoming30Days.push({
+              ...s,
+              isOverdue,
+              daysUntil: isOverdue
+                ? -Math.ceil((now - nextDue) / (1000 * 60 * 60 * 24))
+                : Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24))
+            });
+          }
 
           // Initialize if not exists
           if (!statuses[s.switchboard_id]) {
@@ -1242,6 +1260,10 @@ export default function Switchboards() {
           }
         }
       });
+
+      // Sort upcoming by date
+      upcoming30Days.sort((a, b) => new Date(a.next_due_date || 0) - new Date(b.next_due_date || 0));
+      setUpcomingControls(upcoming30Days);
       setControlStatuses(statuses);
     } catch (e) {
       console.warn('Load control statuses error:', e);
@@ -2210,6 +2232,28 @@ export default function Switchboards() {
               <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
                 <Settings size={18} className="sm:w-5 sm:h-5" />
               </button>
+              {/* Upcoming Controls Button */}
+              <button
+                onClick={() => setShowUpcomingPanel(!showUpcomingPanel)}
+                className={`p-2 sm:px-3 sm:py-2 rounded-xl font-medium flex items-center gap-2 transition-colors ${
+                  showUpcomingPanel
+                    ? 'bg-orange-500 text-white'
+                    : upcomingControls.length > 0
+                    ? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Contrôles à venir (30 jours)"
+              >
+                <Calendar size={18} />
+                <span className="hidden md:inline">30j</span>
+                {upcomingControls.length > 0 && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                    showUpcomingPanel ? 'bg-white text-orange-600' : 'bg-orange-500 text-white'
+                  }`}>
+                    {upcomingControls.length}
+                  </span>
+                )}
+              </button>
               <button
                 onClick={() => navigate('/app/switchboard-controls')}
                 className="p-2 sm:px-3 sm:py-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 flex items-center gap-2"
@@ -2241,6 +2285,126 @@ export default function Switchboards() {
           </div>
         </div>
       </div>
+
+      {/* Upcoming Controls Floating Panel */}
+      {showUpcomingPanel && (
+        <div className="fixed top-20 right-4 w-80 max-h-[70vh] bg-white rounded-2xl shadow-2xl border overflow-hidden z-50 animate-slideUp">
+          <div className="bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-3 text-white flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Calendar size={18} />
+              <span className="font-semibold">Contrôles à venir (30j)</span>
+            </div>
+            <button
+              onClick={() => setShowUpcomingPanel(false)}
+              className="p-1 hover:bg-white/20 rounded-lg transition"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="overflow-y-auto max-h-[calc(70vh-52px)]">
+            {upcomingControls.length === 0 ? (
+              <div className="p-6 text-center text-gray-500">
+                <Calendar size={32} className="mx-auto mb-2 text-gray-300" />
+                <p className="text-sm">Aucun contrôle prévu dans les 30 prochains jours</p>
+              </div>
+            ) : (
+              <div className="divide-y">
+                {upcomingControls.map((ctrl, idx) => {
+                  const board = boards.find(b => b.id === ctrl.switchboard_id);
+                  const isOverdue = ctrl.isOverdue;
+
+                  return (
+                    <div
+                      key={`${ctrl.id}-${idx}`}
+                      className={`p-3 hover:bg-gray-50 cursor-pointer transition ${
+                        isOverdue ? 'bg-red-50' : ''
+                      }`}
+                      onClick={() => {
+                        if (board) {
+                          setSelectedBoard(board);
+                          navigate(`/app/switchboards?board=${board.id}`);
+                        }
+                        setShowUpcomingPanel(false);
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-mono font-semibold text-sm ${
+                              isOverdue ? 'text-red-700' : 'text-gray-900'
+                            }`}>
+                              {ctrl.switchboard_code || board?.code || `#${ctrl.switchboard_id}`}
+                            </span>
+                            {isOverdue && (
+                              <span className="px-1.5 py-0.5 rounded-full text-xs bg-red-100 text-red-700">
+                                En retard
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 truncate mt-0.5">
+                            {ctrl.template_name || 'Contrôle'}
+                          </p>
+                          {board && (
+                            <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
+                              <span className="flex items-center gap-0.5">
+                                <Building2 size={10} />
+                                {board.meta?.building_code || '-'}
+                              </span>
+                              <span className="flex items-center gap-0.5">
+                                <Layers size={10} />
+                                {board.meta?.floor || '-'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={`px-2 py-1 rounded-lg text-xs font-medium whitespace-nowrap ${
+                          isOverdue
+                            ? 'bg-red-100 text-red-700'
+                            : ctrl.daysUntil <= 7
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          <div className="flex items-center gap-1">
+                            <Clock size={12} />
+                            {isOverdue
+                              ? `${Math.abs(ctrl.daysUntil)}j en retard`
+                              : ctrl.daysUntil === 0
+                              ? "Aujourd'hui"
+                              : ctrl.daysUntil === 1
+                              ? 'Demain'
+                              : `${ctrl.daysUntil}j`
+                            }
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {upcomingControls.length > 0 && (
+            <div className="border-t px-4 py-2 bg-gray-50 text-xs text-gray-500 flex items-center justify-between">
+              <span>
+                {upcomingControls.filter(c => c.isOverdue).length} en retard •{' '}
+                {upcomingControls.filter(c => !c.isOverdue).length} à venir
+              </span>
+              <button
+                onClick={() => {
+                  navigate('/app/switchboard-controls');
+                  setShowUpcomingPanel(false);
+                }}
+                className="text-blue-600 hover:underline flex items-center gap-1"
+              >
+                Voir tous <ExternalLink size={10} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {isLoading && boards.length === 0 && (
         <div className="flex items-center justify-center h-64">
