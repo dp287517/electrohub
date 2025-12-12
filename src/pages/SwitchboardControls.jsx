@@ -1,5 +1,5 @@
 // src/pages/SwitchboardControls.jsx
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
 
@@ -110,6 +110,19 @@ export default function SwitchboardControls() {
   // Pre-selected board for schedule modal (from URL param newBoard)
   const [preSelectedBoardId, setPreSelectedBoardId] = useState(null);
 
+  // Advanced filters state
+  const [filters, setFilters] = useState({
+    search: '',
+    switchboardIds: [],
+    templateIds: [],
+    buildings: [],
+    status: 'all', // all, overdue, upcoming, conform, non_conform
+    dateFrom: '',
+    dateTo: '',
+    performers: []
+  });
+  const [showFilters, setShowFilters] = useState(false);
+
   // Load data
   const loadDashboard = useCallback(async () => {
     try {
@@ -204,6 +217,141 @@ export default function SwitchboardControls() {
   const overdueCount = dashboard?.stats?.overdue || 0;
   const pendingCount = dashboard?.stats?.pending || 0;
   const completedCount = dashboard?.stats?.completed_30d || 0;
+
+  // Extract unique values for filter options
+  const filterOptions = useMemo(() => {
+    const buildings = new Set();
+    const performers = new Set();
+
+    switchboards.forEach(sb => {
+      if (sb.meta?.building_code) buildings.add(sb.meta.building_code);
+    });
+    records.forEach(r => {
+      if (r.performed_by) performers.add(r.performed_by);
+    });
+
+    return {
+      buildings: Array.from(buildings).sort(),
+      performers: Array.from(performers).sort(),
+      templates: templates.map(t => ({ id: t.id, name: t.name })),
+      switchboards: switchboards.map(sb => ({
+        id: sb.id,
+        code: sb.code,
+        name: sb.name,
+        building: sb.meta?.building_code
+      }))
+    };
+  }, [switchboards, records, templates]);
+
+  // Filter schedules
+  const filteredSchedules = useMemo(() => {
+    return schedules.filter(s => {
+      const now = new Date();
+      const dueDate = s.next_due_date ? new Date(s.next_due_date) : null;
+
+      // Search filter
+      if (filters.search) {
+        const q = filters.search.toLowerCase();
+        const matchSearch = (
+          s.template_name?.toLowerCase().includes(q) ||
+          s.switchboard_code?.toLowerCase().includes(q) ||
+          s.switchboard_name?.toLowerCase().includes(q)
+        );
+        if (!matchSearch) return false;
+      }
+
+      // Switchboard filter
+      if (filters.switchboardIds.length > 0 && !filters.switchboardIds.includes(s.switchboard_id)) {
+        return false;
+      }
+
+      // Template filter
+      if (filters.templateIds.length > 0 && !filters.templateIds.includes(s.template_id)) {
+        return false;
+      }
+
+      // Status filter
+      if (filters.status === 'overdue' && (!dueDate || dueDate >= now)) return false;
+      if (filters.status === 'upcoming' && (!dueDate || dueDate < now)) return false;
+
+      // Date range
+      if (filters.dateFrom && dueDate && dueDate < new Date(filters.dateFrom)) return false;
+      if (filters.dateTo && dueDate && dueDate > new Date(filters.dateTo)) return false;
+
+      return true;
+    });
+  }, [schedules, filters]);
+
+  // Filter records (history)
+  const filteredRecords = useMemo(() => {
+    return records.filter(r => {
+      const performedDate = r.performed_at ? new Date(r.performed_at) : null;
+
+      // Search filter
+      if (filters.search) {
+        const q = filters.search.toLowerCase();
+        const matchSearch = (
+          r.template_name?.toLowerCase().includes(q) ||
+          r.switchboard_code?.toLowerCase().includes(q) ||
+          r.switchboard_name?.toLowerCase().includes(q) ||
+          r.performed_by?.toLowerCase().includes(q)
+        );
+        if (!matchSearch) return false;
+      }
+
+      // Switchboard filter
+      if (filters.switchboardIds.length > 0 && !filters.switchboardIds.includes(r.switchboard_id)) {
+        return false;
+      }
+
+      // Template filter
+      if (filters.templateIds.length > 0 && !filters.templateIds.includes(r.template_id)) {
+        return false;
+      }
+
+      // Status filter (conform/non_conform)
+      if (filters.status === 'conform' && r.status !== 'conform') return false;
+      if (filters.status === 'non_conform' && r.status !== 'non_conform') return false;
+
+      // Performer filter
+      if (filters.performers.length > 0 && !filters.performers.includes(r.performed_by)) {
+        return false;
+      }
+
+      // Date range
+      if (filters.dateFrom && performedDate && performedDate < new Date(filters.dateFrom)) return false;
+      if (filters.dateTo && performedDate && performedDate > new Date(filters.dateTo)) return false;
+
+      return true;
+    });
+  }, [records, filters]);
+
+  // Count active filters
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filters.search) count++;
+    if (filters.switchboardIds.length > 0) count++;
+    if (filters.templateIds.length > 0) count++;
+    if (filters.buildings.length > 0) count++;
+    if (filters.status !== 'all') count++;
+    if (filters.dateFrom || filters.dateTo) count++;
+    if (filters.performers.length > 0) count++;
+    return count;
+  }, [filters]);
+
+  // Reset filters
+  const resetFilters = () => {
+    setFilters({
+      search: '',
+      switchboardIds: [],
+      templateIds: [],
+      buildings: [],
+      status: 'all',
+      dateFrom: '',
+      dateTo: '',
+      performers: []
+    });
+  };
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-20">
@@ -301,11 +449,11 @@ export default function SwitchboardControls() {
       <AnimatedCard delay={350}>
         <div className="flex gap-1 sm:gap-2 overflow-x-auto pb-2 scrollbar-hide">
           {[
-            { id: "dashboard", label: "📊 Tableau de bord", shortLabel: "📊" },
-            { id: "schedules", label: `📅 Planifiés (${pendingCount})`, shortLabel: `📅 ${pendingCount}` },
-            { id: "overdue", label: `⚠️ En retard (${overdueCount})`, shortLabel: `⚠️ ${overdueCount}`, alert: overdueCount > 0 },
-            { id: "history", label: "📜 Historique", shortLabel: "📜" },
-            { id: "templates", label: "📝 Modèles", shortLabel: "📝" },
+            { id: "dashboard", label: "Tableau de bord", shortLabel: "TB" },
+            { id: "schedules", label: `Planifies (${filteredSchedules.length})`, shortLabel: `P ${filteredSchedules.length}` },
+            { id: "overdue", label: `En retard (${overdueCount})`, shortLabel: `R ${overdueCount}`, alert: overdueCount > 0 },
+            { id: "history", label: `Historique (${filteredRecords.length})`, shortLabel: `H ${filteredRecords.length}` },
+            { id: "templates", label: "Modeles", shortLabel: "M" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -325,6 +473,248 @@ export default function SwitchboardControls() {
         </div>
       </AnimatedCard>
 
+      {/* Advanced Filter Bar */}
+      {(activeTab === "schedules" || activeTab === "history") && (
+        <AnimatedCard delay={375}>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 sm:p-4">
+            {/* Search + Filter Toggle */}
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Rechercher tableau, modele, controleur..."
+                  value={filters.search}
+                  onChange={(e) => setFilters(f => ({ ...f, search: e.target.value }))}
+                  className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-amber-500 bg-white text-gray-900"
+                />
+              </div>
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`px-4 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors ${
+                  showFilters || activeFilterCount > 0
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span>🎛️</span>
+                Filtres
+                {activeFilterCount > 0 && (
+                  <span className="px-2 py-0.5 bg-amber-500 text-white text-xs rounded-full">{activeFilterCount}</span>
+                )}
+              </button>
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={resetFilters}
+                  className="px-4 py-2.5 bg-red-100 text-red-700 rounded-xl font-medium hover:bg-red-200 flex items-center gap-2"
+                >
+                  ✕ Reset
+                </button>
+              )}
+            </div>
+
+            {/* Expanded Filters */}
+            {showFilters && (
+              <div className="mt-4 pt-4 border-t border-gray-100 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {/* Switchboard Filter */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Tableaux</label>
+                    <select
+                      multiple
+                      value={filters.switchboardIds.map(String)}
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.selectedOptions, o => Number(o.value));
+                        setFilters(f => ({ ...f, switchboardIds: selected }));
+                      }}
+                      className="w-full border border-gray-200 rounded-lg p-2 text-sm bg-white text-gray-900 h-24"
+                    >
+                      {filterOptions.switchboards.map(sb => (
+                        <option key={sb.id} value={sb.id}>{sb.code} - {sb.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-400 mt-1">Ctrl+clic pour multi-selection</p>
+                  </div>
+
+                  {/* Template Filter */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Modeles</label>
+                    <select
+                      multiple
+                      value={filters.templateIds.map(String)}
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.selectedOptions, o => Number(o.value));
+                        setFilters(f => ({ ...f, templateIds: selected }));
+                      }}
+                      className="w-full border border-gray-200 rounded-lg p-2 text-sm bg-white text-gray-900 h-24"
+                    >
+                      {filterOptions.templates.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Statut</label>
+                    <select
+                      value={filters.status}
+                      onChange={(e) => setFilters(f => ({ ...f, status: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-lg p-2.5 text-sm bg-white text-gray-900"
+                    >
+                      <option value="all">Tous</option>
+                      {activeTab === "schedules" && (
+                        <>
+                          <option value="overdue">En retard</option>
+                          <option value="upcoming">A venir</option>
+                        </>
+                      )}
+                      {activeTab === "history" && (
+                        <>
+                          <option value="conform">Conforme</option>
+                          <option value="non_conform">Non conforme</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Date Range */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Periode</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="date"
+                        value={filters.dateFrom}
+                        onChange={(e) => setFilters(f => ({ ...f, dateFrom: e.target.value }))}
+                        className="flex-1 border border-gray-200 rounded-lg p-2 text-xs bg-white text-gray-900"
+                      />
+                      <input
+                        type="date"
+                        value={filters.dateTo}
+                        onChange={(e) => setFilters(f => ({ ...f, dateTo: e.target.value }))}
+                        className="flex-1 border border-gray-200 rounded-lg p-2 text-xs bg-white text-gray-900"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* History-specific: Performer filter */}
+                {activeTab === "history" && filterOptions.performers.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Controleur</label>
+                    <div className="flex flex-wrap gap-2">
+                      {filterOptions.performers.map(p => (
+                        <button
+                          key={p}
+                          onClick={() => {
+                            setFilters(f => ({
+                              ...f,
+                              performers: f.performers.includes(p)
+                                ? f.performers.filter(x => x !== p)
+                                : [...f.performers, p]
+                            }));
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                            filters.performers.includes(p)
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick Filters */}
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+                  <span className="text-xs text-gray-400 self-center">Filtres rapides:</span>
+                  <button
+                    onClick={() => setFilters(f => ({ ...f, status: 'overdue' }))}
+                    className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium hover:bg-red-200"
+                  >
+                    En retard
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+                      setFilters(f => ({
+                        ...f,
+                        dateFrom: today.toISOString().split('T')[0],
+                        dateTo: nextWeek.toISOString().split('T')[0]
+                      }));
+                    }}
+                    className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium hover:bg-blue-200"
+                  >
+                    7 prochains jours
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      const nextMonth = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+                      setFilters(f => ({
+                        ...f,
+                        dateFrom: today.toISOString().split('T')[0],
+                        dateTo: nextMonth.toISOString().split('T')[0]
+                      }));
+                    }}
+                    className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium hover:bg-green-200"
+                  >
+                    30 prochains jours
+                  </button>
+                  {activeTab === "history" && (
+                    <button
+                      onClick={() => setFilters(f => ({ ...f, status: 'non_conform' }))}
+                      className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium hover:bg-orange-200"
+                    >
+                      Non conformes
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Active Filters Summary */}
+            {activeFilterCount > 0 && !showFilters && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {filters.switchboardIds.length > 0 && (
+                  <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs flex items-center gap-1">
+                    {filters.switchboardIds.length} tableau(x)
+                    <button onClick={() => setFilters(f => ({ ...f, switchboardIds: [] }))} className="hover:text-blue-900">✕</button>
+                  </span>
+                )}
+                {filters.templateIds.length > 0 && (
+                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs flex items-center gap-1">
+                    {filters.templateIds.length} modele(s)
+                    <button onClick={() => setFilters(f => ({ ...f, templateIds: [] }))} className="hover:text-purple-900">✕</button>
+                  </span>
+                )}
+                {filters.status !== 'all' && (
+                  <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs flex items-center gap-1">
+                    {filters.status}
+                    <button onClick={() => setFilters(f => ({ ...f, status: 'all' }))} className="hover:text-amber-900">✕</button>
+                  </span>
+                )}
+                {(filters.dateFrom || filters.dateTo) && (
+                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs flex items-center gap-1">
+                    {filters.dateFrom || '...'} - {filters.dateTo || '...'}
+                    <button onClick={() => setFilters(f => ({ ...f, dateFrom: '', dateTo: '' }))} className="hover:text-green-900">✕</button>
+                  </span>
+                )}
+                {filters.performers.length > 0 && (
+                  <span className="px-2 py-1 bg-teal-100 text-teal-700 rounded-full text-xs flex items-center gap-1">
+                    {filters.performers.length} controleur(s)
+                    <button onClick={() => setFilters(f => ({ ...f, performers: [] }))} className="hover:text-teal-900">✕</button>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </AnimatedCard>
+      )}
+
       {/* Tab Content */}
       <AnimatedCard delay={400}>
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -337,7 +727,7 @@ export default function SwitchboardControls() {
           )}
           {activeTab === "schedules" && (
             <SchedulesTab
-              schedules={schedules}
+              schedules={filteredSchedules}
               navigate={navigate}
               onStartControl={(s) => { setSelectedSchedule(s); setShowControlModal(true); }}
               onDelete={async (id) => {
@@ -357,7 +747,7 @@ export default function SwitchboardControls() {
             />
           )}
           {activeTab === "history" && (
-            <HistoryTab records={records} navigate={navigate} />
+            <HistoryTab records={filteredRecords} navigate={navigate} />
           )}
           {activeTab === "templates" && (
             <TemplatesTab

@@ -3080,14 +3080,14 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
     // Table header
     doc.rect(50, y, 495, 22).fill('#e5e7eb');
     doc.fontSize(9).fillColor('#374151');
-    doc.text('Point de contrôle', 55, y + 6);
-    doc.text('Résultat', 350, y + 6);
-    doc.text('Valeur', 420, y + 6);
+    doc.text('Point de controle', 55, y + 6);
+    doc.text('Resultat', 355, y + 6);
+    doc.text('Valeur', 450, y + 6);
     y += 22;
 
     // Table rows
     const resultColors = { conform: '#059669', non_conform: '#dc2626', na: '#9ca3af' };
-    const resultLabels = { conform: '✓ Conforme', non_conform: '✗ Non conforme', na: '- N/A' };
+    const resultLabels = { conform: 'CONFORME', non_conform: 'NON CONFORME', na: 'N/A' };
 
     checklistResults.forEach((result, idx) => {
       const item = itemMap.get(result.item_id) || { label: `Item ${idx + 1}` };
@@ -3095,8 +3095,13 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
       doc.rect(50, y, 495, 20).fill(bgColor);
 
       doc.fontSize(8).fillColor('#374151').text(item.label || '-', 55, y + 6, { width: 280 });
-      doc.fillColor(resultColors[result.status] || '#374151').text(resultLabels[result.status] || result.status, 350, y + 6);
-      doc.fillColor('#374151').text(result.value ? `${result.value} ${item.unit || ''}` : '-', 420, y + 6);
+
+      // Status indicator with colored bullet
+      const statusColor = resultColors[result.status] || '#374151';
+      doc.circle(353, y + 10, 4).fill(statusColor);
+      doc.fontSize(8).fillColor(statusColor).text(resultLabels[result.status] || result.status, 362, y + 6);
+
+      doc.fillColor('#374151').text(result.value ? `${result.value} ${item.unit || ''}` : '-', 445, y + 6);
 
       y += 20;
       if (y > 750) { doc.addPage(); y = 50; }
@@ -3169,8 +3174,8 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
 
         // Section header with gradient background
         doc.rect(50, y, 495, 28).fill('#eff6ff');
-        doc.fontSize(13).fillColor('#1e40af').text('📷 Photos du Contrôle', 60, y + 7);
-        doc.fontSize(9).fillColor('#6b7280').text(`(${photos.length} photo${photos.length > 1 ? 's' : ''})`, 200, y + 9);
+        doc.fontSize(13).fillColor('#1e40af').text('PHOTOS DU CONTROLE', 60, y + 7);
+        doc.fontSize(9).fillColor('#6b7280').text(`(${photos.length} photo${photos.length > 1 ? 's' : ''})`, 230, y + 9);
         y += 38;
 
         // Grid layout - 2 photos per row with larger size
@@ -3238,18 +3243,25 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
 
         // Section header
         doc.rect(50, y, 495, 28).fill('#fef3c7');
-        doc.fontSize(13).fillColor('#92400e').text('📎 Documents Joints', 60, y + 7);
-        doc.fontSize(9).fillColor('#78716c').text(`(${documents.length} fichier${documents.length > 1 ? 's' : ''})`, 200, y + 9);
+        doc.fontSize(13).fillColor('#92400e').text('DOCUMENTS JOINTS', 60, y + 7);
+        doc.fontSize(9).fillColor('#78716c').text(`(${documents.length} fichier${documents.length > 1 ? 's' : ''})`, 220, y + 9);
         y += 38;
+
+        // Info note about accessing documents
+        doc.rect(50, y, 495, 24).fill('#fef9c3');
+        doc.fontSize(8).fillColor('#854d0e')
+           .text('Les documents sont consultables dans l\'application web - Section Controles > Historique', 60, y + 8, { width: 475 });
+        y += 32;
 
         // List documents
         for (const doc_file of documents) {
           if (y > 750) { doc.addPage(); y = 50; }
 
-          // Document item with icon
+          // Document item with bullet
           doc.rect(50, y, 495, 24).fill('#fffbeb');
+          doc.circle(60, y + 12, 3).fill('#92400e');
           doc.fontSize(10).fillColor('#374151')
-             .text(`📄 ${doc_file.file_name || 'Document'}`, 60, y + 7);
+             .text(doc_file.file_name || 'Document', 70, y + 7, { width: 280 });
 
           if (doc_file.caption) {
             doc.fontSize(8).fillColor('#6b7280')
