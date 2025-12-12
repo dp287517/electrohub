@@ -325,7 +325,18 @@
 }
 
 /* =========================
-   Toolbar (plus / crayon / ajuster)
+   Scrollbar hide (Tailwind plugin replacement)
+   ========================= */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* =========================
+   Toolbar moderne (style Switchboard)
    ========================= */
 .atex-toolbar {
   position: absolute;
@@ -336,28 +347,77 @@
   gap: 8px;
   z-index: 5000;
 }
+
 .btn-plus, .btn-pencil {
-  width: 36px; height: 36px; border-radius: 8px;
-  border: none; background: #ffffffdd;
-  box-shadow: 0 2px 8px rgba(0,0,0,.15);
-  cursor: pointer; font-size: 18px; line-height: 36px;
-  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(234, 88, 12, 0.35);
+  cursor: pointer;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
 }
-.btn-plus:hover, .btn-pencil:hover { background: #fff; }
+
+.btn-plus:hover, .btn-pencil:hover {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(234, 88, 12, 0.45);
+}
+
+.btn-plus:active, .btn-pencil:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(234, 88, 12, 0.35);
+}
+
 .btn-pencil-wrap { position: relative; }
 
 .draw-menu {
-  position: absolute; top: 40px; left: 0;
-  display: flex; flex-direction: column;
-  background: #ffffffee; border: 1px solid #e6e6e6;
-  border-radius: 8px; overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  position: absolute;
+  top: 48px;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  min-width: 140px;
 }
+
 .draw-menu > button {
-  padding: 8px 12px; background: transparent; border: none;
-  text-align: left; white-space: nowrap; cursor: pointer; font-size: 14px;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  transition: all 0.15s ease;
 }
-.draw-menu > button:hover { background: #f6f6f6; }
+
+.draw-menu > button:hover {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
+}
+
+.draw-menu > button:last-child {
+  border-top: 1px solid #e5e7eb;
+  color: #9ca3af;
+}
+
+.draw-menu > button:last-child:hover {
+  background: #f3f4f6;
+  color: #6b7280;
+}
 
 /* --- Mode édition de forme --- */
 body.editing-geom .leaflet-wrapper .leaflet-container {

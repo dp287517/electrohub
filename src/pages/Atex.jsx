@@ -77,6 +77,9 @@ export default function Atex() {
   // Toast
   const [toast, setToast] = useState("");
 
+  // 🆕 Modal de confirmation moderne
+  const [confirmModal, setConfirmModal] = useState({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
+
   // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
     const eqId = searchParams.get("eq");
@@ -305,18 +308,27 @@ export default function Atex() {
     }
   }
 
-  async function deleteEquipment() {
+  // 🆕 Fonction de suppression avec modal moderne
+  function confirmDeleteEquipment() {
     if (!editing?.id) return;
-    if (!window.confirm("Supprimer définitivement cet équipement ATEX ?")) return;
-    try {
-      await api.atex.removeEquipment(editing.id);
-      closeEdit();
-      await reload();
-      setMapRefreshTick((t) => t + 1);
-      setToast("Équipement supprimé");
-    } catch {
-      setToast("Suppression impossible");
-    }
+    setConfirmModal({
+      open: true,
+      title: "Supprimer cet équipement ?",
+      message: `Êtes-vous sûr de vouloir supprimer définitivement "${editing.name || 'cet équipement ATEX'}" ? Cette action est irréversible.`,
+      variant: "danger",
+      onConfirm: async () => {
+        try {
+          await api.atex.removeEquipment(editing.id);
+          closeEdit();
+          await reload();
+          setMapRefreshTick((t) => t + 1);
+          setToast("Équipement supprimé");
+        } catch {
+          setToast("Suppression impossible");
+        }
+        setConfirmModal({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
+      }
+    });
   }
 
   /* ----------------------------- Photos / Files ----------------------------- */
@@ -483,19 +495,24 @@ export default function Atex() {
   /* ----------------------------- UI Components ----------------------------- */
   const dirty = isDirty();
 
-  const TabButton = ({ id, label, count, color }) => (
+  // Style tabs moderne (comme SwitchboardControls)
+  const TabButton = ({ id, label, count, color, alert }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-t-lg text-sm sm:text-base font-medium transition-all whitespace-nowrap ${
+      className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base ${
         activeTab === id
-          ? "bg-white text-blue-600 border-t-2 border-x border-blue-600 -mb-px"
-          : "bg-gray-100 text-gray-600 hover:bg-gray-200 border-transparent"
+          ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
+          : alert
+          ? "bg-red-100 text-red-700 hover:bg-red-200"
+          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
       }`}
     >
       <span className="hidden sm:inline">{label}</span>
       <span className="sm:hidden">{label.length > 10 ? label.slice(0, 8) + "…" : label}</span>
       {count !== undefined && count > 0 && (
-        <span className={`ml-1 sm:ml-2 px-1.5 sm:px-2 py-0.5 rounded-full text-xs font-bold ${color || "bg-gray-200 text-gray-700"}`}>
+        <span className={`ml-1 sm:ml-2 px-1.5 sm:px-2 py-0.5 rounded-full text-xs font-bold ${
+          activeTab === id ? "bg-white/20 text-white" : color || "bg-gray-200 text-gray-700"
+        }`}>
           {count}
         </span>
       )}
@@ -561,28 +578,79 @@ export default function Atex() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Équipements ATEX</h1>
-          <p className="text-sm sm:text-base text-gray-500">Gestion des équipements en zones explosives</p>
+      {/* 🆕 Modal de Confirmation Moderne */}
+      {confirmModal.open && (
+        <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fadeIn p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-slideUp">
+            {/* Header avec gradient */}
+            <div className={`p-5 ${
+              confirmModal.variant === "danger"
+                ? "bg-gradient-to-r from-red-500 to-rose-600"
+                : "bg-gradient-to-r from-blue-500 to-indigo-600"
+            } text-white`}>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+                  <span className="text-2xl">{confirmModal.variant === "danger" ? "⚠️" : "❓"}</span>
+                </div>
+                <h3 className="text-lg font-bold">{confirmModal.title}</h3>
+              </div>
+            </div>
+            {/* Content */}
+            <div className="p-5">
+              <p className="text-gray-600">{confirmModal.message}</p>
+            </div>
+            {/* Actions */}
+            <div className="flex justify-end gap-3 p-4 bg-gray-50 border-t">
+              <button
+                onClick={() => setConfirmModal({ open: false, title: "", message: "", onConfirm: null, variant: "danger" })}
+                className="px-4 py-2.5 rounded-xl text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 font-medium transition-all"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className={`px-4 py-2.5 rounded-xl text-white font-medium transition-all ${
+                  confirmModal.variant === "danger"
+                    ? "bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700"
+                    : "bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
+                }`}
+              >
+                {confirmModal.variant === "danger" ? "Supprimer" : "Confirmer"}
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2 w-full sm:w-auto">
-          <button
-            onClick={() => setFiltersOpen(!filtersOpen)}
-            className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 text-sm sm:text-base"
-          >
-            <span>🔍</span>
-            <span className="hidden sm:inline">{filtersOpen ? "Masquer filtres" : "Filtres"}</span>
-            <span className="sm:hidden">Filtres</span>
-          </button>
-          <button
-            onClick={() => openEdit({})}
-            className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base"
-          >
-            <span className="hidden sm:inline">+ Nouvel équipement</span>
-            <span className="sm:hidden">+ Nouveau</span>
-          </button>
+      )}
+
+      {/* Header - Style Switchboard */}
+      <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 rounded-2xl sm:rounded-3xl p-4 sm:p-6 text-white shadow-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="p-3 sm:p-4 bg-white/20 rounded-xl sm:rounded-2xl backdrop-blur-sm">
+              <span className="text-3xl sm:text-4xl">🔥</span>
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold">Équipements ATEX</h1>
+              <p className="text-white/80 text-sm sm:text-base">Gestion des zones explosives</p>
+            </div>
+          </div>
+          <div className="flex gap-2 sm:gap-3">
+            <button
+              onClick={() => setFiltersOpen(!filtersOpen)}
+              className="flex-1 sm:flex-none px-3 sm:px-4 py-2 sm:py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium backdrop-blur-sm transition-all text-sm sm:text-base flex items-center justify-center gap-2"
+            >
+              <span>🔍</span>
+              <span className="hidden sm:inline">{filtersOpen ? "Masquer" : "Filtres"}</span>
+              <span className="sm:hidden">Filtres</span>
+            </button>
+          </div>
+        </div>
+        {/* Stats en une ligne */}
+        <div className="flex flex-wrap gap-2 sm:gap-4 mt-4 text-sm">
+          <span className="px-3 py-1 bg-white/20 rounded-full">{stats.total} équip.</span>
+          <span className="px-3 py-1 bg-emerald-500/40 rounded-full">✓ {stats.conforme} conformes</span>
+          {stats.nonConforme > 0 && <span className="px-3 py-1 bg-red-500/40 rounded-full">⚠ {stats.nonConforme} non conf.</span>}
+          {stats.enRetard > 0 && <span className="px-3 py-1 bg-red-600/50 rounded-full animate-pulse">🕐 {stats.enRetard} en retard</span>}
         </div>
       </div>
 
@@ -640,14 +708,11 @@ export default function Atex() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-1 border-b overflow-x-auto">
+      {/* Tabs - Style Switchboard sans scrollbar */}
+      <div className="flex gap-1 sm:gap-2 overflow-x-auto pb-2 scrollbar-hide">
         <TabButton id="dashboard" label="Tableau de bord" />
         <TabButton id="controls" label="Équipements" count={stats.total} color="bg-blue-100 text-blue-800" />
-        <TabButton id="overdue" label="En retard" count={stats.enRetard} color="bg-red-100 text-red-800" />
-        <TabButton id="calendar" label="Calendrier" />
         <TabButton id="plans" label="Plans" count={plans.length} color="bg-purple-100 text-purple-800" />
-        <TabButton id="settings" label="Paramètres" />
       </div>
 
       {/* Tab Content */}
@@ -672,18 +737,6 @@ export default function Atex() {
           />
         )}
 
-        {/* OVERDUE */}
-        {activeTab === "overdue" && (
-          <OverdueTab
-            overdueList={overdueList}
-            onOpenEquipment={openEdit}
-          />
-        )}
-
-        {/* CALENDAR */}
-        {activeTab === "calendar" && (
-          <CalendarTab items={items} onOpenEquipment={openEdit} />
-        )}
 
         {/* PLANS */}
         {activeTab === "plans" && (
@@ -707,14 +760,6 @@ export default function Atex() {
           />
         )}
 
-        {/* SETTINGS */}
-        {activeTab === "settings" && (
-          <div className="text-center py-12 text-gray-500">
-            <p className="text-4xl mb-4">⚙️</p>
-            <p className="font-medium">Paramètres ATEX</p>
-            <p className="text-sm mt-2">Configuration globale (fréquence contrôles, checklist...) à venir.</p>
-          </div>
-        )}
       </div>
 
       {/* Equipment Drawer */}
@@ -725,7 +770,7 @@ export default function Atex() {
           dirty={dirty}
           onClose={closeEdit}
           onSave={saveBase}
-          onDelete={deleteEquipment}
+          onDelete={confirmDeleteEquipment}
           files={files}
           history={history}
           onUploadPhoto={uploadMainPhoto}
@@ -1192,10 +1237,18 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
 
   return (
     <div className="space-y-4">
-      {/* Import ZIP */}
-      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-        <span className="font-medium">Plans PDF ATEX</span>
-        <label className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer">
+      {/* Import ZIP - Style Switchboard */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-amber-100 rounded-xl">
+            <span className="text-2xl">📄</span>
+          </div>
+          <div>
+            <span className="font-semibold text-amber-900">Plans ATEX</span>
+            <p className="text-xs text-amber-700">Importez un ZIP contenant vos PDFs ATEX</p>
+          </div>
+        </div>
+        <label className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 cursor-pointer font-medium text-center shadow-md transition-all">
           <input
             type="file"
             accept=".zip"
@@ -1204,13 +1257,13 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
               const f = e.target.files?.[0];
               if (f) {
                 await api.atexMaps.uploadZip(f);
-                setToast("Plans importés");
+                setToast("Plans importés ✓");
                 await loadPlans();
               }
               e.target.value = "";
             }}
           />
-          Import ZIP
+          📤 Import ZIP
         </label>
       </div>
 
@@ -1227,16 +1280,23 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
       ) : (
         <div className="space-y-3">
           {grouped.map((bat) => (
-            <details key={bat.key} className="border rounded-xl bg-white">
-              <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gray-50 rounded-t-xl hover:bg-gray-100">
-                <span className="font-medium">🏢 {bat.key}</span>
-                <span className="text-sm text-gray-500">{bat.zones.reduce((n, z) => n + z.items.length, 0)} plan(s)</span>
+            <details key={bat.key} open className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+              <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-150 transition-all">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 rounded-lg">
+                    <span className="text-xl">🏢</span>
+                  </div>
+                  <span className="font-semibold text-gray-800">{bat.key}</span>
+                </div>
+                <span className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+                  {bat.zones.reduce((n, z) => n + z.items.length, 0)} plan(s)
+                </span>
               </summary>
-              <div className="p-3 space-y-2">
+              <div className="p-3 space-y-2 bg-gray-50/50">
                 {bat.zones.map((z) => (
-                  <details key={z.name} className="pl-3 border-l-2 border-gray-200">
-                    <summary className="cursor-pointer py-1 text-sm text-gray-700 hover:text-gray-900">
-                      📍 {z.name} ({z.items.length})
+                  <details key={z.name} className="ml-2 pl-3 border-l-2 border-amber-200">
+                    <summary className="cursor-pointer py-2 text-sm text-gray-700 hover:text-amber-700 font-medium transition-colors">
+                      📍 {z.name} <span className="text-gray-400">({z.items.length})</span>
                     </summary>
                     <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {z.items.map((p) => (
@@ -1250,14 +1310,21 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
                               setMapRefreshTick((t) => t + 1);
                             }
                           }}
-                          className={`p-3 border rounded-xl text-left transition-all hover:shadow ${
-                            selectedPlan?.logical_name === p.logical_name ? "border-blue-500 bg-blue-50" : "bg-white"
+                          className={`p-3 border rounded-xl text-left transition-all hover:shadow-md ${
+                            selectedPlan?.logical_name === p.logical_name
+                              ? "border-amber-400 bg-gradient-to-br from-amber-50 to-orange-50 ring-2 ring-amber-200"
+                              : "bg-white hover:bg-gray-50 border-gray-200"
                           }`}
                         >
                           <div className="flex items-center gap-2">
-                            <span className="text-2xl">📄</span>
-                            <span className="font-medium truncate">{p.display_name || p.logical_name}</span>
+                            <span className={`text-xl ${selectedPlan?.logical_name === p.logical_name ? "" : "opacity-60"}`}>📄</span>
+                            <span className="font-medium truncate text-gray-800">{p.display_name || p.logical_name}</span>
                           </div>
+                          {selectedPlan?.logical_name === p.logical_name && (
+                            <span className="mt-2 inline-flex px-2 py-0.5 bg-amber-500 text-white text-xs rounded-full">
+                              Actif
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1271,16 +1338,25 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
 
       {/* Selected Plan Map */}
       {selectedPlan && (
-        <div className="border rounded-xl p-4 bg-white">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">{selectedPlan.display_name || selectedPlan.logical_name}</h3>
+        <div className="border-2 border-amber-200 rounded-2xl overflow-hidden bg-white shadow-lg">
+          <div className="flex items-center justify-between p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-500 rounded-xl">
+                <span className="text-white text-xl">🗺️</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800">{selectedPlan.display_name || selectedPlan.logical_name}</h3>
+                <p className="text-xs text-amber-700">Cliquez sur + pour ajouter un équipement</p>
+              </div>
+            </div>
             <button
               onClick={() => setSelectedPlan(null)}
-              className="px-3 py-1 bg-gray-100 rounded-lg hover:bg-gray-200 text-sm"
+              className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 text-sm font-medium shadow-sm transition-all"
             >
-              Fermer
+              ✕ Fermer
             </button>
           </div>
+          <div className="p-4">
           <AtexMap
             key={`${selectedPlan.logical_name}:${mapRefreshTick}:${selectedEquipmentId || ''}`}
             plan={selectedPlan}
@@ -1305,6 +1381,7 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
               setToast("Équipements mis à jour");
             }}
           />
+          </div>
         </div>
       )}
     </div>
@@ -1419,21 +1496,26 @@ function EquipmentDrawer({
             </div>
           </div>
 
-          {/* Status badges in header */}
+          {/* Status badges in header - Couleurs contrastées */}
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            <Badge color={statusColor(editing.status)} className="bg-white/20 text-white border border-white/30">
+            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+              editing.status === 'a_faire' ? 'bg-emerald-500 text-white border-emerald-400' :
+              editing.status === 'en_cours_30' ? 'bg-amber-500 text-white border-amber-400' :
+              editing.status === 'en_retard' ? 'bg-red-500 text-white border-red-400' :
+              'bg-white/30 text-white border-white/40'
+            }`}>
               {statusLabel(editing.status)}
-            </Badge>
+            </span>
             {editing.compliance_state === "conforme" ? (
-              <Badge className="bg-emerald-400/30 text-white border border-emerald-300/50">✓ Conforme</Badge>
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500 text-white border border-emerald-400">✓ Conforme</span>
             ) : editing.compliance_state === "non_conforme" ? (
-              <Badge className="bg-red-400/30 text-white border border-red-300/50">✗ Non conforme</Badge>
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500 text-white border border-red-400">✗ Non conforme</span>
             ) : null}
             {editing.zoning_gas != null && (
-              <Badge className="bg-amber-400/30 text-white border border-amber-300/50">💨 Gaz {editing.zoning_gas}</Badge>
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500 text-white border border-amber-400">💨 Gaz {editing.zoning_gas}</span>
             )}
             {editing.zoning_dust != null && (
-              <Badge className="bg-orange-400/30 text-white border border-orange-300/50">🌫️ Pouss. {editing.zoning_dust}</Badge>
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-500 text-white border border-orange-400">🌫️ Pouss. {editing.zoning_dust}</span>
             )}
           </div>
         </div>
