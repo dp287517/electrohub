@@ -199,20 +199,6 @@ export default function SwitchboardControls() {
     }
   }, [searchParams, switchboards, setSearchParams]);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-        <div className="relative">
-          <div className="w-16 h-16 border-4 border-blue-200 rounded-full animate-spin border-t-blue-600" />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-2xl">⚡</span>
-          </div>
-        </div>
-        <p className="text-gray-500 animate-pulse">Chargement des contrôles...</p>
-      </div>
-    );
-  }
-
   // Stats from dashboard API - structure: { stats: { pending, overdue, completed_30d, templates }, upcoming, overdue_list }
   const overdueCount = dashboard?.stats?.overdue || 0;
   const pendingCount = dashboard?.stats?.pending || 0;
@@ -352,6 +338,21 @@ export default function SwitchboardControls() {
       performers: []
     });
   };
+
+  // Loading state (after all hooks)
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <div className="relative">
+          <div className="w-16 h-16 border-4 border-blue-200 rounded-full animate-spin border-t-blue-600" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-2xl">⚡</span>
+          </div>
+        </div>
+        <p className="text-gray-500 animate-pulse">Chargement des contrôles...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-20">
