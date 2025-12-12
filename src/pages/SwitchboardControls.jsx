@@ -70,8 +70,8 @@ export default function SwitchboardControls() {
 
   const loadSwitchboards = useCallback(async () => {
     try {
-      const res = await api.switchboard.listBoards();
-      setSwitchboards(res.boards || res || []);
+      const res = await api.switchboard.listBoards({ pageSize: 500 });
+      setSwitchboards(res.data || []);
     } catch (e) {
       console.error("Switchboards error:", e);
     }
@@ -656,7 +656,7 @@ function TemplateModal({ template, onClose, onSave }) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full border rounded px-3 py-2"
+                className="w-full border rounded px-3 py-2 bg-white text-gray-900"
                 placeholder="Ex: Contrôle annuel tableau"
               />
             </div>
@@ -665,7 +665,7 @@ function TemplateModal({ template, onClose, onSave }) {
               <select
                 value={targetType}
                 onChange={(e) => setTargetType(e.target.value)}
-                className="w-full border rounded px-3 py-2"
+                className="w-full border rounded px-3 py-2 bg-white text-gray-900"
               >
                 <option value="switchboard">Tableau électrique</option>
                 <option value="device">Disjoncteur</option>
@@ -678,7 +678,7 @@ function TemplateModal({ template, onClose, onSave }) {
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
               rows={2}
               placeholder="Description du contrôle..."
             />
@@ -689,7 +689,7 @@ function TemplateModal({ template, onClose, onSave }) {
             <select
               value={frequencyMonths}
               onChange={(e) => setFrequencyMonths(Number(e.target.value))}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
             >
               <option value={1}>Mensuel (1 mois)</option>
               <option value={3}>Trimestriel (3 mois)</option>
@@ -734,7 +734,7 @@ function TemplateModal({ template, onClose, onSave }) {
                     type="text"
                     value={item.label}
                     onChange={(e) => updateItem(idx, "label", e.target.value)}
-                    className="flex-1 border rounded px-2 py-1 text-sm"
+                    className="flex-1 border rounded px-2 py-1 text-sm bg-white text-gray-900"
                     placeholder="Libellé du point de contrôle"
                   />
                   <span className={`px-2 py-1 rounded text-xs ${
@@ -749,7 +749,7 @@ function TemplateModal({ template, onClose, onSave }) {
                       type="text"
                       value={item.unit || ""}
                       onChange={(e) => updateItem(idx, "unit", e.target.value)}
-                      className="w-16 border rounded px-2 py-1 text-sm"
+                      className="w-16 border rounded px-2 py-1 text-sm bg-white text-gray-900"
                       placeholder="Unité"
                     />
                   )}
@@ -831,7 +831,7 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
             <select
               value={targetType}
               onChange={(e) => { setTargetType(e.target.value); setTemplateId(""); }}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
             >
               <option value="switchboard">Tableau électrique</option>
               <option value="device">Disjoncteur</option>
@@ -843,7 +843,7 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
             <select
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
             >
               <option value="">-- Sélectionner --</option>
               {filteredTemplates.map((t) => (
@@ -858,7 +858,7 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
               <select
                 value={switchboardId}
                 onChange={(e) => setSwitchboardId(e.target.value)}
-                className="w-full border rounded px-3 py-2"
+                className="w-full border rounded px-3 py-2 bg-white text-gray-900"
               >
                 <option value="">-- Sélectionner --</option>
                 {switchboards.map((sb) => (
@@ -876,7 +876,7 @@ function ScheduleModal({ templates, switchboards, onClose, onSave }) {
               type="date"
               value={nextDueDate}
               onChange={(e) => setNextDueDate(e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
             />
           </div>
         </div>
@@ -1024,7 +1024,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
                     type="number"
                     value={results[idx]?.value || ""}
                     onChange={(e) => updateResult(idx, "value", e.target.value)}
-                    className="border rounded px-3 py-2 w-32"
+                    className="border rounded px-3 py-2 w-32 bg-white text-gray-900"
                     placeholder="Valeur"
                   />
                   <span className="text-gray-500">{item.unit}</span>
@@ -1035,7 +1035,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
                 <textarea
                   value={results[idx]?.value || ""}
                   onChange={(e) => updateResult(idx, "value", e.target.value)}
-                  className="w-full border rounded px-3 py-2"
+                  className="w-full border rounded px-3 py-2 bg-white text-gray-900"
                   rows={2}
                   placeholder="Saisir le texte..."
                 />
@@ -1045,7 +1045,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
                 type="text"
                 value={results[idx]?.comment || ""}
                 onChange={(e) => updateResult(idx, "comment", e.target.value)}
-                className="w-full border rounded px-3 py-2 mt-2 text-sm"
+                className="w-full border rounded px-3 py-2 mt-2 text-sm bg-white text-gray-900"
                 placeholder="Commentaire (optionnel)"
               />
             </div>
@@ -1057,7 +1057,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
             <textarea
               value={globalNotes}
               onChange={(e) => setGlobalNotes(e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border rounded px-3 py-2 bg-white text-gray-900"
               rows={3}
               placeholder="Notes, remarques, actions à prévoir..."
             />
