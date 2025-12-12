@@ -22,6 +22,10 @@ const app = express();
 // Sécurité & cookies
 app.use(helmet());
 app.use(cookieParser());
+
+// ⚠️ NOTE: switchboardMapApp a un body-parser qui parse TOUS les bodies AVANT les proxies.
+// C'est pour ça que les proxies avec PUT/POST doivent utiliser withRestream: true
+// pour re-transmettre le body parsé au microservice.
 app.use(switchboardMapApp);
 
 // -------- AUTH LIGHT (n'a pas besoin du body pour passer) ----------
@@ -120,7 +124,8 @@ function mkProxy(target, { withRestream = false, timeoutMs = 20000 } = {}) {
 
 app.use("/api/atex",         mkProxy(atexTarget));
 app.use("/api/loopcalc",     mkProxy(loopcalcTarget));
-app.use("/api/switchboard",  mkProxy(switchboardTarget));
+// ✅ SWITCHBOARD: Ajout withRestream pour éviter les problèmes de body
+app.use("/api/switchboard",  mkProxy(switchboardTarget, { withRestream: true, timeoutMs: 25000 }));
 app.use("/api/selectivity",  mkProxy(selectivityTarget));
 app.use("/api/faultlevel",   mkProxy(flaTarget));
 app.use("/api/arcflash",     mkProxy(arcflashTarget));
