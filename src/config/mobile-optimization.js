@@ -51,42 +51,44 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
+ * 🚀 VERSION ULTRA-OPTIMISÉE pour chargement rapide
  */
 export function getPDFConfig() {
   const isMobile = isMobileDevice();
   const networkQuality = getNetworkQuality();
-  
-  // Configuration par défaut (PC / réseau rapide)
+
+  // 🔥 Configuration ULTRA-LÉGÈRE par défaut (PC / réseau rapide)
+  // Réduit drastiquement pour un chargement instantané
   let config = {
-    qualityBoost: 3.5,
-    maxBitmapWidth: 12288,
-    minBitmapWidth: 1800,
-    maxScale: 6.0,
-    minScale: 0.75,
+    qualityBoost: 1.5,        // ⬇️ Réduit de 3.5 à 1.5
+    maxBitmapWidth: 3000,     // ⬇️ Réduit de 12288 à 3000
+    minBitmapWidth: 800,      // ⬇️ Réduit de 1800 à 800
+    maxScale: 2.5,            // ⬇️ Réduit de 6.0 à 2.5
+    minScale: 0.5,
     enableImageSmoothing: true,
     intent: "display",
   };
-  
-  // Mobile + réseau lent
+
+  // Mobile + réseau lent → ULTRA LÉGER
   if (isMobile && networkQuality === "slow") {
     config = {
-      qualityBoost: 1.5,      // ⬇️ Réduit de 3.5 à 1.5
-      maxBitmapWidth: 2048,   // ⬇️ Réduit de 12288 à 2048
-      minBitmapWidth: 800,    // ⬇️ Réduit de 1800 à 800
-      maxScale: 2.0,          // ⬇️ Réduit de 6.0 à 2.0
-      minScale: 0.5,
-      enableImageSmoothing: true,
+      qualityBoost: 1.0,
+      maxBitmapWidth: 1200,
+      minBitmapWidth: 600,
+      maxScale: 1.2,
+      minScale: 0.4,
+      enableImageSmoothing: false,
       intent: "display",
     };
   }
   // Mobile + réseau moyen
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: 2.0,
-      maxBitmapWidth: 4096,
-      minBitmapWidth: 1024,
-      maxScale: 3.0,
-      minScale: 0.6,
+      qualityBoost: 1.2,
+      maxBitmapWidth: 1800,
+      minBitmapWidth: 700,
+      maxScale: 1.8,
+      minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
     };
@@ -94,16 +96,16 @@ export function getPDFConfig() {
   // Mobile + réseau rapide
   else if (isMobile) {
     config = {
-      qualityBoost: 2.5,
-      maxBitmapWidth: 6144,
-      minBitmapWidth: 1200,
-      maxScale: 4.0,
-      minScale: 0.7,
+      qualityBoost: 1.3,
+      maxBitmapWidth: 2200,
+      minBitmapWidth: 800,
+      maxScale: 2.0,
+      minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
     };
   }
-  
+
   return config;
 }
 

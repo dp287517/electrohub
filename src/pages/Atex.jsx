@@ -988,19 +988,21 @@ function applyZonesLocally(id, zones) {
                     >
                       <td className="px-4 py-3 min-w-[260px]">
                         <div className="flex items-center gap-3">
-                          <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
+                          <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
                             {it.photo_url ? (
                               <img
-                                src={api.atex.photoUrl(it.id)}
+                                src={api.atex.photoUrl(it.id, { thumb: true })}
                                 alt={it.name}
+                                loading="lazy"
+                                width={56}
+                                height={56}
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              <span className="text-[10px] text-gray-500 p-1 text-center">
-                                Photo à
-                                <br />
-                                prendre
-                              </span>
+                              <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                              </svg>
                             )}
                           </div>
                           <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(it)}>

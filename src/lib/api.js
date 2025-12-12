@@ -797,11 +797,12 @@ export const api = {
     removeEquipment: (id) =>
       del(`/api/atex/equipments/${encodeURIComponent(id)}`),
 
-    photoUrl: (equipmentId, { bust = true } = {}) =>
+    // 🚀 Support thumbnail pour optimisation mobile (thumb=1 -> image réduite)
+    photoUrl: (equipmentId, { bust = true, thumb = false } = {}) =>
       withBust(
         `${API_BASE}/api/atex/equipments/${encodeURIComponent(
           equipmentId
-        )}/photo`,
+        )}/photo${thumb ? '?thumb=1' : ''}`,
         bust
       ),
 

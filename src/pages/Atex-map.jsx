@@ -649,10 +649,9 @@ export default function AtexMap({
           renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
           await renderTaskRef.current.promise;
 
-          // 🚀 Optimisation : JPEG pour mobile (plus léger), PNG pour PC (meilleure qualité)
-          const format = isMobileDevice() ? "image/jpeg" : "image/png";
-          const quality = isMobileDevice() ? 0.85 : 1.0;
-          const dataUrl = canvas.toDataURL(format, quality);
+          // 🚀 ULTRA-OPTIMISATION : Toujours JPEG avec compression agressive
+          const quality = isMobileDevice() ? 0.65 : 0.80;
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
           setImgSize({ w: canvas.width, h: canvas.height });
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
@@ -692,20 +691,32 @@ export default function AtexMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex, open]);
   /* ----------------------------- Chargements + INDEX ----------------------------- */
-  async function ensureIndexedOnce() {
+  // 🔥 NON-BLOQUANT : reindexZones en background avec timeout court
+  function ensureIndexedOnce() {
     const key = `${plan?.logical_name || ""}::${pageIndex}`;
     if (!key) return;
     if (indexedRef.current.key !== key) indexedRef.current = { key, done: false };
     if (indexedRef.current.done) return;
-    try {
-      log("reindexZones [once] start", { key });
-      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
-      indexedRef.current.done = true;
-      log("reindexZones [once] done", { key });
-    } catch (e) {
-      log("reindexZones [once] error (ignored)", { error: String(e) }, "warn");
-      indexedRef.current.done = true;
-    }
+
+    // 🚀 Fire and forget avec timeout de 5s max
+    indexedRef.current.done = true; // Marquer comme fait immédiatement
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    // Appel en background, ne bloque pas l'UI
+    (async () => {
+      try {
+        log("reindexZones [background] start", { key });
+        await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+        log("reindexZones [background] done", { key });
+      } catch (e) {
+        // Ignorer les erreurs - c'est un appel d'optimisation, pas critique
+        log("reindexZones [background] error (ignored)", { error: String(e) }, "warn");
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    })();
   }
   async function reloadAll() {
     if (!baseReadyRef.current || !planKey) return;
@@ -1254,17 +1265,9 @@ function setupHandleDrag(map, onMoveCallback) {
       // --- 3️⃣ Envoi au backend ---
       await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
 
-      // 🔁 Reindex après changement de géométrie
-      try {
-        if (plan?.logical_name && api.atexMaps?.reindexZones) {
-          await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
-          indexedRef.current = {
-            key: `${plan.logical_name}::${pageIndex}`,
-            done: true,
-          };
-        }
-      } catch (e) {
-        console.warn("[ATEX] reindexZones after saveGeomEdit failed", e);
+      // 🔁 Reindex en BACKGROUND après changement de géométrie (non-bloquant)
+      if (plan?.logical_name && api.atexMaps?.reindexZones) {
+        api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
       }
 
       // --- 4️⃣ Feedback visuel (Ton Toast Bleu) ---
@@ -1562,17 +1565,9 @@ function setupHandleDrag(map, onMoveCallback) {
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
 
-            // 🔁 Reindex zones après création
-            try {
-              if (plan?.logical_name && api.atexMaps?.reindexZones) {
-                await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
-                indexedRef.current = {
-                  key: `${plan.logical_name}::${pageIndex}`,
-                  done: true,
-                };
-              }
-            } catch (e) {
-              console.warn("[ATEX] reindexZones after createSubarea (rect/circle) failed", e);
+            // 🔁 Reindex en BACKGROUND après création (non-bloquant)
+            if (plan?.logical_name && api.atexMaps?.reindexZones) {
+              api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
             }
 
           } catch (e) {
@@ -1634,17 +1629,9 @@ function setupHandleDrag(map, onMoveCallback) {
             });
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
-            // 🔁 Reindex zones après création
-            try {
-              if (plan?.logical_name && api.atexMaps?.reindexZones) {
-                await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
-                indexedRef.current = {
-                  key: `${plan.logical_name}::${pageIndex}`,
-                  done: true,
-                };
-              }
-            } catch (e) {
-              console.warn("[ATEX] reindexZones after createSubarea (poly) failed", e);
+            // 🔁 Reindex en BACKGROUND après création (non-bloquant)
+            if (plan?.logical_name && api.atexMaps?.reindexZones) {
+              api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
             }
           } catch (e) {
             console.error("[ATEX] Subarea poly create failed", e);
@@ -1706,17 +1693,9 @@ function setupHandleDrag(map, onMoveCallback) {
           }
         }
 
-        // 🔁 Reindexer les zones pour mettre à jour zoning_gas/zoning_dust
-        try {
-          if (plan?.logical_name && api.atexMaps?.reindexZones) {
-            await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
-            indexedRef.current = {
-              key: `${plan.logical_name}::${pageIndex}`,
-              done: true,
-            };
-          }
-        } catch (e) {
-          console.warn("[ATEX] reindexZones after onSaveSubarea failed", e);
+        // 🔁 Reindex en BACKGROUND (non-bloquant)
+        if (plan?.logical_name && api.atexMaps?.reindexZones) {
+          api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
         }
 
         setEditorPos(null);
