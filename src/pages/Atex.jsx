@@ -397,15 +397,16 @@ export default function Atex() {
   const TabButton = ({ id, label, count, color }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`px-4 py-2.5 rounded-t-lg font-medium transition-all ${
+      className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-t-lg text-sm sm:text-base font-medium transition-all whitespace-nowrap ${
         activeTab === id
           ? "bg-white text-blue-600 border-t-2 border-x border-blue-600 -mb-px"
           : "bg-gray-100 text-gray-600 hover:bg-gray-200 border-transparent"
       }`}
     >
-      {label}
+      <span className="hidden sm:inline">{label}</span>
+      <span className="sm:hidden">{label.length > 10 ? label.slice(0, 8) + "…" : label}</span>
       {count !== undefined && count > 0 && (
-        <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-bold ${color || "bg-gray-200 text-gray-700"}`}>
+        <span className={`ml-1 sm:ml-2 px-1.5 sm:px-2 py-0.5 rounded-full text-xs font-bold ${color || "bg-gray-200 text-gray-700"}`}>
           {count}
         </span>
       )}
@@ -472,47 +473,49 @@ export default function Atex() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Équipements ATEX</h1>
-          <p className="text-gray-500">Gestion des équipements en zones explosives</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Équipements ATEX</h1>
+          <p className="text-sm sm:text-base text-gray-500">Gestion des équipements en zones explosives</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 w-full sm:w-auto">
           <button
             onClick={() => setFiltersOpen(!filtersOpen)}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-2"
+            className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 text-sm sm:text-base"
           >
             <span>🔍</span>
-            {filtersOpen ? "Masquer filtres" : "Filtres"}
+            <span className="hidden sm:inline">{filtersOpen ? "Masquer filtres" : "Filtres"}</span>
+            <span className="sm:hidden">Filtres</span>
           </button>
           <button
             onClick={() => openEdit({})}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm sm:text-base"
           >
-            + Nouvel équipement
+            <span className="hidden sm:inline">+ Nouvel équipement</span>
+            <span className="sm:hidden">+ Nouveau</span>
           </button>
         </div>
       </div>
 
       {/* Filters */}
       {filtersOpen && (
-        <div className="bg-white rounded-xl border shadow-sm p-4 space-y-3">
-          <div className="grid md:grid-cols-5 gap-3">
+        <div className="bg-white rounded-xl border shadow-sm p-3 sm:p-4 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
             <input
               type="text"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Recherche..."
-              className="border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100"
+              className="col-span-2 sm:col-span-1 border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100"
             />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="border rounded-lg px-3 py-2 text-sm w-full"
+              className="border rounded-lg px-2 sm:px-3 py-2 text-sm w-full"
             >
-              <option value="">Tous statuts</option>
+              <option value="">Statut</option>
               <option value="a_faire">À faire</option>
-              <option value="en_cours_30">En cours ≤90j</option>
+              <option value="en_cours_30">En cours</option>
               <option value="en_retard">En retard</option>
             </select>
             <input
@@ -520,21 +523,21 @@ export default function Atex() {
               value={buildingFilter}
               onChange={(e) => setBuildingFilter(e.target.value)}
               placeholder="Bâtiment"
-              className="border rounded-lg px-3 py-2 text-sm w-full"
+              className="border rounded-lg px-2 sm:px-3 py-2 text-sm w-full"
             />
             <input
               type="text"
               value={zoneFilter}
               onChange={(e) => setZoneFilter(e.target.value)}
               placeholder="Zone"
-              className="border rounded-lg px-3 py-2 text-sm w-full"
+              className="border rounded-lg px-2 sm:px-3 py-2 text-sm w-full"
             />
             <select
               value={complianceFilter}
               onChange={(e) => setComplianceFilter(e.target.value)}
-              className="border rounded-lg px-3 py-2 text-sm w-full"
+              className="border rounded-lg px-2 sm:px-3 py-2 text-sm w-full"
             >
-              <option value="">Toute conformité</option>
+              <option value="">Conformité</option>
               <option value="conforme">Conforme</option>
               <option value="non_conforme">Non conforme</option>
             </select>
@@ -543,7 +546,7 @@ export default function Atex() {
             onClick={() => { setQ(""); setStatusFilter(""); setBuildingFilter(""); setZoneFilter(""); setComplianceFilter(""); }}
             className="text-sm text-blue-600 hover:underline"
           >
-            Réinitialiser les filtres
+            Réinitialiser
           </button>
         </div>
       )}
@@ -1218,44 +1221,46 @@ function EquipmentDrawer({
         }
       }}
     >
-      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50">
-          <h2 className="text-lg font-bold">{editing.id ? "Modifier équipement" : "Nouvel équipement"}</h2>
-          <div className="flex items-center gap-2">
+      <div className="bg-white rounded-t-2xl sm:rounded-3xl shadow-2xl w-full sm:max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header - Fixed on mobile */}
+        <div className="flex items-center justify-between p-3 sm:p-6 border-b bg-gray-50 sticky top-0 z-10">
+          <h2 className="text-base sm:text-lg font-bold truncate pr-2">{editing.id ? "Modifier" : "Nouveau"}</h2>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {dirty && (
-              <button onClick={onSave} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
-                Enregistrer
+              <button onClick={onSave} className="px-3 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs sm:text-sm">
+                Sauver
               </button>
             )}
-            <button onClick={onClose} className="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">✕</button>
+            <button onClick={onClose} className="p-1.5 sm:px-3 sm:py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-lg">✕</button>
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-3 sm:space-y-4">
           {/* Photo */}
           {editing.id && (
-            <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-              <div className="w-24 h-24 rounded-xl border overflow-hidden bg-white flex items-center justify-center shrink-0">
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-3 sm:gap-4 p-3 sm:p-4 bg-gray-50 rounded-xl">
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl border overflow-hidden bg-white flex items-center justify-center shrink-0">
                 {editing.photo_url ? (
                   <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-3xl text-gray-300">📷</span>
+                  <span className="text-2xl sm:text-3xl text-gray-300">📷</span>
                 )}
               </div>
-              <div className="flex-1 space-y-2">
-                <label className="inline-block px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 cursor-pointer text-sm">
+              <div className="flex-1 w-full space-y-2">
+                <label className="block text-center sm:text-left sm:inline-block px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 cursor-pointer text-xs sm:text-sm">
                   <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUploadPhoto(e.target.files[0])} />
                   Changer la photo
                 </label>
-                <div className="flex gap-2">
-                  <label className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 cursor-pointer text-sm">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <label className="px-3 py-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 cursor-pointer text-xs sm:text-sm text-center">
                     <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
-                    Analyser photos (IA)
+                    <span className="hidden sm:inline">Analyser photos (IA)</span>
+                    <span className="sm:hidden">Analyse IA</span>
                   </label>
-                  <button onClick={onVerifyCompliance} className="px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-sm">
-                    Vérifier conformité (IA)
+                  <button onClick={onVerifyCompliance} className="px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs sm:text-sm">
+                    <span className="hidden sm:inline">Vérifier conformité (IA)</span>
+                    <span className="sm:hidden">Conformité IA</span>
                   </button>
                 </div>
               </div>
@@ -1326,33 +1331,67 @@ function EquipmentDrawer({
             </div>
           </div>
 
-          {/* Location (readonly) */}
-          <div className="grid sm:grid-cols-4 gap-3 p-3 bg-gray-50 rounded-xl">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Bâtiment</label>
-              <input type="text" value={editing.building || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
+          {/* Location */}
+          <div className="p-3 bg-gray-50 rounded-xl space-y-3">
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Bâtiment</label>
+                <input type="text" value={editing.building || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Zone</label>
+                <input type="text" value={editing.zone || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Zone</label>
-              <input type="text" value={editing.zone || "—"} readOnly className="w-full bg-white border rounded-lg px-3 py-2 text-sm text-gray-600" />
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Équipement</label>
+                <input
+                  type="text"
+                  value={editing.equipment || ""}
+                  onChange={(e) => setEditing({ ...editing, equipment: e.target.value })}
+                  className="w-full bg-white border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ex: Moteur, Pompe..."
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Sous-équipement</label>
+                <input
+                  type="text"
+                  value={editing.sub_equipment || ""}
+                  onChange={(e) => setEditing({ ...editing, sub_equipment: e.target.value })}
+                  className="w-full bg-white border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ex: Ventilateur, Capteur..."
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Zonage Gaz</label>
-              <input
-                type="text"
-                value={editing.zoning_gas ?? "—"}
-                onChange={(e) => setEditing({ ...editing, zoning_gas: e.target.value === "" ? null : Number(e.target.value) })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Zonage Poussière</label>
-              <input
-                type="text"
-                value={editing.zoning_dust ?? "—"}
-                onChange={(e) => setEditing({ ...editing, zoning_dust: e.target.value === "" ? null : Number(e.target.value) })}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Zonage Gaz (0/1/2)</label>
+                <select
+                  value={editing.zoning_gas ?? ""}
+                  onChange={(e) => setEditing({ ...editing, zoning_gas: e.target.value === "" ? null : Number(e.target.value) })}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Non classé</option>
+                  <option value="0">Zone 0 (permanent)</option>
+                  <option value="1">Zone 1 (occasionnel)</option>
+                  <option value="2">Zone 2 (rare)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Zonage Poussière (20/21/22)</label>
+                <select
+                  value={editing.zoning_dust ?? ""}
+                  onChange={(e) => setEditing({ ...editing, zoning_dust: e.target.value === "" ? null : Number(e.target.value) })}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Non classé</option>
+                  <option value="20">Zone 20 (permanent)</option>
+                  <option value="21">Zone 21 (occasionnel)</option>
+                  <option value="22">Zone 22 (rare)</option>
+                </select>
+              </div>
             </div>
           </div>
 
