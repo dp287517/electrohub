@@ -122,7 +122,8 @@ function mkProxy(target, { withRestream = false, timeoutMs = 20000 } = {}) {
   });
 }
 
-app.use("/api/atex",         mkProxy(atexTarget));
+// ✅ ATEX: Ajout withRestream pour éviter les problèmes de body (setPosition, etc.)
+app.use("/api/atex",         mkProxy(atexTarget, { withRestream: true, timeoutMs: 30000 }));
 app.use("/api/loopcalc",     mkProxy(loopcalcTarget));
 // ✅ SWITCHBOARD: Ajout withRestream pour éviter les problèmes de body
 app.use("/api/switchboard",  mkProxy(switchboardTarget, { withRestream: true, timeoutMs: 25000 }));
