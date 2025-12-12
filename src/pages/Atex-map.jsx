@@ -728,34 +728,9 @@ export default function AtexMap({
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex, open]);
-  /* ----------------------------- Chargements + INDEX ----------------------------- */
-  // 🔥 NON-BLOQUANT : reindexZones en background avec timeout court
-  function ensureIndexedOnce() {
-    const key = `${plan?.logical_name || ""}::${pageIndex}`;
-    if (!key) return;
-    if (indexedRef.current.key !== key) indexedRef.current = { key, done: false };
-    if (indexedRef.current.done) return;
-
-    // 🚀 Fire and forget avec timeout de 5s max
-    indexedRef.current.done = true; // Marquer comme fait immédiatement
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    // Appel en background, ne bloque pas l'UI
-    (async () => {
-      try {
-        log("reindexZones [background] start", { key });
-        await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
-        log("reindexZones [background] done", { key });
-      } catch (e) {
-        // Ignorer les erreurs - c'est un appel d'optimisation, pas critique
-        log("reindexZones [background] error (ignored)", { error: String(e) }, "warn");
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    })();
-  }
+  /* ----------------------------- Chargements ----------------------------- */
+  // ✅ reindexZones supprimé - la détection de zones se fait côté frontend (findContainingSubarea)
+  // et setPosition met à jour les zones en arrière-plan côté backend
   async function reloadAll() {
     if (!baseReadyRef.current || !planKey) return;
 
@@ -766,9 +741,6 @@ export default function AtexMap({
     setTimeout(() => {
       loadSubareas().catch(console.error);
     }, 100);
-
-    // 🚀 reindexZones en arrière-plan (fire and forget)
-    ensureIndexedOnce();
   }
     async function enrichStatuses(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
@@ -1301,10 +1273,7 @@ function setupHandleDrag(map, onMoveCallback) {
       // --- 3️⃣ Envoi au backend ---
       await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
 
-      // 🔁 Reindex en BACKGROUND après changement de géométrie (non-bloquant)
-      if (plan?.logical_name && api.atexMaps?.reindexZones) {
-        api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
-      }
+      // ✅ reindexZones supprimé - détection de zones côté frontend
 
       // --- 4️⃣ Feedback visuel (Ton Toast Bleu) ---
       const toast = document.createElement("div");
@@ -1601,10 +1570,7 @@ function setupHandleDrag(map, onMoveCallback) {
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
 
-            // 🔁 Reindex en BACKGROUND après création (non-bloquant)
-            if (plan?.logical_name && api.atexMaps?.reindexZones) {
-              api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
-            }
+            // ✅ reindexZones supprimé - détection de zones côté frontend
 
           } catch (e) {
             console.error("[ATEX] Subarea create failed", e);
@@ -1665,10 +1631,7 @@ function setupHandleDrag(map, onMoveCallback) {
             });
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
-            // 🔁 Reindex en BACKGROUND après création (non-bloquant)
-            if (plan?.logical_name && api.atexMaps?.reindexZones) {
-              api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
-            }
+            // ✅ reindexZones supprimé - détection de zones côté frontend
           } catch (e) {
             console.error("[ATEX] Subarea poly create failed", e);
             alert("Erreur création polygone");
@@ -1729,10 +1692,7 @@ function setupHandleDrag(map, onMoveCallback) {
           }
         }
 
-        // 🔁 Reindex en BACKGROUND (non-bloquant)
-        if (plan?.logical_name && api.atexMaps?.reindexZones) {
-          api.atexMaps.reindexZones(plan.logical_name, pageIndex).catch(() => {});
-        }
+        // ✅ reindexZones supprimé - détection de zones côté frontend
 
         setEditorPos(null);
         await reloadAll();
