@@ -992,7 +992,21 @@ export default function AtexMap({
             updateEquipmentMacroAndSub(p.id, containingZone.id, containingZone.name).catch(() => {});
           }
 
-          // 2️⃣ Sauvegarder la position en arrière-plan (fire and forget, timeout 5s)
+          // 2️⃣ Mettre à jour l'état LOCAL immédiatement (pas de reload backend)
+          // On met à jour positionsRef pour que le marqueur reste à sa nouvelle position
+          const posIdx = positionsRef.current.findIndex(pos => pos.id === p.id);
+          if (posIdx >= 0) {
+            positionsRef.current[posIdx] = {
+              ...positionsRef.current[posIdx],
+              x_frac: Math.round(xf * 1e6) / 1e6,
+              y_frac: Math.round(yf * 1e6) / 1e6,
+              // Mettre à jour les zones détectées localement
+              zoning_gas: containingZone?.zoning_gas ?? positionsRef.current[posIdx].zoning_gas,
+              zoning_dust: containingZone?.zoning_dust ?? positionsRef.current[posIdx].zoning_dust,
+            };
+          }
+
+          // 3️⃣ Sauvegarder la position en arrière-plan (fire and forget, timeout 5s)
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 5000);
 
@@ -1010,8 +1024,7 @@ export default function AtexMap({
             console.warn("[ATEX] setPosition background error (ignored)", e?.message || e);
           });
 
-          // 3️⃣ Recharger les marqueurs
-          loadPositions().catch(() => {});
+          // ❌ Plus de loadPositions() ici ! On garde la position locale
 
           draggingRef.current = false;
         });
