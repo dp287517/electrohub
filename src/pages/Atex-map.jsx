@@ -156,6 +156,56 @@ function fromLatLngToFrac(latlng, baseLayer) {
   const yf = (latlng.lat - b.getSouth()) / H;
   return { xf: Math.min(1, Math.max(0, xf)), yf: Math.min(1, Math.max(0, yf)) };
 }
+
+// 🔥 DÉTECTION DE ZONE CÔTÉ FRONTEND (ne dépend plus du backend lent)
+function findContainingSubarea(xf, yf, subareas) {
+  if (!subareas || typeof subareas !== 'object') return null;
+
+  const list = Array.isArray(subareas) ? subareas : Object.values(subareas);
+
+  for (const sa of list) {
+    if (!sa) continue;
+
+    // Rectangle: vérifier si le point est dans le rectangle
+    if (sa.kind === 'rect') {
+      const x1 = Math.min(sa.x1 ?? 0, sa.x2 ?? 1);
+      const x2 = Math.max(sa.x1 ?? 0, sa.x2 ?? 1);
+      const y1 = Math.min(sa.y1 ?? 0, sa.y2 ?? 1);
+      const y2 = Math.max(sa.y1 ?? 0, sa.y2 ?? 1);
+      if (xf >= x1 && xf <= x2 && yf >= y1 && yf <= y2) {
+        return sa;
+      }
+    }
+
+    // Cercle: vérifier si le point est dans le cercle
+    if (sa.kind === 'circle') {
+      const cx = sa.cx ?? 0.5;
+      const cy = sa.cy ?? 0.5;
+      const r = sa.r ?? 0.1;
+      const dist = Math.sqrt((xf - cx) ** 2 + (yf - cy) ** 2);
+      if (dist <= r) {
+        return sa;
+      }
+    }
+
+    // Polygone: ray casting algorithm
+    if (sa.kind === 'poly' && Array.isArray(sa.points) && sa.points.length >= 3) {
+      let inside = false;
+      const pts = sa.points;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i][0], yi = pts[i][1];
+        const xj = pts[j][0], yj = pts[j][1];
+        if (((yi > yf) !== (yj > yf)) && (xf < (xj - xi) * (yf - yi) / (yj - yi) + xi)) {
+          inside = !inside;
+        }
+      }
+      if (inside) return sa;
+    }
+  }
+
+  return null;
+}
+
 // 🔥 Nouveau design des marqueurs ATEX avec icône SVG et gradient (style Switchboard)
 const ICON_PX_SELECTED = 30;
 
@@ -951,40 +1001,47 @@ export default function AtexMap({
         mk.on("dragend", async () => {
           const ll = mk.getLatLng();
           const { xf, yf } = fromLatLngToFrac(ll, base);
-          log("marker dragend -> setPosition", { id: p.id, xFrac: xf, yFrac: yf });
-          try {
-            const resp = await api.atexMaps.setPosition(p.id, {
-              logical_name: plan?.logical_name,
-              plan_id: plan?.id,
-              page_index: pageIndex,
-              x_frac: Math.round(xf * 1e6) / 1e6,
-              y_frac: Math.round(yf * 1e6) / 1e6,
-            });
-            log("setPosition response", { raw: safeJson(resp) });
+          log("marker dragend", { id: p.id, xFrac: xf, yFrac: yf });
 
-            // RECHARGE LES ZONES D'ABORD → subareasById à jour
-            loadSubareas();
+          // 🚀 DÉTECTION DE ZONE CÔTÉ FRONTEND (instantané, pas de timeout!)
+          const containingZone = findContainingSubarea(xf, yf, subareasById);
+          log("Zone détectée côté frontend", { zone: containingZone?.name, zoning_gas: containingZone?.zoning_gas, zoning_dust: containingZone?.zoning_dust });
 
-            // Maintenant on peut utiliser le bon nom de sous-zone
-            await updateEquipmentMacroAndSub(
-              p.id, 
-              resp?.zones?.subarea_id || null,
-              resp?.zones?.subarea_name || null
-            );
-            try { 
-              onZonesApplied?.(p.id, { 
-                zoning_gas: resp?.zones?.zoning_gas ?? null, 
-                zoning_dust: resp?.zones?.zoning_dust ?? null, 
-              }); 
+          // 1️⃣ Appliquer les zones IMMÉDIATEMENT (côté frontend)
+          if (containingZone) {
+            try {
+              onZonesApplied?.(p.id, {
+                zoning_gas: containingZone.zoning_gas ?? null,
+                zoning_dust: containingZone.zoning_dust ?? null,
+              });
             } catch {}
 
-            // Recharge tout
-            await reloadAll();
-          } catch (e) {
-            console.error("[ATEX] setPosition error", e);
-          } finally {
-            draggingRef.current = false;
+            // Mettre à jour l'équipement avec les infos de zone
+            updateEquipmentMacroAndSub(p.id, containingZone.id, containingZone.name).catch(() => {});
           }
+
+          // 2️⃣ Sauvegarder la position en arrière-plan (fire and forget, timeout 5s)
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+          api.atexMaps.setPosition(p.id, {
+            logical_name: plan?.logical_name,
+            plan_id: plan?.id,
+            page_index: pageIndex,
+            x_frac: Math.round(xf * 1e6) / 1e6,
+            y_frac: Math.round(yf * 1e6) / 1e6,
+          }).then(resp => {
+            clearTimeout(timeoutId);
+            log("setPosition response", { raw: safeJson(resp) });
+          }).catch(e => {
+            clearTimeout(timeoutId);
+            console.warn("[ATEX] setPosition background error (ignored)", e?.message || e);
+          });
+
+          // 3️⃣ Recharger les marqueurs
+          loadPositions().catch(() => {});
+
+          draggingRef.current = false;
         });
         mk.on("click", () => {
           onOpenEquipment?.({
