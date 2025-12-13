@@ -1228,6 +1228,7 @@ export default function Meca() {
 
   // Placement state
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
 
   // Toast state
   const [toast, setToast] = useState(null);
@@ -1251,7 +1252,20 @@ export default function Meca() {
   useEffect(() => {
     loadEquipments();
     loadPlacements();
-  }, []);
+  }, [loadPlacements]);
+
+  // Refresh placements on visibility change
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (!document.hidden) loadPlacements();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', loadPlacements);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', loadPlacements);
+    };
+  }, [loadPlacements]);
 
   // URL params handling
   useEffect(() => {
@@ -1284,23 +1298,16 @@ export default function Meca() {
     }
   };
 
-  const loadPlacements = async () => {
+  const loadPlacements = useCallback(async () => {
     try {
-      const plans = await api.mecaMaps.listPlans().catch(() => ({ plans: [] }));
-      const placed = new Set();
-      for (const plan of (plans?.plans || [])) {
-        try {
-          const positions = await api.mecaMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
-          (positions?.positions || []).forEach(p => {
-            if (p.equipment_id) placed.add(p.equipment_id);
-          });
-        } catch {}
-      }
-      setPlacedIds(placed);
+      const response = await api.mecaMaps.placedIds();
+      const ids = (response?.placed_ids || []).map(Number);
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(response?.placed_details || {});
     } catch (e) {
       console.error("Load placements error:", e);
     }
-  };
+  }, []);
 
   const handleSelectEquipment = async (eq) => {
     setSearchParams({ meca: eq.id.toString() });
@@ -1386,8 +1393,16 @@ export default function Meca() {
   };
 
   const handleNavigateToMap = (eq) => {
-    if (eq?.id && placedIds.has(eq.id)) {
-      navigate(`/app/meca/map?meca=${eq.id}`);
+    const eqId = eq?.id || selectedEquipment?.id;
+    if (!eqId) {
+      navigate('/app/meca/map');
+      return;
+    }
+
+    const details = placedDetails[eqId];
+    if (details?.plans?.length > 0) {
+      const planKey = details.plans[0];
+      navigate(`/app/meca/map?meca=${eqId}&plan=${encodeURIComponent(planKey)}`);
     } else {
       navigate('/app/meca/map');
     }
