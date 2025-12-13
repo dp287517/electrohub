@@ -2339,26 +2339,46 @@ function setupHandleDrag(map, onMoveCallback) {
           {/* Dialog */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b gap-3 flex-wrap">
-                <div className="font-semibold">
-                  {title}
-                  {planDisplayName ? ` — ${planDisplayName}` : ""}
+              {/* 🆕 Header redesigné - compact sur mobile */}
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+                {/* Ligne 1: Titre + Fermer */}
+                <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl sm:text-2xl">🗺️</span>
+                    <div className="min-w-0">
+                      <div className="font-bold text-sm sm:text-base truncate">
+                        {planDisplayName || title || "Plan ATEX"}
+                      </div>
+                      {/* Mobile: affiche bâtiment/zone en sous-titre */}
+                      <div className="text-amber-100 text-xs sm:hidden truncate">
+                        {building || "Bâtiment"} • {zone || "Zone"}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleClosePlan}
+                    className="w-8 h-8 flex items-center justify-center bg-white/20 hover:bg-white/30 rounded-lg transition-all shrink-0"
+                    title="Fermer"
+                  >
+                    ✕
+                  </button>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
+
+                {/* Ligne 2: Champs bâtiment/zone (masqués sur mobile petit) */}
+                <div className="hidden sm:flex items-center gap-3 px-4 pb-3 flex-wrap">
                   {/* Champ Bâtiment */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm text-gray-600">Bâtiment</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-amber-100">Bâtiment</span>
                     <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
+                      className="border-0 rounded-lg px-2 py-1 text-sm w-[140px] bg-white/90 text-gray-800 placeholder-gray-400"
                       value={building}
                       onChange={(e) => setBuilding(e.target.value)}
                       placeholder="Ex: Bât. A"
                     />
-                    {/* Bouton visible uniquement si modif réelle */}
                     {building.trim() !== savedBuilding.trim() && (
                       <button
-                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
-                        title="Enregistrer le nom du bâtiment"
+                        className="px-2 py-1 bg-white/30 hover:bg-white/40 text-white rounded text-sm font-medium"
+                        title="Enregistrer"
                         onClick={async () => {
                           await handleMetaChange(building, zone);
                           setSavedBuilding(building);
@@ -2370,19 +2390,18 @@ function setupHandleDrag(map, onMoveCallback) {
                   </div>
 
                   {/* Champ Zone */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm text-gray-600">Zone</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-amber-100">Zone</span>
                     <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
+                      className="border-0 rounded-lg px-2 py-1 text-sm w-[140px] bg-white/90 text-gray-800 placeholder-gray-400"
                       value={zone}
                       onChange={(e) => setZone(e.target.value)}
                       placeholder="Ex: Niv. 2"
                     />
-                    {/* Bouton visible uniquement si modif réelle */}
                     {zone.trim() !== savedZone.trim() && (
                       <button
-                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
-                        title="Enregistrer le nom de la zone"
+                        className="px-2 py-1 bg-white/30 hover:bg-white/40 text-white rounded text-sm font-medium"
+                        title="Enregistrer"
                         onClick={async () => {
                           await handleMetaChange(building, zone);
                           setSavedZone(zone);
@@ -2392,16 +2411,12 @@ function setupHandleDrag(map, onMoveCallback) {
                       </button>
                     )}
                   </div>
-
-                  <Btn variant="ghost" onClick={handleClosePlan}>
-                    Fermer
-                  </Btn>
                 </div>
               </div>
 
               <div className="flex-1 overflow-hidden">
                 {MapInner}
-                <div className="p-3">{MarkerLegend}</div>
+                <div className="p-2 sm:p-3">{MarkerLegend}</div>
               </div>
             </div>
           </div>
