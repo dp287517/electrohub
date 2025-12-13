@@ -1074,9 +1074,9 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
         </span>
       </div>
 
-      {/* Arborescence Bâtiment > Zone > Équipements */}
+      {/* Arborescence Bâtiment > Zone > Équipements - Fermée par défaut */}
       {grouped.map((bat) => (
-        <details key={bat.key} open className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+        <details key={bat.key} className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
           <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 transition-all">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-blue-100 rounded-lg">
@@ -1090,7 +1090,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
           </summary>
           <div className="p-3 space-y-2 bg-gray-50/50">
             {bat.zones.map((z) => (
-              <details key={z.name} open className="ml-2 pl-3 border-l-2 border-blue-200">
+              <details key={z.name} className="ml-2 pl-3 border-l-2 border-blue-200">
                 <summary className="cursor-pointer py-2 text-sm text-gray-700 hover:text-blue-700 font-medium transition-colors flex items-center gap-2">
                   <span className="p-1 bg-amber-100 rounded">📍</span>
                   {z.name}
@@ -1306,8 +1306,9 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Arborescence fermée par défaut */}
           {grouped.map((bat) => (
-            <details key={bat.key} open className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+            <details key={bat.key} className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
               <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-150 transition-all">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-amber-100 rounded-lg">
