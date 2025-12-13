@@ -411,9 +411,10 @@ const VsdLeafletViewer = forwardRef(({
     const bg = isSelected
       ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
       : "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
+    const animClass = isSelected ? "vsd-marker-selected" : "";
 
     const html = `
-      <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
         <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
           <rect x="4" y="4" width="16" height="16" rx="2" stroke="white" stroke-width="2" fill="none"/>
           <line x1="8" y1="12" x2="16" y2="12" stroke="white" stroke-width="2"/>
@@ -530,8 +531,17 @@ const VsdLeafletViewer = forwardRef(({
   const highlightMarker = useCallback((equipmentId) => {
     const mk = markersMapRef.current.get(equipmentId);
     if (!mk || !mapRef.current) return;
+
+    // Center on marker
     const ll = mk.getLatLng();
     mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+    // Flash animation
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("vsd-marker-flash");
+      setTimeout(() => el.classList.remove("vsd-marker-flash"), 2000);
+    }
   }, []);
 
   useEffect(() => {
@@ -1095,7 +1105,42 @@ export default function VsdMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes flash-marker {
+          0%, 100% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          25% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+          50% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          75% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+        }
+        @keyframes pulse-selected {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+          }
+          50% {
+            transform: scale(1.15);
+            box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+          }
+        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
+        .vsd-marker-flash > div {
+          animation: flash-marker 2s ease-in-out;
+        }
+        .vsd-marker-selected > div {
+          animation: pulse-selected 1.5s ease-in-out infinite;
+        }
+        .vsd-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}

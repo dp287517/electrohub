@@ -411,9 +411,10 @@ const MecaLeafletViewer = forwardRef(({
     const bg = isSelected
       ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
       : "background: radial-gradient(circle at 30% 30%, #fb923c, #ea580c);";
+    const animClass = isSelected ? "meca-marker-selected" : "";
 
     const html = `
-      <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
         <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
           <circle cx="12" cy="12" r="3" fill="white"/>
           <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -529,8 +530,17 @@ const MecaLeafletViewer = forwardRef(({
   const highlightMarker = useCallback((equipmentId) => {
     const mk = markersMapRef.current.get(equipmentId);
     if (!mk || !mapRef.current) return;
+
+    // Center on marker
     const ll = mk.getLatLng();
     mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+    // Flash animation
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("meca-marker-flash");
+      setTimeout(() => el.classList.remove("meca-marker-flash"), 2000);
+    }
   }, []);
 
   useEffect(() => {
@@ -1095,7 +1105,42 @@ export default function MecaMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes flash-marker {
+          0%, 100% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          25% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+          50% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          75% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+        }
+        @keyframes pulse-selected {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7);
+          }
+          50% {
+            transform: scale(1.15);
+            box-shadow: 0 0 0 8px rgba(249, 115, 22, 0);
+          }
+        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
+        .meca-marker-flash > div {
+          animation: flash-marker 2s ease-in-out;
+        }
+        .meca-marker-selected > div {
+          animation: pulse-selected 1.5s ease-in-out infinite;
+        }
+        .meca-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}
