@@ -2015,13 +2015,13 @@ function setupHandleDrag(map, onMoveCallback) {
             💾
           </button>
         )}
-        {/* Légende */}
+        {/* Légende - 🆕 Bouton distinct et plus visible */}
         <button
-          className="btn-pencil"
+          className="btn-legend"
           title={legendVisible ? "Cacher la légende" : "Afficher la légende"}
           onClick={toggleLegend}
         >
-          {legendVisible ? "⮜" : "⮞"}
+          {legendVisible ? "✕" : "ℹ️"}
         </button>
       </div>
       {/* Overlay aide polygone */}

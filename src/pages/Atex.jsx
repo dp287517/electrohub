@@ -10,6 +10,42 @@ import { api, API_BASE } from "../lib/api.js";
 import AtexMap from "./Atex-map.jsx";
 
 // ============================================================
+// 🆕 Helper pour récupérer l'identité utilisateur (email)
+// ============================================================
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+  return match ? decodeURIComponent(match[2]) : null;
+}
+
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || getCookie("fullname") || getCookie("username") || null;
+
+  if (typeof window !== "undefined") {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("username") || null;
+
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && u?.name) name = String(u.name);
+      } catch {}
+    }
+  }
+
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    name = base.replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  email = email ? String(email).trim() : null;
+  name = name ? String(name).trim() : null;
+
+  return { email, name };
+}
+
+// ============================================================
 // ATEX EQUIPMENTS - Page principale v2.0
 // Design inspiré de SwitchboardControls
 // ============================================================
@@ -265,6 +301,9 @@ export default function Atex() {
   async function saveBase() {
     if (!editing) return;
 
+    // 🆕 Récupérer l'identité utilisateur pour tracking
+    const identity = getIdentity();
+
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
@@ -283,6 +322,9 @@ export default function Atex() {
       next_check_date: editing.next_check_date || null,
       zoning_gas: editing.zoning_gas ?? null,
       zoning_dust: editing.zoning_dust ?? null,
+      // 🆕 Tracking utilisateur
+      user_email: identity.email || null,
+      user_name: identity.name || null,
     };
 
     try {
@@ -913,7 +955,7 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
 }
 
 // ============================================================
-// EQUIPMENTS TAB
+// EQUIPMENTS TAB - Avec arborescence Bâtiment > Zone > Équipement
 // ============================================================
 
 function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
@@ -943,6 +985,24 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
     return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]}`}>{children}</span>;
   };
 
+  // 🆕 Grouper les équipements par bâtiment > zone (comme PlansTab)
+  const grouped = useMemo(() => {
+    const byKey = new Map();
+    for (const eq of items) {
+      const batKey = eq.building?.trim() || "Autres";
+      const zoneKey = eq.zone?.trim() || "Zone non renseignée";
+      const g = byKey.get(batKey) || { key: batKey, zones: new Map() };
+      const z = g.zones.get(zoneKey) || { name: zoneKey, items: [] };
+      z.items.push(eq);
+      g.zones.set(zoneKey, z);
+      byKey.set(batKey, g);
+    }
+    return Array.from(byKey.values()).map((g) => ({
+      key: g.key,
+      zones: Array.from(g.zones.values()),
+    }));
+  }, [items]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -961,126 +1021,93 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
     );
   }
 
-  // 🆕 Version responsive: cartes sur mobile, tableau sur desktop
-  return (
-    <div>
-      {/* Mobile: Liste de cartes */}
-      <div className="sm:hidden space-y-3">
-        {items.map((it) => (
-          <div key={it.id} className="bg-white border rounded-xl p-3 shadow-sm">
-            <div className="flex items-start gap-3">
-              <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
-                {it.photo_url ? (
-                  <img src={api.atex.photoUrl(it.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
-                ) : (
-                  <span className="text-gray-400 text-2xl">📷</span>
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <button className="text-blue-600 font-semibold hover:underline text-left truncate w-full" onClick={() => onOpenEquipment(it)}>
-                  {it.name || it.type || "Équipement"}
-                </button>
-                <div className="text-xs text-gray-500 truncate">
-                  {it.building || "—"} / {it.zone || "—"}
-                </div>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {it.zoning_gas != null && <Badge color="orange">Gaz {it.zoning_gas}</Badge>}
-                  {it.zoning_dust != null && <Badge color="blue">Dust {it.zoning_dust}</Badge>}
-                  <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-2 mt-3 pt-3 border-t">
-              <button onClick={() => onOpenEquipment(it)} className="flex-1 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm font-medium">
-                Modifier
-              </button>
-              {onGoToMap && (
-                <button onClick={() => onGoToMap(it)} className="flex-1 px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-sm font-medium">
-                  📍 Carte
-                </button>
-              )}
-            </div>
+  // 🆕 Composant carte équipement compact
+  const EquipmentCard = ({ eq }) => (
+    <div className="bg-white border rounded-xl p-3 shadow-sm hover:shadow-md transition-all">
+      <div className="flex items-start gap-3">
+        <div className="w-12 h-12 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+          {eq.photo_url ? (
+            <img src={api.atex.photoUrl(eq.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
+          ) : (
+            <span className="text-gray-400 text-xl">🔥</span>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <button className="text-blue-600 font-semibold hover:underline text-left truncate w-full text-sm" onClick={() => onOpenEquipment(eq)}>
+            {eq.name || eq.type || "Équipement"}
+          </button>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {eq.zoning_gas != null && <Badge color="orange">Gaz {eq.zoning_gas}</Badge>}
+            {eq.zoning_dust != null && <Badge color="blue">Dust {eq.zoning_dust}</Badge>}
+            <Badge color={statusColor(eq.status)}>{statusLabel(eq.status)}</Badge>
           </div>
-        ))}
+          {eq.next_check_date && (
+            <p className="text-xs text-gray-400 mt-1">
+              Prochain: {dayjs(eq.next_check_date).format("DD/MM/YY")}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 shrink-0">
+          <button onClick={() => onOpenEquipment(eq)} className="p-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs" title="Modifier">
+            ✏️
+          </button>
+          {onGoToMap && (
+            <button onClick={() => onGoToMap(eq)} className="p-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs" title="Voir sur carte">
+              📍
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // 🆕 Vue arborescence (comme PlansTab)
+  return (
+    <div className="space-y-3">
+      {/* Stats rapides */}
+      <div className="flex flex-wrap gap-2 text-sm">
+        <span className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+          {items.length} équipement{items.length > 1 ? "s" : ""}
+        </span>
+        <span className="px-3 py-1.5 bg-amber-100 text-amber-700 rounded-full font-medium">
+          {grouped.length} bâtiment{grouped.length > 1 ? "s" : ""}
+        </span>
       </div>
 
-      {/* Desktop: Tableau */}
-      <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="text-left p-3 font-semibold">Équipement</th>
-              <th className="text-left p-3 font-semibold hidden lg:table-cell">Localisation</th>
-              <th className="text-left p-3 font-semibold">Zonage</th>
-              <th className="text-left p-3 font-semibold hidden md:table-cell">Conformité</th>
-              <th className="text-left p-3 font-semibold">Statut</th>
-              <th className="text-left p-3 font-semibold hidden lg:table-cell">Prochain</th>
-              <th className="text-left p-3 font-semibold">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, idx) => (
-              <tr key={it.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
-                <td className="p-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
-                      {it.photo_url ? (
-                        <img src={api.atex.photoUrl(it.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-gray-400 text-lg">📷</span>
-                      )}
-                    </div>
-                    <div>
-                      <button className="text-blue-600 font-medium hover:underline text-left" onClick={() => onOpenEquipment(it)}>
-                        {it.name || it.type || "Équipement"}
-                      </button>
-                      <div className="text-xs text-gray-400 lg:hidden">{it.building || "—"}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="p-3 text-gray-600 hidden lg:table-cell">
-                  {it.building || "—"} / {it.zone || "—"}
-                  {it.equipment && <span className="text-gray-400 block text-xs">{it.equipment}</span>}
-                </td>
-                <td className="p-3">
-                  <div className="flex flex-col gap-1">
-                    {it.zoning_gas != null && <Badge color="orange">Gaz {it.zoning_gas}</Badge>}
-                    {it.zoning_dust != null && <Badge color="blue">Dust {it.zoning_dust}</Badge>}
-                    {it.zoning_gas == null && it.zoning_dust == null && <span className="text-gray-400">—</span>}
-                  </div>
-                </td>
-                <td className="p-3 hidden md:table-cell">
-                  {it.compliance_state === "conforme" ? (
-                    <Badge color="green">Conforme</Badge>
-                  ) : it.compliance_state === "non_conforme" ? (
-                    <Badge color="red">Non conforme</Badge>
-                  ) : (
-                    <Badge>N/A</Badge>
-                  )}
-                </td>
-                <td className="p-3">
-                  <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
-                </td>
-                <td className="p-3 whitespace-nowrap text-gray-600 hidden lg:table-cell">
-                  {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YY") : "—"}
-                </td>
-                <td className="p-3">
-                  <div className="flex gap-1">
-                    <button onClick={() => onOpenEquipment(it)} className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs">
-                      Ouvrir
-                    </button>
-                    {onGoToMap && (
-                      <button onClick={() => onGoToMap(it)} className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs" title="Voir sur la carte">
-                        📍
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
+      {/* Arborescence Bâtiment > Zone > Équipements */}
+      {grouped.map((bat) => (
+        <details key={bat.key} open className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+          <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 transition-all">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <span className="text-xl">🏢</span>
+              </div>
+              <span className="font-semibold text-gray-800">{bat.key}</span>
+            </div>
+            <span className="px-2.5 py-1 bg-blue-500 text-white rounded-full text-xs font-medium">
+              {bat.zones.reduce((n, z) => n + z.items.length, 0)} éq.
+            </span>
+          </summary>
+          <div className="p-3 space-y-2 bg-gray-50/50">
+            {bat.zones.map((z) => (
+              <details key={z.name} open className="ml-2 pl-3 border-l-2 border-blue-200">
+                <summary className="cursor-pointer py-2 text-sm text-gray-700 hover:text-blue-700 font-medium transition-colors flex items-center gap-2">
+                  <span className="p-1 bg-amber-100 rounded">📍</span>
+                  {z.name}
+                  <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded-full text-xs">
+                    {z.items.length}
+                  </span>
+                </summary>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pb-2">
+                  {z.items.map((eq) => (
+                    <EquipmentCard key={eq.id} eq={eq} />
+                  ))}
+                </div>
+              </details>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </details>
+      ))}
     </div>
   );
 }
@@ -1336,33 +1363,33 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
         </div>
       )}
 
-      {/* Selected Plan Map */}
+      {/* Selected Plan Map - Design épuré */}
       {selectedPlan && (
-        <div className="border-2 border-amber-200 rounded-2xl overflow-hidden bg-white shadow-lg">
-          <div className="flex items-center justify-between p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-amber-500 rounded-xl">
-                <span className="text-white text-xl">🗺️</span>
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-800">{selectedPlan.display_name || selectedPlan.logical_name}</h3>
-                <p className="text-xs text-amber-700">Cliquez sur + pour ajouter un équipement</p>
+        <div className="mt-4 rounded-2xl overflow-hidden bg-white shadow-xl border border-gray-200">
+          {/* Header compact et moderne */}
+          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-2xl">🗺️</span>
+              <div className="min-w-0">
+                <h3 className="font-bold text-base truncate">{selectedPlan.display_name || selectedPlan.logical_name}</h3>
+                <p className="text-amber-100 text-xs">Cliquez sur + pour ajouter un équipement</p>
               </div>
             </div>
             <button
               onClick={() => setSelectedPlan(null)}
-              className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 text-sm font-medium shadow-sm transition-all"
+              className="w-8 h-8 flex items-center justify-center bg-white/20 hover:bg-white/30 rounded-lg transition-all shrink-0"
+              title="Fermer"
             >
-              ✕ Fermer
+              ✕
             </button>
           </div>
-          <div className="p-4">
+          {/* Carte sans padding excessif */}
           <AtexMap
             key={`${selectedPlan.logical_name}:${mapRefreshTick}:${selectedEquipmentId || ''}`}
             plan={selectedPlan}
             selectedEquipmentId={selectedEquipmentId}
             onOpenEquipment={(eq) => {
-              setSelectedEquipmentId(eq?.id || null);  // 🆕 Highlight quand on clique sur marqueur
+              setSelectedEquipmentId(eq?.id || null);
               openEdit(eq);
             }}
             onZonesApplied={async (id, zones) => {
@@ -1381,7 +1408,6 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
               setToast("Équipements mis à jour");
             }}
           />
-          </div>
         </div>
       )}
     </div>
@@ -1624,6 +1650,27 @@ function EquipmentDrawer({
                   placeholder="Notes, remarques, observations..."
                 />
               </div>
+
+              {/* 🆕 Tracking utilisateur - Créé / Modifié par */}
+              {editing.id && (editing.user_email || editing.user_name || editing.created_by || editing.updated_by || editing.created_at || editing.updated_at) && (
+                <div className="atex-section bg-gray-50">
+                  <div className="atex-section-title">👤 Traçabilité</div>
+                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    {(editing.created_by || editing.created_at) && (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <span className="text-green-500">●</span>
+                        <span>Créé {editing.created_by && `par ${editing.created_by}`} {editing.created_at && `le ${dayjs(editing.created_at).format("DD/MM/YY HH:mm")}`}</span>
+                      </div>
+                    )}
+                    {(editing.updated_by || editing.user_email || editing.updated_at) && (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <span className="text-blue-500">●</span>
+                        <span>Modifié {(editing.updated_by || editing.user_name || editing.user_email) && `par ${editing.updated_by || editing.user_name || editing.user_email}`} {editing.updated_at && `le ${dayjs(editing.updated_at).format("DD/MM/YY HH:mm")}`}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1805,11 +1852,26 @@ function EquipmentDrawer({
                     {history.map((h) => (
                       <div key={h.id} className="atex-timeline-item">
                         <div className="atex-timeline-date">{dayjs(h.date).format("DD/MM/YYYY à HH:mm")}</div>
-                        <div className="atex-timeline-content flex items-center gap-2">
-                          <span>Contrôle effectué</span>
-                          <Badge color={h.result === "conforme" ? "green" : h.result === "non_conforme" ? "red" : "gray"}>
-                            {h.result === "conforme" ? "✓ Conforme" : h.result === "non_conforme" ? "✗ Non conforme" : "N/A"}
-                          </Badge>
+                        <div className="atex-timeline-content">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span>Contrôle effectué</span>
+                            <Badge color={h.result === "conforme" ? "green" : h.result === "non_conforme" ? "red" : "gray"}>
+                              {h.result === "conforme" ? "✓ Conforme" : h.result === "non_conforme" ? "✗ Non conforme" : "N/A"}
+                            </Badge>
+                          </div>
+                          {/* 🆕 Affichage de l'utilisateur qui a fait le contrôle */}
+                          {(h.user_email || h.user_name || h.performed_by) && (
+                            <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                              <span>👤</span>
+                              <span>{h.user_name || h.performed_by || h.user_email}</span>
+                              {h.user_email && h.user_name && (
+                                <span className="text-gray-400">({h.user_email})</span>
+                              )}
+                            </div>
+                          )}
+                          {h.rationale && (
+                            <div className="text-xs text-gray-500 mt-1 italic">"{h.rationale}"</div>
+                          )}
                         </div>
                       </div>
                     ))}
