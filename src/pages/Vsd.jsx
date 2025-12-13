@@ -1126,6 +1126,32 @@ export default function Vsd() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Functions - defined before useEffects that use them
+  const loadEquipments = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.vsd.listEquipments({});
+      const list = res?.items || res?.equipments || res || [];
+      setEquipments(list);
+    } catch (err) {
+      console.error('Load equipments error:', err);
+      showToast('Erreur lors du chargement', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [showToast]);
+
+  const loadPlacements = useCallback(async () => {
+    try {
+      const response = await api.vsdMaps.placedIds();
+      const ids = (response?.placed_ids || []).map(Number);
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(response?.placed_details || {});
+    } catch (e) {
+      console.error("Load placements error:", e);
+    }
+  }, []);
+
   // Effects
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -1136,7 +1162,7 @@ export default function Vsd() {
   useEffect(() => {
     loadEquipments();
     loadPlacements();
-  }, [loadPlacements]);
+  }, [loadEquipments, loadPlacements]);
 
   // Refresh placements on visibility change
   useEffect(() => {
@@ -1166,32 +1192,7 @@ export default function Vsd() {
         })
         .catch(() => showToast('Variateur non trouvé', 'error'));
     }
-  }, [searchParams]);
-
-  const loadEquipments = async () => {
-    setIsLoading(true);
-    try {
-      const res = await api.vsd.listEquipments({});
-      const list = res?.items || res?.equipments || res || [];
-      setEquipments(list);
-    } catch (err) {
-      console.error('Load equipments error:', err);
-      showToast('Erreur lors du chargement', 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const loadPlacements = useCallback(async () => {
-    try {
-      const response = await api.vsdMaps.placedIds();
-      const ids = (response?.placed_ids || []).map(Number);
-      setPlacedIds(new Set(ids));
-      setPlacedDetails(response?.placed_details || {});
-    } catch (e) {
-      console.error("Load placements error:", e);
-    }
-  }, []);
+  }, [searchParams, showToast]);
 
   const handleSelectEquipment = async (eq) => {
     setSearchParams({ vsd: eq.id.toString() });
