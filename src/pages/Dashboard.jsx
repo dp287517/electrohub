@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Zap, Recycle, Puzzle, TrendingUp, AlertTriangle, RefreshCw,
@@ -6,6 +6,7 @@ import {
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
   Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase
 } from 'lucide-react';
+import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 
 // Icon mapping for apps
 const iconMap = {
@@ -233,6 +234,20 @@ export default function Dashboard() {
   }, []);
 
   const site = user?.site || '';
+  const isAdmin = ADMIN_EMAILS.includes(user?.email);
+
+  // Get allowed apps for current user
+  const allowedApps = useMemo(() => {
+    return getAllowedApps(user?.email);
+  }, [user?.email]);
+
+  // Filter apps based on user permissions
+  const filterByPermissions = (apps) => {
+    return apps.filter(app => {
+      const appId = allowedApps.find(a => a.route === app.to)?.id;
+      return allowedApps.some(a => a.route === app.to);
+    });
+  };
 
   // OIBT card (only for Nyon site)
   const oibtCard = {
@@ -243,7 +258,14 @@ export default function Dashboard() {
     color: 'from-indigo-400 to-blue-500',
   };
 
-  const visibleElectricalApps = site === 'Nyon' ? [...electricalApps, oibtCard] : electricalApps;
+  // Filter electrical apps by permissions, then add OIBT if Nyon
+  const filteredElectricalApps = filterByPermissions(electricalApps);
+  const visibleElectricalApps = site === 'Nyon' && allowedApps.some(a => a.id === 'oibt')
+    ? [...filteredElectricalApps, oibtCard]
+    : filteredElectricalApps;
+
+  // Filter other apps by permissions
+  const visibleOtherApps = filterByPermissions(otherApps);
 
   const getInitials = (name) => {
     if (!name) return '?';
@@ -377,7 +399,7 @@ export default function Dashboard() {
                   <Grid3X3 size={14} />
                   Total Apps
                 </div>
-                <p className="text-white font-semibold">{visibleElectricalApps.length + otherApps.length}</p>
+                <p className="text-white font-semibold">{visibleElectricalApps.length + visibleOtherApps.length}</p>
               </div>
             </div>
           </div>
@@ -394,44 +416,48 @@ export default function Dashboard() {
       {/* Main Content */}
       <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
         {/* Utilities Section */}
-        <div className="mb-6">
-          <SectionHeader
-            icon={Wrench}
-            title="Utilities & Tools"
-            count={otherApps.length}
-            isOpen={showOther}
-            onToggle={() => setShowOther(v => !v)}
-            color="from-teal-500 to-cyan-600"
-          />
+        {visibleOtherApps.length > 0 && (
+          <div className="mb-6">
+            <SectionHeader
+              icon={Wrench}
+              title="Utilities & Tools"
+              count={visibleOtherApps.length}
+              isOpen={showOther}
+              onToggle={() => setShowOther(v => !v)}
+              color="from-teal-500 to-cyan-600"
+            />
 
-          <div className={`overflow-hidden transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {otherApps.map((app, index) => (
-                <AppCard key={app.label} {...app} index={index} />
-              ))}
+            <div className={`overflow-hidden transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {visibleOtherApps.map((app, index) => (
+                  <AppCard key={app.label} {...app} index={index} />
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Electrical Controls Section */}
-        <div className="mb-6">
-          <SectionHeader
-            icon={Zap}
-            title="Electrical Controls"
-            count={visibleElectricalApps.length}
-            isOpen={showElectrical}
-            onToggle={() => setShowElectrical(v => !v)}
-            color="from-amber-500 to-orange-600"
-          />
+        {visibleElectricalApps.length > 0 && (
+          <div className="mb-6">
+            <SectionHeader
+              icon={Zap}
+              title="Electrical Controls"
+              count={visibleElectricalApps.length}
+              isOpen={showElectrical}
+              onToggle={() => setShowElectrical(v => !v)}
+              color="from-amber-500 to-orange-600"
+            />
 
-          <div className={`overflow-hidden transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {visibleElectricalApps.map((app, index) => (
-                <AppCard key={app.label} {...app} index={index} />
-              ))}
+            <div className={`overflow-hidden transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {visibleElectricalApps.map((app, index) => (
+                  <AppCard key={app.label} {...app} index={index} />
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Footer */}
         <div className={`text-center py-10 transition-all duration-1000 delay-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X, LogOut, LayoutDashboard, Zap, Shield } from 'lucide-react';
-
-const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+import { ADMIN_EMAILS } from '../lib/permissions';
 
 export default function Navbar() {
   const { pathname } = useLocation();
