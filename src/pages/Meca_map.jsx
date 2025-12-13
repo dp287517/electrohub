@@ -1446,7 +1446,8 @@ export default function MecaMap() {
                     }}
                     onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
                   />
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
