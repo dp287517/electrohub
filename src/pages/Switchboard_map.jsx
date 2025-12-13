@@ -1341,6 +1341,7 @@ export default function SwitchboardMap() {
   }, [pageIndex]);
 
   // ✅ Auto-highlight switchboard from URL params after PDF is ready
+  // Only highlight the marker, don't open detail panel to avoid hiding the plan
   useEffect(() => {
     if (!pdfReady || !targetSwitchboardIdRef.current) return;
 
@@ -1349,22 +1350,11 @@ export default function SwitchboardMap() {
 
     // Small delay to ensure markers are rendered
     setTimeout(async () => {
-      // Highlight the marker on the map
+      // Highlight the marker on the map (zoom + visual highlight)
       viewerRef.current?.highlightMarker(targetId);
 
-      // Find and select the position
-      const positions = getLatestPositions();
-      const pos = positions.find(p => Number(p.switchboard_id) === targetId);
-
-      if (pos) {
-        setSelectedPosition(pos);
-        try {
-          const board = await api.switchboard.getBoard(targetId);
-          setSelectedBoard(board);
-        } catch (err) {
-          console.error("Erreur chargement détails:", err);
-        }
-      }
+      // Don't auto-open the detail panel - let user click on marker if they want details
+      // This keeps the plan visible and unobstructed
     }, 300);
   }, [pdfReady, getLatestPositions]);
 
