@@ -256,7 +256,7 @@ const MecaCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewher
 
           <button
             onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
-            className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
+            className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-orange-600 transition-colors"
             title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
           >
             <Target size={12} />
@@ -411,9 +411,10 @@ const MecaLeafletViewer = forwardRef(({
     const bg = isSelected
       ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
       : "background: radial-gradient(circle at 30% 30%, #fb923c, #ea580c);";
+    const animClass = isSelected ? "meca-marker-selected" : "";
 
     const html = `
-      <div style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
         <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
           <circle cx="12" cy="12" r="3" fill="white"/>
           <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -529,8 +530,17 @@ const MecaLeafletViewer = forwardRef(({
   const highlightMarker = useCallback((equipmentId) => {
     const mk = markersMapRef.current.get(equipmentId);
     if (!mk || !mapRef.current) return;
+
+    // Center on marker
     const ll = mk.getLatLng();
     mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+    // Flash animation
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("meca-marker-flash");
+      setTimeout(() => el.classList.remove("meca-marker-flash"), 2000);
+    }
   }, []);
 
   useEffect(() => {
@@ -1095,7 +1105,42 @@ export default function MecaMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes flash-marker {
+          0%, 100% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          25% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+          50% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          75% {
+            transform: scale(1.3);
+            filter: brightness(1.3);
+          }
+        }
+        @keyframes pulse-selected {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7);
+          }
+          50% {
+            transform: scale(1.15);
+            box-shadow: 0 0 0 8px rgba(249, 115, 22, 0);
+          }
+        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
+        .meca-marker-flash > div {
+          animation: flash-marker 2s ease-in-out;
+        }
+        .meca-marker-selected > div {
+          animation: pulse-selected 1.5s ease-in-out infinite;
+        }
+        .meca-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}
@@ -1351,26 +1396,56 @@ export default function MecaMap() {
                 <X size={20} />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {filteredEquipments.map(eq => (
-                <MecaCard
-                  key={eq.id}
-                  equipment={eq}
-                  isPlacedHere={isPlacedHere(eq.id)}
-                  isPlacedSomewhere={placedIds.has(eq.id)}
-                  isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
-                  isSelected={selectedEquipmentId === eq.id}
-                  onClick={() => {
-                    const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                    if (pos) {
-                      setSelectedPosition(pos);
-                      setSelectedEquipment(eq);
-                      viewerRef.current?.highlightMarker(eq.id);
-                    }
-                    setShowSidebar(false);
-                  }}
-                  onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
+            {/* Search and filters */}
+            <div className="p-3 border-b space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Input
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="Rechercher..."
+                  className="pl-9"
                 />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés
+                </Btn>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {loadingEquipments ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : filteredEquipments.length === 0 ? (
+                <EmptyState icon={Cog} title="Aucun équipement" description="Créez des équipements pour les placer sur le plan" />
+              ) : (
+                filteredEquipments.map(eq => (
+                  <MecaCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={isPlacedHere(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
+                    isSelected={selectedEquipmentId === eq.id}
+                    onClick={() => {
+                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        setSelectedPosition(pos);
+                        setSelectedEquipment(eq);
+                        viewerRef.current?.highlightMarker(eq.id);
+                      }
+                      setShowSidebar(false);
+                    }}
+                    onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
+                  />
               ))}
             </div>
           </div>
