@@ -1322,7 +1322,7 @@ export default function Vsd() {
   }), [equipments, placedIds]);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
+    <div className="min-h-screen bg-gray-50">
       <style>{`
         @keyframes slideUp {
           from { opacity: 0; transform: translateY(20px); }
@@ -1386,10 +1386,10 @@ export default function Vsd() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex">
         {/* Sidebar - Desktop */}
         {!isMobile && (
-          <div className="w-80 bg-white border-r shadow-sm flex flex-col">
+          <div className="w-80 bg-white border-r shadow-sm flex flex-col min-h-[calc(100vh-120px)] sticky top-0 self-start">
             {/* Search */}
             <div className="p-3 border-b">
               <div className="relative">
@@ -1467,7 +1467,7 @@ export default function Vsd() {
         )}
 
         {/* Main Content Area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-[calc(100vh-120px)]">
           {selectedEquipment ? (
             viewMode === 'edit' ? (
               <EditForm
@@ -1490,7 +1490,7 @@ export default function Vsd() {
               />
             )
           ) : (
-            <div className="flex-1 flex items-center justify-center bg-gray-50">
+            <div className="min-h-[calc(100vh-120px)] flex items-center justify-center bg-gray-50">
               <div className="text-center">
                 <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Cpu size={40} className="text-gray-300" />
