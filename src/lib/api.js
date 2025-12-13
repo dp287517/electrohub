@@ -1275,6 +1275,36 @@ export const api = {
         x_frac,
         y_frac,
       }),
+    deletePosition: (positionId) =>
+      del(`/api/vsd/maps/positions/${encodeURIComponent(positionId)}`),
+    placedIds: async () => {
+      try {
+        return await get("/api/vsd/maps/placed-ids");
+      } catch (e) {
+        // Fallback: build from all plans
+        try {
+          const plans = await get("/api/vsd/maps/listPlans");
+          const placed_ids = [];
+          const placed_details = {};
+          for (const plan of (plans?.plans || plans || [])) {
+            const positions = await get("/api/vsd/maps/positions", { logical_name: plan.logical_name, page_index: 0 }).catch(() => ({}));
+            for (const pos of (positions?.positions || [])) {
+              if (pos.equipment_id && !placed_ids.includes(pos.equipment_id)) {
+                placed_ids.push(pos.equipment_id);
+                placed_details[pos.equipment_id] = { plans: [plan.logical_name] };
+              } else if (pos.equipment_id && placed_details[pos.equipment_id]) {
+                if (!placed_details[pos.equipment_id].plans.includes(plan.logical_name)) {
+                  placed_details[pos.equipment_id].plans.push(plan.logical_name);
+                }
+              }
+            }
+          }
+          return { placed_ids, placed_details };
+        } catch {
+          return { placed_ids: [], placed_details: {} };
+        }
+      }
+    },
   },
 
   /** --- MECA --- */
@@ -1386,6 +1416,36 @@ export const api = {
         x_frac,
         y_frac,
       }),
+    deletePosition: (positionId) =>
+      del(`/api/meca/maps/positions/${encodeURIComponent(positionId)}`),
+    placedIds: async () => {
+      try {
+        return await get("/api/meca/maps/placed-ids");
+      } catch (e) {
+        // Fallback: build from all plans
+        try {
+          const plans = await get("/api/meca/maps/listPlans");
+          const placed_ids = [];
+          const placed_details = {};
+          for (const plan of (plans?.plans || plans || [])) {
+            const positions = await get("/api/meca/maps/positions", { logical_name: plan.logical_name, page_index: 0 }).catch(() => ({}));
+            for (const pos of (positions?.positions || [])) {
+              if (pos.equipment_id && !placed_ids.includes(pos.equipment_id)) {
+                placed_ids.push(pos.equipment_id);
+                placed_details[pos.equipment_id] = { plans: [plan.logical_name] };
+              } else if (pos.equipment_id && placed_details[pos.equipment_id]) {
+                if (!placed_details[pos.equipment_id].plans.includes(plan.logical_name)) {
+                  placed_details[pos.equipment_id].plans.push(plan.logical_name);
+                }
+              }
+            }
+          }
+          return { placed_ids, placed_details };
+        } catch {
+          return { placed_ids: [], placed_details: {} };
+        }
+      }
+    },
   },
 
   /** --- DCF ASSISTANT --- */

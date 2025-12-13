@@ -1112,6 +1112,7 @@ export default function Vsd() {
 
   // Placement state
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
 
   // Toast state
   const [toast, setToast] = useState(null);
@@ -1135,7 +1136,20 @@ export default function Vsd() {
   useEffect(() => {
     loadEquipments();
     loadPlacements();
-  }, []);
+  }, [loadPlacements]);
+
+  // Refresh placements on visibility change
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (!document.hidden) loadPlacements();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', loadPlacements);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', loadPlacements);
+    };
+  }, [loadPlacements]);
 
   // URL params handling
   useEffect(() => {
@@ -1168,24 +1182,16 @@ export default function Vsd() {
     }
   };
 
-  const loadPlacements = async () => {
+  const loadPlacements = useCallback(async () => {
     try {
-      // Check which VSD are placed on maps
-      const plans = await api.vsdMaps.listPlans().catch(() => ({ plans: [] }));
-      const placed = new Set();
-      for (const plan of (plans?.plans || [])) {
-        try {
-          const positions = await api.vsdMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
-          (positions?.positions || []).forEach(p => {
-            if (p.equipment_id) placed.add(p.equipment_id);
-          });
-        } catch {}
-      }
-      setPlacedIds(placed);
+      const response = await api.vsdMaps.placedIds();
+      const ids = (response?.placed_ids || []).map(Number);
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(response?.placed_details || {});
     } catch (e) {
       console.error("Load placements error:", e);
     }
-  };
+  }, []);
 
   const handleSelectEquipment = async (eq) => {
     setSearchParams({ vsd: eq.id.toString() });
@@ -1272,8 +1278,16 @@ export default function Vsd() {
   };
 
   const handleNavigateToMap = (eq) => {
-    if (eq?.id && placedIds.has(eq.id)) {
-      navigate(`/app/vsd/map?vsd=${eq.id}`);
+    const eqId = eq?.id || selectedEquipment?.id;
+    if (!eqId) {
+      navigate('/app/vsd/map');
+      return;
+    }
+
+    const details = placedDetails[eqId];
+    if (details?.plans?.length > 0) {
+      const planKey = details.plans[0];
+      navigate(`/app/vsd/map?vsd=${eqId}&plan=${encodeURIComponent(planKey)}`);
     } else {
       navigate('/app/vsd/map');
     }
