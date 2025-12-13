@@ -35,7 +35,9 @@ import SwitchboardMap from './pages/Switchboard_map.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
+import VsdMap from './pages/Vsd_map.jsx';
 import Meca from './pages/Meca.jsx';
+import MecaMap from './pages/Meca_map.jsx';
 
 export default function App() {
   return (
@@ -101,6 +103,11 @@ export default function App() {
 
           {/* Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
+          <Route path="/app/vsd/map" element={<ProtectedRoute><VsdMap /></ProtectedRoute>} />
+
+          {/* Mechanical Equipment Map */}
+          <Route path="/app/meca/map" element={<ProtectedRoute><MecaMap /></ProtectedRoute>} />
+
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
 
           {/* Fallback */}

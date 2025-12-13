@@ -1,1628 +1,1536 @@
-// src/pages/Vsd.jsx
-import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
-import dayjs from "dayjs";
-import "dayjs/locale/fr";
-dayjs.locale("fr");
+// src/pages/Vsd.jsx - Redesigned following Switchboards pattern
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import {
+  Cpu, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
+  MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
+  Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
+  Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
+  Tag, Hash, Factory, Gauge, Thermometer, Network, Info
+} from 'lucide-react';
+import { api } from '../lib/api';
 
-import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import "../styles/vsd-map.css";
+// ==================== ANIMATION COMPONENTS ====================
 
-import { api, API_BASE } from "../lib/api.js";
+const AnimatedCard = ({ children, delay = 0, className = '' }) => (
+  <div
+    className={`animate-slideUp ${className}`}
+    style={{ animationDelay: `${delay}ms`, animationFillMode: 'backwards' }}
+  >
+    {children}
+  </div>
+);
 
-/* ----------------------------- PDF.js Config ----------------------------- */
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
+// Toast Notification Component
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
 
-/* ----------------------------- Helpers ----------------------------- */
-function getCookie(name) {
-  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
-  return m ? decodeURIComponent(m[1]) : null;
-}
+  const bgColor = type === 'success' ? 'bg-emerald-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+  const Icon = type === 'success' ? CheckCircle : type === 'error' ? AlertCircle : Info;
 
-function getIdentity() {
-  let email = getCookie("email") || null;
-  let name = getCookie("name") || null;
-  try {
-    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
-    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
-    if ((!email || !name) && localStorage.getItem("user")) {
-      try {
-        const u = JSON.parse(localStorage.getItem("user"));
-        if (!email && u?.email) email = String(u.email);
-        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
-      } catch {}
-    }
-  } catch {}
-  if (!name && email) {
-    const base = String(email).split("@")[0] || "";
-    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
-  }
-  return { email, name };
-}
+  return (
+    <div className={`fixed bottom-4 right-4 z-[200] ${bgColor} text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slideUp`}>
+      <Icon size={20} />
+      <span className="font-medium">{message}</span>
+      <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+        <X size={16} />
+      </button>
+    </div>
+  );
+};
 
-function userHeaders() {
-  const { email, name } = getIdentity();
-  const h = {};
-  if (email) h["X-User-Email"] = email;
-  if (name) h["X-User-Name"] = name;
-  return h;
-}
-
-function pdfDocOpts(url) {
-  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
-}
-
-/* ----------------------------- UI Components ----------------------------- */
-function Btn({ children, variant = "primary", className = "", ...p }) {
-  const map = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
-    ghost: "bg-white text-black border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed",
-    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed",
-    success: "bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed",
-    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed",
-    warn: "bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed",
+// Badge Component
+const Badge = ({ children, variant = 'default', className = '' }) => {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    warning: 'bg-amber-100 text-amber-700',
+    danger: 'bg-red-100 text-red-700',
+    info: 'bg-blue-100 text-blue-700',
+    purple: 'bg-purple-100 text-purple-700',
   };
   return (
-    <button
-      className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
-      {...p}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Input({ value, onChange, className = "", ...p }) {
-  return (
-    <input
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
-      {...p}
-    />
-  );
-}
-
-function Textarea({ value, onChange, className = "", ...p }) {
-  return (
-    <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
-      {...p}
-    />
-  );
-}
-
-function Select({ value, onChange, options = [], className = "", placeholder }) {
-  return (
-    <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
-    >
-      {placeholder != null && <option value="">{placeholder}</option>}
-      {options.map((o) =>
-        typeof o === "string" ? (
-          <option key={o} value={o}>{o}</option>
-        ) : (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        )
-      )}
-    </select>
-  );
-}
-
-function Badge({ color = "gray", children, className = "" }) {
-  const map = {
-    gray: "bg-gray-100 text-gray-700",
-    green: "bg-emerald-100 text-emerald-700",
-    orange: "bg-amber-100 text-amber-700",
-    red: "bg-rose-100 text-rose-700",
-    blue: "bg-blue-100 text-blue-700",
-  };
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>
       {children}
     </span>
   );
-}
+};
 
-function Labeled({ label, children }) {
-  return (
-    <label className="text-sm space-y-1">
-      <div className="text-gray-600">{label}</div>
-      {children}
-    </label>
-  );
-}
+// ==================== INPUT STYLES ====================
 
-function Drawer({ title, children, onClose, dirty = false }) {
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.key === "Escape") confirmClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty]);
+const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
+const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900";
 
-  useEffect(() => {
-    const beforeUnload = (e) => {
-      if (dirty) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
-    };
-    window.addEventListener("beforeunload", beforeUnload);
-    return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty]);
+// ==================== MODAL COMPONENTS ====================
 
-  function confirmClose() {
-    if (dirty) {
-      const ok = window.confirm("Des modifications ne sont pas enregistrées. Fermer quand même ?");
-      if (!ok) return;
-    }
-    onClose?.();
-  }
+// Delete Confirm Modal
+const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, isLoading }) => {
+  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[6000]">
-      <div className="absolute inset-0 bg-black/30" onClick={confirmClose} />
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[760px] bg-white shadow-2xl p-4 overflow-y-auto">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold truncate pr-3">{title}</h3>
-          <Btn variant="ghost" onClick={confirmClose}>Fermer</Btn>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-red-500 to-rose-600 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <AlertTriangle size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Confirmer la suppression</h2>
+              <p className="text-red-100 text-sm">Cette action est irréversible</p>
+            </div>
+          </div>
         </div>
-        {children}
+
+        <div className="p-6">
+          <p className="text-gray-700">
+            Supprimer le variateur <span className="font-semibold">"{itemName}"</span> ?
+          </p>
+        </div>
+
+        <div className="border-t p-4 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 text-white font-medium hover:from-red-600 hover:to-rose-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Trash2 size={18} />}
+            Supprimer
+          </button>
+        </div>
       </div>
     </div>
   );
-}
+};
 
-function Toast({ text, onClose }) {
-  useEffect(() => {
-    if (!text) return;
-    const t = setTimeout(() => onClose?.(), 4000);
-    return () => clearTimeout(t);
-  }, [text, onClose]);
-  if (!text) return null;
-  return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
-    </div>
-  );
-}
+// Share Link Modal
+const ShareLinkModal = ({ isOpen, onClose, equipment }) => {
+  const [copied, setCopied] = useState(false);
 
-/* ----------------------------- VSD Leaflet Viewer ----------------------------- */
-const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false }, ref) => {
-  const wrapRef = useRef(null);
-  const mapRef = useRef(null);
-  const imageLayerRef = useRef(null);
-  const markersLayerRef = useRef(null);
-  const addBtnControlRef = useRef(null);
-  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [picker, setPicker] = useState(null);
-  const aliveRef = useRef(true);
-  const pointsRef = useRef(initialPoints); 
-  
-  // Zoom persistant
-  const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
-  const initialFitDoneRef = useRef(false);
-  const userViewTouchedRef = useRef(false);
+  if (!isOpen || !equipment) return null;
 
-  const lastJob = useRef({ key: null });
-  const loadingTaskRef = useRef(null);
-  const renderTaskRef = useRef(null);
+  const url = `${window.location.origin}${window.location.pathname}?vsd=${equipment.id}`;
 
-  const ICON_PX = 22;
-
-  function makeVsdIcon() {
-    const s = ICON_PX;
-    const html = `<div class="vsd-marker" style="width:${s}px;height:${s}px;"></div>`;
-    return L.divIcon({
-      className: "vsd-marker-inline",
-      html,
-      iconSize: [s, s],
-      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
-      popupAnchor: [0, -Math.round(s / 2)],
-    });
-  }
-
-  function ensureAddButton(map) {
-    if (addBtnControlRef.current) return;
-    const AddCtrl = L.Control.extend({
-      onAdd: function () {
-        const container = L.DomUtil.create("div", "leaflet-bar leaflet-control leaflet-control-addvsd");
-        const a = L.DomUtil.create("a", "", container);
-        a.href = "#";
-        a.title = "Créer un variateur au centre";
-        a.textContent = "+";
-        L.DomEvent.on(a, "click", (ev) => {
-          L.DomEvent.stop(ev);
-          onCreatePoint?.();
-        });
-        return container;
-      },
-      onRemove: function () {},
-      options: { position: "topright" },
-    });
-    addBtnControlRef.current = new AddCtrl();
-    map.addControl(addBtnControlRef.current);
-  }
-
-  const drawMarkers = useCallback((list, w, h) => {
-    const map = mapRef.current;
-    const g = markersLayerRef.current;
-    if (!map || !g || w === 0 || h === 0) return;
-    
-    pointsRef.current = list; 
-    g.clearLayers();
-
-    (list || []).forEach((p) => {
-      const x = Number(p.x_frac ?? p.x ?? 0) * w;
-      const y = Number(p.y_frac ?? p.y ?? 0) * h;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-
-      const latlng = L.latLng(y, x);
-      const icon = makeVsdIcon();
-      const mk = L.marker(latlng, {
-        icon,
-        draggable: true,
-        autoPan: true,
-        bubblingMouseEvents: false,
-        keyboard: false,
-        riseOnHover: true,
-      });
-      mk.__meta = {
-        equipment_id: p.equipment_id,
-        name: p.name || p.equipment_name,
-        x_frac: p.x_frac,
-        y_frac: p.y_frac,
-      };
-
-      mk.on("click", () => {
-        setPicker(null);
-        onClickPoint?.(mk.__meta);
-      });
-
-      mk.on("dragend", () => {
-        if (!onMovePoint) return;
-        const ll = mk.getLatLng();
-        const xFrac = Math.min(1, Math.max(0, ll.lng / w));
-        const yFrac = Math.min(1, Math.max(0, ll.lat / h));
-        const xf = Math.round(xFrac * 1e6) / 1e6;
-        const yf = Math.round(yFrac * 1e6) / 1e6;
-        onMovePoint(p.equipment_id, { x: xf, y: yf });
-      });
-
-      mk.addTo(g);
-    });
-  }, [onClickPoint, onMovePoint]);
-
-  useEffect(() => {
-    if (disabled) return;
-    if (!fileUrl || !wrapRef.current) return;
-
-    let cancelled = false;
-    aliveRef.current = true;
-
-    const jobKey = `${fileUrl}::${pageIndex}`;
-    
-    // Si même URL/page, on ne recharge pas tout
-    if (lastJob.current.key === jobKey) {
-      onReady?.();
-      return;
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      const input = document.createElement('input');
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
-    
-    // Nettoyage complet de l'instance précédente
-    const cleanupMap = () => {
-      const map = mapRef.current;
-      if (map) {
-        // IMPORTANT : Arrêter le moteur de rendu/anim avant de détruire
-        try { map.stop(); } catch {} 
-        try { map.off(); } catch {}
-        try {
-          map.eachLayer((l) => {
-            try { map.removeLayer(l); } catch {}
-          });
-        } catch {}
-        try {
-            if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
-        } catch {}
-        try { map.remove(); } catch {}
-      }
-      mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) {
-        try { markersLayerRef.current.clearLayers(); } catch {}
-        markersLayerRef.current = null;
-      }
-      addBtnControlRef.current = null;
-      initialFitDoneRef.current = false;
-      userViewTouchedRef.current = false;
-    };
-
-    lastJob.current.key = jobKey;
-
-    const cleanupPdf = async () => {
-      try { renderTaskRef.current?.cancel(); } catch {}
-      try { await loadingTaskRef.current?.destroy(); } catch {}
-      renderTaskRef.current = null;
-      loadingTaskRef.current = null;
-    };
-    
-    (async () => {
-      try {
-        await cleanupPdf();
-        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = window.devicePixelRatio || 1;
-
-        loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
-        const pdf = await loadingTaskRef.current.promise;
-        if (cancelled) return;
-
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const baseVp = page.getViewport({ scale: 1 });
-
-        const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5))); 
-        const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
-        const viewport = page.getViewport({ scale: safeScale });
-
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        const ctx = canvas.getContext("2d", { alpha: true });
-
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
-        await renderTaskRef.current.promise;
-        if (cancelled) return;
-
-        const dataUrl = canvas.toDataURL("image/png");
-        setImgSize({ w: canvas.width, h: canvas.height });
-
-        // --- INITIALISATION CARTE ---
-        const m = L.map(wrapRef.current, {
-          crs: L.CRS.Simple,
-          zoomControl: false,
-          zoomAnimation: true,
-          fadeAnimation: false,
-          markerZoomAnimation: false,
-          scrollWheelZoom: true,
-          touchZoom: true,
-          tap: true,
-          preferCanvas: true,
-          center: lastViewRef.current.center,
-          zoom: lastViewRef.current.zoom,
-        });
-        L.control.zoom({ position: "topright" }).addTo(m);
-        ensureAddButton(m);
-
-        m.on("click", (e) => {
-          if (!aliveRef.current) return;
-          const clicked = e.containerPoint;
-          const near = [];
-          const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
-          markersLayerRef.current?.eachLayer((mk) => {
-            const mp = m.latLngToContainerPoint(mk.getLatLng());
-            const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-            if (dist <= pickRadius) near.push(mk.__meta);
-          });
-          if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
-          else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
-          else setPicker(null);
-        });
-
-        m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
-        m.on("movestart", () => { setPicker(null); userViewTouchedRef.current = true; });
-        m.on("zoomend", () => { lastViewRef.current.zoom = m.getZoom(); });
-        m.on("moveend", () => { lastViewRef.current.center = m.getCenter(); });
-
-        mapRef.current = m;
-        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
-        if (imageLayerRef.current) {
-          try { m.removeLayer(imageLayerRef.current); } catch {}
-          imageLayerRef.current = null;
-        }
-
-        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
-        imageLayerRef.current = layer;
-        layer.addTo(m);
-
-        await new Promise(requestAnimationFrame);
-        if (cancelled) return; // Check after wait
-        m.invalidateSize(false);
-
-        const fitZoom = m.getBoundsZoom(bounds, true);
-        m.options.zoomSnap = 0.1;
-        m.options.zoomDelta = 0.5;
-        m.setMinZoom(fitZoom - 1);
-
-        if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
-          m.fitBounds(bounds, { padding: [8, 8] });
-          lastViewRef.current.center = m.getCenter();
-          lastViewRef.current.zoom = m.getZoom();
-          initialFitDoneRef.current = true;
-        } else {
-          // Restaure la vue précédente
-          m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
-        }
-
-        m.setMaxZoom(fitZoom + 6);
-        m.setMaxBounds(bounds.pad(0.5));
-
-        if (!markersLayerRef.current) {
-          markersLayerRef.current = L.layerGroup().addTo(m);
-        }
-        
-        drawMarkers(pointsRef.current, canvas.width, canvas.height);
-
-        try { m.scrollWheelZoom.enable(); } catch {}
-        try { await pdf.cleanup(); } catch {}
-        onReady?.();
-      } catch (e) {
-        if (String(e?.name) === "RenderingCancelledException") return;
-        const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
-        console.error("VSD Leaflet viewer error", e);
-      }
-    })();
-
-    const onResize = () => {
-      const m = mapRef.current;
-      const layer = imageLayerRef.current;
-      if (!m || !layer) return;
-      
-      const keepCenter = lastViewRef.current.center;
-      const keepZoom = lastViewRef.current.zoom;
-
-      m.invalidateSize(false);
-
-      if (!initialFitDoneRef.current) {
-        const b = layer.getBounds();
-        m.fitBounds(b, { padding: [8, 8] });
-        initialFitDoneRef.current = true;
-      } else {
-        m.setView(keepCenter, keepZoom, { animate: false });
-      }
-    };
-    window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", onResize);
-
-    return () => {
-      cancelled = true;
-      aliveRef.current = false;
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
-      try { renderTaskRef.current?.cancel(); } catch {}
-      try { loadingTaskRef.current?.destroy(); } catch {}
-      cleanupMap();
-    };
-  }, [fileUrl, pageIndex, disabled]); // NOTE : On ne met PAS onClickPoint ici car il est stable via useCallback
-  
-  useEffect(() => {
-    pointsRef.current = initialPoints;
-    if(mapRef.current && imgSize.w > 0) {
-        drawMarkers(initialPoints, imgSize.w, imgSize.h);
-    }
-  }, [initialPoints, drawMarkers, imgSize.w]);
-
-
-  const adjust = () => {
-    const m = mapRef.current;
-    const layer = imageLayerRef.current;
-    if (!m || !layer) return;
-    const b = layer.getBounds();
-    try { m.scrollWheelZoom?.disable(); } catch {}
-    m.invalidateSize(false);
-    const fitZoom = m.getBoundsZoom(b, true);
-    m.setMinZoom(fitZoom - 1);
-    m.fitBounds(b, { padding: [8, 8] });
-    
-    lastViewRef.current.center = m.getCenter();
-    lastViewRef.current.zoom = m.getZoom();
-    initialFitDoneRef.current = true;
-    userViewTouchedRef.current = false;
-
-    setTimeout(() => {
-      try {
-        m.scrollWheelZoom?.enable();
-      } catch {}
-    }, 50);
   };
 
-  useImperativeHandle(ref, () => ({ 
-    adjust,
-    drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
-  }));
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Share2 size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Partager le lien</h2>
+              <p className="text-green-100 text-sm">{equipment.name || equipment.tag}</p>
+            </div>
+          </div>
+        </div>
 
-  const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
-  const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
+        <div className="p-6 space-y-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={url}
+              readOnly
+              className={`${inputBaseClass} flex-1 text-sm font-mono`}
+            />
+            <button
+              onClick={handleCopy}
+              className={`px-4 py-2 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                copied ? 'bg-emerald-100 text-emerald-700' : 'bg-green-100 text-green-700 hover:bg-green-200'
+              }`}
+            >
+              {copied ? <CheckCircle size={18} /> : <Copy size={18} />}
+              {copied ? 'Copié!' : 'Copier'}
+            </button>
+          </div>
+        </div>
 
-  const onPickEquipment = useCallback((it) => {
-    setPicker(null);
-    onClickPoint?.(it);
-  }, [onClickPoint]);
+        <div className="border-t p-4">
+          <button
+            onClick={onClose}
+            className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// AI Photo Analysis Modal
+const AIPhotoModal = ({ isOpen, onClose, onComplete, showToast }) => {
+  const [photos, setPhotos] = useState([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setPhotos([]);
+      setResult(null);
+    }
+  }, [isOpen]);
+
+  const handlePhotoSelect = (e) => {
+    const files = Array.from(e.target.files);
+    setPhotos(files);
+  };
+
+  const analyzePhotos = async () => {
+    if (!photos.length) return;
+    setIsAnalyzing(true);
+    try {
+      const res = await api.vsd.extractFromPhotos(photos);
+      setResult(res?.extracted || res || {});
+    } catch (err) {
+      showToast?.('Erreur lors de l\'analyse', 'error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleUse = () => {
+    if (result) {
+      onComplete(result);
+    }
+    onClose();
+  };
+
+  if (!isOpen) return null;
 
   return (
-    <div className="mt-3 relative">
-      <div className="flex items-center justify-end gap-2 mb-2">
-        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>
-          Ajuster
-        </Btn>
-      </div>
-      <div
-        ref={wrapRef}
-        className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
-        style={{ height: wrapperHeight }}
-      />
-      {picker && (
-        <div className="vsd-pick" style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}>
-          {picker.items.slice(0, 8).map((it) => (
-            <button key={it.equipment_id} onClick={() => onPickEquipment(it)}>
-              {it.name || it.equipment_id}
-            </button>
-          ))}
-          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp">
+        <div className="sticky top-0 bg-gradient-to-r from-amber-500 to-orange-600 p-6 text-white z-10">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Sparkles size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Analyse IA</h2>
+              <p className="text-amber-100 text-sm">Extraction automatique des données</p>
+            </div>
+          </div>
         </div>
-      )}
-      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full vsd-marker" />
-          Variateur
-        </span>
+
+        <div className="p-6 space-y-4">
+          {!result ? (
+            <>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all
+                  ${photos.length ? 'border-amber-500 bg-amber-50' : 'border-gray-300 hover:border-amber-400'}`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handlePhotoSelect}
+                  className="hidden"
+                />
+                {photos.length > 0 ? (
+                  <div className="space-y-2">
+                    <CheckCircle className="mx-auto text-amber-500" size={40} />
+                    <p className="font-medium text-amber-700">{photos.length} photo(s) sélectionnée(s)</p>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setPhotos([]); }}
+                      className="text-xs text-red-600 hover:text-red-800"
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Camera className="mx-auto text-gray-400" size={48} />
+                    <p className="font-medium text-gray-700">Sélectionnez des photos</p>
+                    <p className="text-sm text-gray-500">Photo de la plaque signalétique</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-gray-50 rounded-xl p-4">
+                <p className="text-sm text-gray-600">
+                  <Sparkles size={14} className="inline mr-1 text-amber-500" />
+                  L'IA extraira automatiquement : fabricant, modèle, puissance, tension, courant, etc.
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-4 space-y-2">
+                <h3 className="font-semibold text-gray-900 mb-3">Données extraites</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  {result.manufacturer && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Fabricant</span>
+                      <p className="font-semibold">{result.manufacturer}</p>
+                    </div>
+                  )}
+                  {result.model && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Modèle</span>
+                      <p className="font-semibold">{result.model}</p>
+                    </div>
+                  )}
+                  {result.reference && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Référence</span>
+                      <p className="font-semibold">{result.reference}</p>
+                    </div>
+                  )}
+                  {result.power_kw && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Puissance</span>
+                      <p className="font-semibold">{result.power_kw} kW</p>
+                    </div>
+                  )}
+                  {result.voltage && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Tension</span>
+                      <p className="font-semibold">{result.voltage}</p>
+                    </div>
+                  )}
+                  {result.current_a && (
+                    <div className="bg-white rounded-lg p-2">
+                      <span className="text-gray-500 text-xs">Courant</span>
+                      <p className="font-semibold">{result.current_a} A</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t p-4 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
+            Annuler
+          </button>
+          {!result ? (
+            <button
+              onClick={analyzePhotos}
+              disabled={!photos.length || isAnalyzing}
+              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isAnalyzing ? <RefreshCw size={18} className="animate-spin" /> : <Eye size={18} />}
+              {isAnalyzing ? 'Analyse...' : 'Analyser'}
+            </button>
+          ) : (
+            <button
+              onClick={handleUse}
+              className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium flex items-center justify-center gap-2"
+            >
+              <CheckCircle size={18} />
+              Utiliser ces données
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Mobile Tree Drawer
+const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, selectedEquipment, onSelectEquipment, placedIds }) => {
+  if (!isOpen) return null;
+
+  const isPlaced = (id) => placedIds.has(id);
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+
+      <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl animate-slideRight overflow-hidden flex flex-col">
+        <div className="p-4 border-b bg-gradient-to-r from-green-500 to-emerald-600 text-white">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg">Variateurs</h2>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="space-y-1">
+            {Object.entries(tree).map(([building, equipments]) => (
+              <div key={building}>
+                <button
+                  onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                >
+                  {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  <Building2 size={16} className="text-green-500" />
+                  <span className="font-medium truncate flex-1">{building}</span>
+                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                    {equipments.length}
+                  </span>
+                </button>
+
+                {expandedBuildings[building] && (
+                  <div className="ml-4 space-y-1 mt-1">
+                    {equipments.map(eq => (
+                      <button
+                        key={eq.id}
+                        onClick={() => { onSelectEquipment(eq); onClose(); }}
+                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg
+                          ${selectedEquipment?.id === eq.id ? 'bg-green-100 text-green-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                      >
+                        <Cpu size={14} className="text-green-500" />
+                        <span className="text-sm truncate flex-1">{eq.name || eq.tag || 'VSD'}</span>
+                        {!isPlaced(eq.id) && (
+                          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
+                            <MapPin size={8} />
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
 });
 
-/* ----------------------------- Page principale VSD ----------------------------- */
+// ==================== DETAIL PANEL COMPONENT ====================
 
-function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
-  const reloadPositionsRef = useRef(null);
-  const latestPositionsRef = useRef([]);
-
-  const loadPositions = useCallback(async (plan, pageIdx = 0) => {
-    if (!plan) return;
-    const key = plan.id || plan.logical_name || "";
-    try {
-      const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({}));
-      let list = Array.isArray(r?.positions)
-        ? r.positions.map((item) => ({
-            equipment_id: item.equipment_id,
-            name: item.name || item.equipment_name,
-            x_frac: Number(item.x_frac ?? item.x ?? 0),
-            y_frac: Number(item.y_frac ?? item.y ?? 0),
-            x: Number(item.x_frac ?? item.x ?? 0),
-            y: Number(item.y_frac ?? item.y ?? 0),
-            building: item.building,
-            floor: item.floor,
-            zone: item.zone,
-          }))
-        : [];
-
-      latestPositionsRef.current = list;
-      viewerRef.current?.drawMarkers(list);
-    } catch (e) {
-      console.error("Erreur chargement positions", e);
-      latestPositionsRef.current = [];
-      viewerRef.current?.drawMarkers([]);
-    }
-  }, [viewerRef]);
-
-  useEffect(() => {
-    reloadPositionsRef.current = loadPositions;
-  }, [loadPositions]);
-
-  useEffect(() => {
-    if (!stableSelectedPlan) return;
-    const tick = () => reloadPositionsRef.current?.(stableSelectedPlan, 0);
-
-    tick();
-
-    const iv = setInterval(tick, 8000);
-    const onVis = () => {
-      if (!document.hidden) tick();
-    };
-    document.addEventListener("visibilitychange", onVis);
-
-    return () => {
-      clearInterval(iv);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [stableSelectedPlan]);
-
-  const refreshPositions = useCallback((p, idx = 0) => {
-    return reloadPositionsRef.current?.(p, idx);
-  }, []);
-
-  const getLatestPositions = useCallback(() => {
-    return latestPositionsRef.current;
-  }, []);
-
-  return { refreshPositions, getLatestPositions };
-}
-
-function getNormalizedEquipment(eq) {
-    const base = {
-        id: null,
-        name: "",
-        tag: "", 
-        manufacturer: "",
-        model: "", 
-        reference: "", 
-        serial_number: "", 
-        voltage: "",
-        ip_address: "", 
-        protocol: "",
-        building: "",
-        floor: "", 
-        zone: "",
-        location: "", 
-        panel: "", 
-        status: "",
-        ui_status: "",
-        criticality: "", 
-        comments: "",
-        ip_rating: "", 
-        power_kw: null,
-        current_a: null, 
-    };
-    
-    const clean = { ...base, ...eq };
-    
-    if (eq?.manufacturer_ref && !clean.reference) {
-      clean.reference = String(eq.manufacturer_ref);
-    }
-
-    if (eq?.current_nominal != null && clean.current_a == null) {
-      const n = Number(eq.current_nominal);
-      if (!Number.isNaN(n)) clean.current_a = n;
-    }
-
-    if (eq?.power_kw != null && clean.power_kw == null) {
-      const p = Number(eq.power_kw);
-      if (!Number.isNaN(p)) clean.power_kw = p;
-    }
-    
-    if (eq?.comment) {
-        clean.comments = String(eq.comment);
-    }
-
-    for (const field of ["building", "zone", "tag", "model", "serial_number", "ip_address", "protocol", "floor", "panel", "location", "criticality", "ui_status", "comments", "ip_rating", "reference", "voltage"]) {
-      if (typeof clean[field] === "object" && clean[field] !== null) {
-        clean[field] = clean[field].name || clean[field].id || "";
-      } else if (clean[field] == null) {
-        clean[field] = "";
-      } else {
-        clean[field] = String(clean[field]);
-      }
-    }
-
-    return clean;
-}
-
-
-export default function Vsd() {
-  const [tab, setTab] = useState("tree");
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const [building, setBuilding] = useState("");
-  const [floor, setFloor] = useState("");
-  const [zone, setZone] = useState("");
-
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const initialRef = useRef(null);
-
+const DetailPanel = ({
+  equipment,
+  onClose,
+  onEdit,
+  onDelete,
+  onShare,
+  onNavigateToMap,
+  onPhotoUpload,
+  isPlaced,
+  showToast
+}) => {
   const [files, setFiles] = useState([]);
-  const [toast, setToast] = useState("");
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const photoInputRef = useRef(null);
 
-  const [plans, setPlans] = useState([]);
-  const [mapsLoading, setMapsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null);
-  
-  const [initialPoints, setInitialPoints] = useState([]); 
-  const [pdfReady, setPdfReady] = useState(false);
-  const viewerRef = useRef(null);
-  
-  const [analyzingIA, setAnalyzingIA] = useState(false); 
+  useEffect(() => {
+    if (equipment?.id) {
+      loadFiles();
+    }
+  }, [equipment?.id]);
 
-  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
-  
-  // FIX CRITIQUE POUR LE RESET DU ZOOM : On stabilise l'URL ici avec useMemo
-  const stableFileUrl = useMemo(() => {
-    if (!stableSelectedPlan) return null;
-    return api.vsdMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
-  }, [stableSelectedPlan]);
-
-  const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, viewerRef);
-
-  const debouncer = useRef(null);
-  function triggerReloadDebounced() {
-    if (debouncer.current) clearTimeout(debouncer.current);
-    debouncer.current = setTimeout(reload, 300);
-  }
-
-  function normalizeListResponse(res) {
-    if (Array.isArray(res?.items)) return res.items;
-    if (Array.isArray(res?.equipments)) return res.equipments;
-    if (Array.isArray(res)) return res;
-    return [];
-  }
-
-  async function reload() {
-    setLoading(true);
+  const loadFiles = async () => {
+    if (!equipment?.id) return;
+    setLoadingFiles(true);
     try {
-      const res = await api.vsd.listEquipments({ q, building, floor, zone });
-      setItems(normalizeListResponse(res));
+      const res = await api.vsd.listFiles(equipment.id).catch(() => ({}));
+      setFiles(res?.files || []);
     } catch (e) {
       console.error(e);
-      setItems([]);
     } finally {
-      setLoading(false);
+      setLoadingFiles(false);
     }
-  }
+  };
 
-  async function reloadFiles(equipId) {
-    if (!equipId) return;
-    try {
-      const res = await api.vsd.listFiles(equipId).catch(() => ({}));
-      const arr = Array.isArray(res?.files)
-        ? res.files.map((f) => ({
-            id: f.id,
-            name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
-            mime: f.mime,
-            url: f.download_url || f.inline_url || `/api/vsd/files/${encodeURIComponent(f.id)}`,
-          }))
-        : [];
-      setFiles(arr);
-    } catch (e) {
-      console.error(e);
-      setFiles([]);
-    }
-  }
+  if (!equipment) return null;
 
-  useEffect(() => {
-    reload();
-  }, []);
+  const statusColors = {
+    en_service: 'success',
+    hors_service: 'danger',
+    spare: 'warning'
+  };
 
-  useEffect(() => {
-    triggerReloadDebounced();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, building, floor, zone]);
-
-  // Ancienne fonction mergeZones remplacée par getNormalizedEquipment
-  const mergeZones = getNormalizedEquipment; 
-
-  const openEdit = useCallback(async (equipment, reloadFn) => {
-    const base = getNormalizedEquipment(equipment || {});
-    setEditing(base);
-    initialRef.current = base;
-    setDrawerOpen(true);
-
-    if (typeof reloadFn === "function") {
-      window._vsdReload = reloadFn;
-    } else {
-      delete window._vsdReload;
-    }
-
-    if (base?.id) {
-      try {
-        const res = await api.vsd.getEquipment(base.id);
-        
-        const fresh = getNormalizedEquipment(res?.equipment || res || {});
-        
-        setEditing((cur) => {
-          const next = { ...(cur || {}), ...fresh };
-          initialRef.current = next;
-          return next;
-        });
-
-        await reloadFiles(base.id);
-      } catch (err) {
-        console.warn("[VSD] Erreur rechargement équipement :", err);
-        setFiles([]);
-      }
-    }
-  }, []);
-
-  function closeEdit() {
-    setEditing(null);
-    setFiles([]);
-    delete window._vsdReload;
-    setDrawerOpen(false);
-    initialRef.current = null;
-  }
-
-  function isDirty() {
-    if (!editing || !initialRef.current) return false;
-    const A = editing;
-    const B = initialRef.current;
-    const keys = [
-      "name", "tag", "manufacturer", "model", "reference", "serial_number", 
-      "voltage", "ip_address", "protocol", "building", "floor", "zone",
-      "location", "panel", "ui_status", "criticality", "comments", "ip_rating", 
-    ];
-    
-    if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
-    if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
-    if (Number(A?.current_a) !== Number(B?.current_a)) return true;
-    return false;
-  }
-
-  const dirty = isDirty();
-
-  async function saveBase() {
-    if (!editing) return;
-    
-    const payload = {
-      name: editing.name || "",
-      building: editing.building || "",
-      zone: editing.zone || "",
-      equipment: editing.equipment || "", 
-      sub_equipment: "", 
-      type: editing.type || "Variateur",
-      manufacturer: editing.manufacturer || "",
-      manufacturer_ref: editing.reference || "", 
-      power_kw: editing.power_kw ?? null,
-      voltage: editing.voltage || "",
-      current_nominal: editing.current_a ?? null, 
-      ip_rating: editing.ip_rating || "",
-      comment: editing.comments || "", 
-      
-      tag: editing.tag || "",
-      model: editing.model || "",
-      serial_number: editing.serial_number || "",
-      ip_address: editing.ip_address || "",
-      protocol: editing.protocol || "",
-      floor: editing.floor || "",
-      panel: editing.panel || "",
-      location: editing.location || "",
-      criticality: editing.criticality || "",
-      ui_status: editing.ui_status || "",
-    };
-
-    try {
-      let updated;
-      if (editing.id) {
-        updated = await api.vsd.updateEquipment(editing.id, payload);
-      } else {
-        updated = await api.vsd.createEquipment(payload);
-      }
-      const eq = updated?.equipment || updated || null;
-      if (eq?.id) {
-        const fresh = getNormalizedEquipment(eq);
-        
-        setEditing((currentEditing) => {
-            const merged = {
-                ...(currentEditing || {}), 
-                ...fresh,                  
-            };
-            initialRef.current = merged; 
-            return merged;
-        });
-
-      }
-      await reload();
-      await refreshPositions(stableSelectedPlan, 0); 
-      setToast("Fiche enregistrée");
-    } catch (e) {
-      console.error("[VSD] Erreur lors de l'enregistrement :", e);
-      setToast("Erreur enregistrement");
-    }
-  }
-
-  async function deleteEquipment() {
-    if (!editing?.id) return;
-    const ok = window.confirm("Supprimer définitivement ce variateur ? Cette action est irréversible.");
-    if (!ok) return;
-    try {
-      await api.vsd.deleteEquipment(editing.id);
-      closeEdit();
-      await reload();
-      await refreshPositions(stableSelectedPlan, 0); 
-      setToast("Équipement supprimé");
-    } catch (e) {
-      console.error(e);
-      setToast("Suppression impossible");
-    }
-  }
-
-  async function uploadMainPhoto(file) {
-    if (!editing?.id || !file) return;
-    try {
-      await api.vsd.uploadPhoto(editing.id, file);
-      const url = api.vsd.photoUrl(editing.id, { bust: true });
-      setEditing((cur) => ({ ...(cur || {}), photo_url: url }));
-      await reloadFiles(editing.id);
-      await reload();
-      setToast("Photo mise à jour");
-    } catch (e) {
-      console.error(e);
-      setToast("Échec upload photo");
-    }
-  }
-
-  async function uploadAttachments(filesArr) {
-    if (!editing?.id || !filesArr?.length) return;
-    try {
-      await api.vsd.uploadFiles(editing.id, filesArr);
-      await reloadFiles(editing.id);
-      setToast(filesArr.length > 1 ? "Fichiers ajoutés" : "Fichier ajouté");
-    } catch (e) {
-      console.error(e);
-      setToast("Échec upload fichiers");
-    }
-  }
-
-  async function analyzeFromPhotos(filesLike) {
-    const list = Array.from(filesLike || []);
-    if (!list.length) return;
-    
-    setAnalyzingIA(true); 
-    try {
-      const res = await api.vsd.extractFromPhotos(list);
-      const s = res?.extracted || res || {};
-
-      setEditing((x) => {
-        const safe = { ...x };
-        const applyIfValid = (field, value) => {
-          if (value && typeof value === "string" && value.trim().length > 2 && value.trim() !== safe[field]) {
-            safe[field] = value.trim();
-          }
-        };
-
-        applyIfValid("manufacturer", s.manufacturer);
-        applyIfValid("model", s.model); 
-        applyIfValid("reference", s.reference); 
-        applyIfValid("serial_number", s.serial_number); 
-        applyIfValid("voltage", s.voltage);
-        applyIfValid("protocol", s.protocol);
-        applyIfValid("ip_rating", s.ip_rating);
-
-        if (s.power_kw != null && !isNaN(Number(s.power_kw))) {
-          safe.power_kw = Number(s.power_kw);
-        }
-        if (s.current_a != null && !isNaN(Number(s.current_a))) {
-          safe.current_a = Number(s.current_a);
-        }
-
-        return safe;
-      });
-
-      setToast("Analyse IA terminée");
-    } catch (e) {
-      console.error("[VSD] Erreur analyse IA :", e);
-      setToast("Analyse IA indisponible");
-    } finally {
-        setAnalyzingIA(false); 
-    }
-  }
-
-  async function loadPlans() {
-    setMapsLoading(true);
-    try {
-      const r = await api.vsdMaps.listPlans();
-      const planList = Array.isArray(r?.plans) ? r.plans : [];
-      setPlans(planList);
-
-      if (selectedPlan) {
-        const current = planList.find(p => p.logical_name === selectedPlan.logical_name);
-        if (current) {
-            setSelectedPlan(current);
-            await refreshPositions(current, 0);
-            setInitialPoints(getLatestPositions()); 
-        }
-      }
-    } finally {
-      setMapsLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (tab === "plans") loadPlans();
-  }, [tab]);
-
-  useEffect(() => {
-    if (tab !== "plans" && selectedPlan) setSelectedPlan(null);
-  }, [tab, selectedPlan]);
-
-  useEffect(() => {
-    if (!mapsLoading && selectedPlan && !plans.find((p) => p.logical_name === selectedPlan.logical_name)) {
-      setSelectedPlan(null);
-    }
-  }, [plans, mapsLoading, selectedPlan]);
-
-  const buildingTree = useMemo(() => {
-    const tree = {};
-    (items || []).forEach((item) => {
-      const b = (item.building || "Sans bâtiment").trim();
-      if (!tree[b]) tree[b] = [];
-      tree[b].push(item);
-    });
-    return tree;
-  }, [items]);
-  
-  const handlePdfReady = useCallback(() => setPdfReady(true), []);
-
-  // UTILISATION DE USECALLBACK POUR STABILISER LES HANDLERS
-  const handleMovePoint = useCallback(
-    async (equipmentId, xy) => {
-      if (!stableSelectedPlan) return;
-      await api.vsdMaps.setPosition(equipmentId, {
-        logical_name: stableSelectedPlan.logical_name,
-        plan_id: stableSelectedPlan.id,
-        page_index: 0,
-        x_frac: xy.x,
-        y_frac: xy.y,
-      });
-      await refreshPositions(stableSelectedPlan, 0); 
-    },
-    [stableSelectedPlan, refreshPositions]
-  );
-
-  const handleClickPoint = useCallback((p) => {
-    openEdit({ id: p.equipment_id, name: p.name });
-  }, [openEdit]);
-
-  const createEquipmentAtCenter = useCallback(async () => {
-    if (!stableSelectedPlan) return;
-    try {
-      const payload = {
-        name: "Nouveau VSD",
-        building: "",
-        zone: "",
-        equipment: stableSelectedPlan.logical_name, 
-        type: "Variateur",
-        comment: "Point créé sur le plan " + stableSelectedPlan.logical_name,
-      };
-      const created = await api.vsd.createEquipment(payload);
-      const id = created?.equipment?.id || created?.id;
-      if (!id) throw new Error("Création VSD: ID manquant");
-
-      await api.vsdMaps.setPosition(id, {
-        logical_name: stableSelectedPlan.logical_name,
-        plan_id: stableSelectedPlan.id,
-        page_index: 0,
-        x_frac: 0.5,
-        y_frac: 0.5,
-      });
-
-      await refreshPositions(stableSelectedPlan, 0);
-      viewerRef.current?.adjust();
-      setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
-
-      openEdit({ id, name: created?.equipment?.name || created?.name || "Nouveau VSD" });
-    } catch (e) {
-      console.error(e);
-      setToast("Création impossible");
-    }
-  }, [stableSelectedPlan, refreshPositions, openEdit]);
-
-  const StickyTabs = () => (
-    <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
-      <div className="flex flex-wrap gap-2">
-        <Btn variant={tab === "tree" ? "primary" : "ghost"} onClick={() => setTab("tree")}>
-          🏢 Arborescence
-        </Btn>
-        <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>
-          🗺️ Plans
-        </Btn>
-      </div>
-    </div>
-  );
+  const criticalityColors = {
+    critique: 'danger',
+    important: 'warning',
+    standard: 'default'
+  };
 
   return (
-    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
-      <Toast text={toast} onClose={() => setToast("")} />
-
-      {loading && (
-        <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-[5000] backdrop-blur-sm">
-          <div className="text-sm text-gray-600">Mise à jour en cours…</div>
-        </div>
-      )}
-
-      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Variateurs de fréquence</h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
-            {filtersOpen ? "Masquer les filtres" : "Filtres"}
-          </Btn>
-        </div>
-      </header>
-
-      <StickyTabs />
-
-      {filtersOpen && (
-        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
-          <div className="grid md:grid-cols-4 gap-3">
-            <Input value={q} onChange={setQ} placeholder="Recherche (nom / tag / fabricant…)" />
-            <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
-            <Input value={floor} onChange={setFloor} placeholder="Étage" />
-            <Input value={zone} onChange={setZone} placeholder="Zone" />
-          </div>
-          <div className="flex gap-2">
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setQ("");
-                setBuilding("");
-                setFloor("");
-                setZone("");
-              }}
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
+        <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-white/20 rounded-lg transition-colors md:hidden"
+          >
+            <X size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onShare(equipment)}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Partager"
             >
-              Réinitialiser
-            </Btn>
+              <Share2 size={18} />
+            </button>
+            <button
+              onClick={() => onEdit(equipment)}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Modifier"
+            >
+              <Edit3 size={18} />
+            </button>
           </div>
-          <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
-      )}
 
-      {tab === "tree" && (
-        <div className="space-y-4">
-          {loading && <div className="bg-white rounded-2xl border shadow-sm p-4 text-gray-500">Chargement…</div>}
-          {!loading && Object.keys(buildingTree).length === 0 && (
-            <div className="bg-white rounded-2xl border shadow-sm p-4 text-gray-500">Aucun variateur.</div>
-          )}
-          {!loading &&
-            Object.keys(buildingTree)
-              .sort()
-              .map((buildingName) => (
-                <BuildingSection
-                  key={buildingName}
-                  buildingName={buildingName}
-                  equipments={buildingTree[buildingName]}
-                  onOpenEquipment={openEdit}
-                />
-              ))}
-        </div>
-      )}
-
-      {tab === "plans" && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
-            <div className="font-semibold">Plans PDF</div>
-            <VsdZipImport
-              disabled={mapsLoading}
-              onDone={async () => {
-                setToast("Plans importés");
-                await loadPlans();
-              }}
+        <div className="flex items-start gap-4">
+          <div
+            onClick={() => photoInputRef.current?.click()}
+            className="w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center cursor-pointer hover:bg-white/30 transition-colors overflow-hidden"
+          >
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
+            {equipment.photo_url ? (
+              <img src={api.vsd.photoUrl(equipment.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <Camera size={24} />
+            )}
           </div>
-
-          <PlanCards
-            plans={plans}
-            onRename={async (plan, name) => {
-              await api.vsdMaps.renamePlan(plan.logical_name, name);
-              await loadPlans();
-            }}
-            onPick={async (plan) => {
-              setSelectedPlan(plan);
-              setPdfReady(false); 
-              setInitialPoints([]); 
-              await refreshPositions(plan, 0);
-              setInitialPoints(getLatestPositions()); 
-            }}
-          />
-
-          {selectedPlan && (
-            <div className="bg-white rounded-2xl border shadow-sm p-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold truncate pr-3">{selectedPlan.display_name || selectedPlan.logical_name}</div>
-                <div className="flex items-center gap-2">
-                  <Btn
-                    variant="ghost"
-                    onClick={() => {
-                      setSelectedPlan(null);
-                      setInitialPoints([]); 
-                    }}
-                  >
-                    Fermer le plan
-                  </Btn>
-                </div>
-              </div>
-
-              <div className="relative">
-                {!pdfReady && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none">
-                    <div className="flex flex-col items-center gap-3 text-gray-700">
-                      <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
-                      <div className="text-sm font-medium">Chargement du plan…</div>
-                    </div>
-                  </div>
-                )}
-
-                <VsdLeafletViewer
-                  ref={viewerRef}
-                  key={selectedPlan.logical_name} 
-                  fileUrl={stableFileUrl} 
-                  pageIndex={0}
-                  initialPoints={initialPoints} 
-                  onReady={handlePdfReady}
-                  onMovePoint={handleMovePoint}
-                  onClickPoint={handleClickPoint}
-                  onCreatePoint={createEquipmentAtCenter}
-                  disabled={false}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {drawerOpen && editing && (
-        <Drawer title={`VSD • ${editing.name || "nouvel équipement"}`} onClose={closeEdit} dirty={dirty}>
-          <div className="space-y-4">
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="font-semibold">Ajout & Analyse IA</div>
-                <div className="flex items-center gap-2">
-                  <label className={`px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer ${analyzingIA ? 'opacity-70 cursor-wait' : ''}`}>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
-                      disabled={analyzingIA}
-                    />
-                    {analyzingIA ? 'Analyse en cours...' : 'Analyser des photos (IA)'}
-                  </label>
-                </div>
-              </div>
-              <div className="text-xs text-gray-500 mt-2">
-                Conseils : photo nette de la plaque signalétique. L'IA remplira automatiquement les champs (fabricant, modèle, puissance, tension…).
-              </div>
-            </div>
-
-            {editing?.id && (
-              <div className="border rounded-2xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-semibold">Photo principale</div>
-                  <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
-                    />
-                    Mettre à jour
-                  </label>
-                </div>
-                <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
-                  {editing.photo_url ? (
-                    <img src={api.vsd.photoUrl(editing.id, { bust: true })} alt="photo" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
-                  )}
-                </div>
-              </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl font-bold truncate">{equipment.name || 'Variateur'}</h2>
+            {equipment.tag && (
+              <p className="text-green-100 text-sm font-mono">{equipment.tag}</p>
             )}
-
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="font-semibold mb-2">Identification</div>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Labeled label="Nom">
-                  <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
-                </Labeled>
-                <Labeled label="Tag / Repère">
-                  <Input value={editing.tag || ""} onChange={(v) => setEditing({ ...editing, tag: v })} />
-                </Labeled>
-                <Labeled label="Fabricant">
-                  <Input value={editing.manufacturer || ""} onChange={(v) => setEditing({ ...editing, manufacturer: v })} />
-                </Labeled>
-                <Labeled label="Modèle">
-                  <Input value={editing.model || ""} onChange={(v) => setEditing({ ...editing, model: v })} />
-                </Labeled>
-                <Labeled label="Référence">
-                  <Input value={editing.reference || ""} onChange={(v) => setEditing({ ...editing, reference: v })} />
-                </Labeled>
-                <Labeled label="Numéro de série">
-                  <Input value={editing.serial_number || ""} onChange={(v) => setEditing({ ...editing, serial_number: v })} />
-                </Labeled>
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="font-semibold mb-2">Caractéristiques électriques</div>
-              <div className="grid sm:grid-cols-3 gap-3">
-                <Labeled label="Puissance (kW)">
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={editing.power_kw ?? ""}
-                    onChange={(v) => setEditing({ ...editing, power_kw: v === "" ? null : Number(v) })}
-                  />
-                </Labeled>
-                <Labeled label="Courant (A)">
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={editing.current_a ?? ""}
-                    onChange={(v) => setEditing({ ...editing, current_a: v === "" ? null : Number(v) })}
-                  />
-                </Labeled>
-                <Labeled label="Tension">
-                  <Input value={editing.voltage || ""} onChange={(v) => setEditing({ ...editing, voltage: v })} />
-                </Labeled>
-                <Labeled label="Adresse IP">
-                  <Input value={editing.ip_address || ""} onChange={(v) => setEditing({ ...editing, ip_address: v })} />
-                </Labeled>
-                <Labeled label="Protocole">
-                  <Input value={editing.protocol || ""} onChange={(v) => setEditing({ ...editing, protocol: v })} placeholder="Modbus, Profibus…" />
-                </Labeled>
-                <Labeled label="Indice IP">
-                  <Input value={editing.ip_rating || ""} onChange={(v) => setEditing({ ...editing, ip_rating: v })} placeholder="IP20, IP54…" />
-                </Labeled>
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="font-semibold mb-2">Localisation</div>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Labeled label="Bâtiment">
-                  <Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} />
-                </Labeled>
-                <Labeled label="Étage">
-                  <Input value={editing.floor || ""} onChange={(v) => setEditing({ ...editing, floor: v })} />
-                </Labeled>
-                <Labeled label="Zone">
-                  <Input value={editing.zone || ""} onChange={(v) => setEditing({ ...editing, zone: v })} />
-                </Labeled>
-                <Labeled label="Local / Machine">
-                  <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
-                </Labeled>
-                <Labeled label="Tableau / Coffret">
-                  <Input value={editing.panel || ""} onChange={(v) => setEditing({ ...editing, panel: v })} />
-                </Labeled>
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="font-semibold mb-2">Statut & Criticité</div>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Labeled label="Statut d'exploitation">
-                  <Select
-                    value={editing.ui_status || ""}
-                    onChange={(v) => setEditing({ ...editing, ui_status: v })}
-                    options={[
-                      { value: "", label: "—" },
-                      { value: "en_service", label: "En service" },
-                      { value: "hors_service", label: "Hors service" },
-                      { value: "spare", label: "Spare" },
-                    ]}
-                  />
-                </Labeled>
-                <Labeled label="Criticité">
-                  <Select
-                    value={editing.criticality || ""}
-                    onChange={(v) => setEditing({ ...editing, criticality: v })}
-                    options={[
-                      { value: "", label: "—" },
-                      { value: "critique", label: "Critique" },
-                      { value: "important", label: "Important" },
-                      { value: "standard", label: "Standard" },
-                    ]}
-                  />
-                </Labeled>
-              </div>
-            </div>
-
-            <div className="border rounded-2xl p-3">
-              <div className="font-semibold mb-2">Commentaires</div>
-              <Textarea rows={3} value={editing.comments || ""} onChange={(v) => setEditing({ ...editing, comments: v })} placeholder="Notes libres…" />
-            </div>
-
-            {editing?.id && (
-              <div className="border rounded-2xl p-3 bg-white">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-semibold">Pièces jointes</div>
-                  <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                    <input
-                      type="file"
-                      className="hidden"
-                      multiple
-                      onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
-                    />
-                    Ajouter
-                  </label>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {files.length === 0 && <div className="text-xs text-gray-500">Aucune pièce jointe.</div>}
-                  {files.map((f) => (
-                    <div key={f.id} className="flex items-center justify-between text-sm border rounded-lg px-2 py-1">
-                      <a href={f.url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline truncate max-w-[70%]" title={f.name}>
-                        {f.name}
-                      </a>
-                      <button
-                        className="text-rose-600 hover:underline"
-                        onClick={async () => {
-                          await api.vsd.deleteFile(f.id);
-                          reloadFiles(editing.id);
-                        }}
-                      >
-                        Supprimer
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Btn variant={dirty ? "warn" : "ghost"} className={dirty ? "animate-pulse" : ""} onClick={saveBase} disabled={!dirty}>
-                {dirty ? "Enregistrer la fiche" : "Aucune modif"}
-              </Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteEquipment}>
-                  Supprimer
-                </Btn>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              {equipment.ui_status && (
+                <Badge variant={statusColors[equipment.ui_status] || 'default'}>
+                  {equipment.ui_status === 'en_service' ? 'En service' :
+                   equipment.ui_status === 'hors_service' ? 'Hors service' : 'Spare'}
+                </Badge>
+              )}
+              {equipment.criticality && (
+                <Badge variant={criticalityColors[equipment.criticality] || 'default'}>
+                  {equipment.criticality}
+                </Badge>
+              )}
+              {isPlaced ? (
+                <Badge variant="success">
+                  <MapPin size={10} className="inline mr-1" />
+                  Localisé
+                </Badge>
+              ) : (
+                <Badge variant="warning">
+                  <MapPin size={10} className="inline mr-1" />
+                  Non localisé
+                </Badge>
               )}
             </div>
           </div>
-        </Drawer>
-      )}
-    </section>
-  );
-}
-
-/* ----------------------------- Sous-composants ----------------------------- */
-function BuildingSection({ buildingName, equipments = [], onOpenEquipment }) {
-  const [collapsed, setCollapsed] = useState(false);
-
-  return (
-    <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
-      <button
-        className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition"
-        onClick={() => setCollapsed((v) => !v)}
-      >
-        <div className="flex items-center gap-2">
-          <span className="font-semibold">{buildingName}</span>
-          <Badge color="blue">{equipments.length}</Badge>
         </div>
-        <span className="text-gray-500">{collapsed ? "▼" : "▲"}</span>
-      </button>
-
-      {!collapsed && (
-        <div className="divide-y">
-          {equipments.map((eq) => (
-            <div key={eq.id} className="p-4 hover:bg-gray-50 transition">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
-                    {eq.photo_url ? (
-                      <img src={api.vsd.photoUrl(eq.id)} alt={eq.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-[11px] text-gray-500 p-1 text-center">
-                        Photo à<br />prendre
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    <button className="text-blue-700 font-semibold hover:underline" onClick={() => onOpenEquipment(eq)}>
-                      {eq.name || eq.tag || "VSD"}
-                    </button>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      {eq.floor ? `${eq.floor} • ` : ""}
-                      {eq.zone ? `${eq.zone} • ` : ""}
-                      {eq.location || "—"}
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      {eq.manufacturer || "—"} {eq.model ? `• ${eq.model}` : ""} {eq.power_kw ? `• ${eq.power_kw} kW` : ""}
-                    </div>
-                  </div>
-                </div>
-                <Btn variant="ghost" onClick={() => onOpenEquipment(eq)}>
-                  Ouvrir
-                </Btn>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VsdZipImport({ disabled, onDone }) {
-  const inputRef = useRef(null);
-  return (
-    <div className="flex items-center gap-2">
-      <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={disabled}>
-        Import ZIP de plans
-      </Btn>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".zip,application/zip"
-        className="hidden"
-        onChange={async (e) => {
-          const f = e.target.files?.[0];
-          if (f) {
-            await api.vsdMaps.uploadZip(f);
-            onDone?.();
-          }
-          e.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
-function PlanCards({ plans = [], onRename, onPick }) {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
-      {plans.map((p) => (
-        <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
-      ))}
-    </div>
-  );
-}
-
-function PlanCard({ plan, onRename, onPick }) {
-  const [edit, setEdit] = useState(false);
-  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
-
-  return (
-    <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        <div className="flex flex-col items-center justify-center text-gray-500">
-          <div className="text-4xl leading-none">PDF</div>
-          <div className="text-[11px] mt-1">Plan</div>
-        </div>
-        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">{name}</div>
       </div>
-      <div className="p-3">
-        {!edit ? (
-          <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>
-              {name || "—"}
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <Gauge size={20} className="mx-auto text-green-500 mb-1" />
+            <p className="text-lg font-bold text-gray-900">{equipment.power_kw || '-'}</p>
+            <p className="text-xs text-gray-500">kW</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <Zap size={20} className="mx-auto text-amber-500 mb-1" />
+            <p className="text-lg font-bold text-gray-900">{equipment.voltage || '-'}</p>
+            <p className="text-xs text-gray-500">Tension</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <Power size={20} className="mx-auto text-blue-500 mb-1" />
+            <p className="text-lg font-bold text-gray-900">{equipment.current_a || '-'}</p>
+            <p className="text-xs text-gray-500">Ampères</p>
+          </div>
+        </div>
+
+        {/* Identification */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Tag size={16} className="text-green-500" />
+            Identification
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Fabricant</span>
+              <p className="font-medium text-gray-900">{equipment.manufacturer || '-'}</p>
             </div>
-            <div className="flex items-center gap-1">
-              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
-                ✏️
-              </Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>
-                Ouvrir
-              </Btn>
+            <div>
+              <span className="text-gray-500">Modèle</span>
+              <p className="font-medium text-gray-900">{equipment.model || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Référence</span>
+              <p className="font-medium text-gray-900 font-mono">{equipment.reference || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">N° série</span>
+              <p className="font-medium text-gray-900 font-mono">{equipment.serial_number || '-'}</p>
             </div>
           </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <Input value={name} onChange={setName} />
-            <Btn
-              variant="subtle"
-              onClick={async () => {
-                await onRename(plan, (name || "").trim());
-                setEdit(false);
-              }}
-            >
-              OK
-            </Btn>
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setName(plan.display_name || plan.logical_name || "");
-                setEdit(false);
-              }}
-            >
-              Annuler
-            </Btn>
+        </div>
+
+        {/* Location */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Building2 size={16} className="text-green-500" />
+            Localisation
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Bâtiment</span>
+              <p className="font-medium text-gray-900">{equipment.building || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Étage</span>
+              <p className="font-medium text-gray-900">{equipment.floor || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Zone</span>
+              <p className="font-medium text-gray-900">{equipment.zone || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Local</span>
+              <p className="font-medium text-gray-900">{equipment.location || '-'}</p>
+            </div>
+            <div className="col-span-2">
+              <span className="text-gray-500">Tableau</span>
+              <p className="font-medium text-gray-900">{equipment.panel || '-'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Technical */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Network size={16} className="text-green-500" />
+            Caractéristiques
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Adresse IP</span>
+              <p className="font-medium text-gray-900 font-mono">{equipment.ip_address || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Protocole</span>
+              <p className="font-medium text-gray-900">{equipment.protocol || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Indice IP</span>
+              <p className="font-medium text-gray-900">{equipment.ip_rating || '-'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Comments */}
+        {equipment.comments && (
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-900 mb-2">Commentaires</h3>
+            <p className="text-sm text-gray-600 whitespace-pre-wrap">{equipment.comments}</p>
+          </div>
+        )}
+
+        {/* Files */}
+        {files.length > 0 && (
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-900 mb-3">Pièces jointes</h3>
+            <div className="space-y-2">
+              {files.map(f => (
+                <a
+                  key={f.id}
+                  href={f.download_url || f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2 p-2 bg-white rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  <ExternalLink size={14} className="text-gray-400" />
+                  <span className="text-sm text-blue-600 truncate">{f.original_name || f.name}</span>
+                </a>
+              ))}
+            </div>
           </div>
         )}
       </div>
+
+      {/* Actions */}
+      <div className="border-t p-4 space-y-2">
+        <button
+          onClick={() => onNavigateToMap(equipment)}
+          className="w-full py-3 px-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:from-green-600 hover:to-emerald-700 transition-all flex items-center justify-center gap-2"
+        >
+          <MapPin size={18} />
+          {isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
+        </button>
+        <button
+          onClick={() => onDelete(equipment)}
+          className="w-full py-3 px-4 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+        >
+          <Trash2 size={18} />
+          Supprimer
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==================== EDIT FORM COMPONENT ====================
+
+const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
+  const [form, setForm] = useState({
+    name: '',
+    tag: '',
+    manufacturer: '',
+    model: '',
+    reference: '',
+    serial_number: '',
+    power_kw: '',
+    voltage: '',
+    current_a: '',
+    ip_address: '',
+    protocol: '',
+    ip_rating: '',
+    building: '',
+    floor: '',
+    zone: '',
+    location: '',
+    panel: '',
+    ui_status: '',
+    criticality: '',
+    comments: ''
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [showAIModal, setShowAIModal] = useState(false);
+
+  useEffect(() => {
+    if (equipment) {
+      setForm({
+        name: equipment.name || '',
+        tag: equipment.tag || '',
+        manufacturer: equipment.manufacturer || '',
+        model: equipment.model || '',
+        reference: equipment.reference || '',
+        serial_number: equipment.serial_number || '',
+        power_kw: equipment.power_kw ?? '',
+        voltage: equipment.voltage || '',
+        current_a: equipment.current_a ?? '',
+        ip_address: equipment.ip_address || '',
+        protocol: equipment.protocol || '',
+        ip_rating: equipment.ip_rating || '',
+        building: equipment.building || '',
+        floor: equipment.floor || '',
+        zone: equipment.zone || '',
+        location: equipment.location || '',
+        panel: equipment.panel || '',
+        ui_status: equipment.ui_status || '',
+        criticality: equipment.criticality || '',
+        comments: equipment.comments || ''
+      });
+    }
+  }, [equipment]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const payload = {
+        ...form,
+        power_kw: form.power_kw !== '' ? Number(form.power_kw) : null,
+        current_a: form.current_a !== '' ? Number(form.current_a) : null,
+      };
+      await onSave(payload);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAIComplete = (data) => {
+    setForm(prev => ({
+      ...prev,
+      manufacturer: data.manufacturer || prev.manufacturer,
+      model: data.model || prev.model,
+      reference: data.reference || prev.reference,
+      serial_number: data.serial_number || prev.serial_number,
+      voltage: data.voltage || prev.voltage,
+      protocol: data.protocol || prev.protocol,
+      ip_rating: data.ip_rating || prev.ip_rating,
+      power_kw: data.power_kw ?? prev.power_kw,
+      current_a: data.current_a ?? prev.current_a,
+    }));
+    showToast?.('Données appliquées', 'success');
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Edit3 size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">
+                {equipment?.id ? 'Modifier le variateur' : 'Nouveau variateur'}
+              </h2>
+              <p className="text-green-100 text-sm">
+                {equipment?.name || 'Remplissez les informations'}
+              </p>
+            </div>
+          </div>
+          <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+      </div>
+
+      {/* Form Content */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* AI Button */}
+        <button
+          onClick={() => setShowAIModal(true)}
+          className="w-full py-3 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-700 flex items-center justify-center gap-2"
+        >
+          <Sparkles size={18} />
+          Analyser une photo (IA)
+        </button>
+
+        {/* Identification */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Tag size={16} className="text-green-500" />
+            Identification
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nom</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Nom du variateur"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tag / Repère</label>
+              <input
+                type="text"
+                value={form.tag}
+                onChange={e => setForm(f => ({ ...f, tag: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="VSD-001"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fabricant</label>
+              <input
+                type="text"
+                value={form.manufacturer}
+                onChange={e => setForm(f => ({ ...f, manufacturer: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="ABB, Siemens..."
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Modèle</label>
+              <input
+                type="text"
+                value={form.model}
+                onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Référence</label>
+              <input
+                type="text"
+                value={form.reference}
+                onChange={e => setForm(f => ({ ...f, reference: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">N° de série</label>
+              <input
+                type="text"
+                value={form.serial_number}
+                onChange={e => setForm(f => ({ ...f, serial_number: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Electrical */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Zap size={16} className="text-green-500" />
+            Caractéristiques électriques
+          </h3>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Puissance (kW)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={form.power_kw}
+                onChange={e => setForm(f => ({ ...f, power_kw: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tension</label>
+              <input
+                type="text"
+                value={form.voltage}
+                onChange={e => setForm(f => ({ ...f, voltage: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="400V"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Courant (A)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={form.current_a}
+                onChange={e => setForm(f => ({ ...f, current_a: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Adresse IP</label>
+              <input
+                type="text"
+                value={form.ip_address}
+                onChange={e => setForm(f => ({ ...f, ip_address: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="192.168.1.100"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Protocole</label>
+              <input
+                type="text"
+                value={form.protocol}
+                onChange={e => setForm(f => ({ ...f, protocol: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Modbus, Profibus..."
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Indice IP</label>
+              <input
+                type="text"
+                value={form.ip_rating}
+                onChange={e => setForm(f => ({ ...f, ip_rating: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="IP54"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Location */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Building2 size={16} className="text-green-500" />
+            Localisation
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+              <input
+                type="text"
+                value={form.building}
+                onChange={e => setForm(f => ({ ...f, building: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Étage</label>
+              <input
+                type="text"
+                value={form.floor}
+                onChange={e => setForm(f => ({ ...f, floor: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Zone</label>
+              <input
+                type="text"
+                value={form.zone}
+                onChange={e => setForm(f => ({ ...f, zone: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Local</label>
+              <input
+                type="text"
+                value={form.location}
+                onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tableau / Coffret</label>
+              <input
+                type="text"
+                value={form.panel}
+                onChange={e => setForm(f => ({ ...f, panel: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Status */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Info size={16} className="text-green-500" />
+            Statut & Criticité
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
+              <select
+                value={form.ui_status}
+                onChange={e => setForm(f => ({ ...f, ui_status: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="">—</option>
+                <option value="en_service">En service</option>
+                <option value="hors_service">Hors service</option>
+                <option value="spare">Spare</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Criticité</label>
+              <select
+                value={form.criticality}
+                onChange={e => setForm(f => ({ ...f, criticality: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="">—</option>
+                <option value="critique">Critique</option>
+                <option value="important">Important</option>
+                <option value="standard">Standard</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Comments */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700">Commentaires</label>
+          <textarea
+            value={form.comments}
+            onChange={e => setForm(f => ({ ...f, comments: e.target.value }))}
+            className={`${inputBaseClass} min-h-[100px]`}
+            placeholder="Notes libres..."
+          />
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="border-t p-4 flex gap-3">
+        <button
+          onClick={onCancel}
+          className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+        >
+          Annuler
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+          Enregistrer
+        </button>
+      </div>
+
+      <AIPhotoModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        onComplete={handleAIComplete}
+        showToast={showToast}
+      />
+    </div>
+  );
+};
+
+// ==================== MAIN COMPONENT ====================
+
+export default function Vsd() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // State
+  const [equipments, setEquipments] = useState([]);
+  const [selectedEquipment, setSelectedEquipment] = useState(null);
+  const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+
+  // View mode
+  const [viewMode, setViewMode] = useState('detail'); // 'detail' | 'edit'
+
+  // Placement state
+  const [placedIds, setPlacedIds] = useState(new Set());
+
+  // Toast state
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+  }, []);
+
+  // Modal state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Effects
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    loadEquipments();
+    loadPlacements();
+  }, []);
+
+  // URL params handling
+  useEffect(() => {
+    const vsdId = searchParams.get('vsd');
+    if (vsdId && (!selectedEquipment || selectedEquipment.id !== Number(vsdId))) {
+      api.vsd.getEquipment(vsdId)
+        .then(res => {
+          const eq = res?.equipment || res;
+          if (eq) {
+            setSelectedEquipment(eq);
+            const building = eq.building || 'Sans bâtiment';
+            setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+          }
+        })
+        .catch(() => showToast('Variateur non trouvé', 'error'));
+    }
+  }, [searchParams]);
+
+  const loadEquipments = async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.vsd.listEquipments({});
+      const list = res?.items || res?.equipments || res || [];
+      setEquipments(list);
+    } catch (err) {
+      console.error('Load equipments error:', err);
+      showToast('Erreur lors du chargement', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadPlacements = async () => {
+    try {
+      // Check which VSD are placed on maps
+      const plans = await api.vsdMaps.listPlans().catch(() => ({ plans: [] }));
+      const placed = new Set();
+      for (const plan of (plans?.plans || [])) {
+        try {
+          const positions = await api.vsdMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
+          (positions?.positions || []).forEach(p => {
+            if (p.equipment_id) placed.add(p.equipment_id);
+          });
+        } catch {}
+      }
+      setPlacedIds(placed);
+    } catch (e) {
+      console.error("Load placements error:", e);
+    }
+  };
+
+  const handleSelectEquipment = async (eq) => {
+    setSearchParams({ vsd: eq.id.toString() });
+    setViewMode('detail');
+    try {
+      const res = await api.vsd.getEquipment(eq.id);
+      setSelectedEquipment(res?.equipment || res || eq);
+    } catch {
+      setSelectedEquipment(eq);
+    }
+  };
+
+  const handleCloseEquipment = () => {
+    setSelectedEquipment(null);
+    setViewMode('detail');
+    setSearchParams({});
+  };
+
+  const handleNewEquipment = () => {
+    setSelectedEquipment({});
+    setViewMode('edit');
+  };
+
+  const handleEditEquipment = (eq) => {
+    setSelectedEquipment(eq);
+    setViewMode('edit');
+  };
+
+  const handleSaveEquipment = async (payload) => {
+    try {
+      let saved;
+      if (selectedEquipment?.id) {
+        saved = await api.vsd.updateEquipment(selectedEquipment.id, payload);
+        showToast('Variateur modifié !', 'success');
+        setEquipments(prev => prev.map(e => e.id === selectedEquipment.id ? { ...e, ...saved?.equipment || saved } : e));
+      } else {
+        saved = await api.vsd.createEquipment(payload);
+        showToast('Variateur créé !', 'success');
+        setEquipments(prev => [...prev, saved?.equipment || saved]);
+      }
+      const eq = saved?.equipment || saved;
+      setSelectedEquipment(eq);
+      setViewMode('detail');
+      setSearchParams({ vsd: eq.id.toString() });
+    } catch (err) {
+      console.error('Save error:', err);
+      showToast(err.message || 'Erreur lors de l\'enregistrement', 'error');
+      throw err;
+    }
+  };
+
+  const handleDeleteEquipment = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await api.vsd.deleteEquipment(deleteTarget.id);
+      showToast('Variateur supprimé', 'success');
+      setEquipments(prev => prev.filter(e => e.id !== deleteTarget.id));
+      if (selectedEquipment?.id === deleteTarget.id) {
+        handleCloseEquipment();
+      }
+      setShowDeleteModal(false);
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error('Delete error:', err);
+      showToast('Erreur lors de la suppression', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handlePhotoUpload = async (equipmentId, file) => {
+    try {
+      await api.vsd.uploadPhoto(equipmentId, file);
+      showToast('Photo mise à jour', 'success');
+      // Refresh
+      const res = await api.vsd.getEquipment(equipmentId);
+      const eq = res?.equipment || res;
+      setSelectedEquipment(eq);
+      setEquipments(prev => prev.map(e => e.id === equipmentId ? { ...e, photo_url: eq.photo_url } : e));
+    } catch (err) {
+      showToast('Erreur upload photo', 'error');
+    }
+  };
+
+  const handleNavigateToMap = (eq) => {
+    if (eq?.id && placedIds.has(eq.id)) {
+      navigate(`/app/vsd/map?vsd=${eq.id}`);
+    } else {
+      navigate('/app/vsd/map');
+    }
+  };
+
+  // Build tree
+  const buildingTree = useMemo(() => {
+    const filtered = equipments.filter(eq => {
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        eq.name?.toLowerCase().includes(q) ||
+        eq.tag?.toLowerCase().includes(q) ||
+        eq.manufacturer?.toLowerCase().includes(q) ||
+        eq.building?.toLowerCase().includes(q)
+      );
+    });
+
+    const tree = {};
+    filtered.forEach(eq => {
+      const building = eq.building || 'Sans bâtiment';
+      if (!tree[building]) tree[building] = [];
+      tree[building].push(eq);
+    });
+    return tree;
+  }, [equipments, searchQuery]);
+
+  const stats = useMemo(() => ({
+    total: equipments.length,
+    placed: equipments.filter(e => placedIds.has(e.id)).length,
+    unplaced: equipments.filter(e => !placedIds.has(e.id)).length,
+  }), [equipments, placedIds]);
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
+      <style>{`
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideRight {
+          from { opacity: 0; transform: translateX(-20px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        .animate-slideUp { animation: slideUp .3s ease-out forwards; }
+        .animate-slideRight { animation: slideRight .3s ease-out forwards; }
+      `}</style>
+
+      {/* Header */}
+      <div className="bg-white border-b shadow-sm z-20">
+        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            {isMobile && (
+              <button
+                onClick={() => setShowMobileDrawer(true)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <Menu size={20} />
+              </button>
+            )}
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-green-100 rounded-xl">
+                <Cpu size={20} className="text-green-600" />
+              </div>
+              <div>
+                <h1 className="font-bold text-gray-900">Variateurs de fréquence</h1>
+                <p className="text-xs text-gray-500">Gestion des VSD</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1 text-xs">
+              <Badge variant="default">Total: {stats.total}</Badge>
+              <Badge variant="success">Localisés: {stats.placed}</Badge>
+              <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
+            </div>
+
+            <button
+              onClick={() => navigate('/app/vsd/map')}
+              className="px-3 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 flex items-center gap-2"
+            >
+              <MapPin size={16} />
+              Carte
+            </button>
+
+            <button
+              onClick={handleNewEquipment}
+              className="px-3 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg text-sm font-medium hover:from-green-600 hover:to-emerald-700 flex items-center gap-2"
+            >
+              <Plus size={16} />
+              Nouveau
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar - Desktop */}
+        {!isMobile && (
+          <div className="w-80 bg-white border-r shadow-sm flex flex-col">
+            {/* Search */}
+            <div className="p-3 border-b">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input
+                  type="text"
+                  placeholder="Rechercher..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm bg-white text-gray-900"
+                />
+              </div>
+            </div>
+
+            {/* Tree */}
+            <div className="flex-1 overflow-y-auto p-3">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : Object.keys(buildingTree).length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <Cpu size={32} className="mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm">Aucun variateur</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {Object.entries(buildingTree).sort(([a], [b]) => a.localeCompare(b)).map(([building, eqs]) => (
+                    <div key={building}>
+                      <button
+                        onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                      >
+                        {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        <Building2 size={16} className="text-green-500" />
+                        <span className="font-medium truncate flex-1">{building}</span>
+                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                          {eqs.length}
+                        </span>
+                      </button>
+
+                      {expandedBuildings[building] && (
+                        <div className="ml-4 space-y-1 mt-1">
+                          {eqs.map(eq => (
+                            <button
+                              key={eq.id}
+                              onClick={() => handleSelectEquipment(eq)}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg transition-colors
+                                ${selectedEquipment?.id === eq.id
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'text-gray-600 hover:bg-gray-100'}`}
+                            >
+                              <Cpu size={14} className={selectedEquipment?.id === eq.id ? 'text-green-600' : 'text-gray-400'} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{eq.name || eq.tag || 'VSD'}</p>
+                                <p className="text-xs text-gray-400 truncate">
+                                  {eq.manufacturer} {eq.power_kw ? `• ${eq.power_kw}kW` : ''}
+                                </p>
+                              </div>
+                              {!placedIds.has(eq.id) && (
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
+                                  <MapPin size={8} />
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {selectedEquipment ? (
+            viewMode === 'edit' ? (
+              <EditForm
+                equipment={selectedEquipment}
+                onSave={handleSaveEquipment}
+                onCancel={() => selectedEquipment?.id ? setViewMode('detail') : handleCloseEquipment()}
+                showToast={showToast}
+              />
+            ) : (
+              <DetailPanel
+                equipment={selectedEquipment}
+                onClose={handleCloseEquipment}
+                onEdit={handleEditEquipment}
+                onDelete={(eq) => { setDeleteTarget(eq); setShowDeleteModal(true); }}
+                onShare={(eq) => setShowShareModal(true)}
+                onNavigateToMap={handleNavigateToMap}
+                onPhotoUpload={handlePhotoUpload}
+                isPlaced={placedIds.has(selectedEquipment.id)}
+                showToast={showToast}
+              />
+            )
+          ) : (
+            <div className="flex-1 flex items-center justify-center bg-gray-50">
+              <div className="text-center">
+                <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Cpu size={40} className="text-gray-300" />
+                </div>
+                <h3 className="text-lg font-medium text-gray-700">Sélectionnez un variateur</h3>
+                <p className="text-gray-500 mt-1">ou créez-en un nouveau</p>
+                <button
+                  onClick={handleNewEquipment}
+                  className="mt-4 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg font-medium hover:from-green-600 hover:to-emerald-700 flex items-center gap-2 mx-auto"
+                >
+                  <Plus size={18} />
+                  Nouveau variateur
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Mobile Drawer */}
+      <MobileTreeDrawer
+        isOpen={showMobileDrawer}
+        onClose={() => setShowMobileDrawer(false)}
+        tree={buildingTree}
+        expandedBuildings={expandedBuildings}
+        setExpandedBuildings={setExpandedBuildings}
+        selectedEquipment={selectedEquipment}
+        onSelectEquipment={handleSelectEquipment}
+        placedIds={placedIds}
+      />
+
+      {/* Modals */}
+      <DeleteConfirmModal
+        isOpen={showDeleteModal}
+        onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }}
+        onConfirm={handleDeleteEquipment}
+        itemName={deleteTarget?.name || deleteTarget?.tag || 'ce variateur'}
+        isLoading={isDeleting}
+      />
+
+      <ShareLinkModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        equipment={selectedEquipment}
+      />
+
+      {/* Toast */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   );
 }
