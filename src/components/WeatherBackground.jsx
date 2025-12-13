@@ -237,8 +237,8 @@ function SnowFlakes({ intensity = 'normal' }) {
 
 function SunRays() {
   return (
-    <div className="absolute top-0 right-0 w-96 h-96 overflow-hidden pointer-events-none">
-      <div className="absolute -top-20 -right-20 w-64 h-64">
+    <div className="absolute top-0 right-0 w-48 h-48 sm:w-96 sm:h-96 overflow-hidden pointer-events-none">
+      <div className="absolute -top-10 -right-10 sm:-top-20 sm:-right-20 w-32 h-32 sm:w-64 sm:h-64">
         {/* Sun glow */}
         <div className="absolute inset-0 bg-yellow-300/30 rounded-full blur-3xl animate-pulse-slow" />
         <div className="absolute inset-8 bg-yellow-200/40 rounded-full blur-2xl" />
@@ -261,14 +261,14 @@ function SunRays() {
 
 function Moon() {
   return (
-    <div className="absolute top-8 right-12 w-20 h-20 pointer-events-none">
+    <div className="absolute top-16 right-4 sm:top-8 sm:right-12 w-12 h-12 sm:w-20 sm:h-20 pointer-events-none">
       <div className="relative w-full h-full">
         <div className="absolute inset-0 bg-slate-200 rounded-full shadow-lg shadow-slate-300/50" />
-        <div className="absolute top-2 left-3 w-4 h-4 bg-slate-300/50 rounded-full" />
-        <div className="absolute top-6 right-4 w-3 h-3 bg-slate-300/40 rounded-full" />
-        <div className="absolute bottom-4 left-5 w-2 h-2 bg-slate-300/30 rounded-full" />
+        <div className="absolute top-1 left-1.5 sm:top-2 sm:left-3 w-2 h-2 sm:w-4 sm:h-4 bg-slate-300/50 rounded-full" />
+        <div className="absolute top-3 right-2 sm:top-6 sm:right-4 w-1.5 h-1.5 sm:w-3 sm:h-3 bg-slate-300/40 rounded-full" />
+        <div className="absolute bottom-2 left-2.5 sm:bottom-4 sm:left-5 w-1 h-1 sm:w-2 sm:h-2 bg-slate-300/30 rounded-full" />
         {/* Moon glow */}
-        <div className="absolute -inset-4 bg-slate-200/20 rounded-full blur-xl" />
+        <div className="absolute -inset-2 sm:-inset-4 bg-slate-200/20 rounded-full blur-xl" />
       </div>
     </div>
   );
@@ -467,26 +467,27 @@ export default function WeatherBackground({ site, children }) {
       {/* Gradient overlay for readability */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent" />
 
-      {/* Weather info overlay */}
-      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
+      {/* Weather info overlay - repositioned for mobile */}
+      <div className="absolute top-2 right-2 sm:top-6 sm:right-6 z-20">
         {!loading && weather && (
-          <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl px-4 py-3 border border-white/20">
+          <div className="flex items-center gap-2 sm:gap-4 bg-black/30 backdrop-blur-md rounded-xl sm:rounded-2xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/20">
             <div className="text-right">
-              <div className="text-3xl sm:text-4xl font-light text-white">
+              <div className="text-xl sm:text-4xl font-light text-white">
                 {weather.temperature}°
               </div>
-              <div className="text-xs sm:text-sm text-white/80">{weather.label}</div>
+              <div className="text-[10px] sm:text-sm text-white/80 hidden sm:block">{weather.label}</div>
             </div>
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-white/10 flex items-center justify-center">
-              <WeatherIcon size={28} className="text-white" />
+            <div className="w-8 h-8 sm:w-14 sm:h-14 rounded-lg sm:rounded-xl bg-white/10 flex items-center justify-center">
+              <WeatherIcon size={18} className="text-white sm:hidden" />
+              <WeatherIcon size={28} className="text-white hidden sm:block" />
             </div>
           </div>
         )}
       </div>
 
-      {/* Weather details (bottom left) */}
+      {/* Weather details (bottom left) - hidden on mobile */}
       {!loading && weather && (
-        <div className="absolute bottom-24 left-4 sm:left-6 z-20 flex gap-3 text-white/70 text-xs sm:text-sm">
+        <div className="absolute bottom-24 left-4 sm:left-6 z-20 hidden sm:flex gap-3 text-white/70 text-xs sm:text-sm">
           <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1.5">
             <Droplets size={14} />
             <span>{weather.humidity}%</span>
