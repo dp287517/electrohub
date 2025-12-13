@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Home, Zap } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Zap, Shield } from 'lucide-react';
+
+const ADMIN_EMAIL = 'daniel.x.palha@haleon.com';
 
 export default function Navbar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const token = localStorage.getItem('eh_token');
   const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+  const isAdmin = user?.email === ADMIN_EMAIL;
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
-  // Detect scroll for header shadow effect
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 10);
     window.addEventListener('scroll', handleScroll);
@@ -21,18 +23,18 @@ export default function Navbar() {
   const logout = () => {
     localStorage.removeItem('eh_token');
     localStorage.removeItem('eh_user');
+    localStorage.removeItem('bubble_token');
     setMobileMenuOpen(false);
     navigate('/');
   };
 
-  // Get user initials for avatar
   const getInitials = (name) => {
     if (!name) return '?';
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   const NavLink = ({ to, children, icon: Icon, onClick }) => {
-    const isActive = to === '/' ? pathname === '/' : pathname.startsWith(to);
+    const isActive = pathname === to || (to !== '/' && pathname.startsWith(to));
     return (
       <Link
         to={to}
@@ -62,7 +64,7 @@ export default function Navbar() {
           <div className="flex h-16 items-center justify-between">
             {/* Logo */}
             <Link
-              to="/"
+              to={token ? "/dashboard" : "/"}
               className="flex items-center gap-2.5 group"
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/25 group-hover:shadow-brand-500/40 transition-shadow">
@@ -74,12 +76,14 @@ export default function Navbar() {
             </Link>
 
             {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center gap-1">
-              <NavLink to="/" icon={Home}>Home</NavLink>
-              {token && (
+            {token && (
+              <nav className="hidden md:flex items-center gap-1">
                 <NavLink to="/dashboard" icon={LayoutDashboard}>Dashboard</NavLink>
-              )}
-            </nav>
+                {isAdmin && (
+                  <NavLink to="/admin" icon={Shield}>Admin</NavLink>
+                )}
+              </nav>
+            )}
 
             {/* Desktop Right Section */}
             <div className="hidden md:flex items-center gap-3">
@@ -160,14 +164,17 @@ export default function Navbar() {
             </div>
           )}
 
-          <NavLink to="/" icon={Home} onClick={() => setMobileMenuOpen(false)}>
-            Home
-          </NavLink>
-
           {token && (
-            <NavLink to="/dashboard" icon={LayoutDashboard} onClick={() => setMobileMenuOpen(false)}>
-              Dashboard
-            </NavLink>
+            <>
+              <NavLink to="/dashboard" icon={LayoutDashboard} onClick={() => setMobileMenuOpen(false)}>
+                Dashboard
+              </NavLink>
+              {isAdmin && (
+                <NavLink to="/admin" icon={Shield} onClick={() => setMobileMenuOpen(false)}>
+                  Admin Panel
+                </NavLink>
+              )}
+            </>
           )}
 
           <div className="pt-4 mt-4 border-t border-gray-100">
