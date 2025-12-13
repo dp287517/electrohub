@@ -2,14 +2,14 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X, LogOut, LayoutDashboard, Zap, Shield } from 'lucide-react';
 
-const ADMIN_EMAIL = 'daniel.x.palha@haleon.com';
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
 
 export default function Navbar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const token = localStorage.getItem('eh_token');
   const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-  const isAdmin = user?.email === ADMIN_EMAIL;
+  const isAdmin = ADMIN_EMAILS.includes(user?.email);
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
