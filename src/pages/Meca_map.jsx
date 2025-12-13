@@ -256,7 +256,7 @@ const MecaCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewher
 
           <button
             onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
-            className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
+            className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-orange-600 transition-colors"
             title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
           >
             <Target size={12} />
@@ -1351,26 +1351,56 @@ export default function MecaMap() {
                 <X size={20} />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {filteredEquipments.map(eq => (
-                <MecaCard
-                  key={eq.id}
-                  equipment={eq}
-                  isPlacedHere={isPlacedHere(eq.id)}
-                  isPlacedSomewhere={placedIds.has(eq.id)}
-                  isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
-                  isSelected={selectedEquipmentId === eq.id}
-                  onClick={() => {
-                    const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                    if (pos) {
-                      setSelectedPosition(pos);
-                      setSelectedEquipment(eq);
-                      viewerRef.current?.highlightMarker(eq.id);
-                    }
-                    setShowSidebar(false);
-                  }}
-                  onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
+            {/* Search and filters */}
+            <div className="p-3 border-b space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Input
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="Rechercher..."
+                  className="pl-9"
                 />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés
+                </Btn>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {loadingEquipments ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : filteredEquipments.length === 0 ? (
+                <EmptyState icon={Cog} title="Aucun équipement" description="Créez des équipements pour les placer sur le plan" />
+              ) : (
+                filteredEquipments.map(eq => (
+                  <MecaCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={isPlacedHere(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
+                    isSelected={selectedEquipmentId === eq.id}
+                    onClick={() => {
+                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        setSelectedPosition(pos);
+                        setSelectedEquipment(eq);
+                        viewerRef.current?.highlightMarker(eq.id);
+                      }
+                      setShowSidebar(false);
+                    }}
+                    onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
+                  />
               ))}
             </div>
           </div>
