@@ -1278,32 +1278,46 @@ export const api = {
     deletePosition: (positionId) =>
       del(`/api/vsd/maps/positions/${encodeURIComponent(positionId)}`),
     placedIds: async () => {
-      try {
-        return await get("/api/vsd/maps/placed-ids");
-      } catch (e) {
-        // Fallback: build from all plans
+      // Try dedicated endpoint first, then fallback to building from plans
+      const tryDedicatedEndpoint = async () => {
         try {
-          const plans = await get("/api/vsd/maps/listPlans");
-          const placed_ids = [];
-          const placed_details = {};
-          for (const plan of (plans?.plans || plans || [])) {
-            const positions = await get("/api/vsd/maps/positions", { logical_name: plan.logical_name, page_index: 0 }).catch(() => ({}));
-            for (const pos of (positions?.positions || [])) {
-              if (pos.equipment_id && !placed_ids.includes(pos.equipment_id)) {
-                placed_ids.push(pos.equipment_id);
-                placed_details[pos.equipment_id] = { plans: [plan.logical_name] };
-              } else if (pos.equipment_id && placed_details[pos.equipment_id]) {
-                if (!placed_details[pos.equipment_id].plans.includes(plan.logical_name)) {
-                  placed_details[pos.equipment_id].plans.push(plan.logical_name);
+          const res = await get("/api/vsd/maps/placed-ids");
+          if (res?.placed_ids) return res;
+          throw new Error("Invalid response");
+        } catch {
+          return null;
+        }
+      };
+
+      const buildFromPlans = async () => {
+        const placed_ids = [];
+        const placed_details = {};
+        try {
+          const plansRes = await get("/api/vsd/maps/listPlans").catch(() => null);
+          const plans = plansRes?.plans || plansRes || [];
+          for (const plan of plans) {
+            try {
+              const posRes = await get("/api/vsd/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+              for (const pos of (posRes?.positions || [])) {
+                if (pos.equipment_id) {
+                  const eqId = Number(pos.equipment_id);
+                  if (!placed_ids.includes(eqId)) {
+                    placed_ids.push(eqId);
+                    placed_details[eqId] = { plans: [plan.logical_name] };
+                  } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
+                    placed_details[eqId].plans.push(plan.logical_name);
+                  }
                 }
               }
-            }
+            } catch {}
           }
-          return { placed_ids, placed_details };
-        } catch {
-          return { placed_ids: [], placed_details: {} };
-        }
-      }
+        } catch {}
+        return { placed_ids, placed_details };
+      };
+
+      const dedicated = await tryDedicatedEndpoint();
+      if (dedicated) return dedicated;
+      return buildFromPlans();
     },
   },
 
@@ -1419,32 +1433,46 @@ export const api = {
     deletePosition: (positionId) =>
       del(`/api/meca/maps/positions/${encodeURIComponent(positionId)}`),
     placedIds: async () => {
-      try {
-        return await get("/api/meca/maps/placed-ids");
-      } catch (e) {
-        // Fallback: build from all plans
+      // Try dedicated endpoint first, then fallback to building from plans
+      const tryDedicatedEndpoint = async () => {
         try {
-          const plans = await get("/api/meca/maps/listPlans");
-          const placed_ids = [];
-          const placed_details = {};
-          for (const plan of (plans?.plans || plans || [])) {
-            const positions = await get("/api/meca/maps/positions", { logical_name: plan.logical_name, page_index: 0 }).catch(() => ({}));
-            for (const pos of (positions?.positions || [])) {
-              if (pos.equipment_id && !placed_ids.includes(pos.equipment_id)) {
-                placed_ids.push(pos.equipment_id);
-                placed_details[pos.equipment_id] = { plans: [plan.logical_name] };
-              } else if (pos.equipment_id && placed_details[pos.equipment_id]) {
-                if (!placed_details[pos.equipment_id].plans.includes(plan.logical_name)) {
-                  placed_details[pos.equipment_id].plans.push(plan.logical_name);
+          const res = await get("/api/meca/maps/placed-ids");
+          if (res?.placed_ids) return res;
+          throw new Error("Invalid response");
+        } catch {
+          return null;
+        }
+      };
+
+      const buildFromPlans = async () => {
+        const placed_ids = [];
+        const placed_details = {};
+        try {
+          const plansRes = await get("/api/meca/maps/listPlans").catch(() => null);
+          const plans = plansRes?.plans || plansRes || [];
+          for (const plan of plans) {
+            try {
+              const posRes = await get("/api/meca/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+              for (const pos of (posRes?.positions || [])) {
+                if (pos.equipment_id) {
+                  const eqId = Number(pos.equipment_id);
+                  if (!placed_ids.includes(eqId)) {
+                    placed_ids.push(eqId);
+                    placed_details[eqId] = { plans: [plan.logical_name] };
+                  } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
+                    placed_details[eqId].plans.push(plan.logical_name);
+                  }
                 }
               }
-            }
+            } catch {}
           }
-          return { placed_ids, placed_details };
-        } catch {
-          return { placed_ids: [], placed_details: {} };
-        }
-      }
+        } catch {}
+        return { placed_ids, placed_details };
+      };
+
+      const dedicated = await tryDedicatedEndpoint();
+      if (dedicated) return dedicated;
+      return buildFromPlans();
     },
   },
 
