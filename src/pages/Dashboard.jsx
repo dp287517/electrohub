@@ -7,6 +7,7 @@ import {
   Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
+import WeatherBackground from '../components/WeatherBackground';
 
 // Icon mapping for apps
 const iconMap = {
@@ -321,26 +322,9 @@ export default function Dashboard() {
         }
       `}</style>
 
-      {/* Hero Section */}
-      <div className="relative overflow-hidden bg-gradient-to-br from-brand-600 via-brand-700 to-indigo-800">
-        {/* Animated background elements */}
-        <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute top-10 left-10 w-72 h-72 bg-white/10 rounded-full filter blur-3xl animate-pulse-glow" />
-          <div className="absolute bottom-10 right-10 w-96 h-96 bg-brand-300/20 rounded-full filter blur-3xl animate-pulse-glow" style={{ animationDelay: '1s' }} />
-          <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-indigo-400/15 rounded-full filter blur-3xl animate-pulse-glow" style={{ animationDelay: '2s' }} />
-
-          {/* Floating shapes */}
-          <div className="absolute top-20 right-1/4 w-8 h-8 bg-white/20 rounded-lg animate-float" />
-          <div className="absolute bottom-32 left-1/4 w-6 h-6 bg-white/15 rounded-full animate-float-delayed" />
-          <div className="absolute top-1/3 right-20 w-4 h-4 bg-brand-300/30 rounded-full animate-float" style={{ animationDelay: '1s' }} />
-        </div>
-
-        {/* Grid pattern overlay */}
-        <div className="absolute inset-0 opacity-[0.03]" style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
-        }} />
-
-        <div className={`relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+      {/* Hero Section with Weather Background */}
+      <WeatherBackground site={site}>
+        <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
             {/* Welcome message */}
             <div className="flex items-center gap-5">
@@ -356,14 +340,14 @@ export default function Dashboard() {
                 </div>
               </button>
               <div>
-                <p className="text-brand-200 text-sm sm:text-base flex items-center gap-2">
+                <p className="text-white/80 text-sm sm:text-base flex items-center gap-2">
                   <Sparkles size={16} className="text-yellow-300 animate-pulse" />
                   {greeting}
                 </p>
-                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mt-1">
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mt-1 drop-shadow-lg">
                   {user?.name || 'Welcome back'}
                 </h1>
-                <p className="text-brand-200 mt-1 flex items-center gap-2">
+                <p className="text-white/70 mt-1 flex items-center gap-2">
                   <Calendar size={14} />
                   {currentDate}
                 </p>
@@ -374,9 +358,9 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={() => setShowProfileModal(true)}
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-white/20 hover:border-white/30 transition-all duration-300 group text-left"
+                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
               >
-                <div className="flex items-center gap-2 text-brand-200 text-xs mb-1">
+                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Building size={14} />
                   Site
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -385,17 +369,17 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => setShowProfileModal(true)}
-                className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-white/20 hover:border-white/30 transition-all duration-300 group text-left"
+                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
               >
-                <div className="flex items-center gap-2 text-brand-200 text-xs mb-1">
+                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Users size={14} />
                   Department
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <p className="text-white font-semibold">{user?.department || '—'}</p>
               </button>
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl px-5 py-4 min-w-[140px]">
-                <div className="flex items-center gap-2 text-brand-200 text-xs mb-1">
+              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px]">
+                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Grid3X3 size={14} />
                   Total Apps
                 </div>
@@ -404,14 +388,7 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-
-        {/* Wave decoration */}
-        <div className="absolute bottom-0 left-0 right-0">
-          <svg viewBox="0 0 1440 100" className="w-full h-auto fill-gray-50" preserveAspectRatio="none">
-            <path d="M0,50 C360,100 1080,0 1440,50 L1440,100 L0,100 Z" />
-          </svg>
-        </div>
-      </div>
+      </WeatherBackground>
 
       {/* Main Content */}
       <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
