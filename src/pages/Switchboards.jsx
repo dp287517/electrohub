@@ -2214,11 +2214,6 @@ export default function Switchboards() {
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              {isMobile && !selectedBoard && (
-                <button onClick={() => setShowMobileDrawer(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl flex-shrink-0">
-                  <Menu size={22} />
-                </button>
-              )}
               <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white flex-shrink-0">
                 <Zap size={20} className="sm:w-6 sm:h-6" />
               </div>
@@ -2229,13 +2224,13 @@ export default function Switchboards() {
             </div>
 
             <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-              <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200">
-                <Settings size={18} className="sm:w-5 sm:h-5" />
+              <button onClick={() => setShowSettingsModal(true)} className="p-2 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200" title="Paramètres">
+                <Settings size={18} />
               </button>
               {/* Upcoming Controls Button */}
               <button
                 onClick={() => setShowUpcomingPanel(!showUpcomingPanel)}
-                className={`p-2 sm:px-3 sm:py-2 rounded-xl font-medium flex items-center gap-2 transition-colors ${
+                className={`p-2 rounded-xl font-medium flex items-center gap-1.5 transition-colors ${
                   showUpcomingPanel
                     ? 'bg-orange-500 text-white'
                     : upcomingControls.length > 0
@@ -2245,9 +2240,8 @@ export default function Switchboards() {
                 title="Contrôles à venir (30 jours)"
               >
                 <Calendar size={18} />
-                <span className="hidden md:inline">30j</span>
                 {upcomingControls.length > 0 && (
-                  <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+                  <span className={`hidden sm:inline px-1.5 py-0.5 rounded-full text-xs ${
                     showUpcomingPanel ? 'bg-white text-orange-600' : 'bg-orange-500 text-white'
                   }`}>
                     {upcomingControls.length}
@@ -2256,19 +2250,16 @@ export default function Switchboards() {
               </button>
               <button
                 onClick={() => navigate('/app/switchboard-controls')}
-                className="p-2 sm:px-3 sm:py-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 flex items-center gap-2"
+                className="hidden sm:flex p-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 items-center gap-1.5"
                 title="Contrôles"
               >
                 <ClipboardCheck size={18} />
-                <span className="hidden md:inline">Contrôles</span>
               </button>
-              <button onClick={() => setShowImportModal(true)} className="hidden sm:flex p-2 sm:px-3 sm:py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 items-center gap-2" title="Import">
+              <button onClick={() => setShowImportModal(true)} className="hidden md:flex p-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 items-center gap-1.5" title="Import Excel">
                 <FileSpreadsheet size={18} />
-                <span className="hidden md:inline">Import</span>
               </button>
-              <button onClick={() => setShowBoardForm(true)} className="p-2 sm:px-3 sm:py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-2" title="Nouveau tableau">
+              <button onClick={() => setShowBoardForm(true)} className="p-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-1.5" title="Nouveau tableau">
                 <Plus size={18} />
-                <span className="hidden md:inline">Tableau</span>
               </button>
             </div>
           </div>
@@ -2413,13 +2404,87 @@ export default function Switchboards() {
       )}
 
       <div className="max-w-7xl mx-auto flex">
+        {/* Desktop: sidebar tree */}
         {!isMobile && (
           <div className="w-64 lg:w-80 border-r bg-white min-h-screen p-3 lg:p-4 sticky top-28 sm:top-32 self-start overflow-y-auto max-h-[calc(100vh-7rem)] sm:max-h-[calc(100vh-8rem)] flex-shrink-0">
             {renderTree()}
           </div>
         )}
 
-        {isMobile && !selectedBoard && renderMobileCards()}
+        {/* Mobile: show tree directly instead of cards when no board selected */}
+        {isMobile && !selectedBoard && (
+          <div className="flex-1 bg-white p-3">
+            <div className="space-y-1">
+              {Object.entries(tree).map(([building, floors]) => (
+                <div key={building} className="bg-gray-50 rounded-xl overflow-hidden">
+                  <button
+                    onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-100"
+                  >
+                    {expandedBuildings[building] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    <Building2 size={18} className="text-blue-500" />
+                    <span className="font-semibold truncate flex-1">{building}</span>
+                    <span className="text-xs text-gray-400 bg-white px-2 py-1 rounded-full shadow-sm">
+                      {Object.values(floors).flat().length}
+                    </span>
+                  </button>
+
+                  {expandedBuildings[building] && (
+                    <div className="bg-white border-t divide-y">
+                      {Object.entries(floors).map(([floor, floorBoards]) => (
+                        <div key={floor}>
+                          <button
+                            onClick={() => setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: !prev[`${building}-${floor}`] }))}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-gray-600 hover:bg-gray-50"
+                          >
+                            {expandedFloors[`${building}-${floor}`] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            <Layers size={16} className="text-amber-500" />
+                            <span className="text-sm truncate flex-1">Étage {floor}</span>
+                            <span className="text-xs text-gray-400">{floorBoards.length}</span>
+                          </button>
+
+                          {expandedFloors[`${building}-${floor}`] && (
+                            <div className="bg-gray-50/50 divide-y divide-gray-100">
+                              {floorBoards.map(board => (
+                                <button
+                                  key={board.id}
+                                  onClick={() => handleSelectBoard(board)}
+                                  className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-blue-50 transition-colors"
+                                >
+                                  <Zap size={16} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-sm font-mono font-semibold text-gray-900 block truncate">{board.code}</span>
+                                    <span className="text-xs text-gray-500 truncate block">{board.name}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {!isBoardPlacedOnMap(board) && (
+                                      <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-0.5">
+                                        <MapPin size={10} />
+                                      </span>
+                                    )}
+                                    {controlStatuses[board.id]?.overdueCount > 0 && (
+                                      <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-0.5 animate-pulse">
+                                        <AlertTriangle size={10} />
+                                      </span>
+                                    )}
+                                    {(board.device_count || 0) > 0 && (
+                                      <ProgressRing progress={getProgress(board)} size={28} strokeWidth={3} />
+                                    )}
+                                  </div>
+                                  <ChevronRight size={16} className="text-gray-300" />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {selectedBoard && (
           <div className="flex-1 p-2 sm:p-4 min-w-0">
@@ -2481,36 +2546,32 @@ export default function Switchboards() {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <button onClick={() => setShowShareModal(true)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl">
-                          <Link size={18} />
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setShowShareModal(true)} className="p-1.5 sm:p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg sm:rounded-xl" title="Partager">
+                          <Link size={16} className="sm:w-[18px] sm:h-[18px]" />
                         </button>
                         <button
                           onClick={() => handleNavigateToMap(selectedBoard)}
-                          className={`px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 ${
+                          className={`p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-sm font-medium flex items-center gap-1.5 ${
                             isBoardPlacedOnMap(selectedBoard) ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
                           }`}
+                          title="Plans"
                         >
                           <MapPin size={16} />
-                          Plans
+                          <span className="hidden sm:inline">Plans</span>
                         </button>
-                        <button onClick={handlePrintPDF} disabled={isPrinting} className="p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl disabled:opacity-50">
-                          {isPrinting ? <RefreshCw size={18} className="animate-spin" /> : <Printer size={18} />}
+                        <button onClick={handlePrintPDF} disabled={isPrinting} className="p-1.5 sm:p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg sm:rounded-xl disabled:opacity-50" title="Imprimer PDF">
+                          {isPrinting ? <RefreshCw size={16} className="sm:w-[18px] sm:h-[18px] animate-spin" /> : <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />}
                         </button>
-                        <button onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)} className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl">
-                          <GitBranch size={18} />
+                        <button onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)} className="hidden sm:block p-1.5 sm:p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-lg sm:rounded-xl" title="Schéma">
+                          <GitBranch size={16} className="sm:w-[18px] sm:h-[18px]" />
                         </button>
-                        <button onClick={() => startEditBoard(selectedBoard)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl">
-                          <Edit3 size={18} />
+                        <button onClick={() => startEditBoard(selectedBoard)} className="p-1.5 sm:p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg sm:rounded-xl" title="Modifier">
+                          <Edit3 size={16} className="sm:w-[18px] sm:h-[18px]" />
                         </button>
-                        <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl">
-                          <Trash2 size={18} />
+                        <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-1.5 sm:p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg sm:rounded-xl" title="Supprimer">
+                          <Trash2 size={16} className="sm:w-[18px] sm:h-[18px]" />
                         </button>
-                        {isMobile && (
-                          <button onClick={handleCloseBoard} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl">
-                            <X size={18} />
-                          </button>
-                        )}
                       </div>
                     </div>
 
@@ -2572,20 +2633,22 @@ export default function Switchboards() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 sm:gap-2">
                     <button
                       onClick={() => navigate(`/app/switchboard-controls?tab=history&switchboard=${selectedBoard.id}`)}
-                      className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                      className="p-2 sm:px-3 sm:py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                      title="Historique"
                     >
                       <History size={14} />
-                      Historique
+                      <span className="hidden sm:inline">Historique</span>
                     </button>
                     <button
                       onClick={() => navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`)}
-                      className="px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
+                      className="p-2 sm:px-3 sm:py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
+                      title="Gérer"
                     >
                       <ClipboardCheck size={14} />
-                      Gérer
+                      <span className="hidden sm:inline">Gérer</span>
                     </button>
                   </div>
                 </div>
@@ -2633,9 +2696,11 @@ export default function Switchboards() {
             </AnimatedCard>
 
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-gray-900">Disjoncteurs ({devices.length})</h3>
-              <button onClick={() => setShowDeviceForm(true)} className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-2">
-                <Plus size={18} />Ajouter
+              <h3 className="font-semibold text-gray-900 text-sm sm:text-base">Disjoncteurs ({devices.length})</h3>
+              <button onClick={() => setShowDeviceForm(true)} className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base">
+                <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
+                <span className="hidden sm:inline">Ajouter</span>
+                <span className="sm:hidden">+</span>
               </button>
             </div>
 
