@@ -1,11 +1,11 @@
 // src/App.jsx
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar.jsx';
-import Index from './pages/Index.jsx';
 import SignIn from './pages/SignIn.jsx';
 import SignUp from './pages/SignUp.jsx';
 import LostPassword from './pages/LostPassword.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Admin from './pages/Admin.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 
 import Atex from './pages/Atex.jsx';
@@ -17,7 +17,6 @@ import ArcFlash from './pages/Arc_flash.jsx';
 import Obsolescence from './pages/Obsolescence.jsx';
 import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
-// ✅ Switchboard Controls (nouveau système v1.0)
 import SwitchboardControls from './pages/SwitchboardControls.jsx';
 import Oibt from './pages/Oibt.jsx';
 import Project from './pages/Project.jsx';
@@ -26,18 +25,21 @@ import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
 import Dcf from './pages/Dcf.jsx';
 import LearnEx from './pages/Learn_ex.jsx';
-
-// ✅ Diagramme switchboard
 import SwitchboardDiagram from './pages/SwitchboardDiagram.jsx';
-
-// ✅ Map switchboard (NOUVEAU)
 import SwitchboardMap from './pages/Switchboard_map.jsx';
-
-// 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
 import VsdMap from './pages/Vsd_map.jsx';
 import Meca from './pages/Meca.jsx';
 import MecaMap from './pages/Meca_map.jsx';
+
+// Component to redirect authenticated users to dashboard
+function AuthRedirect({ children }) {
+  const token = localStorage.getItem('eh_token');
+  if (token) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
 
 export default function App() {
   return (
@@ -45,10 +47,10 @@ export default function App() {
       <Navbar />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <Routes>
-          {/* Public */}
-          <Route path="/" element={<Index />} />
-          <Route path="/signin" element={<SignIn />} />
-          <Route path="/signup" element={<SignUp />} />
+          {/* Public - redirect to dashboard if already logged in */}
+          <Route path="/" element={<AuthRedirect><SignIn /></AuthRedirect>} />
+          <Route path="/signin" element={<AuthRedirect><SignIn /></AuthRedirect>} />
+          <Route path="/signup" element={<AuthRedirect><SignUp /></AuthRedirect>} />
           <Route path="/lost-password" element={<LostPassword />} />
 
           {/* Dashboard */}
@@ -61,7 +63,17 @@ export default function App() {
             }
           />
 
-          {/* Apps existantes */}
+          {/* Admin Panel */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute>
+                <Admin />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Apps */}
           <Route path="/app/atex" element={<ProtectedRoute><Atex /></ProtectedRoute>} />
           <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} />
           <Route path="/app/switchboards" element={<ProtectedRoute><Switchboards /></ProtectedRoute>} />
@@ -71,7 +83,6 @@ export default function App() {
           <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} />
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
-          {/* ✅ Switchboard Controls - nouveau système v1.0 */}
           <Route path="/app/switchboard-controls" element={<ProtectedRoute><SwitchboardControls /></ProtectedRoute>} />
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
           <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
@@ -80,37 +91,14 @@ export default function App() {
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
           <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
           <Route path="/app/dcf" element={<ProtectedRoute><Dcf /></ProtectedRoute>} />
-
-          {/* Switchboard diagram */}
-          <Route
-            path="/app/switchboards/:id/diagram"
-            element={
-              <ProtectedRoute>
-                <SwitchboardDiagram />
-              </ProtectedRoute>
-            }
-          />
-
-          {/* ✅ Switchboard map - Route corrigée (sans :id) */}
-          <Route
-            path="/app/switchboards/map"
-            element={
-              <ProtectedRoute>
-                <SwitchboardMap />
-              </ProtectedRoute>
-            }
-          />
-
-          {/* Variable Speed Drives */}
+          <Route path="/app/switchboards/:id/diagram" element={<ProtectedRoute><SwitchboardDiagram /></ProtectedRoute>} />
+          <Route path="/app/switchboards/map" element={<ProtectedRoute><SwitchboardMap /></ProtectedRoute>} />
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
           <Route path="/app/vsd/map" element={<ProtectedRoute><VsdMap /></ProtectedRoute>} />
-
-          {/* Mechanical Equipment Map */}
           <Route path="/app/meca/map" element={<ProtectedRoute><MecaMap /></ProtectedRoute>} />
-
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
 
-          {/* Fallback */}
+          {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

@@ -5,57 +5,93 @@ import { api } from "../lib/api";
 export default function AuthCard({ title, subtitle, children }) {
   const navigate = useNavigate();
   const [hasHaleonToken, setHasHaleonToken] = useState(false);
+  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
+  const [loginStatus, setLoginStatus] = useState('');
 
-  // 🧩 Étape 1 : détecte si un token Bubble est présent dans l'URL ou localStorage
+  // Step 1: Detect Bubble token and auto-login
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incoming = params.get("token");
 
-    if (incoming) {
-      console.log("✅ Token Haleon reçu depuis l'URL :", incoming);
+    async function autoLogin(token) {
+      setLoginStatus('Connecting to Haleon-tool...');
+      try {
+        const res = await api.bubble.login(token);
+        if (res?.ok) {
+          localStorage.setItem("eh_token", res.jwt);
+          const userWithSite = {
+            ...res.user,
+            site: res.user?.site || "Nyon"
+          };
+          localStorage.setItem("eh_user", JSON.stringify(userWithSite));
+          setLoginStatus('Success! Redirecting...');
+          setTimeout(() => navigate("/dashboard"), 500);
+        } else {
+          setLoginStatus('');
+          setHasHaleonToken(true);
+        }
+      } catch (err) {
+        console.error("Auto-login failed:", err);
+        setLoginStatus('');
+        setHasHaleonToken(true);
+      }
+      setAutoLoginAttempted(true);
+    }
+
+    if (incoming && !autoLoginAttempted) {
+      console.log("Token Haleon received from URL:", incoming);
       localStorage.setItem("bubble_token", incoming);
-      setHasHaleonToken(true);
       window.history.replaceState({}, "", window.location.pathname);
-    } else {
-      // Vérifie si un token Haleon existe déjà en localStorage
+      autoLogin(incoming);
+    } else if (!autoLoginAttempted) {
       const existing = localStorage.getItem("bubble_token");
       if (existing) {
         setHasHaleonToken(true);
       }
+      setAutoLoginAttempted(true);
     }
-  }, []);
+  }, [navigate, autoLoginAttempted]);
 
-  // 🧩 Étape 2 : connexion via Haleon
+  // Manual Haleon login (fallback)
   async function handleBubbleLogin() {
     try {
       const token = localStorage.getItem("bubble_token");
       if (!token) {
-        alert("Aucun token Haleon trouvé — connectez-vous d'abord via haleon-tool.io");
+        alert("No Haleon token found — please login via haleon-tool.io first");
         return;
       }
 
+      setLoginStatus('Connecting...');
       const res = await api.bubble.login(token);
       if (res?.ok) {
-        console.log("✅ Connexion Haleon réussie :", res);
         localStorage.setItem("eh_token", res.jwt);
-        
-        // ✅ CORRECTION FINALE : S'assurer que le site est bien "Nyon"
         const userWithSite = {
           ...res.user,
-          site: res.user?.site || "Nyon" // ✅ Fallback sur "Nyon" au lieu de "Default"
+          site: res.user?.site || "Nyon"
         };
         localStorage.setItem("eh_user", JSON.stringify(userWithSite));
-        
-        console.log("✅ User stocké avec site:", userWithSite);
-        
         navigate("/dashboard");
       } else {
-        alert("Échec de la connexion via Haleon");
+        setLoginStatus('');
+        alert("Haleon login failed");
       }
     } catch (err) {
-      console.error("❌ Erreur Haleon login :", err);
-      alert("Erreur lors de la connexion via Haleon");
+      console.error("Haleon login error:", err);
+      setLoginStatus('');
+      alert("Error during Haleon login");
     }
+  }
+
+  // Show loading state during auto-login
+  if (loginStatus) {
+    return (
+      <div className="container-narrow">
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="w-16 h-16 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin mb-6" />
+          <p className="text-lg font-medium text-gray-700">{loginStatus}</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -73,7 +109,7 @@ export default function AuthCard({ title, subtitle, children }) {
       </style>
 
       <div className="grid md:grid-cols-2 gap-10 py-12 items-center">
-        {/* Section gauche */}
+        {/* Left section */}
         <div className="hidden md:block">
           <div className="relative">
             <div className="absolute -inset-10 bg-gradient-to-br from-brand-100 via-white to-transparent rounded-[2rem] blur-2xl"></div>
@@ -95,12 +131,12 @@ export default function AuthCard({ title, subtitle, children }) {
           </div>
         </div>
 
-        {/* Section droite (login) */}
+        {/* Right section (login) */}
         <div className="card p-8">
           <h1 className="text-3xl font-bold mb-2">{title}</h1>
           <p className="text-gray-600 mb-8">{subtitle}</p>
 
-          {/* 🔥 Bouton Haleon Account dynamique — seulement si token détecté */}
+          {/* Haleon Account button — only if token detected */}
           {hasHaleonToken && (
             <button
               onClick={handleBubbleLogin}
