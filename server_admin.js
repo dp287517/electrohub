@@ -749,10 +749,12 @@ router.delete("/users/external/:id", adminOnly, async (req, res) => {
 // HALEON USERS - Bubble/Internal Users
 // ============================================================
 
-// GET /api/admin/users/haleon - Liste les utilisateurs Haleon (combine plusieurs sources)
+// GET /api/admin/users/haleon - Liste les utilisateurs Haleon (combine TOUTES les sources)
 router.get("/users/haleon", adminOnly, async (req, res) => {
   try {
     const allUsers = new Map(); // Utilise Map pour dédupliquer par email
+    const logs = [];
+    const errors = [];
 
     // 1. Chercher dans haleon_users
     try {
@@ -764,9 +766,14 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
         LEFT JOIN sites s ON h.site_id = s.id
         LEFT JOIN departments d ON h.department_id = d.id
       `);
-      haleonResult.rows.forEach(u => allUsers.set(u.email.toLowerCase(), u));
+      haleonResult.rows.forEach(u => {
+        if (u.email) allUsers.set(u.email.toLowerCase(), u);
+      });
+      logs.push(`haleon_users: ${haleonResult.rows.length} utilisateurs`);
+      console.log(`[ADMIN] haleon_users: ${haleonResult.rows.length} utilisateurs`);
     } catch (e) {
-      // Table haleon_users n'existe pas, continuer
+      errors.push(`haleon_users: ${e.message}`);
+      console.log(`[ADMIN] haleon_users ERROR: ${e.message}`);
     }
 
     // 2. Chercher dans askv_users (utilisateurs Ask Veeva)
@@ -780,13 +787,18 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
         ORDER BY LOWER(email), created_at DESC
       `);
       askvResult.rows.forEach(u => {
-        const key = u.email.toLowerCase();
-        if (!allUsers.has(key)) {
-          allUsers.set(key, u);
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, u);
+          }
         }
       });
+      logs.push(`askv_users: ${askvResult.rows.length} utilisateurs`);
+      console.log(`[ADMIN] askv_users: ${askvResult.rows.length} utilisateurs @haleon.com`);
     } catch (e) {
-      // Table askv_users n'existe pas, continuer
+      errors.push(`askv_users: ${e.message}`);
+      console.log(`[ADMIN] askv_users ERROR: ${e.message}`);
     }
 
     // 3. Chercher dans users (utilisateurs principaux @haleon.com)
@@ -802,21 +814,177 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
         WHERE u.email LIKE '%@haleon.com'
       `);
       usersResult.rows.forEach(u => {
-        const key = u.email.toLowerCase();
-        if (!allUsers.has(key)) {
-          allUsers.set(key, u);
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, u);
+          }
         }
       });
+      logs.push(`users: ${usersResult.rows.length} utilisateurs @haleon.com`);
+      console.log(`[ADMIN] users: ${usersResult.rows.length} utilisateurs @haleon.com`);
     } catch (e) {
-      // Erreur, continuer
+      errors.push(`users: ${e.message}`);
+      console.log(`[ADMIN] users ERROR: ${e.message}`);
+    }
+
+    // 4. Chercher dans askv_events (utilisateurs qui ont utilisé Ask Veeva)
+    try {
+      const eventsResult = await pool.query(`
+        SELECT DISTINCT user_email as email, 'askv_events' as source
+        FROM askv_events
+        WHERE user_email LIKE '%@haleon.com'
+      `);
+      let newFromEvents = 0;
+      eventsResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, source: 'askv_events', name: null });
+            newFromEvents++;
+          }
+        }
+      });
+      logs.push(`askv_events: ${eventsResult.rows.length} emails, ${newFromEvents} nouveaux`);
+      console.log(`[ADMIN] askv_events: ${eventsResult.rows.length} emails uniques, ${newFromEvents} nouveaux`);
+    } catch (e) {
+      errors.push(`askv_events: ${e.message}`);
+      console.log(`[ADMIN] askv_events ERROR: ${e.message}`);
+    }
+
+    // 5. Chercher dans atex_checks (utilisateurs qui ont fait des contrôles ATEX)
+    try {
+      const atexResult = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, 'atex_checks' as source
+        FROM atex_checks
+        WHERE user_email LIKE '%@haleon.com'
+      `);
+      let newFromAtex = 0;
+      atexResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, name: u.name, source: 'atex_checks' });
+            newFromAtex++;
+          }
+        }
+      });
+      logs.push(`atex_checks: ${atexResult.rows.length} emails, ${newFromAtex} nouveaux`);
+      console.log(`[ADMIN] atex_checks: ${atexResult.rows.length} emails, ${newFromAtex} nouveaux`);
+    } catch (e) {
+      errors.push(`atex_checks: ${e.message}`);
+      console.log(`[ADMIN] atex_checks ERROR: ${e.message}`);
+    }
+
+    // 6. Chercher dans vsd_checks (utilisateurs qui ont fait des contrôles VSD)
+    try {
+      const vsdResult = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, 'vsd_checks' as source
+        FROM vsd_checks
+        WHERE user_email LIKE '%@haleon.com'
+      `);
+      let newFromVsd = 0;
+      vsdResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, name: u.name, source: 'vsd_checks' });
+            newFromVsd++;
+          }
+        }
+      });
+      logs.push(`vsd_checks: ${vsdResult.rows.length} emails, ${newFromVsd} nouveaux`);
+      console.log(`[ADMIN] vsd_checks: ${vsdResult.rows.length} emails, ${newFromVsd} nouveaux`);
+    } catch (e) {
+      errors.push(`vsd_checks: ${e.message}`);
+      console.log(`[ADMIN] vsd_checks ERROR: ${e.message}`);
+    }
+
+    // 7. Chercher dans learn_ex_sessions (utilisateurs Learn EX)
+    try {
+      const learnResult = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, 'learn_ex' as source
+        FROM learn_ex_sessions
+        WHERE user_email LIKE '%@haleon.com'
+      `);
+      let newFromLearn = 0;
+      learnResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, name: u.name, source: 'learn_ex' });
+            newFromLearn++;
+          }
+        }
+      });
+      logs.push(`learn_ex_sessions: ${learnResult.rows.length} emails, ${newFromLearn} nouveaux`);
+      console.log(`[ADMIN] learn_ex_sessions: ${learnResult.rows.length} emails, ${newFromLearn} nouveaux`);
+    } catch (e) {
+      errors.push(`learn_ex_sessions: ${e.message}`);
+      console.log(`[ADMIN] learn_ex_sessions ERROR: ${e.message}`);
+    }
+
+    // 8. Chercher dans control_records (utilisateurs OIBT)
+    try {
+      const oibtResult = await pool.query(`
+        SELECT DISTINCT performed_by_email as email, performed_by as name, 'oibt' as source
+        FROM control_records
+        WHERE performed_by_email LIKE '%@haleon.com'
+      `);
+      let newFromOibt = 0;
+      oibtResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, name: u.name, source: 'oibt' });
+            newFromOibt++;
+          }
+        }
+      });
+      logs.push(`control_records (OIBT): ${oibtResult.rows.length} emails, ${newFromOibt} nouveaux`);
+      console.log(`[ADMIN] control_records: ${oibtResult.rows.length} emails, ${newFromOibt} nouveaux`);
+    } catch (e) {
+      errors.push(`control_records: ${e.message}`);
+      console.log(`[ADMIN] control_records ERROR: ${e.message}`);
+    }
+
+    // 9. Chercher dans fd_checks (Fire Doors - utilisateurs)
+    try {
+      const fdResult = await pool.query(`
+        SELECT DISTINCT closed_by_email as email, closed_by_name as name, 'fire_doors' as source
+        FROM fd_checks
+        WHERE closed_by_email LIKE '%@haleon.com'
+      `);
+      let newFromFd = 0;
+      fdResult.rows.forEach(u => {
+        if (u.email) {
+          const key = u.email.toLowerCase();
+          if (!allUsers.has(key)) {
+            allUsers.set(key, { email: u.email, name: u.name, source: 'fire_doors' });
+            newFromFd++;
+          }
+        }
+      });
+      logs.push(`fd_checks (Fire Doors): ${fdResult.rows.length} emails, ${newFromFd} nouveaux`);
+      console.log(`[ADMIN] fd_checks: ${fdResult.rows.length} emails, ${newFromFd} nouveaux`);
+    } catch (e) {
+      errors.push(`fd_checks: ${e.message}`);
+      console.log(`[ADMIN] fd_checks ERROR: ${e.message}`);
     }
 
     const users = Array.from(allUsers.values()).sort((a, b) =>
       (a.email || '').localeCompare(b.email || '')
     );
 
-    res.json({ users, source: 'combined' });
+    console.log(`[ADMIN] TOTAL: ${users.length} utilisateurs Haleon uniques`);
+    console.log(`[ADMIN] Sources: ${logs.join(' | ')}`);
+    if (errors.length > 0) {
+      console.log(`[ADMIN] Errors: ${errors.join(' | ')}`);
+    }
+
+    res.json({ users, source: 'combined', logs, errors: errors.length > 0 ? errors : undefined });
   } catch (err) {
+    console.error('[ADMIN] /users/haleon FATAL ERROR:', err);
     res.status(500).json({ error: err.message });
   }
 });

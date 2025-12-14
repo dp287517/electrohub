@@ -100,19 +100,61 @@ function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
   );
 }
 
-// Profile Edit Modal
-function ProfileModal({ user, onClose, onSave }) {
-  const [site, setSite] = useState(user?.site || 'Nyon');
-  const [department, setDepartment] = useState(user?.department || 'Maintenance');
+// Profile Edit Modal - now saves to database with department_id
+function ProfileModal({ user, departments, sites, onClose, onSave }) {
+  const [siteId, setSiteId] = useState(user?.site_id || 1);
+  const [departmentId, setDepartmentId] = useState(user?.department_id || null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSaving(true);
-    setTimeout(() => {
-      onSave({ ...user, site, department });
+    setError(null);
+    try {
+      // Save to database via API
+      const token = localStorage.getItem('eh_token');
+      const response = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        credentials: 'include',
+        body: JSON.stringify({ department_id: departmentId, site_id: siteId })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save profile');
+      }
+
+      const data = await response.json();
+
+      // Update local user with new data
+      const selectedDept = departments.find(d => d.id === departmentId);
+      const selectedSite = sites.find(s => s.id === siteId);
+      const updatedUser = {
+        ...user,
+        department_id: departmentId,
+        site_id: siteId,
+        department: selectedDept?.name || user?.department,
+        site: selectedSite?.name || user?.site,
+      };
+
+      // Save new token if provided
+      if (data.jwt) {
+        localStorage.setItem('eh_token', data.jwt);
+      }
+
+      onSave(updatedUser);
+    } catch (err) {
+      setError(err.message);
       setSaving(false);
-    }, 500);
+    }
   };
+
+  // Find current department and site names for display
+  const currentDeptName = departments.find(d => d.id === departmentId)?.name || user?.department || 'Not set';
+  const currentSiteName = sites.find(s => s.id === siteId)?.name || user?.site || 'Not set';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -161,11 +203,12 @@ function ProfileModal({ user, onClose, onSave }) {
             Site
           </label>
           <select
-            value={site}
-            onChange={(e) => setSite(e.target.value)}
+            value={siteId || ''}
+            onChange={(e) => setSiteId(e.target.value ? Number(e.target.value) : null)}
             className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
           >
-            {SITES.map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="">Select site...</option>
+            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
 
@@ -176,13 +219,20 @@ function ProfileModal({ user, onClose, onSave }) {
             Department
           </label>
           <select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
+            value={departmentId || ''}
+            onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)}
             className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
           >
-            {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+            <option value="">Select department...</option>
+            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm">
+            {error}
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex gap-3">
@@ -219,6 +269,8 @@ export default function Dashboard() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [greeting, setGreeting] = useState('');
   const [mounted, setMounted] = useState(false);
+  const [departments, setDepartments] = useState([]);
+  const [sites, setSites] = useState([]);
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
@@ -231,10 +283,38 @@ export default function Dashboard() {
 
     // Trigger mount animations
     setTimeout(() => setMounted(true), 100);
+
+    // Fetch departments and sites for profile modal (public endpoints)
+    Promise.all([
+      fetch('/api/departments').then(r => r.json()).catch(() => ({ departments: [] })),
+      fetch('/api/sites').then(r => r.json()).catch(() => ({ sites: [] }))
+    ]).then(([deptsRes, sitesRes]) => {
+      setDepartments(deptsRes.departments || []);
+      setSites(sitesRes.sites || []);
+    });
   }, []);
 
   const site = user?.site || '';
   const isAdmin = ADMIN_EMAILS.includes(user?.email);
+
+  // Get display names for department and site (using ID if name not available)
+  const departmentName = useMemo(() => {
+    if (user?.department) return user.department;
+    if (user?.department_id && departments.length) {
+      const dept = departments.find(d => d.id === user.department_id);
+      return dept?.name || null;
+    }
+    return null;
+  }, [user?.department, user?.department_id, departments]);
+
+  const siteName = useMemo(() => {
+    if (user?.site) return user.site;
+    if (user?.site_id && sites.length) {
+      const s = sites.find(s => s.id === user.site_id);
+      return s?.name || null;
+    }
+    return null;
+  }, [user?.site, user?.site_id, sites]);
 
   // Get allowed apps for current user
   const allowedApps = useMemo(() => {
@@ -375,7 +455,7 @@ export default function Dashboard() {
                   Department
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-                <p className="text-white font-semibold">{user?.department || '—'}</p>
+                <p className="text-white font-semibold">{departmentName || '—'}</p>
               </button>
               <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px]">
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
@@ -448,6 +528,8 @@ export default function Dashboard() {
       {showProfileModal && (
         <ProfileModal
           user={user}
+          departments={departments}
+          sites={sites}
           onClose={() => setShowProfileModal(false)}
           onSave={handleSaveProfile}
         />
