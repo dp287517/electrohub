@@ -226,8 +226,9 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     // 2️⃣ Cherche l'utilisateur en base pour récupérer department_id, company_id, site_id
     let dbUser = null;
     try {
+      // Only select columns that are guaranteed to exist
       const result = await pool.query(
-        `SELECT id, email, name, department_id, company_id, site_id, role, allowed_apps
+        `SELECT id, email, name, department_id, company_id, site_id
          FROM users WHERE email = $1 LIMIT 1`,
         [user.email]
       );
