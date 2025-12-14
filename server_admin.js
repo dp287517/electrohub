@@ -1288,12 +1288,46 @@ router.post("/migrate", adminOnly, async (req, res) => {
     `);
     logs.push('Table haleon_users créée/vérifiée');
 
+    // 6b. Créer la table departments
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS departments (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+        site_id INTEGER REFERENCES sites(id) ON DELETE SET NULL,
+        code TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await addColumnIfNotExists('departments', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
+    await addColumnIfNotExists('departments', 'site_id', 'INTEGER REFERENCES sites(id) ON DELETE SET NULL');
+    await addColumnIfNotExists('departments', 'code', 'TEXT');
+    await addColumnIfNotExists('departments', 'description', 'TEXT');
+    await addColumnIfNotExists('departments', 'is_active', 'BOOLEAN DEFAULT TRUE');
+    logs.push('Table departments créée/vérifiée');
+
+    // 6c. Créer quelques départements par défaut pour Haleon/Nyon
+    const defaultDepts = ['Maintenance', 'Engineering', 'Operations', 'Quality', 'Safety', 'IT'];
+    for (const deptName of defaultDepts) {
+      await pool.query(`
+        INSERT INTO departments (company_id, site_id, code, name)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+      `, [haleonId, nyonId, deptName.substring(0, 4).toUpperCase(), deptName]).catch(() => {});
+    }
+    logs.push('Départements par défaut créés');
+
     // 7. Créer index
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_sites_company ON sites(company_id);
       CREATE INDEX IF NOT EXISTS idx_users_company ON users(company_id);
       CREATE INDEX IF NOT EXISTS idx_users_site ON users(site_id);
       CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+      CREATE INDEX IF NOT EXISTS idx_departments_company ON departments(company_id);
+      CREATE INDEX IF NOT EXISTS idx_departments_site ON departments(site_id);
     `);
     logs.push('Index créés');
 
