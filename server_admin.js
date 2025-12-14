@@ -25,7 +25,64 @@ function adminOnly(req, res, next) {
 }
 
 // ============================================================
-// DATABASE EXPLORATION
+// DATABASE EXPLORATION (PUBLIC - pour debug temporaire)
+// ============================================================
+
+// GET /api/admin/explore - Vue complète publique (TEMPORAIRE)
+router.get("/explore", async (req, res) => {
+  try {
+    // Liste toutes les tables avec leur nombre de lignes
+    const tablesResult = await pool.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      ORDER BY table_name
+    `);
+
+    const tables = [];
+    for (const row of tablesResult.rows) {
+      try {
+        // Count rows
+        const countResult = await pool.query(`SELECT COUNT(*) FROM "${row.table_name}"`);
+        const rowCount = parseInt(countResult.rows[0].count);
+
+        // Get columns
+        const colsResult = await pool.query(`
+          SELECT column_name, data_type, is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1
+          ORDER BY ordinal_position
+        `, [row.table_name]);
+
+        // Get sample data (3 rows)
+        let sampleData = [];
+        if (rowCount > 0) {
+          const sampleResult = await pool.query(`SELECT * FROM "${row.table_name}" LIMIT 3`);
+          sampleData = sampleResult.rows;
+        }
+
+        tables.push({
+          name: row.table_name,
+          rowCount,
+          columns: colsResult.rows,
+          sample: sampleData
+        });
+      } catch (e) {
+        tables.push({ name: row.table_name, error: e.message });
+      }
+    }
+
+    res.json({
+      totalTables: tables.length,
+      tables: tables.sort((a, b) => (b.rowCount || 0) - (a.rowCount || 0))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// DATABASE EXPLORATION (PROTECTED)
 // ============================================================
 
 // GET /api/admin/tables - Liste toutes les tables
