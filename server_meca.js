@@ -1,5 +1,6 @@
 // ==============================
 // server_meca.js — Équipements électromécaniques (ESM)
+// ✅ VERSION 2.0 - MULTI-TENANT (Company + Site)
 // ==============================
 import express from "express";
 import cors from "cors";
@@ -12,6 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
+import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
 
 dotenv.config();
 
@@ -130,6 +132,8 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meca_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id INTEGER,
+      site_id INTEGER,
 
       -- Identification
       name TEXT NOT NULL,
@@ -276,13 +280,18 @@ async function logEvent(action, details = {}, user = {}) {
 // -------------------------------------------------
 
 // GET /api/meca/equipments
-app.get("/api/meca/equipments", async (_req, res) => {
+app.get("/api/meca/equipments", async (req, res) => {
   try {
+    // 🏢 MULTI-TENANT: Extraire les infos tenant
+    const tenant = extractTenantFromRequest(req);
+    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
+
     const { rows } = await pool.query(`
-      SELECT *
-        FROM meca_equipments
-       ORDER BY building, zone, name
-    `);
+      SELECT e.*
+        FROM meca_equipments e
+       WHERE ${tenantFilter.where}
+       ORDER BY e.building, e.zone, e.name
+    `, tenantFilter.params);
 
     for (const r of rows) {
       r.photo_url =
@@ -322,6 +331,9 @@ app.get("/api/meca/equipments/:id", async (req, res) => {
 app.post("/api/meca/equipments", async (req, res) => {
   try {
     const u = getUser(req);
+    // 🏢 MULTI-TENANT: Extraire les infos tenant
+    const tenant = extractTenantFromRequest(req);
+
     const {
       name = "",
       tag = "",
@@ -360,6 +372,7 @@ app.post("/api/meca/equipments", async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO meca_equipments(
+         company_id, site_id,
          name, tag, equipment_type, category, function,
          building, floor, zone, location, panel,
          power_kw, voltage, current_a, speed_rpm, ip_rating,
@@ -368,15 +381,18 @@ app.post("/api/meca/equipments", async (req, res) => {
          status, criticality, comments
        )
        VALUES(
-         $1,$2,$3,$4,$5,
-         $6,$7,$8,$9,$10,
-         $11,$12,$13,$14,$15,
-         $16,$17,$18,$19,$20,$21,
-         $22,$23,$24,$25,
-         $26,$27,$28
+         $1,$2,
+         $3,$4,$5,$6,$7,
+         $8,$9,$10,$11,$12,
+         $13,$14,$15,$16,$17,
+         $18,$19,$20,$21,$22,$23,
+         $24,$25,$26,$27,
+         $28,$29,$30
        )
        RETURNING *`,
       [
+        tenant.companyId,
+        tenant.siteId,
         name,
         tag,
         equipment_type,
