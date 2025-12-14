@@ -11,12 +11,16 @@ import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 // API base URL
 const API_BASE = '/api/admin';
 
-// Helper to get auth headers
-function getAuthHeaders() {
+// Helper to get fetch options with auth (cookies + header)
+function getAuthOptions(extraOptions = {}) {
   const token = localStorage.getItem('eh_token');
   return {
-    'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : ''
+    credentials: 'include', // Send cookies
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': token ? `Bearer ${token}` : ''
+    },
+    ...extraOptions
   };
 }
 
@@ -145,7 +149,7 @@ function HaleonUsersTab({ haleonUsers, sites, departments, onRefresh, loading })
 
       const response = await fetch(url, {
         method,
-        headers: getAuthHeaders(),
+        ...getAuthOptions(),
         body: JSON.stringify(userData)
       });
 
@@ -163,10 +167,7 @@ function HaleonUsersTab({ haleonUsers, sites, departments, onRefresh, loading })
   const handleDelete = async (id) => {
     if (!confirm('Delete this user?')) return;
     try {
-      await fetch(`${API_BASE}/users/haleon/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      });
+      await fetch(`${API_BASE}/users/haleon/${id}`, getAuthOptions({ method: 'DELETE' }));
       onRefresh();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -287,7 +288,7 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
 
       const response = await fetch(url, {
         method,
-        headers: getAuthHeaders(),
+        ...getAuthOptions(),
         body: JSON.stringify(userData)
       });
 
@@ -315,10 +316,7 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
   const handleDelete = async (id) => {
     if (!confirm('Delete this user?')) return;
     try {
-      await fetch(`${API_BASE}/users/external/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      });
+      await fetch(`${API_BASE}/users/external/${id}`, getAuthOptions({ method: 'DELETE' }));
       onRefresh();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -329,11 +327,10 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
     const pwd = generatePassword();
     setSaving(true);
     try {
-      await fetch(`${API_BASE}/users/external/${id}`, {
+      await fetch(`${API_BASE}/users/external/${id}`, getAuthOptions({
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ password: pwd })
-      });
+      }));
       setNewPasswords({ ...newPasswords, [id]: pwd });
     } catch (err) {
       alert('Error: ' + err.message);
@@ -468,11 +465,10 @@ function CompaniesTab({ companies, onRefresh, loading }) {
       const url = isNew ? `${API_BASE}/companies` : `${API_BASE}/companies/${editingId}`;
       const method = isNew ? 'POST' : 'PUT';
 
-      const response = await fetch(url, {
+      const response = await fetch(url, getAuthOptions({
         method,
-        headers: getAuthHeaders(),
         body: JSON.stringify(companyData)
-      });
+      }));
 
       if (!response.ok) throw new Error('Failed to save company');
       onRefresh();
@@ -488,10 +484,7 @@ function CompaniesTab({ companies, onRefresh, loading }) {
   const handleDelete = async (id) => {
     if (!confirm('Delete this company?')) return;
     try {
-      await fetch(`${API_BASE}/companies/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      });
+      await fetch(`${API_BASE}/companies/${id}`, getAuthOptions({ method: 'DELETE' }));
       onRefresh();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -577,11 +570,10 @@ function SitesTab({ sites, onRefresh, loading }) {
   const handleSave = async (siteData) => {
     setSaving(true);
     try {
-      const response = await fetch(`${API_BASE}/sites`, {
+      const response = await fetch(`${API_BASE}/sites`, getAuthOptions({
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify(siteData)
-      });
+      }));
 
       if (!response.ok) throw new Error('Failed to create site');
       onRefresh();
@@ -647,11 +639,10 @@ function DepartmentsTab({ departments, onRefresh, loading }) {
   const handleSave = async (deptData) => {
     setSaving(true);
     try {
-      const response = await fetch(`${API_BASE}/departments`, {
+      const response = await fetch(`${API_BASE}/departments`, getAuthOptions({
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify(deptData)
-      });
+      }));
 
       if (!response.ok) throw new Error('Failed to create department');
       onRefresh();
@@ -727,15 +718,15 @@ export default function Admin() {
     setLoading(true);
     setError(null);
     try {
-      const headers = getAuthHeaders();
+      const opts = getAuthOptions();
 
       // Fetch all data in parallel
       const [haleonRes, externalRes, companiesRes, sitesRes, deptsRes] = await Promise.all([
-        fetch(`${API_BASE}/users/haleon`, { headers }).then(r => r.json()).catch(() => ({ users: [] })),
-        fetch(`${API_BASE}/users/external`, { headers }).then(r => r.json()).catch(() => ({ users: [] })),
-        fetch(`${API_BASE}/companies`, { headers }).then(r => r.json()).catch(() => ({ companies: [] })),
-        fetch(`${API_BASE}/sites`, { headers }).then(r => r.json()).catch(() => ({ sites: [] })),
-        fetch(`${API_BASE}/departments`, { headers }).then(r => r.json()).catch(() => ({ departments: [] }))
+        fetch(`${API_BASE}/users/haleon`, opts).then(r => r.json()).catch(() => ({ users: [] })),
+        fetch(`${API_BASE}/users/external`, opts).then(r => r.json()).catch(() => ({ users: [] })),
+        fetch(`${API_BASE}/companies`, opts).then(r => r.json()).catch(() => ({ companies: [] })),
+        fetch(`${API_BASE}/sites`, opts).then(r => r.json()).catch(() => ({ sites: [] })),
+        fetch(`${API_BASE}/departments`, opts).then(r => r.json()).catch(() => ({ departments: [] }))
       ]);
 
       setHaleonUsers(haleonRes.users || []);
@@ -755,10 +746,7 @@ export default function Admin() {
     if (!confirm('Run database migration? This will create missing tables and migrate Haleon users.')) return;
     setMigrating(true);
     try {
-      const response = await fetch(`${API_BASE}/migrate`, {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
+      const response = await fetch(`${API_BASE}/migrate`, getAuthOptions({ method: 'POST' }));
       const data = await response.json();
       if (data.ok) {
         alert(`Migration completed! ${data.migratedUsers || 0} users migrated.`);
