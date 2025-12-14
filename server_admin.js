@@ -55,6 +55,23 @@ function adminOnly(req, res, next) {
 }
 
 // ============================================================
+// DEBUG ENDPOINT (PUBLIC - pour troubleshoot auth)
+// ============================================================
+router.get("/debug-auth", (req, res) => {
+  const authHeader = req.headers.authorization;
+  const cookieToken = req.cookies?.token;
+
+  res.json({
+    hasAuthHeader: !!authHeader,
+    authHeaderPreview: authHeader ? authHeader.substring(0, 50) + "..." : null,
+    hasCookieToken: !!cookieToken,
+    userFromMiddleware: req.user || null,
+    adminEmails: ADMIN_EMAILS,
+    isAdmin: isAdmin(req)
+  });
+});
+
+// ============================================================
 // DATABASE EXPLORATION (PUBLIC - pour debug temporaire)
 // ============================================================
 
