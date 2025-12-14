@@ -9,6 +9,8 @@ import {
   MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock
 } from 'lucide-react';
 import { api } from '../lib/api';
+import AuditHistory from '../components/AuditHistory.jsx';
+import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -2693,6 +2695,62 @@ export default function Switchboards() {
                   </div>
                 )}
               </div>
+            </AnimatedCard>
+
+            {/* Audit History Section - Collapsible */}
+            <AnimatedCard delay={75}>
+              <details className="bg-white rounded-2xl shadow-sm mb-4 group">
+                <summary className="flex items-center justify-between p-4 cursor-pointer list-none">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-purple-100 rounded-xl">
+                      <History size={20} className="text-purple-600" />
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-gray-900">Historique des modifications</h4>
+                      <p className="text-xs text-gray-500">Voir qui a modifié ce tableau</p>
+                    </div>
+                  </div>
+                  <ChevronDown size={20} className="text-gray-400 group-open:rotate-180 transition-transform" />
+                </summary>
+                <div className="px-4 pb-4">
+                  {/* Qui a créé/modifié */}
+                  {(selectedBoard.created_by_name || selectedBoard.created_by_email || selectedBoard.updated_at) && (
+                    <div className="grid sm:grid-cols-2 gap-3 mb-4">
+                      {(selectedBoard.created_by_name || selectedBoard.created_by_email) && (
+                        <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                          <div className="text-xs text-gray-500 mb-1">Créé par</div>
+                          <CreatedByBadge
+                            name={selectedBoard.created_by_name}
+                            email={selectedBoard.created_by_email}
+                            date={selectedBoard.created_at}
+                            size="md"
+                          />
+                        </div>
+                      )}
+                      {(selectedBoard.updated_by_name || selectedBoard.updated_by_email || selectedBoard.updated_at) && (
+                        <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
+                          <div className="text-xs text-gray-500 mb-1">Dernière modification</div>
+                          <LastModifiedBadge
+                            actor_name={selectedBoard.updated_by_name}
+                            actor_email={selectedBoard.updated_by_email}
+                            date={selectedBoard.updated_at}
+                            action="updated"
+                            showIcon={false}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <AuditHistory
+                    apiEndpoint="/api/switchboard/audit/entity"
+                    entityType="switchboard"
+                    entityId={selectedBoard.id}
+                    title="Historique complet"
+                    maxHeight="250px"
+                    showFilters={false}
+                  />
+                </div>
+              </details>
             </AnimatedCard>
 
             <div className="flex items-center justify-between mb-4">
