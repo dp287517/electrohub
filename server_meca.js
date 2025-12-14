@@ -132,8 +132,6 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meca_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company_id INTEGER,
-      site_id INTEGER,
 
       -- Identification
       name TEXT NOT NULL,
@@ -184,9 +182,23 @@ async function ensureSchema() {
     );
   `);
 
+  // Add multi-tenant columns if they don't exist (for existing databases)
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS company_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS site_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_meca_eq_name ON meca_equipments(name);
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_company ON meca_equipments(company_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_site ON meca_equipments(site_id);`);
 
   // Fichiers attachés
   await pool.query(`
