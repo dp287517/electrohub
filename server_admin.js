@@ -15,27 +15,56 @@ const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com']
 
 // Middleware pour extraire l'utilisateur du JWT (cookie ou header Authorization)
 function extractUser(req, _res, next) {
+  console.log('\n========== ADMIN AUTH DEBUG ==========');
+  console.log('📍 Path:', req.path);
+  console.log('📍 Method:', req.method);
+
+  // Log all cookies
+  console.log('🍪 All cookies:', req.cookies);
+  console.log('🍪 Cookie token exists:', !!req.cookies?.token);
+
+  // Log Authorization header
+  const authHeader = req.headers.authorization;
+  console.log('🔑 Auth header exists:', !!authHeader);
+  console.log('🔑 Auth header value:', authHeader ? authHeader.substring(0, 80) : 'none');
+
   // Si déjà défini par le middleware principal, on garde
-  if (req.user) return next();
+  if (req.user) {
+    console.log('✅ User already set by main middleware:', req.user.email);
+    return next();
+  }
 
   // Essayer le cookie
   let token = req.cookies?.token;
+  let tokenSource = 'cookie';
 
   // Sinon essayer le header Authorization: Bearer <token>
   if (!token) {
-    const authHeader = req.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
       token = authHeader.slice(7);
+      tokenSource = 'header';
     }
   }
 
+  console.log('🎫 Token found:', !!token);
+  console.log('🎫 Token source:', token ? tokenSource : 'none');
+  console.log('🎫 Token preview:', token ? token.substring(0, 50) + '...' : 'none');
+
   if (token) {
     try {
-      req.user = jwt.verify(token, process.env.JWT_SECRET || "devsecret");
+      const secret = process.env.JWT_SECRET || "devsecret";
+      console.log('🔐 JWT_SECRET exists:', !!process.env.JWT_SECRET);
+      req.user = jwt.verify(token, secret);
+      console.log('✅ Token verified! User:', req.user.email);
     } catch (e) {
-      // Token invalide, on continue sans user
+      console.log('❌ Token verification failed:', e.message);
     }
+  } else {
+    console.log('❌ No token found in cookie or header');
   }
+
+  console.log('👤 Final req.user:', req.user ? req.user.email : 'none');
+  console.log('========================================\n');
   next();
 }
 
@@ -48,9 +77,12 @@ function isAdmin(req) {
 }
 
 function adminOnly(req, res, next) {
+  console.log('🛡️ adminOnly check - email:', req.user?.email, 'isAdmin:', isAdmin(req));
   if (!isAdmin(req)) {
+    console.log('🚫 ACCESS DENIED - user not admin');
     return res.status(403).json({ error: "Admin access required", userEmail: req.user?.email || "none" });
   }
+  console.log('✅ ACCESS GRANTED');
   next();
 }
 
