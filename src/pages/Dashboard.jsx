@@ -39,7 +39,6 @@ const electricalApps = [
 // Other apps
 const otherApps = [
   { label: 'ATEX', to: '/app/atex', description: 'Explosive atmospheres equipment management', icon: '🧯', color: 'from-orange-400 to-red-500' },
-  { label: 'Maintenance Controls', to: '/app/controls', description: 'Follow-up of electrical equipment maintenance tasks', icon: '🛠️', color: 'from-blue-400 to-indigo-500' },
   { label: 'External Contractors', to: '/app/comp-ext', description: 'Vendors offers, JSA, prevention plan, access, visits', icon: '🤝', color: 'from-teal-400 to-cyan-500' },
   { label: 'Ask Veeva', to: '/app/ask-veeva', description: 'Upload documents, index them, and ask questions with AI', icon: '💬', color: 'from-violet-400 to-purple-500' },
   { label: 'Fire Doors', to: '/app/doors', description: 'Annual checks, QR codes, nonconformities & SAP follow-ups', icon: '🚪', color: 'from-rose-400 to-pink-500' },

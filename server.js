@@ -9,6 +9,7 @@ import jwt from "jsonwebtoken";
 import pg from "pg";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
+import adminRouter from "./server_admin.js";
 
 dotenv.config();
 const { Pool } = pg;
@@ -231,6 +232,11 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     res.status(401).json({ error: err.message || "Invalid Bubble token" });
   }
 });
+
+/* ================================================================
+   🔵 Admin API Routes (gestion utilisateurs, exploration DB)
+   ================================================================ */
+app.use("/api/admin", adminRouter);
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
