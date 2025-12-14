@@ -1,6 +1,7 @@
 // server_admin.js — API pour l'administration et gestion des utilisateurs
 import express from "express";
 import pg from "pg";
+import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,6 +13,35 @@ const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 // Middleware pour vérifier si l'utilisateur est admin
 const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
 
+// Middleware pour extraire l'utilisateur du JWT (cookie ou header Authorization)
+function extractUser(req, _res, next) {
+  // Si déjà défini par le middleware principal, on garde
+  if (req.user) return next();
+
+  // Essayer le cookie
+  let token = req.cookies?.token;
+
+  // Sinon essayer le header Authorization: Bearer <token>
+  if (!token) {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      token = authHeader.slice(7);
+    }
+  }
+
+  if (token) {
+    try {
+      req.user = jwt.verify(token, process.env.JWT_SECRET || "devsecret");
+    } catch (e) {
+      // Token invalide, on continue sans user
+    }
+  }
+  next();
+}
+
+// Appliquer l'extraction d'utilisateur à toutes les routes admin
+router.use(extractUser);
+
 function isAdmin(req) {
   const email = req.user?.email;
   return ADMIN_EMAILS.includes(email?.toLowerCase());
@@ -19,7 +49,7 @@ function isAdmin(req) {
 
 function adminOnly(req, res, next) {
   if (!isAdmin(req)) {
-    return res.status(403).json({ error: "Admin access required" });
+    return res.status(403).json({ error: "Admin access required", userEmail: req.user?.email || "none" });
   }
   next();
 }
