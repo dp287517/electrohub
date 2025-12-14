@@ -1,6 +1,7 @@
 // ==============================
 // server_doors.js — Fire Doors CMMS microservice (ESM)
 // Port: 3016
+// ✅ VERSION 2.0 - AUDIT TRAIL + MULTI-TENANT
 // ==============================
 
 import express from "express";
@@ -15,6 +16,8 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import QRCode from "qrcode";
 import PDFDocument from "pdfkit";
+import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
+import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
 
 // 🔹 MAPS
 import crypto from "crypto";
@@ -682,6 +685,13 @@ app.post("/api/doors/doors", async (req, res) => {
       due,
     ]);
 
+    // 📝 AUDIT: Log création porte
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: 'door',
+      entityId: door.id,
+      details: { name, building, floor, location }
+    });
+
     res.json({
       ok: true,
       door: { ...door, next_check_date: due, photo_url: null, door_state: null },
@@ -782,7 +792,24 @@ app.put("/api/doors/doors/:id", async (req, res) => {
 
 app.delete("/api/doors/doors/:id", async (req, res) => {
   try {
-    await pool.query(`DELETE FROM fd_doors WHERE id=$1`, [req.params.id]);
+    const doorId = req.params.id;
+
+    // Get door info before delete (for audit)
+    const { rows: doorInfo } = await pool.query(
+      `SELECT name, building, floor, location FROM fd_doors WHERE id=$1`,
+      [doorId]
+    );
+
+    await pool.query(`DELETE FROM fd_doors WHERE id=$1`, [doorId]);
+
+    // 📝 AUDIT: Log suppression porte
+    const door = doorInfo[0];
+    await audit.log(req, AUDIT_ACTIONS.DELETED, {
+      entityType: 'door',
+      entityId: doorId,
+      details: { name: door?.name, building: door?.building, floor: door?.floor, location: door?.location }
+    });
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -1920,6 +1947,14 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
 // Boot
 // ------------------------------
 await ensureSchema();
+
+// ============================================================
+// AUDIT TRAIL - Traçabilité des modifications
+// ============================================================
+const audit = createAuditTrail(pool, 'fire_doors');
+await audit.ensureTable();
+console.log('[fire-doors] Audit trail initialized');
+
 app.listen(PORT, HOST, () => {
   console.log(`[fire-doors] listening on ${HOST}:${PORT}`);
   console.log(

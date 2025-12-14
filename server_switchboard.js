@@ -1,6 +1,10 @@
 // server_switchboard.js - Backend complet Switchboard
-// VERSION 3.0 - ROBUSTE TIMEOUTS & PERFORMANCE
+// VERSION 3.1 - ROBUSTE TIMEOUTS & PERFORMANCE + AUDIT TRAIL
 // =======================================================
+//
+// CHANGEMENTS v3.1:
+// - Ajout audit trail pour traçabilité des modifications
+// - Support multi-tenant (company_id/site_id)
 //
 // CHANGEMENTS v3.0:
 // 1. Timeout sur l'ACQUISITION de connexion (pas seulement sur la query)
@@ -19,6 +23,8 @@ import OpenAI from 'openai';
 import PDFDocument from 'pdfkit';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
+import { createAuditTrail, AUDIT_ACTIONS } from './lib/audit-trail.js';
+import { extractTenantFromRequest, getTenantFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -747,6 +753,20 @@ async function ensureSchema() {
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA ERROR]', e.message));
 
 // ============================================================
+// AUDIT TRAIL - Traçabilité des modifications
+// ============================================================
+const audit = createAuditTrail(pool, 'switchboard');
+audit.ensureTable().catch(e => console.error('[SWITCHBOARD AUDIT ERROR]', e.message));
+
+// Helper pour extraire l'utilisateur actuel
+function getUser(req) {
+  return {
+    name: req.user?.name || req.headers['x-user-name'] || null,
+    email: req.user?.email || req.headers['x-user-email'] || null
+  };
+}
+
+// ============================================================
 // SITE SETTINGS
 // ============================================================
 
@@ -964,11 +984,11 @@ app.post('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const b = req.body || {};
     const name = String(b.name || '').trim();
     const code = String(b.code || '').trim();
-    
+
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
@@ -980,7 +1000,14 @@ app.post('/api/switchboard/boards', async (req, res) => {
        b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {}]
     );
     const sb = r.rows[0];
-    
+
+    // 📝 AUDIT: Log création tableau
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: 'switchboard',
+      entityId: sb.id,
+      details: { name: sb.name, code: sb.code, site, building: sb.building_code }
+    });
+
     res.status(201).json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
@@ -1144,17 +1171,25 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
-    
-    // Get device count before delete (for response)
-    const countRes = await quickQuery(`SELECT device_count FROM switchboards WHERE id = $1 AND site = $2`, [id, site]);
-    const deviceCount = countRes.rows[0]?.device_count || 0;
-    
+
+    // Get board info before delete (for audit)
+    const countRes = await quickQuery(`SELECT device_count, name, code FROM switchboards WHERE id = $1 AND site = $2`, [id, site]);
+    const boardInfo = countRes.rows[0];
+    const deviceCount = boardInfo?.device_count || 0;
+
     const r = await quickQuery(`DELETE FROM switchboards WHERE id=$1 AND site=$2 RETURNING id, name`, [id, site]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Board not found' });
-    
+
+    // 📝 AUDIT: Log suppression tableau
+    await audit.log(req, AUDIT_ACTIONS.DELETED, {
+      entityType: 'switchboard',
+      entityId: id,
+      details: { name: boardInfo?.name, code: boardInfo?.code, site, devicesDeleted: deviceCount }
+    });
+
     res.json({ success: true, deleted: id, name: r.rows[0].name, devices_deleted: deviceCount });
   } catch (e) {
     console.error('[DELETE BOARD]', e.message);
@@ -1388,27 +1423,27 @@ app.post('/api/switchboard/devices', async (req, res) => {
 
     const { rows } = await quickQuery(
       `INSERT INTO devices (
-        site, switchboard_id, parent_id, downstream_switchboard_id, 
-        name, device_type, manufacturer, reference, 
-        in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, 
+        site, switchboard_id, parent_id, downstream_switchboard_id,
+        name, device_type, manufacturer, reference,
+        in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
         position_number, is_differential, is_complete, settings, is_main_incoming, diagram_data
       )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
       [
-        site, switchboard_id, 
-        b.parent_id || null, 
-        b.downstream_switchboard_id || null, 
-        b.name || null, 
-        b.device_type || 'Low Voltage Circuit Breaker', 
-        b.manufacturer || null, 
+        site, switchboard_id,
+        b.parent_id || null,
+        b.downstream_switchboard_id || null,
+        b.name || null,
+        b.device_type || 'Low Voltage Circuit Breaker',
+        b.manufacturer || null,
         b.reference || null,
-        b.in_amps ? Number(b.in_amps) : null, 
+        b.in_amps ? Number(b.in_amps) : null,
         b.icu_ka ? Number(b.icu_ka) : null,
-        b.ics_ka ? Number(b.ics_ka) : null, 
+        b.ics_ka ? Number(b.ics_ka) : null,
         b.poles ? Number(b.poles) : null,
         b.voltage_v ? Number(b.voltage_v) : null,
-        b.trip_unit || null, 
+        b.trip_unit || null,
         b.position_number || null,
         !!b.is_differential,
         is_complete,
@@ -1417,10 +1452,26 @@ app.post('/api/switchboard/devices', async (req, res) => {
         b.diagram_data || {}
       ]
     );
-    
+
+    const device = rows[0];
+
+    // 📝 AUDIT: Log création appareil
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: 'device',
+      entityId: device.id,
+      details: {
+        name: device.name,
+        deviceType: device.device_type,
+        switchboardId: switchboard_id,
+        manufacturer: device.manufacturer,
+        reference: device.reference,
+        inAmps: device.in_amps
+      }
+    });
+
     // Le trigger met à jour automatiquement device_count et complete_count
-    
-    res.status(201).json(rows[0]);
+
+    res.status(201).json(device);
   } catch (e) {
     console.error('[CREATE DEVICE]', e.message);
     res.status(500).json({ error: 'Create failed' });
@@ -1535,9 +1586,18 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid device ID' });
+
+    // Get device info before delete (for audit)
+    const deviceInfo = await quickQuery(
+      `SELECT d.name, d.device_type, d.manufacturer, d.reference, d.switchboard_id, sb.name as board_name
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.id = $1 AND sb.site = $2`,
+      [id, site]
+    );
 
     const r = await quickQuery(
       `DELETE FROM devices d
@@ -1546,11 +1606,26 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
        RETURNING d.id, d.switchboard_id`,
       [id, site]
     );
-    
+
     if (r.rowCount === 0) return res.status(404).json({ error: 'Device not found' });
-    
+
+    // 📝 AUDIT: Log suppression appareil
+    const dev = deviceInfo.rows[0];
+    await audit.log(req, AUDIT_ACTIONS.DELETED, {
+      entityType: 'device',
+      entityId: id,
+      details: {
+        name: dev?.name,
+        deviceType: dev?.device_type,
+        switchboardId: dev?.switchboard_id,
+        boardName: dev?.board_name,
+        manufacturer: dev?.manufacturer,
+        reference: dev?.reference
+      }
+    });
+
     // Le trigger met à jour automatiquement device_count et complete_count
-    
+
     res.json({ success: true, deleted: id });
   } catch (e) {
     console.error('[DELETE DEVICE]', e.message);
