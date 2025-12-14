@@ -64,7 +64,7 @@ export async function verifyBubbleToken(bubbleToken) {
 }
 
 /**
- * Crée un JWT local pour ElectroHub à partir des infos Bubble
+ * Crée un JWT local pour ElectroHub à partir des infos Bubble + DB
  */
 export function signLocalJWT(user) {
   const payload = {
@@ -72,9 +72,15 @@ export function signLocalJWT(user) {
     name: user.name || user.email,
     email: user.email,
     source: "bubble",
-    site: user.site || "Nyon", // ✅ Fallback sur "Nyon" au lieu de "Default"
+    site: user.site || "Nyon",
+    // Multi-tenant fields from database
+    department_id: user.department_id || null,
+    company_id: user.company_id || null,
+    site_id: user.site_id || null,
+    role: user.role || "site",
+    allowed_apps: user.allowed_apps || null,
   };
 
   const secret = process.env.JWT_SECRET || "devsecret";
-  return jwt.sign(payload, secret, { expiresIn: "7d" }); // 7 jours au lieu de 2h
+  return jwt.sign(payload, secret, { expiresIn: "7d" });
 }
