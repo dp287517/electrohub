@@ -2,6 +2,7 @@
 // server_atex.js — ATEX CMMS microservice (ESM)
 // Port par défaut: 3001
 // ✅ VERSION OPTIMISÉE (90% plus rapide)
+// ✅ VERSION 2.0 - MULTI-TENANT (Company + Site)
 // ==============================
 import express from "express";
 import cors from "cors";
@@ -16,6 +17,7 @@ import pg from "pg";
 import StreamZip from "node-stream-zip";
 import sharp from "sharp";
 import { createRequire } from "module";
+import { extractTenantFromRequest, getTenantFilter, addTenantToData } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -107,6 +109,8 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id INTEGER,
+      site_id INTEGER,
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
@@ -129,6 +133,8 @@ async function ensureSchema() {
       updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_eq_next ON atex_equipments(next_check_date);
+    CREATE INDEX IF NOT EXISTS idx_atex_eq_company ON atex_equipments(company_id);
+    CREATE INDEX IF NOT EXISTS idx_atex_eq_site ON atex_equipments(site_id);
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
@@ -339,30 +345,37 @@ app.get("/api/atex/file", async (req, res) => {
 app.get("/api/atex/equipments", async (req, res) => {
   try {
     console.time('[ATEX] GET /api/atex/equipments'); // 🔍 Log de timing
-    
+
+    // 🏢 MULTI-TENANT: Extraire les infos tenant depuis la requête
+    const tenant = extractTenantFromRequest(req);
+    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
+
     const q = (req.query.q || "").toString().trim().toLowerCase();
     const statusFilter = (req.query.status || "").toString().trim();
     const building = (req.query.building || "").toString().trim().toLowerCase();
     const zone = (req.query.zone || "").toString().trim().toLowerCase();
     const compliance = (req.query.compliance || "").toString().trim();
-    
+
     // 🔥 NOUVEAU : Support du paramètre limit
     const limit = Math.min(1000, Math.max(1, Number(req.query.limit || 1000)));
-    
+
     // 🚀 OPTIMISATION : Requête avec JOIN au lieu de sous-requêtes corrélées
+    // 🏢 MULTI-TENANT: Filtrage par company_id/site_id
     const { rows } = await pool.query(
       `
       WITH last_checks AS (
         SELECT DISTINCT ON (equipment_id)
-               equipment_id, 
-               date AS last_check_date, 
+               equipment_id,
+               date AS last_check_date,
                result
         FROM atex_checks
         WHERE status = 'fait' AND result IS NOT NULL
         ORDER BY equipment_id, date DESC NULLS LAST
       )
-      SELECT 
+      SELECT
         e.id,
+        e.company_id,
+        e.site_id,
         e.name,
         e.type,
         e.manufacturer,
@@ -386,10 +399,11 @@ app.get("/api/atex/equipments", async (req, res) => {
         lc.result AS last_result
       FROM atex_equipments e
       LEFT JOIN last_checks lc ON lc.equipment_id = e.id
+      WHERE ${tenantFilter.where}
       ORDER BY e.created_at DESC
-      LIMIT $1
+      LIMIT $${tenantFilter.nextParam}
       `,
-      [limit]
+      [...tenantFilter.params, limit]
     );
     
     console.log(`[ATEX] Query returned ${rows.length} rows`); // 🔍 Log
@@ -485,6 +499,9 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
 });
 app.post("/api/atex/equipments", async (req, res) => {
   try {
+    // 🏢 MULTI-TENANT: Extraire les infos tenant
+    const tenant = extractTenantFromRequest(req);
+
     const {
       name = "",
       building = "",
@@ -505,13 +522,15 @@ app.post("/api/atex/equipments", async (req, res) => {
     const { rows } = await pool.query(
       `
       INSERT INTO atex_equipments
-        (name, building, zone, equipment, sub_equipment, type,
+        (company_id, site_id, name, building, zone, equipment, sub_equipment, type,
          manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
          comment, installed_at, next_check_date, zoning_gas, zoning_dust)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULL,NULL)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULL,NULL)
       RETURNING *
       `,
       [
+        tenant.companyId,
+        tenant.siteId,
         name || "Équipement ATEX",
         building,
         zone,

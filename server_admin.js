@@ -1,8 +1,10 @@
 // server_admin.js — API pour l'administration et gestion des utilisateurs
+// VERSION 2.0 - MULTI-TENANT (Company + Site)
 import express from "express";
 import pg from "pg";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import { extractTenantFromRequest, getTenantFilter, requireTenant } from "./lib/tenant-filter.js";
 
 dotenv.config();
 
@@ -431,10 +433,24 @@ router.delete("/companies/:id", adminOnly, async (req, res) => {
 
 // --- SITES ---
 
-// GET /api/admin/sites - Liste les sites
+// GET /api/admin/sites - Liste les sites (avec company info)
 router.get("/sites", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM sites ORDER BY name ASC`);
+    const { company_id } = req.query;
+    let query = `
+      SELECT s.*, c.name as company_name
+      FROM sites s
+      LEFT JOIN companies c ON s.company_id = c.id
+    `;
+    const params = [];
+
+    if (company_id) {
+      query += ` WHERE s.company_id = $1`;
+      params.push(company_id);
+    }
+    query += ` ORDER BY c.name ASC, s.name ASC`;
+
+    const result = await pool.query(query, params);
     res.json({ sites: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -444,14 +460,60 @@ router.get("/sites", adminOnly, async (req, res) => {
 // POST /api/admin/sites - Créer un site
 router.post("/sites", adminOnly, express.json(), async (req, res) => {
   try {
-    const { code, name } = req.body;
-    if (!code || !name) return res.status(400).json({ error: "Code and name required" });
+    const { code, name, company_id, city, country, address } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    if (!company_id) return res.status(400).json({ error: "Company ID required" });
 
     const result = await pool.query(`
-      INSERT INTO sites (code, name) VALUES ($1, $2) RETURNING *
-    `, [code, name]);
+      INSERT INTO sites (code, name, company_id, city, country, address)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [code, name, company_id, city, country || 'Switzerland', address]);
 
     res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: "Site already exists for this company" });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/sites/:id - Modifier un site
+router.put("/sites/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { code, name, company_id, city, country, address, is_active } = req.body;
+
+    const result = await pool.query(`
+      UPDATE sites
+      SET code = COALESCE($1, code),
+          name = COALESCE($2, name),
+          company_id = COALESCE($3, company_id),
+          city = COALESCE($4, city),
+          country = COALESCE($5, country),
+          address = COALESCE($6, address),
+          is_active = COALESCE($7, is_active),
+          updated_at = NOW()
+      WHERE id = $8
+      RETURNING *
+    `, [code, name, company_id, city, country, address, is_active, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Site not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/sites/:id - Supprimer un site
+router.delete("/sites/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM sites WHERE id = $1`, [id]);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -462,7 +524,31 @@ router.post("/sites", adminOnly, express.json(), async (req, res) => {
 // GET /api/admin/departments - Liste les départements
 router.get("/departments", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM departments ORDER BY name ASC`);
+    const { company_id, site_id } = req.query;
+    let query = `
+      SELECT d.*, c.name as company_name, s.name as site_name
+      FROM departments d
+      LEFT JOIN companies c ON d.company_id = c.id
+      LEFT JOIN sites s ON d.site_id = s.id
+    `;
+    const conditions = [];
+    const params = [];
+
+    if (company_id) {
+      params.push(company_id);
+      conditions.push(`d.company_id = $${params.length}`);
+    }
+    if (site_id) {
+      params.push(site_id);
+      conditions.push(`d.site_id = $${params.length}`);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+    query += ` ORDER BY d.name ASC`;
+
+    const result = await pool.query(query, params);
     res.json({ departments: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -472,14 +558,52 @@ router.get("/departments", adminOnly, async (req, res) => {
 // POST /api/admin/departments - Créer un département
 router.post("/departments", adminOnly, express.json(), async (req, res) => {
   try {
-    const { code, name } = req.body;
+    const { code, name, company_id, site_id } = req.body;
     if (!code || !name) return res.status(400).json({ error: "Code and name required" });
 
     const result = await pool.query(`
-      INSERT INTO departments (code, name) VALUES ($1, $2) RETURNING *
-    `, [code, name]);
+      INSERT INTO departments (code, name, company_id, site_id)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [code, name, company_id, site_id]);
 
     res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/departments/:id - Modifier un département
+router.put("/departments/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { code, name, company_id, site_id } = req.body;
+
+    const result = await pool.query(`
+      UPDATE departments
+      SET code = COALESCE($1, code),
+          name = COALESCE($2, name),
+          company_id = COALESCE($3, company_id),
+          site_id = COALESCE($4, site_id)
+      WHERE id = $5
+      RETURNING *
+    `, [code, name, company_id, site_id, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Department not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/departments/:id - Supprimer un département
+router.delete("/departments/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM departments WHERE id = $1`, [id]);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -492,18 +616,26 @@ router.post("/departments", adminOnly, express.json(), async (req, res) => {
 // GET /api/admin/users/external - Liste les utilisateurs externes
 router.get("/users/external", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`
+    const { company_id } = req.query;
+    let query = `
       SELECT u.id, u.email, u.name, u.site_id, u.department_id,
-             u.company_id, u.allowed_apps, u.is_admin, u.origin,
-             u.created_at, u.updated_at,
+             u.company_id, u.allowed_apps, u.is_admin, u.role, u.origin,
+             u.is_active, u.created_at, u.updated_at,
              s.name as site_name, d.name as department_name,
              c.name as company_name
       FROM users u
       LEFT JOIN sites s ON u.site_id = s.id
       LEFT JOIN departments d ON u.department_id = d.id
       LEFT JOIN companies c ON u.company_id = c.id
-      ORDER BY u.name ASC
-    `);
+    `;
+    const params = [];
+    if (company_id) {
+      query += ` WHERE u.company_id = $1`;
+      params.push(company_id);
+    }
+    query += ` ORDER BY u.name ASC`;
+
+    const result = await pool.query(query, params);
     res.json({ users: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -513,20 +645,27 @@ router.get("/users/external", adminOnly, async (req, res) => {
 // POST /api/admin/users/external - Créer un utilisateur externe
 router.post("/users/external", adminOnly, express.json(), async (req, res) => {
   try {
-    const { email, name, password, site_id, department_id, company_id, allowed_apps } = req.body;
+    const { email, name, password, site_id, department_id, company_id, allowed_apps, role } = req.body;
     if (!email || !name || !password) {
       return res.status(400).json({ error: "Email, name and password required" });
     }
+    if (!company_id) {
+      return res.status(400).json({ error: "Company ID required" });
+    }
+
+    // Validate role
+    const validRoles = ['site', 'global', 'admin', 'superadmin'];
+    const userRole = validRoles.includes(role) ? role : 'site';
 
     // Hash password (bcrypt)
     const bcrypt = await import('bcryptjs');
     const password_hash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(`
-      INSERT INTO users (email, name, password_hash, site_id, department_id, company_id, allowed_apps, origin)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'external')
-      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, origin, created_at
-    `, [email, name, password_hash, site_id || 1, department_id || 1, company_id, allowed_apps]);
+      INSERT INTO users (email, name, password_hash, site_id, department_id, company_id, allowed_apps, role, origin)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'external')
+      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, role, origin, created_at
+    `, [email, name, password_hash, site_id, department_id, company_id, allowed_apps, userRole]);
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -541,7 +680,11 @@ router.post("/users/external", adminOnly, express.json(), async (req, res) => {
 router.put("/users/external/:id", adminOnly, express.json(), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, site_id, department_id, company_id, allowed_apps, is_admin, password } = req.body;
+    const { name, site_id, department_id, company_id, allowed_apps, is_admin, role, is_active, password } = req.body;
+
+    // Validate role if provided
+    const validRoles = ['site', 'global', 'admin', 'superadmin'];
+    const userRole = role && validRoles.includes(role) ? role : null;
 
     let query = `
       UPDATE users
@@ -551,11 +694,13 @@ router.put("/users/external/:id", adminOnly, express.json(), async (req, res) =>
           company_id = COALESCE($4, company_id),
           allowed_apps = COALESCE($5, allowed_apps),
           is_admin = COALESCE($6, is_admin),
+          role = COALESCE($7, role),
+          is_active = COALESCE($8, is_active),
           updated_at = NOW()
-      WHERE id = $7
-      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, origin
+      WHERE id = $9
+      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, role, is_active, origin
     `;
-    let params = [name, site_id, department_id, company_id, allowed_apps, is_admin, id];
+    let params = [name, site_id, department_id, company_id, allowed_apps, is_admin, userRole, is_active, id];
 
     // Si nouveau mot de passe fourni
     if (password) {
@@ -569,12 +714,14 @@ router.put("/users/external/:id", adminOnly, express.json(), async (req, res) =>
             company_id = COALESCE($4, company_id),
             allowed_apps = COALESCE($5, allowed_apps),
             is_admin = COALESCE($6, is_admin),
-            password_hash = $7,
+            role = COALESCE($7, role),
+            is_active = COALESCE($8, is_active),
+            password_hash = $9,
             updated_at = NOW()
-        WHERE id = $8
-        RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, origin
+        WHERE id = $10
+        RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, role, is_active, origin
       `;
-      params = [name, site_id, department_id, company_id, allowed_apps, is_admin, password_hash, id];
+      params = [name, site_id, department_id, company_id, allowed_apps, is_admin, userRole, is_active, password_hash, id];
     }
 
     const result = await pool.query(query, params);
@@ -775,37 +922,148 @@ router.get("/permissions/:email", async (req, res) => {
 // MIGRATION - Run migration endpoint
 // ============================================================
 
-// POST /api/admin/migrate - Exécuter les migrations
+// Helper pour ajouter une colonne si elle n'existe pas
+async function addColumnIfNotExists(tableName, columnName, columnDef) {
+  const result = await pool.query(`
+    SELECT EXISTS (
+      SELECT FROM information_schema.columns
+      WHERE table_schema = 'public'
+      AND table_name = $1
+      AND column_name = $2
+    );
+  `, [tableName, columnName]);
+
+  if (!result.rows[0].exists) {
+    await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef}`);
+    return true;
+  }
+  return false;
+}
+
+// Helper pour vérifier si une table existe
+async function tableExists(tableName) {
+  const result = await pool.query(`
+    SELECT EXISTS (
+      SELECT FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_name = $1
+    );
+  `, [tableName]);
+  return result.rows[0].exists;
+}
+
+// POST /api/admin/migrate - Exécuter les migrations de base
 router.post("/migrate", adminOnly, async (req, res) => {
   try {
-    // Créer la table companies si elle n'existe pas
+    const logs = [];
+
+    // 1. Créer la table companies
     await pool.query(`
       CREATE TABLE IF NOT EXISTS companies (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
+        code TEXT UNIQUE,
         country TEXT NOT NULL DEFAULT 'Switzerland',
         city TEXT,
+        logo BYTEA,
+        logo_mime TEXT DEFAULT 'image/png',
         is_internal BOOLEAN DEFAULT FALSE,
+        settings JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    logs.push('Table companies créée/vérifiée');
 
-    // Insérer Haleon
-    await pool.query(`
-      INSERT INTO companies (name, country, city, is_internal)
-      VALUES ('Haleon', 'Switzerland', 'Nyon', TRUE)
-      ON CONFLICT (name) DO NOTHING
+    // 2. Insérer Haleon
+    const haleonResult = await pool.query(`
+      INSERT INTO companies (name, code, country, city, is_internal)
+      VALUES ('Haleon', 'HAL', 'Switzerland', 'Nyon', TRUE)
+      ON CONFLICT (name) DO UPDATE SET code = 'HAL', is_internal = TRUE
+      RETURNING id
     `);
+    const haleonId = haleonResult.rows[0].id;
+    logs.push(`Entreprise Haleon créée (id=${haleonId})`);
 
-    // Créer haleon_users
+    // 3. Créer la table sites avec company_id
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sites (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        code TEXT,
+        address TEXT,
+        city TEXT,
+        country TEXT DEFAULT 'Switzerland',
+        timezone TEXT DEFAULT 'Europe/Zurich',
+        is_active BOOLEAN DEFAULT TRUE,
+        settings JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await addColumnIfNotExists('sites', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
+    await addColumnIfNotExists('sites', 'code', 'TEXT');
+    await addColumnIfNotExists('sites', 'settings', "JSONB DEFAULT '{}'::jsonb");
+    logs.push('Table sites mise à jour');
+
+    // 4. Créer le site Nyon
+    const nyonResult = await pool.query(`
+      INSERT INTO sites (company_id, name, code, city, country)
+      VALUES ($1, 'Nyon', 'NYN', 'Nyon', 'Switzerland')
+      ON CONFLICT ON CONSTRAINT sites_company_id_name_key DO UPDATE SET code = 'NYN'
+      RETURNING id
+    `, [haleonId]).catch(async () => {
+      // Contrainte n'existe peut-être pas, essayer autrement
+      const existing = await pool.query(`SELECT id FROM sites WHERE name = 'Nyon' LIMIT 1`);
+      if (existing.rows.length > 0) {
+        await pool.query(`UPDATE sites SET company_id = $1, code = 'NYN' WHERE id = $2`, [haleonId, existing.rows[0].id]);
+        return { rows: existing.rows };
+      }
+      return pool.query(`INSERT INTO sites (company_id, name, code, city) VALUES ($1, 'Nyon', 'NYN', 'Nyon') RETURNING id`, [haleonId]);
+    });
+    const nyonId = nyonResult.rows[0]?.id || 1;
+    logs.push(`Site Nyon créé/mis à jour (id=${nyonId})`);
+
+    // 5. Créer la table users avec tous les champs multi-tenant
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT,
+        name TEXT,
+        company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+        site_id INTEGER REFERENCES sites(id) ON DELETE SET NULL,
+        department_id INTEGER,
+        role TEXT DEFAULT 'site',
+        allowed_apps TEXT[] DEFAULT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        origin TEXT DEFAULT 'manual',
+        preferences JSONB DEFAULT '{}'::jsonb,
+        last_login TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await addColumnIfNotExists('users', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
+    await addColumnIfNotExists('users', 'site_id', 'INTEGER REFERENCES sites(id) ON DELETE SET NULL');
+    await addColumnIfNotExists('users', 'role', "TEXT DEFAULT 'site'");
+    await addColumnIfNotExists('users', 'allowed_apps', 'TEXT[] DEFAULT NULL');
+    await addColumnIfNotExists('users', 'is_admin', 'BOOLEAN DEFAULT FALSE');
+    await addColumnIfNotExists('users', 'is_active', 'BOOLEAN DEFAULT TRUE');
+    await addColumnIfNotExists('users', 'origin', "TEXT DEFAULT 'manual'");
+    await addColumnIfNotExists('users', 'preferences', "JSONB DEFAULT '{}'::jsonb");
+    logs.push('Table users mise à jour');
+
+    // 6. Créer haleon_users (pour compat)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS haleon_users (
         id SERIAL PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         name TEXT,
         site_id INTEGER REFERENCES sites(id),
-        department_id INTEGER REFERENCES departments(id),
+        department_id INTEGER,
         allowed_apps TEXT[] DEFAULT NULL,
         is_active BOOLEAN DEFAULT TRUE,
         last_login TIMESTAMPTZ,
@@ -813,40 +1071,146 @@ router.post("/migrate", adminOnly, async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    logs.push('Table haleon_users créée/vérifiée');
 
-    // Ajouter colonnes à users si nécessaire
-    const columns = ['company_id', 'allowed_apps', 'is_admin', 'origin'];
-    for (const col of columns) {
-      try {
-        if (col === 'company_id') {
-          await pool.query(`ALTER TABLE users ADD COLUMN ${col} INTEGER REFERENCES companies(id)`);
-        } else if (col === 'allowed_apps') {
-          await pool.query(`ALTER TABLE users ADD COLUMN ${col} TEXT[] DEFAULT NULL`);
-        } else if (col === 'is_admin') {
-          await pool.query(`ALTER TABLE users ADD COLUMN ${col} BOOLEAN DEFAULT FALSE`);
-        } else if (col === 'origin') {
-          await pool.query(`ALTER TABLE users ADD COLUMN ${col} TEXT DEFAULT 'manual'`);
-        }
-      } catch (e) {
-        // Colonne existe déjà
+    // 7. Créer index
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_sites_company ON sites(company_id);
+      CREATE INDEX IF NOT EXISTS idx_users_company ON users(company_id);
+      CREATE INDEX IF NOT EXISTS idx_users_site ON users(site_id);
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+    `);
+    logs.push('Index créés');
+
+    // 8. Migrer utilisateurs Haleon existants
+    const askvExists = await tableExists('askv_users');
+    let migratedCount = 0;
+    if (askvExists) {
+      const askvUsers = await pool.query(`
+        SELECT DISTINCT email FROM askv_users WHERE email LIKE '%@haleon.com'
+      `);
+      for (const user of askvUsers.rows) {
+        await pool.query(`
+          INSERT INTO haleon_users (email, site_id)
+          VALUES ($1, $2)
+          ON CONFLICT (email) DO NOTHING
+        `, [user.email, nyonId]);
+        migratedCount++;
+      }
+      logs.push(`${migratedCount} utilisateurs migrés depuis askv_users`);
+    }
+
+    res.json({
+      ok: true,
+      message: "Migration de base terminée",
+      haleonId,
+      nyonId,
+      migratedUsers: migratedCount,
+      logs
+    });
+  } catch (err) {
+    console.error('Migration error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/migrate-multi-tenant - Migration complète multi-tenant
+router.post("/migrate-multi-tenant", adminOnly, async (req, res) => {
+  try {
+    const logs = [];
+    const stats = { tablesUpdated: 0, recordsMigrated: 0 };
+
+    // Récupérer les IDs Haleon/Nyon
+    const haleonResult = await pool.query(`SELECT id FROM companies WHERE name = 'Haleon'`);
+    if (haleonResult.rows.length === 0) {
+      return res.status(400).json({ error: "Run /migrate first to create Haleon company" });
+    }
+    const haleonId = haleonResult.rows[0].id;
+
+    const nyonResult = await pool.query(`SELECT id FROM sites WHERE name = 'Nyon' LIMIT 1`);
+    if (nyonResult.rows.length === 0) {
+      return res.status(400).json({ error: "Run /migrate first to create Nyon site" });
+    }
+    const nyonId = nyonResult.rows[0].id;
+
+    // Tables avec site TEXT existant
+    const tablesWithSite = [
+      'switchboards', 'devices', 'site_settings', 'scanned_products',
+      'control_templates', 'control_schedules', 'control_records', 'control_attachments',
+      'hv_switchboards', 'hv_equipment', 'hv_cells', 'hv_tests', 'hv_maintenance',
+      'arcflash_studies', 'arcflash_switchboards', 'arcflash_equipment', 'arcflash_results',
+      'projects', 'project_tasks', 'selectivity_studies', 'selectivity_devices',
+      'fla_studies', 'fla_calculations', 'obsolescence_items'
+    ];
+
+    // Tables sans site
+    const tablesWithoutSite = [
+      'atex_equipments', 'atex_checks', 'atex_files', 'atex_plans', 'atex_positions', 'atex_subareas', 'atex_events',
+      'meca_equipments', 'meca_checks', 'meca_files', 'meca_plans', 'meca_positions', 'meca_subareas', 'meca_events',
+      'vsd_units', 'vsd_parameters', 'vsd_maintenance', 'vsd_alarms', 'vsd_files',
+      'fire_doors', 'fire_door_checks', 'fire_door_files',
+      'compext_contractors', 'compext_interventions', 'compext_evaluations',
+      'askv_documents', 'askv_questions', 'askv_answers',
+      'dcf_documents', 'dcf_categories',
+      'learnex_incidents', 'learnex_lessons', 'learnex_actions',
+      'loopcalc_studies', 'loopcalc_results',
+      'oibt_inspections', 'oibt_findings', 'oibt_reports'
+    ];
+
+    // Ajouter company_id aux tables avec site TEXT
+    for (const tableName of tablesWithSite) {
+      const exists = await tableExists(tableName);
+      if (!exists) continue;
+
+      const added = await addColumnIfNotExists(tableName, 'company_id', 'INTEGER');
+      await addColumnIfNotExists(tableName, 'site_id', 'INTEGER');
+
+      if (added) {
+        const updateResult = await pool.query(`
+          UPDATE ${tableName} SET company_id = $1, site_id = $2 WHERE company_id IS NULL
+        `, [haleonId, nyonId]);
+        stats.tablesUpdated++;
+        stats.recordsMigrated += updateResult.rowCount;
+        logs.push(`${tableName}: ${updateResult.rowCount} enregistrements migrés`);
       }
     }
 
-    // Migrer les utilisateurs Haleon depuis askv_users
-    const askvUsers = await pool.query(`
-      SELECT DISTINCT email FROM askv_users WHERE email LIKE '%@haleon.com'
-    `);
+    // Ajouter company_id ET site_id aux tables sans site
+    for (const tableName of tablesWithoutSite) {
+      const exists = await tableExists(tableName);
+      if (!exists) continue;
 
-    for (const user of askvUsers.rows) {
-      await pool.query(`
-        INSERT INTO haleon_users (email, site_id)
-        VALUES ($1, 1)
-        ON CONFLICT (email) DO NOTHING
-      `, [user.email]);
+      const addedCompany = await addColumnIfNotExists(tableName, 'company_id', 'INTEGER');
+      await addColumnIfNotExists(tableName, 'site_id', 'INTEGER');
+
+      if (addedCompany) {
+        const updateResult = await pool.query(`
+          UPDATE ${tableName} SET company_id = $1, site_id = $2 WHERE company_id IS NULL
+        `, [haleonId, nyonId]);
+        stats.tablesUpdated++;
+        stats.recordsMigrated += updateResult.rowCount;
+        logs.push(`${tableName}: ${updateResult.rowCount} enregistrements migrés`);
+      }
     }
 
-    res.json({ ok: true, message: "Migration completed", migratedUsers: askvUsers.rows.length });
+    // Migrer les utilisateurs Haleon vers users
+    const userMigration = await pool.query(`
+      UPDATE users
+      SET company_id = $1, site_id = $2, role = COALESCE(role, 'site')
+      WHERE email LIKE '%@haleon.com' AND company_id IS NULL
+    `, [haleonId, nyonId]);
+    logs.push(`${userMigration.rowCount} utilisateurs Haleon migrés`);
+
+    res.json({
+      ok: true,
+      message: "Migration multi-tenant terminée",
+      haleonId,
+      nyonId,
+      stats,
+      logs
+    });
   } catch (err) {
+    console.error('Multi-tenant migration error:', err);
     res.status(500).json({ error: err.message });
   }
 });
