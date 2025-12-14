@@ -175,7 +175,7 @@ app.post("/api/auth/login", express.json(), async (req, res) => {
   const token = jwt.sign(
     { id: email || "user", name: email || "user", site },
     process.env.JWT_SECRET || "devsecret",
-    { expiresIn: "2h" }
+    { expiresIn: "7d" }  // Extended from 2h to 7 days
   );
   const isProduction = process.env.NODE_ENV === 'production';
   res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
@@ -197,7 +197,7 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
   const token = jwt.sign(
     { id: email || "user", name: email || "user", site },
     process.env.JWT_SECRET || "devsecret",
-    { expiresIn: "2h" }
+    { expiresIn: "7d" }  // Extended from 2h to 7 days
   );
   const isProduction = process.env.NODE_ENV === 'production';
   res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
