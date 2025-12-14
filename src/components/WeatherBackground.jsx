@@ -467,34 +467,34 @@ export default function WeatherBackground({ site, children }) {
       {/* Gradient overlay for readability */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent" />
 
-      {/* Weather info overlay - top right on mobile, integrated on desktop */}
-      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 lg:top-auto lg:bottom-28 lg:right-8 z-20">
+      {/* Weather info overlay - compact positioning to avoid overlap */}
+      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-20">
         {!loading && weather && (
           <div className="flex items-center gap-2 sm:gap-3 bg-black/30 backdrop-blur-md rounded-xl sm:rounded-2xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/20">
             <div className="text-right">
-              <div className="text-xl sm:text-3xl lg:text-4xl font-light text-white">
+              <div className="text-xl sm:text-2xl lg:text-3xl font-light text-white">
                 {weather.temperature}°
               </div>
-              <div className="text-[10px] sm:text-xs lg:text-sm text-white/80 hidden sm:block">{weather.label}</div>
+              <div className="text-[10px] sm:text-xs text-white/80 hidden sm:block">{weather.label}</div>
             </div>
-            <div className="w-8 h-8 sm:w-10 sm:h-10 lg:w-14 lg:h-14 rounded-lg sm:rounded-xl bg-white/10 flex items-center justify-center">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 lg:w-12 lg:h-12 rounded-lg sm:rounded-xl bg-white/10 flex items-center justify-center">
               <WeatherIcon size={18} className="text-white sm:hidden" />
-              <WeatherIcon size={22} className="text-white hidden sm:block lg:hidden" />
-              <WeatherIcon size={28} className="text-white hidden lg:block" />
+              <WeatherIcon size={20} className="text-white hidden sm:block lg:hidden" />
+              <WeatherIcon size={24} className="text-white hidden lg:block" />
             </div>
           </div>
         )}
       </div>
 
-      {/* Weather details (bottom left) - hidden on mobile, visible on tablet+ */}
+      {/* Weather details (top left, below main content on mobile, inline on desktop) */}
       {!loading && weather && (
-        <div className="absolute bottom-28 left-4 sm:left-6 lg:left-8 z-20 hidden md:flex gap-3 text-white/70 text-xs sm:text-sm">
-          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1.5">
-            <Droplets size={14} />
+        <div className="absolute top-2 left-2 sm:top-4 sm:left-4 z-20 hidden sm:flex gap-2 text-white/80 text-xs">
+          <div className="flex items-center gap-1.5 bg-black/20 backdrop-blur-sm rounded-full px-2.5 py-1">
+            <Droplets size={12} />
             <span>{weather.humidity}%</span>
           </div>
-          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1.5">
-            <Wind size={14} />
+          <div className="flex items-center gap-1.5 bg-black/20 backdrop-blur-sm rounded-full px-2.5 py-1">
+            <Wind size={12} />
             <span>{weather.windSpeed} km/h</span>
           </div>
         </div>

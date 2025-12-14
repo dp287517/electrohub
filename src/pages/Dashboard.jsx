@@ -17,9 +17,6 @@ const iconMap = {
   '📋': ClipboardCheck,
 };
 
-// Available sites and departments
-const SITES = ['Nyon', 'Geneva', 'Lausanne', 'Zurich', 'Basel'];
-const DEPARTMENTS = ['Maintenance', 'Engineering', 'Operations', 'Quality', 'Safety', 'IT'];
 
 // Electrical Controls apps
 const electricalApps = [
@@ -100,19 +97,52 @@ function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
   );
 }
 
+// Default fallback sites and departments if DB is empty
+const FALLBACK_SITES = [
+  { id: 1, name: 'Nyon', code: 'NYO' },
+  { id: 2, name: 'Geneva', code: 'GVA' },
+  { id: 3, name: 'Lausanne', code: 'LSN' },
+  { id: 4, name: 'Zurich', code: 'ZRH' },
+  { id: 5, name: 'Basel', code: 'BSL' },
+];
+
+const FALLBACK_DEPARTMENTS = [
+  { id: 1, name: 'Maintenance' },
+  { id: 2, name: 'Engineering' },
+  { id: 3, name: 'Operations' },
+  { id: 4, name: 'Quality' },
+  { id: 5, name: 'Safety' },
+  { id: 6, name: 'IT' },
+];
+
 // Profile Edit Modal - now saves to database with department_id
 function ProfileModal({ user, departments, sites, onClose, onSave }) {
-  const [siteId, setSiteId] = useState(user?.site_id || 1);
-  const [departmentId, setDepartmentId] = useState(user?.department_id || null);
+  // Use fallbacks if DB data is empty
+  const availableSites = sites?.length > 0 ? sites : FALLBACK_SITES;
+  const availableDepts = departments?.length > 0 ? departments : FALLBACK_DEPARTMENTS;
+
+  // Initialize with existing values or find by name
+  const initialSiteId = user?.site_id || availableSites.find(s => s.name === user?.site)?.id || 1;
+  const initialDeptId = user?.department_id || availableDepts.find(d => d.name === user?.department)?.id || null;
+
+  const [siteId, setSiteId] = useState(initialSiteId);
+  const [departmentId, setDepartmentId] = useState(initialDeptId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setSuccess(false);
+
+    console.log('[ProfileModal] Saving profile:', { siteId, departmentId });
+
     try {
       // Save to database via API
       const token = localStorage.getItem('eh_token');
+      console.log('[ProfileModal] Token exists:', !!token);
+
       const response = await fetch('/api/user/profile', {
         method: 'PUT',
         headers: {
@@ -123,15 +153,18 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
         body: JSON.stringify({ department_id: departmentId, site_id: siteId })
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to save profile');
-      }
+      console.log('[ProfileModal] Response status:', response.status);
 
       const data = await response.json();
+      console.log('[ProfileModal] Response data:', data);
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save profile');
+      }
 
       // Update local user with new data
-      const selectedDept = departments.find(d => d.id === departmentId);
-      const selectedSite = sites.find(s => s.id === siteId);
+      const selectedDept = availableDepts.find(d => d.id === departmentId);
+      const selectedSite = availableSites.find(s => s.id === siteId);
       const updatedUser = {
         ...user,
         department_id: departmentId,
@@ -140,27 +173,30 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
         site: selectedSite?.name || user?.site,
       };
 
+      console.log('[ProfileModal] Updated user:', updatedUser);
+
       // Save new token if provided
       if (data.jwt) {
         localStorage.setItem('eh_token', data.jwt);
+        console.log('[ProfileModal] New JWT saved');
       }
 
-      onSave(updatedUser);
+      setSuccess(true);
+      setTimeout(() => {
+        onSave(updatedUser);
+      }, 500);
     } catch (err) {
-      setError(err.message);
+      console.error('[ProfileModal] Error:', err);
+      setError(err.message || 'Failed to save profile');
       setSaving(false);
     }
   };
-
-  // Find current department and site names for display
-  const currentDeptName = departments.find(d => d.id === departmentId)?.name || user?.department || 'Not set';
-  const currentSiteName = sites.find(s => s.id === siteId)?.name || user?.site || 'Not set';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fadeIn"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
 
@@ -208,7 +244,7 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
             className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
           >
             <option value="">Select site...</option>
-            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {availableSites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
 
@@ -224,13 +260,21 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
             className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
           >
             <option value="">Select department...</option>
-            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {availableDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm">
+          <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm flex items-center gap-2">
+            <AlertTriangle size={16} />
             {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="mb-4 p-3 bg-green-50 text-green-600 rounded-xl text-sm flex items-center gap-2">
+            <Check size={16} />
+            Profile saved successfully!
           </div>
         )}
 
@@ -244,11 +288,16 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || success}
             className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-brand-600 to-brand-700 text-white font-medium hover:from-brand-700 hover:to-brand-800 transition-all shadow-lg shadow-brand-500/25 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {saving ? (
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : success ? (
+              <>
+                <Check size={18} />
+                Saved!
+              </>
             ) : (
               <>
                 <Check size={18} />
