@@ -76,5 +76,5 @@ export function signLocalJWT(user) {
   };
 
   const secret = process.env.JWT_SECRET || "devsecret";
-  return jwt.sign(payload, secret, { expiresIn: "2h" });
+  return jwt.sign(payload, secret, { expiresIn: "7d" }); // 7 jours au lieu de 2h
 }
