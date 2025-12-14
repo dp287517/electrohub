@@ -157,7 +157,8 @@ export default function AuditHistory({
 
       let url = apiEndpoint;
       if (entityType && entityId) {
-        url = `${apiEndpoint}/entity/${entityType}/${entityId}`;
+        // apiEndpoint already contains the base path, just add type/id
+        url = `${apiEndpoint}/${entityType}/${entityId}`;
       }
 
       const params = new URLSearchParams();
