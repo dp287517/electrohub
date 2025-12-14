@@ -1976,6 +1976,112 @@ app.post("/api/atex/aiAnalyze", (req, res) => {
   req.url = "/api/atex/assess";
   return app._router.handle(req, res);
 });
+
+// ============================================================
+// AUDIT TRAIL - Historique des modifications
+// ============================================================
+
+// GET /audit/history - Récupérer l'historique complet
+app.get("/api/atex/audit/history", async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, action } = req.query;
+
+    let query = `
+      SELECT id, ts, action, actor_name, actor_email, details
+      FROM atex_events
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIdx = 1;
+
+    if (action) {
+      query += ` AND action = $${paramIdx++}`;
+      params.push(action);
+    }
+
+    query += ` ORDER BY ts DESC LIMIT $${paramIdx++} OFFSET $${paramIdx}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const { rows } = await pool.query(query, params);
+
+    // Transformer pour compatibilité avec le composant frontend
+    const events = rows.map(r => ({
+      ...r,
+      entity_type: r.details?.entity_type || 'equipment',
+      entity_id: r.details?.id || r.details?.equipmentId || null,
+    }));
+
+    res.json({ events });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/equipment/:id - Historique d'un équipement spécifique
+app.get("/api/atex/audit/equipment/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { limit = 50 } = req.query;
+
+    const { rows } = await pool.query(`
+      SELECT id, ts, action, actor_name, actor_email, details
+      FROM atex_events
+      WHERE details->>'id' = $1 OR details->>'equipmentId' = $1
+      ORDER BY ts DESC
+      LIMIT $2
+    `, [id, parseInt(limit)]);
+
+    const events = rows.map(r => ({
+      ...r,
+      entity_type: 'equipment',
+      entity_id: id,
+    }));
+
+    res.json({ events });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/stats - Statistiques d'audit
+app.get("/api/atex/audit/stats", async (req, res) => {
+  try {
+    const { days = 30 } = req.query;
+
+    const { rows } = await pool.query(`
+      SELECT
+        action,
+        COUNT(*) as count,
+        COUNT(DISTINCT actor_email) as unique_actors,
+        MAX(ts) as last_occurrence
+      FROM atex_events
+      WHERE ts >= NOW() - INTERVAL '${parseInt(days)} days'
+      GROUP BY action
+      ORDER BY count DESC
+    `);
+
+    const { rows: contributors } = await pool.query(`
+      SELECT
+        actor_email,
+        actor_name,
+        COUNT(*) as action_count
+      FROM atex_events
+      WHERE ts >= NOW() - INTERVAL '${parseInt(days)} days'
+        AND actor_email IS NOT NULL
+      GROUP BY actor_email, actor_name
+      ORDER BY action_count DESC
+      LIMIT 10
+    `);
+
+    res.json({
+      by_action: rows,
+      top_contributors: contributors
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // -------------------------------------------------
 await ensureSchema();
 app.listen(PORT, HOST, () => {

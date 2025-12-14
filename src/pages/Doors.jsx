@@ -14,6 +14,8 @@ import "leaflet/dist/leaflet.css";
 import "../styles/doors-map.css";
 
 import { api } from "../lib/api.js";
+import AuditHistory from "../components/AuditHistory.jsx";
+import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
 
 /* >>> PDF.js (worker + logs réduits) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -2067,6 +2069,46 @@ function Doors() {
                     Étiquettes PDF (HALEON)
                   </a>
                 </div>
+              </div>
+            )}
+
+            {/* Audit Trail - Qui a créé/modifié */}
+            {editing?.id && (
+              <div className="border rounded-2xl p-3">
+                <div className="font-semibold mb-2">Traçabilité</div>
+                <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                  {(editing.created_by_name || editing.created_by_email) && (
+                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                      <div className="text-xs text-gray-500 mb-1">Créé par</div>
+                      <CreatedByBadge
+                        name={editing.created_by_name}
+                        email={editing.created_by_email}
+                        date={editing.created_at}
+                        size="md"
+                      />
+                    </div>
+                  )}
+                  {(editing.updated_by_name || editing.updated_by_email || editing.updated_at) && (
+                    <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
+                      <div className="text-xs text-gray-500 mb-1">Dernière modification</div>
+                      <LastModifiedBadge
+                        actor_name={editing.updated_by_name}
+                        actor_email={editing.updated_by_email}
+                        date={editing.updated_at}
+                        action="updated"
+                        showIcon={false}
+                      />
+                    </div>
+                  )}
+                </div>
+                <AuditHistory
+                  apiEndpoint="/api/doors/audit/entity"
+                  entityType="door"
+                  entityId={editing.id}
+                  title="Historique complet"
+                  maxHeight="200px"
+                  showFilters={false}
+                />
               </div>
             )}
 

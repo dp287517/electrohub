@@ -3376,6 +3376,125 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
 });
 
 // ============================================================
+// AUDIT TRAIL - Historique des modifications
+// ============================================================
+
+// GET /audit/history - Récupérer l'historique complet
+app.get('/api/switchboard/audit/history', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const { limit = 100, offset = 0, entity_type, entity_id, action } = req.query;
+
+    let query = `
+      SELECT id, ts, action, entity_type, entity_id,
+             actor_name, actor_email, details
+      FROM switchboard_audit_log
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIdx = 1;
+
+    if (entity_type) {
+      query += ` AND entity_type = $${paramIdx++}`;
+      params.push(entity_type);
+    }
+    if (entity_id) {
+      query += ` AND entity_id = $${paramIdx++}`;
+      params.push(entity_id);
+    }
+    if (action) {
+      query += ` AND action = $${paramIdx++}`;
+      params.push(action);
+    }
+
+    query += ` ORDER BY ts DESC LIMIT $${paramIdx++} OFFSET $${paramIdx}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const { rows } = await quickQuery(query, params);
+    res.json({ events: rows });
+  } catch (e) {
+    console.error('[AUDIT] History error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/entity/:type/:id - Historique d'une entité spécifique
+app.get('/api/switchboard/audit/entity/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const { limit = 50 } = req.query;
+
+    const { rows } = await quickQuery(`
+      SELECT id, ts, action, entity_type, entity_id,
+             actor_name, actor_email, details, old_values, new_values
+      FROM switchboard_audit_log
+      WHERE entity_type = $1 AND entity_id = $2
+      ORDER BY ts DESC
+      LIMIT $3
+    `, [type, id, parseInt(limit)]);
+
+    res.json({ events: rows });
+  } catch (e) {
+    console.error('[AUDIT] Entity history error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/stats - Statistiques d'audit
+app.get('/api/switchboard/audit/stats', async (req, res) => {
+  try {
+    const { days = 30 } = req.query;
+
+    const { rows } = await quickQuery(`
+      SELECT
+        action,
+        entity_type,
+        COUNT(*) as count,
+        COUNT(DISTINCT actor_email) as unique_actors,
+        MAX(ts) as last_occurrence
+      FROM switchboard_audit_log
+      WHERE ts >= NOW() - INTERVAL '${parseInt(days)} days'
+      GROUP BY action, entity_type
+      ORDER BY count DESC
+    `);
+
+    // Activité par jour
+    const { rows: daily } = await quickQuery(`
+      SELECT
+        DATE(ts) as date,
+        COUNT(*) as count
+      FROM switchboard_audit_log
+      WHERE ts >= NOW() - INTERVAL '${parseInt(days)} days'
+      GROUP BY DATE(ts)
+      ORDER BY date DESC
+    `);
+
+    // Top contributors
+    const { rows: contributors } = await quickQuery(`
+      SELECT
+        actor_email,
+        actor_name,
+        COUNT(*) as action_count
+      FROM switchboard_audit_log
+      WHERE ts >= NOW() - INTERVAL '${parseInt(days)} days'
+        AND actor_email IS NOT NULL
+      GROUP BY actor_email, actor_name
+      ORDER BY action_count DESC
+      LIMIT 10
+    `);
+
+    res.json({
+      by_action: rows,
+      by_day: daily,
+      top_contributors: contributors
+    });
+  } catch (e) {
+    console.error('[AUDIT] Stats error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
 // START SERVER
 // ============================================================
 

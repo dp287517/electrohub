@@ -8,6 +8,8 @@ dayjs.locale("fr");
 import "../styles/atex-map.css";
 import { api, API_BASE } from "../lib/api.js";
 import AtexMap from "./Atex-map.jsx";
+import AuditHistory from "../components/AuditHistory.jsx";
+import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
 
 // ============================================================
 // 🆕 Helper pour récupérer l'identité utilisateur (email)
@@ -1554,6 +1556,7 @@ function EquipmentDrawer({
           <SectionTab id="atex" label="ATEX" icon="⚠️" />
           <SectionTab id="dates" label="Contrôles" icon="📅" />
           {editing.id && <SectionTab id="files" label="Fichiers" icon="📎" />}
+          {editing.id && <SectionTab id="audit" label="Historique" icon="📜" />}
         </div>
 
         {/* Content */}
@@ -1911,6 +1914,51 @@ function EquipmentDrawer({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* SECTION: Audit History */}
+          {activeSection === "audit" && editing.id && (
+            <div className="space-y-4 animate-fadeIn">
+              {/* Qui a créé/modifié */}
+              <div className="atex-section">
+                <div className="atex-section-title">👤 Informations de création</div>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {(editing.created_by_name || editing.created_by_email) && (
+                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                      <div className="text-xs text-gray-500 mb-1">Créé par</div>
+                      <CreatedByBadge
+                        name={editing.created_by_name}
+                        email={editing.created_by_email}
+                        date={editing.created_at}
+                        size="md"
+                      />
+                    </div>
+                  )}
+                  {(editing.updated_by_name || editing.updated_by_email || editing.updated_at) && (
+                    <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
+                      <div className="text-xs text-gray-500 mb-1">Dernière modification</div>
+                      <LastModifiedBadge
+                        actor_name={editing.updated_by_name}
+                        actor_email={editing.updated_by_email}
+                        date={editing.updated_at}
+                        action="updated"
+                        showIcon={false}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Full audit history */}
+              <AuditHistory
+                apiEndpoint="/api/atex/audit/equipment"
+                entityType="equipment"
+                entityId={editing.id}
+                title="Historique complet"
+                maxHeight="350px"
+                showFilters={true}
+              />
             </div>
           )}
         </div>

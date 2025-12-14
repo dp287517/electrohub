@@ -1955,6 +1955,63 @@ const audit = createAuditTrail(pool, 'fire_doors');
 await audit.ensureTable();
 console.log('[fire-doors] Audit trail initialized');
 
+// ============================================================
+// AUDIT API ENDPOINTS - Exposer l'historique au frontend
+// ============================================================
+
+// GET /audit/history - Récupérer l'historique complet
+app.get('/api/doors/audit/history', async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const { action, entityType, limit = 100, offset = 0 } = req.query;
+
+    const events = await audit.getRecentEvents(tenant, {
+      action: action || null,
+      entityType: entityType || null,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    res.json({ events });
+  } catch (e) {
+    console.error('[doors] Audit history error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/entity/:type/:id - Historique d'une entité spécifique
+app.get('/api/doors/audit/entity/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    const events = await audit.getHistory(type, id, {
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    res.json({ events });
+  } catch (e) {
+    console.error('[doors] Audit entity history error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /audit/stats - Statistiques d'audit
+app.get('/api/doors/audit/stats', async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const { days = 30 } = req.query;
+
+    const stats = await audit.getStats(tenant, { days: parseInt(days) });
+
+    res.json({ stats });
+  } catch (e) {
+    console.error('[doors] Audit stats error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`[fire-doors] listening on ${HOST}:${PORT}`);
   console.log(
