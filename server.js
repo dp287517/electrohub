@@ -223,17 +223,38 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     // 1️⃣ Vérifie le token Bubble
     const user = await verifyBubbleToken(token);
 
-    // 2️⃣ Crée un JWT local pour ElectroHub (2h)
-    const jwtToken = signLocalJWT(user);
+    // 2️⃣ Cherche l'utilisateur en base pour récupérer department_id, company_id, site_id
+    let dbUser = null;
+    try {
+      const result = await pool.query(
+        `SELECT id, email, name, department_id, company_id, site_id, role, allowed_apps
+         FROM users WHERE email = $1 LIMIT 1`,
+        [user.email]
+      );
+      dbUser = result.rows[0] || null;
+    } catch (dbErr) {
+      console.warn('[auth/bubble] DB lookup failed:', dbErr.message);
+    }
 
-    // 3️⃣ Stocke en cookie + renvoie au front
+    // 3️⃣ Crée un JWT local enrichi avec les infos de la base
+    const enrichedUser = {
+      ...user,
+      department_id: dbUser?.department_id || null,
+      company_id: dbUser?.company_id || null,
+      site_id: dbUser?.site_id || null,
+      role: dbUser?.role || 'site',
+      allowed_apps: dbUser?.allowed_apps || null,
+    };
+    const jwtToken = signLocalJWT(enrichedUser);
+
+    // 4️⃣ Stocke en cookie + renvoie au front
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie("token", jwtToken, {
       httpOnly: true,
       sameSite: isProduction ? "none" : "lax",
       secure: isProduction
     });
-    res.json({ ok: true, user, jwt: jwtToken });
+    res.json({ ok: true, user: enrichedUser, jwt: jwtToken });
   } catch (err) {
     console.error("Bubble auth failed:", err);
     res.status(401).json({ error: err.message || "Invalid Bubble token" });
