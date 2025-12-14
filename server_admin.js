@@ -801,7 +801,8 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
       console.log(`[ADMIN] askv_users ERROR: ${e.message}`);
     }
 
-    // 3. Chercher dans users (utilisateurs principaux @haleon.com)
+    // 3. Chercher dans users (utilisateurs principaux @haleon.com - SANS password = via SSO/Bubble)
+    // On exclut les utilisateurs avec password_hash car ce sont des "external users" avec login propre
     try {
       const usersResult = await pool.query(`
         SELECT u.id, u.email, u.name, u.department_id, u.site_id, u.company_id,
@@ -812,6 +813,7 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
         LEFT JOIN sites s ON u.site_id = s.id
         LEFT JOIN departments d ON u.department_id = d.id
         WHERE u.email LIKE '%@haleon.com'
+          AND (u.password_hash IS NULL OR u.password_hash = '')
       `);
       usersResult.rows.forEach(u => {
         if (u.email) {

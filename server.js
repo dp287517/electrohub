@@ -461,43 +461,16 @@ app.use(express.static(__dist));
 app.get("*", (_req, res) => res.sendFile(path.join(__dist, "index.html")));
 
 // -------- Auto-init essential tables -----------
+async function addColumnIfNotExists(table, column, definition) {
+  try {
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${definition}`);
+  } catch (err) {
+    // Column might already exist or table doesn't exist
+  }
+}
+
 async function initEssentialTables() {
   try {
-    // Create departments table if it doesn't exist
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS departments (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER,
-        site_id INTEGER,
-        code TEXT,
-        name TEXT NOT NULL,
-        description TEXT,
-        is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    console.log('[init] ✅ Table departments vérifiée');
-
-    // Create sites table if it doesn't exist
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sites (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER,
-        name TEXT NOT NULL,
-        code TEXT,
-        address TEXT,
-        city TEXT,
-        country TEXT DEFAULT 'Switzerland',
-        timezone TEXT DEFAULT 'Europe/Zurich',
-        is_active BOOLEAN DEFAULT TRUE,
-        settings JSONB DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    console.log('[init] ✅ Table sites vérifiée');
-
     // Create companies table if it doesn't exist
     await pool.query(`
       CREATE TABLE IF NOT EXISTS companies (
@@ -516,6 +489,56 @@ async function initEssentialTables() {
       )
     `);
     console.log('[init] ✅ Table companies vérifiée');
+
+    // Create sites table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sites (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER,
+        name TEXT NOT NULL,
+        code TEXT,
+        address TEXT,
+        city TEXT,
+        country TEXT DEFAULT 'Switzerland',
+        timezone TEXT DEFAULT 'Europe/Zurich',
+        is_active BOOLEAN DEFAULT TRUE,
+        settings JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Add missing columns to sites
+    await addColumnIfNotExists('sites', 'company_id', 'INTEGER');
+    await addColumnIfNotExists('sites', 'code', 'TEXT');
+    await addColumnIfNotExists('sites', 'address', 'TEXT');
+    await addColumnIfNotExists('sites', 'city', 'TEXT');
+    await addColumnIfNotExists('sites', 'country', "TEXT DEFAULT 'Switzerland'");
+    await addColumnIfNotExists('sites', 'timezone', "TEXT DEFAULT 'Europe/Zurich'");
+    await addColumnIfNotExists('sites', 'is_active', 'BOOLEAN DEFAULT TRUE');
+    await addColumnIfNotExists('sites', 'settings', "JSONB DEFAULT '{}'::jsonb");
+    console.log('[init] ✅ Table sites vérifiée + colonnes ajoutées');
+
+    // Create departments table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS departments (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER,
+        site_id INTEGER,
+        code TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    // Add missing columns to departments
+    await addColumnIfNotExists('departments', 'company_id', 'INTEGER');
+    await addColumnIfNotExists('departments', 'site_id', 'INTEGER');
+    await addColumnIfNotExists('departments', 'code', 'TEXT');
+    await addColumnIfNotExists('departments', 'description', 'TEXT');
+    await addColumnIfNotExists('departments', 'is_active', 'BOOLEAN DEFAULT TRUE');
+    console.log('[init] ✅ Table departments vérifiée + colonnes ajoutées');
 
   } catch (err) {
     console.error('[init] ⚠️ Error creating essential tables:', err.message);

@@ -359,6 +359,21 @@ export default function Dashboard() {
     return null;
   }, [user?.site, user?.site_id, sites]);
 
+  // Get company name from the user's site
+  const companyName = useMemo(() => {
+    if (user?.company) return user.company;
+    if (user?.site_id && sites.length) {
+      const s = sites.find(s => s.id === user.site_id);
+      return s?.company_name || null;
+    }
+    // Try to find company from site name match
+    if (siteName && sites.length) {
+      const s = sites.find(s => s.name === siteName);
+      return s?.company_name || null;
+    }
+    return null;
+  }, [user?.company, user?.site_id, siteName, sites]);
+
   // Get allowed apps for current user
   const allowedApps = useMemo(() => {
     return getAllowedApps(user?.email);
@@ -466,7 +481,7 @@ export default function Dashboard() {
                   <Sparkles size={16} className="text-yellow-300 animate-pulse" />
                   {greeting}
                 </p>
-                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mt-1 drop-shadow-lg">
+                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white mt-1 drop-shadow-lg">
                   {user?.name || 'Welcome back'}
                 </h1>
                 <p className="text-white/70 mt-1 flex items-center gap-2">
@@ -478,34 +493,42 @@ export default function Dashboard() {
 
             {/* User info cards */}
             <div className="flex flex-wrap gap-3">
+              {/* Company card (read-only) */}
+              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px]">
+                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
+                  <Briefcase size={14} />
+                  Company
+                </div>
+                <p className="text-white font-semibold text-sm truncate max-w-[140px]">{companyName || '—'}</p>
+              </div>
               <button
                 onClick={() => setShowProfileModal(true)}
-                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
+                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
               >
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Building size={14} />
                   Site
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-                <p className="text-white font-semibold">{site || '—'}</p>
+                <p className="text-white font-semibold text-sm">{site || '—'}</p>
               </button>
               <button
                 onClick={() => setShowProfileModal(true)}
-                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
+                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
               >
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Users size={14} />
                   Department
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-                <p className="text-white font-semibold">{departmentName || '—'}</p>
+                <p className="text-white font-semibold text-sm">{departmentName || '—'}</p>
               </button>
-              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-5 py-4 min-w-[140px]">
+              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[100px]">
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Grid3X3 size={14} />
-                  Total Apps
+                  Apps
                 </div>
-                <p className="text-white font-semibold">{visibleElectricalApps.length + visibleOtherApps.length}</p>
+                <p className="text-white font-semibold text-sm">{visibleElectricalApps.length + visibleOtherApps.length}</p>
               </div>
             </div>
           </div>
