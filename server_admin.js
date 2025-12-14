@@ -270,83 +270,504 @@ router.get("/users", adminOnly, async (req, res) => {
 });
 
 // ============================================================
-// COMPANIES / SITES / DEPARTMENTS
+// COMPANIES / SITES / DEPARTMENTS - CRUD OPERATIONS
 // ============================================================
+
+// Liste des apps disponibles
+const ALL_APPS = [
+  'switchboards', 'obsolescence', 'selectivity', 'fault-level', 'arc-flash',
+  'loopcalc', 'hv', 'diagram', 'projects', 'vsd', 'meca', 'oibt',
+  'atex', 'comp-ext', 'ask-veeva', 'doors', 'dcf', 'learn_ex'
+];
+
+// --- COMPANIES ---
 
 // GET /api/admin/companies - Liste les entreprises
 router.get("/companies", adminOnly, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public'
-      AND (table_name ILIKE '%compan%' OR table_name ILIKE '%enterprise%' OR table_name ILIKE '%org%')
+      SELECT * FROM companies ORDER BY is_internal DESC, name ASC
     `);
-
-    const companiesData = [];
-    for (const row of result.rows) {
-      const data = await pool.query(`SELECT * FROM "${row.table_name}" LIMIT 100`);
-      companiesData.push({
-        table: row.table_name,
-        count: data.rows.length,
-        data: data.rows
-      });
-    }
-
-    res.json({ companyTables: companiesData });
+    res.json({ companies: result.rows });
   } catch (err) {
-    console.error("Error getting companies:", err);
+    // Table might not exist yet
+    res.json({ companies: [], error: "Table companies not found - run migration" });
+  }
+});
+
+// POST /api/admin/companies - Créer une entreprise
+router.post("/companies", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { name, country, city, is_internal } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+
+    const result = await pool.query(`
+      INSERT INTO companies (name, country, city, is_internal)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [name, country || 'Switzerland', city, is_internal || false]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// PUT /api/admin/companies/:id - Modifier une entreprise
+router.put("/companies/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, country, city, is_internal } = req.body;
+
+    const result = await pool.query(`
+      UPDATE companies
+      SET name = COALESCE($1, name),
+          country = COALESCE($2, country),
+          city = COALESCE($3, city),
+          is_internal = COALESCE($4, is_internal),
+          updated_at = NOW()
+      WHERE id = $5
+      RETURNING *
+    `, [name, country, city, is_internal, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Company not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/companies/:id - Supprimer une entreprise
+router.delete("/companies/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM companies WHERE id = $1`, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- SITES ---
 
 // GET /api/admin/sites - Liste les sites
 router.get("/sites", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public'
-      AND (table_name ILIKE '%site%' OR table_name ILIKE '%location%' OR table_name ILIKE '%building%')
-    `);
-
-    const sitesData = [];
-    for (const row of result.rows) {
-      const data = await pool.query(`SELECT * FROM "${row.table_name}" LIMIT 100`);
-      sitesData.push({
-        table: row.table_name,
-        count: data.rows.length,
-        data: data.rows
-      });
-    }
-
-    res.json({ siteTables: sitesData });
+    const result = await pool.query(`SELECT * FROM sites ORDER BY name ASC`);
+    res.json({ sites: result.rows });
   } catch (err) {
-    console.error("Error getting sites:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// POST /api/admin/sites - Créer un site
+router.post("/sites", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { code, name } = req.body;
+    if (!code || !name) return res.status(400).json({ error: "Code and name required" });
+
+    const result = await pool.query(`
+      INSERT INTO sites (code, name) VALUES ($1, $2) RETURNING *
+    `, [code, name]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- DEPARTMENTS ---
+
 // GET /api/admin/departments - Liste les départements
 router.get("/departments", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public'
-      AND (table_name ILIKE '%depart%' OR table_name ILIKE '%team%' OR table_name ILIKE '%service%')
-    `);
+    const result = await pool.query(`SELECT * FROM departments ORDER BY name ASC`);
+    res.json({ departments: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const deptData = [];
-    for (const row of result.rows) {
-      const data = await pool.query(`SELECT * FROM "${row.table_name}" LIMIT 100`);
-      deptData.push({
-        table: row.table_name,
-        count: data.rows.length,
-        data: data.rows
+// POST /api/admin/departments - Créer un département
+router.post("/departments", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { code, name } = req.body;
+    if (!code || !name) return res.status(400).json({ error: "Code and name required" });
+
+    const result = await pool.query(`
+      INSERT INTO departments (code, name) VALUES ($1, $2) RETURNING *
+    `, [code, name]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// USERS MANAGEMENT - External Users (with password)
+// ============================================================
+
+// GET /api/admin/users/external - Liste les utilisateurs externes
+router.get("/users/external", adminOnly, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.email, u.name, u.site_id, u.department_id,
+             u.company_id, u.allowed_apps, u.is_admin, u.origin,
+             u.created_at, u.updated_at,
+             s.name as site_name, d.name as department_name,
+             c.name as company_name
+      FROM users u
+      LEFT JOIN sites s ON u.site_id = s.id
+      LEFT JOIN departments d ON u.department_id = d.id
+      LEFT JOIN companies c ON u.company_id = c.id
+      ORDER BY u.name ASC
+    `);
+    res.json({ users: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/external - Créer un utilisateur externe
+router.post("/users/external", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { email, name, password, site_id, department_id, company_id, allowed_apps } = req.body;
+    if (!email || !name || !password) {
+      return res.status(400).json({ error: "Email, name and password required" });
+    }
+
+    // Hash password (bcrypt)
+    const bcrypt = await import('bcryptjs');
+    const password_hash = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(`
+      INSERT INTO users (email, name, password_hash, site_id, department_id, company_id, allowed_apps, origin)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'external')
+      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, origin, created_at
+    `, [email, name, password_hash, site_id || 1, department_id || 1, company_id, allowed_apps]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/users/external/:id - Modifier un utilisateur externe
+router.put("/users/external/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, site_id, department_id, company_id, allowed_apps, is_admin, password } = req.body;
+
+    let query = `
+      UPDATE users
+      SET name = COALESCE($1, name),
+          site_id = COALESCE($2, site_id),
+          department_id = COALESCE($3, department_id),
+          company_id = COALESCE($4, company_id),
+          allowed_apps = COALESCE($5, allowed_apps),
+          is_admin = COALESCE($6, is_admin),
+          updated_at = NOW()
+      WHERE id = $7
+      RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, origin
+    `;
+    let params = [name, site_id, department_id, company_id, allowed_apps, is_admin, id];
+
+    // Si nouveau mot de passe fourni
+    if (password) {
+      const bcrypt = await import('bcryptjs');
+      const password_hash = await bcrypt.hash(password, 10);
+      query = `
+        UPDATE users
+        SET name = COALESCE($1, name),
+            site_id = COALESCE($2, site_id),
+            department_id = COALESCE($3, department_id),
+            company_id = COALESCE($4, company_id),
+            allowed_apps = COALESCE($5, allowed_apps),
+            is_admin = COALESCE($6, is_admin),
+            password_hash = $7,
+            updated_at = NOW()
+        WHERE id = $8
+        RETURNING id, email, name, site_id, department_id, company_id, allowed_apps, is_admin, origin
+      `;
+      params = [name, site_id, department_id, company_id, allowed_apps, is_admin, password_hash, id];
+    }
+
+    const result = await pool.query(query, params);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/users/external/:id - Supprimer un utilisateur externe
+router.delete("/users/external/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// HALEON USERS - Bubble/Internal Users
+// ============================================================
+
+// GET /api/admin/users/haleon - Liste les utilisateurs Haleon
+router.get("/users/haleon", adminOnly, async (req, res) => {
+  try {
+    // D'abord essayer la table haleon_users
+    try {
+      const result = await pool.query(`
+        SELECT h.*, s.name as site_name, d.name as department_name
+        FROM haleon_users h
+        LEFT JOIN sites s ON h.site_id = s.id
+        LEFT JOIN departments d ON h.department_id = d.id
+        ORDER BY h.email ASC
+      `);
+      return res.json({ users: result.rows, source: 'haleon_users' });
+    } catch (e) {
+      // Table n'existe pas, fallback sur askv_users
+      const result = await pool.query(`
+        SELECT DISTINCT email, name, role, sector, created_at
+        FROM askv_users
+        WHERE email LIKE '%@haleon.com'
+        ORDER BY email ASC
+      `);
+      return res.json({ users: result.rows, source: 'askv_users' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/haleon - Ajouter un utilisateur Haleon
+router.post("/users/haleon", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { email, name, site_id, department_id, allowed_apps } = req.body;
+    if (!email) return res.status(400).json({ error: "Email required" });
+
+    const result = await pool.query(`
+      INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (email) DO UPDATE SET
+        name = COALESCE(EXCLUDED.name, haleon_users.name),
+        site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
+        department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
+        allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
+        updated_at = NOW()
+      RETURNING *
+    `, [email, name, site_id || 1, department_id, allowed_apps]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/users/haleon/:id - Modifier un utilisateur Haleon
+router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, site_id, department_id, allowed_apps, is_active } = req.body;
+
+    const result = await pool.query(`
+      UPDATE haleon_users
+      SET name = COALESCE($1, name),
+          site_id = COALESCE($2, site_id),
+          department_id = COALESCE($3, department_id),
+          allowed_apps = COALESCE($4, allowed_apps),
+          is_active = COALESCE($5, is_active),
+          updated_at = NOW()
+      WHERE id = $6
+      RETURNING *
+    `, [name, site_id, department_id, allowed_apps, is_active, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/users/haleon/:id - Supprimer un utilisateur Haleon
+router.delete("/users/haleon/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM haleon_users WHERE id = $1`, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// USER PERMISSIONS - Get permissions for current user
+// ============================================================
+
+// GET /api/admin/permissions/:email - Obtenir les permissions d'un utilisateur
+router.get("/permissions/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const emailLower = email.toLowerCase();
+
+    // Vérifier si admin
+    if (ADMIN_EMAILS.includes(emailLower)) {
+      return res.json({
+        email: emailLower,
+        isAdmin: true,
+        apps: ALL_APPS
       });
     }
 
-    res.json({ departmentTables: deptData });
+    // Chercher dans haleon_users
+    try {
+      const haleonResult = await pool.query(`
+        SELECT * FROM haleon_users WHERE LOWER(email) = $1
+      `, [emailLower]);
+
+      if (haleonResult.rows.length > 0) {
+        const user = haleonResult.rows[0];
+        return res.json({
+          email: emailLower,
+          isAdmin: false,
+          isHaleon: true,
+          apps: user.allowed_apps || ALL_APPS,
+          user
+        });
+      }
+    } catch (e) {
+      // Table n'existe pas encore
+    }
+
+    // Chercher dans users (externes)
+    const userResult = await pool.query(`
+      SELECT * FROM users WHERE LOWER(email) = $1
+    `, [emailLower]);
+
+    if (userResult.rows.length > 0) {
+      const user = userResult.rows[0];
+      return res.json({
+        email: emailLower,
+        isAdmin: user.is_admin || false,
+        isExternal: true,
+        apps: user.allowed_apps || ALL_APPS,
+        user
+      });
+    }
+
+    // Utilisateur inconnu - accès par défaut (tous les apps pour Haleon)
+    if (emailLower.includes('@haleon.com')) {
+      return res.json({
+        email: emailLower,
+        isAdmin: false,
+        isHaleon: true,
+        isNew: true,
+        apps: ALL_APPS
+      });
+    }
+
+    // Utilisateur externe inconnu - pas d'accès
+    res.json({
+      email: emailLower,
+      isAdmin: false,
+      isExternal: true,
+      isNew: true,
+      apps: []
+    });
   } catch (err) {
-    console.error("Error getting departments:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// MIGRATION - Run migration endpoint
+// ============================================================
+
+// POST /api/admin/migrate - Exécuter les migrations
+router.post("/migrate", adminOnly, async (req, res) => {
+  try {
+    // Créer la table companies si elle n'existe pas
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS companies (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        country TEXT NOT NULL DEFAULT 'Switzerland',
+        city TEXT,
+        is_internal BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Insérer Haleon
+    await pool.query(`
+      INSERT INTO companies (name, country, city, is_internal)
+      VALUES ('Haleon', 'Switzerland', 'Nyon', TRUE)
+      ON CONFLICT (name) DO NOTHING
+    `);
+
+    // Créer haleon_users
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS haleon_users (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT,
+        site_id INTEGER REFERENCES sites(id),
+        department_id INTEGER REFERENCES departments(id),
+        allowed_apps TEXT[] DEFAULT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        last_login TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Ajouter colonnes à users si nécessaire
+    const columns = ['company_id', 'allowed_apps', 'is_admin', 'origin'];
+    for (const col of columns) {
+      try {
+        if (col === 'company_id') {
+          await pool.query(`ALTER TABLE users ADD COLUMN ${col} INTEGER REFERENCES companies(id)`);
+        } else if (col === 'allowed_apps') {
+          await pool.query(`ALTER TABLE users ADD COLUMN ${col} TEXT[] DEFAULT NULL`);
+        } else if (col === 'is_admin') {
+          await pool.query(`ALTER TABLE users ADD COLUMN ${col} BOOLEAN DEFAULT FALSE`);
+        } else if (col === 'origin') {
+          await pool.query(`ALTER TABLE users ADD COLUMN ${col} TEXT DEFAULT 'manual'`);
+        }
+      } catch (e) {
+        // Colonne existe déjà
+      }
+    }
+
+    // Migrer les utilisateurs Haleon depuis askv_users
+    const askvUsers = await pool.query(`
+      SELECT DISTINCT email FROM askv_users WHERE email LIKE '%@haleon.com'
+    `);
+
+    for (const user of askvUsers.rows) {
+      await pool.query(`
+        INSERT INTO haleon_users (email, site_id)
+        VALUES ($1, 1)
+        ON CONFLICT (email) DO NOTHING
+      `, [user.email]);
+    }
+
+    res.json({ ok: true, message: "Migration completed", migratedUsers: askvUsers.rows.length });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

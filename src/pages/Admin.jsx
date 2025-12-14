@@ -1,12 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, UserPlus, Users, Key, Trash2, Search, Plus, X, Check,
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
-  Square, ChevronDown, Sparkles
+  Square, ChevronDown, Sparkles, Database, Loader2
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
+
+// API base URL
+const API_BASE = '/api/admin';
+
+// Helper to get auth headers
+function getAuthHeaders() {
+  const token = localStorage.getItem('eh_token');
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': token ? `Bearer ${token}` : ''
+  };
+}
 
 // Countries with cities
 const COUNTRIES = {
@@ -14,10 +26,11 @@ const COUNTRIES = {
   'France': ['Paris', 'Lyon', 'Marseille', 'Toulouse', 'Nice', 'Strasbourg'],
   'Germany': ['Berlin', 'Munich', 'Frankfurt', 'Hamburg', 'Cologne', 'Stuttgart'],
   'United Kingdom': ['London', 'Manchester', 'Birmingham', 'Edinburgh', 'Glasgow', 'Bristol'],
-  'Italy': ['Milan', 'Rome', 'Turin', 'Florence', 'Naples', 'Bologna'],
+  'Italy': ['Milan', 'Rome', 'Turin', 'Florence', 'Naples', 'Bologna', 'Aprilia', 'Levice'],
   'Spain': ['Madrid', 'Barcelona', 'Valencia', 'Seville', 'Bilbao', 'Malaga'],
   'Belgium': ['Brussels', 'Antwerp', 'Ghent', 'Liège', 'Bruges'],
   'Netherlands': ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht', 'Eindhoven'],
+  'Slovakia': ['Levice', 'Bratislava', 'Kosice'],
 };
 
 function generatePassword(length = 12) {
@@ -93,13 +106,74 @@ function AppSelector({ selectedApps, onChange, showByDefault = false }) {
   );
 }
 
+function LoadingSpinner({ text = 'Loading...' }) {
+  return (
+    <div className="flex items-center justify-center py-20">
+      <div className="flex flex-col items-center gap-3">
+        <Loader2 size={32} className="text-brand-600 animate-spin" />
+        <p className="text-gray-500">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+function ErrorMessage({ error, onRetry }) {
+  return (
+    <div className="text-center py-12">
+      <AlertTriangle size={48} className="mx-auto text-red-400 mb-4" />
+      <h3 className="text-lg font-medium text-gray-900">Error loading data</h3>
+      <p className="text-gray-500 mt-1">{error}</p>
+      {onRetry && <button onClick={onRetry} className="mt-4 px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700">Retry</button>}
+    </div>
+  );
+}
+
 // ============== HALEON USERS TAB ==============
-function HaleonUsersTab({ haleonUsers, setHaleonUsers, departments }) {
+function HaleonUsersTab({ haleonUsers, sites, departments, onRefresh, loading }) {
   const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const filtered = haleonUsers.filter(u => u.email?.toLowerCase().includes(searchQuery.toLowerCase()) || u.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const handleSave = async (userData, isNew = false) => {
+    setSaving(true);
+    try {
+      const url = isNew ? `${API_BASE}/users/haleon` : `${API_BASE}/users/haleon/${editingId}`;
+      const method = isNew ? 'POST' : 'PUT';
+
+      const response = await fetch(url, {
+        method,
+        headers: getAuthHeaders(),
+        body: JSON.stringify(userData)
+      });
+
+      if (!response.ok) throw new Error('Failed to save user');
+      onRefresh();
+      setShowAddModal(false);
+      setEditingId(null);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this user?')) return;
+    try {
+      await fetch(`${API_BASE}/users/haleon/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      onRefresh();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading Haleon users..." />;
 
   return (
     <div>
@@ -126,21 +200,23 @@ function HaleonUsersTab({ haleonUsers, setHaleonUsers, departments }) {
       ) : (
         <div className="space-y-3">
           {filtered.map(user => (
-            <div key={user.id} className="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-shadow">
+            <div key={user.id || user.email} className="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-semibold">{user.name?.[0]?.toUpperCase() || '?'}</div>
+                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-semibold">{user.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || '?'}</div>
                   <div>
-                    <p className="font-medium text-gray-900 flex items-center gap-2">{user.name || user.email}<span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">Haleon</span></p>
+                    <p className="font-medium text-gray-900 flex items-center gap-2">{user.name || user.email?.split('@')[0]}<span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">Haleon</span></p>
                     <p className="text-sm text-gray-500">{user.email}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.apps?.length ?? ALL_APPS.length} apps</span>
+                  {user.site_name && <span className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg flex items-center gap-1"><MapPin size={12} />{user.site_name}</span>}
+                  {user.department_name && <span className="text-xs px-2 py-1 bg-teal-50 text-teal-600 rounded-lg">{user.department_name}</span>}
+                  <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.allowed_apps?.length ?? ALL_APPS.length} apps</span>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setEditingId(user.id)} className="p-2 hover:bg-gray-100 rounded-lg"><Edit3 size={16} /></button>
-                  <button onClick={() => confirm('Remove?') && setHaleonUsers(haleonUsers.filter(u => u.id !== user.id))} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>
+                  <button onClick={() => handleDelete(user.id)} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>
                 </div>
               </div>
             </div>
@@ -148,33 +224,45 @@ function HaleonUsersTab({ haleonUsers, setHaleonUsers, departments }) {
         </div>
       )}
 
-      {showAddModal && <HaleonUserModal departments={departments} onClose={() => setShowAddModal(false)} onSave={(u) => { setHaleonUsers([...haleonUsers, { ...u, id: Date.now().toString() }]); setShowAddModal(false); }} />}
-      {editingId && <HaleonUserModal user={haleonUsers.find(u => u.id === editingId)} departments={departments} onClose={() => setEditingId(null)} onSave={(updates) => { setHaleonUsers(haleonUsers.map(u => u.id === editingId ? { ...u, ...updates } : u)); setEditingId(null); }} />}
+      {showAddModal && <HaleonUserModal sites={sites} departments={departments} saving={saving} onClose={() => setShowAddModal(false)} onSave={(u) => handleSave(u, true)} />}
+      {editingId && <HaleonUserModal user={haleonUsers.find(u => u.id === editingId)} sites={sites} departments={departments} saving={saving} onClose={() => setEditingId(null)} onSave={handleSave} />}
     </div>
   );
 }
 
-function HaleonUserModal({ user, departments, onClose, onSave }) {
+function HaleonUserModal({ user, sites, departments, saving, onClose, onSave }) {
   const [email, setEmail] = useState(user?.email || '');
   const [name, setName] = useState(user?.name || '');
-  const [department, setDepartment] = useState(user?.department || departments[0] || '');
-  const [selectedApps, setSelectedApps] = useState(user?.apps || ALL_APPS.map(a => a.id));
+  const [siteId, setSiteId] = useState(user?.site_id || sites[0]?.id || 1);
+  const [departmentId, setDepartmentId] = useState(user?.department_id || departments[0]?.id || null);
+  const [selectedApps, setSelectedApps] = useState(user?.allowed_apps || ALL_APPS.map(a => a.id));
 
   return (
     <Modal title={user ? 'Edit Haleon User' : 'Add Haleon User'} icon={Sparkles} onClose={onClose} wide>
-      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], department, apps: selectedApps }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], site_id: siteId, department_id: departmentId, allowed_apps: selectedApps }); }} className="space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Mail size={14} />Email *</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@haleon.com" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required disabled={!!user} /></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Name</label>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" /></div>
         </div>
-        <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Department</label>
-          <select value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">{departments.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />Site</label>
+            <select value={siteId} onChange={(e) => setSiteId(Number(e.target.value))} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select></div>
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Department</label>
+            <select value={departmentId || ''} onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              <option value="">No department</option>
+              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select></div>
+        </div>
         <AppSelector selectedApps={selectedApps} onChange={setSelectedApps} showByDefault={true} />
         <div className="flex gap-3 pt-4">
-          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50">Cancel</button>
-          <button type="submit" className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2"><Save size={18} />{user ? 'Save' : 'Add'}</button>
+          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
+          <button type="submit" className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 flex items-center justify-center gap-2" disabled={saving}>
+            {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}{user ? 'Save' : 'Add'}
+          </button>
         </div>
       </form>
     </Modal>
@@ -182,17 +270,79 @@ function HaleonUserModal({ user, departments, onClose, onSave }) {
 }
 
 // ============== EXTERNAL USERS TAB ==============
-function ExternalUsersTab({ users, setUsers, companies, departments }) {
+function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loading }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [newPasswords, setNewPasswords] = useState({});
 
-  const filtered = users.filter(u => u.email?.toLowerCase().includes(searchQuery.toLowerCase()) || u.name?.toLowerCase().includes(searchQuery.toLowerCase()) || u.company?.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filtered = users.filter(u => u.email?.toLowerCase().includes(searchQuery.toLowerCase()) || u.name?.toLowerCase().includes(searchQuery.toLowerCase()) || u.company_name?.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  const handleResetPassword = (id) => {
-    const pwd = generatePassword();
-    setUsers(users.map(u => u.id === id ? { ...u, password: pwd, showPassword: true } : u));
+  const handleSave = async (userData, isNew = false) => {
+    setSaving(true);
+    try {
+      const url = isNew ? `${API_BASE}/users/external` : `${API_BASE}/users/external/${editingId}`;
+      const method = isNew ? 'POST' : 'PUT';
+
+      const response = await fetch(url, {
+        method,
+        headers: getAuthHeaders(),
+        body: JSON.stringify(userData)
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to save user');
+      }
+
+      // Show password for new users
+      if (isNew && userData.password) {
+        const result = await response.json();
+        setNewPasswords({ ...newPasswords, [result.id]: userData.password });
+      }
+
+      onRefresh();
+      setShowCreate(false);
+      setEditingId(null);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this user?')) return;
+    try {
+      await fetch(`${API_BASE}/users/external/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      onRefresh();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
+  const handleResetPassword = async (id) => {
+    const pwd = generatePassword();
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/users/external/${id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ password: pwd })
+      });
+      setNewPasswords({ ...newPasswords, [id]: pwd });
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading external users..." />;
 
   return (
     <div>
@@ -221,20 +371,20 @@ function ExternalUsersTab({ users, setUsers, companies, departments }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {user.company && <span className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg flex items-center gap-1"><Building2 size={12} />{user.company}</span>}
-                  <span className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg">{user.site || 'No site'}</span>
-                  <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.apps?.length || 0} apps</span>
+                  {user.company_name && <span className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg flex items-center gap-1"><Building2 size={12} />{user.company_name}</span>}
+                  {user.site_name && <span className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg">{user.site_name}</span>}
+                  <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.allowed_apps?.length || 0} apps</span>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => handleResetPassword(user.id)} className="p-2 hover:bg-amber-50 text-amber-600 rounded-lg" title="Reset Password"><Key size={16} /></button>
                   <button onClick={() => setEditingId(user.id)} className="p-2 hover:bg-gray-100 rounded-lg"><Edit3 size={16} /></button>
-                  <button onClick={() => confirm('Delete?') && setUsers(users.filter(u => u.id !== user.id))} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>
+                  <button onClick={() => handleDelete(user.id)} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>
                 </div>
               </div>
-              {user.showPassword && (
+              {newPasswords[user.id] && (
                 <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
-                  <div><p className="text-sm text-green-800 font-medium">New password:</p><code className="text-sm font-mono">{user.password}</code></div>
-                  <button onClick={() => { navigator.clipboard.writeText(user.password); setUsers(users.map(u => u.id === user.id ? { ...u, showPassword: false } : u)); }} className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg flex items-center gap-1"><Copy size={14} />Copy</button>
+                  <div><p className="text-sm text-green-800 font-medium">New password:</p><code className="text-sm font-mono">{newPasswords[user.id]}</code></div>
+                  <button onClick={() => { navigator.clipboard.writeText(newPasswords[user.id]); setNewPasswords({ ...newPasswords, [user.id]: null }); }} className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg flex items-center gap-1"><Copy size={14} />Copy</button>
                 </div>
               )}
             </div>
@@ -242,28 +392,25 @@ function ExternalUsersTab({ users, setUsers, companies, departments }) {
         </div>
       )}
 
-      {showCreate && <ExternalUserModal companies={companies} departments={departments} onClose={() => setShowCreate(false)} onSave={(u) => { setUsers([...users, { ...u, id: Date.now().toString() }]); setShowCreate(false); }} />}
-      {editingId && <ExternalUserModal user={users.find(u => u.id === editingId)} companies={companies} departments={departments} onClose={() => setEditingId(null)} onSave={(updates) => { setUsers(users.map(u => u.id === editingId ? { ...u, ...updates } : u)); setEditingId(null); }} />}
+      {showCreate && <ExternalUserModal sites={sites} companies={companies} departments={departments} saving={saving} onClose={() => setShowCreate(false)} onSave={(u) => handleSave(u, true)} />}
+      {editingId && <ExternalUserModal user={users.find(u => u.id === editingId)} sites={sites} companies={companies} departments={departments} saving={saving} onClose={() => setEditingId(null)} onSave={handleSave} />}
     </div>
   );
 }
 
-function ExternalUserModal({ user, companies, departments, onClose, onSave }) {
+function ExternalUserModal({ user, sites, companies, departments, saving, onClose, onSave }) {
   const [email, setEmail] = useState(user?.email || '');
   const [name, setName] = useState(user?.name || '');
-  const [company, setCompany] = useState(user?.company || '');
-  const [site, setSite] = useState(user?.site || 'Nyon');
-  const [department, setDepartment] = useState(user?.department || departments[0] || '');
-  const [password, setPassword] = useState(user?.password || generatePassword());
+  const [companyId, setCompanyId] = useState(user?.company_id || '');
+  const [siteId, setSiteId] = useState(user?.site_id || sites[0]?.id || 1);
+  const [departmentId, setDepartmentId] = useState(user?.department_id || departments[0]?.id || null);
+  const [password, setPassword] = useState(user ? '' : generatePassword());
   const [showPassword, setShowPassword] = useState(false);
-  const [selectedApps, setSelectedApps] = useState(user?.apps || []);
-
-  const selectedCompany = companies.find(c => c.name === company);
-  const cities = selectedCompany ? COUNTRIES[selectedCompany.country] || [] : Object.values(COUNTRIES).flat();
+  const [selectedApps, setSelectedApps] = useState(user?.allowed_apps || []);
 
   return (
     <Modal title={user ? 'Edit External User' : 'New External User'} icon={UserPlus} onClose={onClose} wide>
-      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], company, site, department, password, apps: selectedApps }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], company_id: companyId || null, site_id: siteId, department_id: departmentId, password: password || undefined, allowed_apps: selectedApps }); }} className="space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Mail size={14} />Email *</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required disabled={!!user} /></div>
@@ -272,11 +419,19 @@ function ExternalUserModal({ user, companies, departments, onClose, onSave }) {
         </div>
         <div className="grid sm:grid-cols-3 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Building2 size={14} />Company</label>
-            <select value={company} onChange={(e) => setCompany(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none"><option value="">No company</option>{companies.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+            <select value={companyId} onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : '')} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              <option value="">No company</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />Site</label>
-            <select value={site} onChange={(e) => setSite(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">{cities.length > 0 ? cities.map(c => <option key={c} value={c}>{c}</option>) : <option value="Nyon">Nyon</option>}</select></div>
+            <select value={siteId} onChange={(e) => setSiteId(Number(e.target.value))} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Department</label>
-            <select value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">{departments.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+            <select value={departmentId || ''} onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              <option value="">No department</option>
+              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select></div>
         </div>
         {!user && (
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Lock size={14} />Password</label>
@@ -288,8 +443,10 @@ function ExternalUserModal({ user, companies, departments, onClose, onSave }) {
         )}
         <AppSelector selectedApps={selectedApps} onChange={setSelectedApps} />
         <div className="flex gap-3 pt-4">
-          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50">Cancel</button>
-          <button type="submit" className="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 flex items-center justify-center gap-2"><Save size={18} />{user ? 'Save' : 'Create'}</button>
+          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
+          <button type="submit" className="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 flex items-center justify-center gap-2" disabled={saving}>
+            {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}{user ? 'Save' : 'Create'}
+          </button>
         </div>
       </form>
     </Modal>
@@ -297,12 +454,51 @@ function ExternalUserModal({ user, companies, departments, onClose, onSave }) {
 }
 
 // ============== COMPANIES TAB ==============
-function CompaniesTab({ companies, setCompanies, departments }) {
+function CompaniesTab({ companies, onRefresh, loading }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const filtered = companies.filter(c => c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || c.country?.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const handleSave = async (companyData, isNew = false) => {
+    setSaving(true);
+    try {
+      const url = isNew ? `${API_BASE}/companies` : `${API_BASE}/companies/${editingId}`;
+      const method = isNew ? 'POST' : 'PUT';
+
+      const response = await fetch(url, {
+        method,
+        headers: getAuthHeaders(),
+        body: JSON.stringify(companyData)
+      });
+
+      if (!response.ok) throw new Error('Failed to save company');
+      onRefresh();
+      setShowCreate(false);
+      setEditingId(null);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this company?')) return;
+    try {
+      await fetch(`${API_BASE}/companies/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      onRefresh();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading companies..." />;
 
   return (
     <div>
@@ -321,35 +517,35 @@ function CompaniesTab({ companies, setCompanies, departments }) {
           {filtered.map(company => (
             <div key={company.id} className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-lg">
               <div className="flex items-start justify-between mb-3">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-white text-xl font-bold">{company.name?.[0]?.toUpperCase() || '?'}</div>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white text-xl font-bold ${company.is_internal ? 'bg-gradient-to-br from-blue-400 to-blue-600' : 'bg-gradient-to-br from-purple-400 to-purple-600'}`}>{company.name?.[0]?.toUpperCase() || '?'}</div>
                 <div className="flex gap-1">
+                  {company.is_internal && <span className="text-xs px-2 py-1 bg-blue-100 text-blue-600 rounded-full">Internal</span>}
                   <button onClick={() => setEditingId(company.id)} className="p-2 hover:bg-gray-100 rounded-lg"><Edit3 size={16} /></button>
-                  <button onClick={() => confirm('Delete?') && setCompanies(companies.filter(c => c.id !== company.id))} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>
+                  {!company.is_internal && <button onClick={() => handleDelete(company.id)} className="p-2 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={16} /></button>}
                 </div>
               </div>
               <h3 className="font-semibold text-gray-900 mb-1">{company.name}</h3>
               <div className="flex items-center gap-2 text-sm text-gray-500"><Globe size={14} />{company.country}<span className="text-gray-300">•</span><MapPin size={14} />{company.city}</div>
-              {company.departments?.length > 0 && <div className="flex flex-wrap gap-1 mt-3">{company.departments.map(d => <span key={d} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">{d}</span>)}</div>}
             </div>
           ))}
         </div>
       )}
 
-      {showCreate && <CompanyModal departments={departments} onClose={() => setShowCreate(false)} onSave={(c) => { setCompanies([...companies, { ...c, id: Date.now().toString() }]); setShowCreate(false); }} />}
-      {editingId && <CompanyModal company={companies.find(c => c.id === editingId)} departments={departments} onClose={() => setEditingId(null)} onSave={(updates) => { setCompanies(companies.map(c => c.id === editingId ? { ...c, ...updates } : c)); setEditingId(null); }} />}
+      {showCreate && <CompanyModal saving={saving} onClose={() => setShowCreate(false)} onSave={(c) => handleSave(c, true)} />}
+      {editingId && <CompanyModal company={companies.find(c => c.id === editingId)} saving={saving} onClose={() => setEditingId(null)} onSave={handleSave} />}
     </div>
   );
 }
 
-function CompanyModal({ company, departments, onClose, onSave }) {
+function CompanyModal({ company, saving, onClose, onSave }) {
   const [name, setName] = useState(company?.name || '');
   const [country, setCountry] = useState(company?.country || 'Switzerland');
   const [city, setCity] = useState(company?.city || 'Nyon');
-  const [selectedDepts, setSelectedDepts] = useState(company?.departments || []);
+  const [isInternal, setIsInternal] = useState(company?.is_internal || false);
 
   return (
     <Modal title={company ? 'Edit Company' : 'New Company'} icon={Building2} onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; onSave({ name, country, city, departments: selectedDepts }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; onSave({ name, country, city, is_internal: isInternal }); }} className="space-y-4">
         <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Company Name *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
         <div className="grid grid-cols-2 gap-4">
@@ -358,52 +554,155 @@ function CompanyModal({ company, departments, onClose, onSave }) {
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />City</label>
             <select value={city} onChange={(e) => setCity(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">{(COUNTRIES[country] || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
         </div>
-        <div><label className="block text-sm font-medium text-gray-700 mb-2">Departments</label>
-          <div className="flex flex-wrap gap-2">{departments.map(dept => (
-            <button key={dept} type="button" onClick={() => setSelectedDepts(prev => prev.includes(dept) ? prev.filter(d => d !== dept) : [...prev, dept])} className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${selectedDepts.includes(dept) ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>{dept}</button>
-          ))}</div></div>
+        <div className="flex items-center gap-2">
+          <input type="checkbox" id="is_internal" checked={isInternal} onChange={(e) => setIsInternal(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
+          <label htmlFor="is_internal" className="text-sm text-gray-700">Internal company (like Haleon)</label>
+        </div>
         <div className="flex gap-3 pt-4">
-          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50">Cancel</button>
-          <button type="submit" className="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 flex items-center justify-center gap-2"><Save size={18} />{company ? 'Save' : 'Create'}</button>
+          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
+          <button type="submit" className="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 flex items-center justify-center gap-2" disabled={saving}>
+            {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}{company ? 'Save' : 'Create'}
+          </button>
         </div>
       </form>
     </Modal>
   );
 }
 
-// ============== DEPARTMENTS TAB ==============
-function DepartmentsTab({ departments, setDepartments }) {
-  const [newDept, setNewDept] = useState('');
-  const [editingIdx, setEditingIdx] = useState(null);
-  const [editValue, setEditValue] = useState('');
+// ============== SITES TAB ==============
+function SitesTab({ sites, onRefresh, loading }) {
+  const [showCreate, setShowCreate] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (siteData) => {
+    setSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/sites`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(siteData)
+      });
+
+      if (!response.ok) throw new Error('Failed to create site');
+      onRefresh();
+      setShowCreate(false);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading sites..." />;
 
   return (
     <div>
-      <form onSubmit={(e) => { e.preventDefault(); if (!newDept.trim() || departments.includes(newDept.trim())) return; setDepartments([...departments, newDept.trim()]); setNewDept(''); }} className="flex gap-3 mb-6">
-        <input type="text" value={newDept} onChange={(e) => setNewDept(e.target.value)} placeholder="New department name..." className="flex-1 px-4 py-3 rounded-xl border border-gray-200 outline-none" />
-        <button type="submit" className="px-6 py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white rounded-xl shadow-lg flex items-center gap-2"><Plus size={20} />Add</button>
-      </form>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {departments.map((dept, idx) => (
-          <div key={idx} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center justify-between group hover:shadow-md">
-            {editingIdx === idx ? (
-              <div className="flex-1 flex gap-2">
-                <input type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} className="flex-1 px-3 py-1.5 rounded-lg border" autoFocus />
-                <button onClick={() => { const updated = [...departments]; updated[idx] = editValue.trim(); setDepartments(updated); setEditingIdx(null); }} className="p-1.5 bg-green-50 text-green-600 rounded-lg"><Check size={16} /></button>
-                <button onClick={() => setEditingIdx(null)} className="p-1.5 bg-gray-100 rounded-lg"><X size={16} /></button>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white"><Briefcase size={14} /></div><span className="font-medium text-gray-900">{dept}</span></div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100">
-                  <button onClick={() => { setEditingIdx(idx); setEditValue(dept); }} className="p-1.5 hover:bg-gray-100 rounded-lg"><Edit3 size={14} /></button>
-                  <button onClick={() => setDepartments(departments.filter((_, i) => i !== idx))} className="p-1.5 hover:bg-red-50 text-red-500 rounded-lg"><Trash2 size={14} /></button>
-                </div>
-              </>
-            )}
-          </div>
-        ))}
+      <div className="flex justify-end mb-6">
+        <button onClick={() => setShowCreate(true)} className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-xl shadow-lg"><Plus size={20} />New Site</button>
       </div>
+
+      {sites.length === 0 ? (
+        <div className="text-center py-16"><MapPin size={48} className="mx-auto text-gray-300 mb-4" /><h3 className="text-lg font-medium">No sites yet</h3></div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {sites.map(site => (
+            <div key={site.id} className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-lg">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-400 to-indigo-600 flex items-center justify-center text-white"><MapPin size={18} /></div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">{site.name}</h3>
+                  <p className="text-sm text-gray-500">Code: {site.code}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showCreate && (
+        <Modal title="New Site" icon={MapPin} onClose={() => setShowCreate(false)}>
+          <form onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.target); handleSave({ code: fd.get('code'), name: fd.get('name') }); }} className="space-y-4">
+            <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Site Code *</label>
+              <input type="text" name="code" placeholder="NYO" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Site Name *</label>
+              <input type="text" name="name" placeholder="Nyon" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
+            <div className="flex gap-3 pt-4">
+              <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
+              <button type="submit" className="flex-1 px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 flex items-center justify-center gap-2" disabled={saving}>
+                {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}Create
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============== DEPARTMENTS TAB ==============
+function DepartmentsTab({ departments, onRefresh, loading }) {
+  const [showCreate, setShowCreate] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (deptData) => {
+    setSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/departments`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(deptData)
+      });
+
+      if (!response.ok) throw new Error('Failed to create department');
+      onRefresh();
+      setShowCreate(false);
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading departments..." />;
+
+  return (
+    <div>
+      <div className="flex justify-end mb-6">
+        <button onClick={() => setShowCreate(true)} className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white rounded-xl shadow-lg"><Plus size={20} />New Department</button>
+      </div>
+
+      {departments.length === 0 ? (
+        <div className="text-center py-16"><Briefcase size={48} className="mx-auto text-gray-300 mb-4" /><h3 className="text-lg font-medium">No departments yet</h3></div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {departments.map((dept) => (
+            <div key={dept.id} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-3 hover:shadow-md">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white"><Briefcase size={14} /></div>
+              <div>
+                <span className="font-medium text-gray-900">{dept.name}</span>
+                <p className="text-xs text-gray-500">Code: {dept.code}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showCreate && (
+        <Modal title="New Department" icon={Briefcase} onClose={() => setShowCreate(false)}>
+          <form onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.target); handleSave({ code: fd.get('code'), name: fd.get('name') }); }} className="space-y-4">
+            <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Department Code *</label>
+              <input type="text" name="code" placeholder="MAINT" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Department Name *</label>
+              <input type="text" name="name" placeholder="Maintenance" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
+            <div className="flex gap-3 pt-4">
+              <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
+              <button type="submit" className="flex-1 px-4 py-3 bg-teal-600 text-white rounded-xl hover:bg-teal-700 flex items-center justify-center gap-2" disabled={saving}>
+                {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}Create
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -414,34 +713,76 @@ export default function Admin() {
   const [currentUser, setCurrentUser] = useState(null);
   const [activeTab, setActiveTab] = useState('haleon');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [migrating, setMigrating] = useState(false);
 
   const [haleonUsers, setHaleonUsers] = useState([]);
   const [externalUsers, setExternalUsers] = useState([]);
   const [companies, setCompanies] = useState([]);
-  const [departments, setDepartments] = useState(['Maintenance', 'Engineering', 'Operations', 'Quality', 'Safety', 'IT', 'External']);
+  const [sites, setSites] = useState([]);
+  const [departments, setDepartments] = useState([]);
+
+  // Fetch all data
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const headers = getAuthHeaders();
+
+      // Fetch all data in parallel
+      const [haleonRes, externalRes, companiesRes, sitesRes, deptsRes] = await Promise.all([
+        fetch(`${API_BASE}/users/haleon`, { headers }).then(r => r.json()).catch(() => ({ users: [] })),
+        fetch(`${API_BASE}/users/external`, { headers }).then(r => r.json()).catch(() => ({ users: [] })),
+        fetch(`${API_BASE}/companies`, { headers }).then(r => r.json()).catch(() => ({ companies: [] })),
+        fetch(`${API_BASE}/sites`, { headers }).then(r => r.json()).catch(() => ({ sites: [] })),
+        fetch(`${API_BASE}/departments`, { headers }).then(r => r.json()).catch(() => ({ departments: [] }))
+      ]);
+
+      setHaleonUsers(haleonRes.users || []);
+      setExternalUsers(externalRes.users || []);
+      setCompanies(companiesRes.companies || []);
+      setSites(sitesRes.sites || []);
+      setDepartments(deptsRes.departments || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Run migration
+  const runMigration = async () => {
+    if (!confirm('Run database migration? This will create missing tables and migrate Haleon users.')) return;
+    setMigrating(true);
+    try {
+      const response = await fetch(`${API_BASE}/migrate`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+      const data = await response.json();
+      if (data.ok) {
+        alert(`Migration completed! ${data.migratedUsers || 0} users migrated.`);
+        fetchData();
+      } else {
+        throw new Error(data.error || 'Migration failed');
+      }
+    } catch (err) {
+      alert('Migration error: ' + err.message);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
     setCurrentUser(storedUser);
-    if (!ADMIN_EMAILS.includes(storedUser.email)) { alert('Access denied'); navigate('/dashboard'); return; }
-
-    const load = (key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
-    setHaleonUsers(load('eh_admin_haleon_users') || []);
-    setExternalUsers(load('eh_admin_users') || []);
-    setCompanies(load('eh_admin_companies') || []);
-    const deps = load('eh_admin_departments');
-    if (deps) setDepartments(deps);
-    setLoading(false);
-  }, [navigate]);
-
-  useEffect(() => {
-    if (!loading) {
-      localStorage.setItem('eh_admin_haleon_users', JSON.stringify(haleonUsers));
-      localStorage.setItem('eh_admin_users', JSON.stringify(externalUsers));
-      localStorage.setItem('eh_admin_companies', JSON.stringify(companies));
-      localStorage.setItem('eh_admin_departments', JSON.stringify(departments));
+    if (!ADMIN_EMAILS.includes(storedUser.email)) {
+      alert('Access denied');
+      navigate('/dashboard');
+      return;
     }
-  }, [haleonUsers, externalUsers, companies, departments, loading]);
+    fetchData();
+  }, [navigate, fetchData]);
 
   if (!currentUser || !ADMIN_EMAILS.includes(currentUser.email)) {
     return <div className="min-h-screen flex items-center justify-center"><div className="text-center"><AlertTriangle size={48} className="mx-auto text-red-500 mb-4" /><h1 className="text-xl font-bold">Access Denied</h1></div></div>;
@@ -451,9 +792,15 @@ export default function Admin() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-brand-50/30">
       <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur flex items-center justify-center"><Shield size={28} /></div>
-            <div><h1 className="text-2xl sm:text-3xl font-bold">Admin Panel</h1><p className="text-gray-400">Manage users, companies and app access</p></div>
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur flex items-center justify-center"><Shield size={28} /></div>
+              <div><h1 className="text-2xl sm:text-3xl font-bold">Admin Panel</h1><p className="text-gray-400">Manage users, companies and app access</p></div>
+            </div>
+            <button onClick={runMigration} disabled={migrating} className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm transition-colors">
+              {migrating ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+              {migrating ? 'Migrating...' : 'Run Migration'}
+            </button>
           </div>
         </div>
       </div>
@@ -464,18 +811,22 @@ export default function Admin() {
             <TabButton active={activeTab === 'haleon'} onClick={() => setActiveTab('haleon')} icon={Sparkles} count={haleonUsers.length}>Haleon Users</TabButton>
             <TabButton active={activeTab === 'external'} onClick={() => setActiveTab('external')} icon={Users} count={externalUsers.length}>External Users</TabButton>
             <TabButton active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} icon={Building2} count={companies.length}>Companies</TabButton>
+            <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {loading ? <div className="flex items-center justify-center py-20"><div className="w-12 h-12 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin" /></div> : (
+        {error ? (
+          <ErrorMessage error={error} onRetry={fetchData} />
+        ) : (
           <>
-            {activeTab === 'haleon' && <HaleonUsersTab haleonUsers={haleonUsers} setHaleonUsers={setHaleonUsers} departments={departments} />}
-            {activeTab === 'external' && <ExternalUsersTab users={externalUsers} setUsers={setExternalUsers} companies={companies} departments={departments} />}
-            {activeTab === 'companies' && <CompaniesTab companies={companies} setCompanies={setCompanies} departments={departments} />}
-            {activeTab === 'departments' && <DepartmentsTab departments={departments} setDepartments={setDepartments} />}
+            {activeTab === 'haleon' && <HaleonUsersTab haleonUsers={haleonUsers} sites={sites} departments={departments} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'external' && <ExternalUsersTab users={externalUsers} sites={sites} companies={companies} departments={departments} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'companies' && <CompaniesTab companies={companies} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'sites' && <SitesTab sites={sites} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
           </>
         )}
       </div>
