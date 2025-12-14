@@ -19,7 +19,6 @@ export const ALL_APPS = [
   { id: 'meca', name: 'Mechanical Equipments', icon: '⚙️', category: 'Electrical', route: '/app/meca' },
   { id: 'oibt', name: 'OIBT', icon: '📋', category: 'Electrical', route: '/app/oibt' },
   { id: 'atex', name: 'ATEX', icon: '🧯', category: 'Utilities', route: '/app/atex' },
-  { id: 'controls', name: 'Maintenance Controls', icon: '🛠️', category: 'Utilities', route: '/app/controls' },
   { id: 'comp-ext', name: 'External Contractors', icon: '🤝', category: 'Utilities', route: '/app/comp-ext' },
   { id: 'ask-veeva', name: 'Ask Veeva', icon: '💬', category: 'Utilities', route: '/app/ask-veeva' },
   { id: 'doors', name: 'Fire Doors', icon: '🚪', category: 'Utilities', route: '/app/doors' },
