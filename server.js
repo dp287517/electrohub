@@ -460,6 +460,70 @@ const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 app.use(express.static(__dist));
 app.get("*", (_req, res) => res.sendFile(path.join(__dist, "index.html")));
 
+// -------- Auto-init essential tables -----------
+async function initEssentialTables() {
+  try {
+    // Create departments table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS departments (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER,
+        site_id INTEGER,
+        code TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('[init] ✅ Table departments vérifiée');
+
+    // Create sites table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sites (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER,
+        name TEXT NOT NULL,
+        code TEXT,
+        address TEXT,
+        city TEXT,
+        country TEXT DEFAULT 'Switzerland',
+        timezone TEXT DEFAULT 'Europe/Zurich',
+        is_active BOOLEAN DEFAULT TRUE,
+        settings JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('[init] ✅ Table sites vérifiée');
+
+    // Create companies table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS companies (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        code TEXT UNIQUE,
+        logo BYTEA,
+        logo_mime TEXT DEFAULT 'image/png',
+        address TEXT,
+        city TEXT,
+        country TEXT DEFAULT 'Switzerland',
+        is_internal BOOLEAN DEFAULT FALSE,
+        settings JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('[init] ✅ Table companies vérifiée');
+
+  } catch (err) {
+    console.error('[init] ⚠️ Error creating essential tables:', err.message);
+  }
+}
+
 // -------- Start -----------
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`ElectroHub server listening on :${port}`));
+initEssentialTables().then(() => {
+  app.listen(port, () => console.log(`ElectroHub server listening on :${port}`));
+});

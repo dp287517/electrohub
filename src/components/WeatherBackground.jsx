@@ -467,35 +467,27 @@ export default function WeatherBackground({ site, children }) {
       {/* Gradient overlay for readability */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent" />
 
-      {/* Weather info overlay - compact positioning to avoid overlap */}
-      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-20">
-        {!loading && weather && (
-          <div className="flex items-center gap-2 sm:gap-3 bg-black/30 backdrop-blur-md rounded-xl sm:rounded-2xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/20">
-            <div className="text-right">
-              <div className="text-xl sm:text-2xl lg:text-3xl font-light text-white">
-                {weather.temperature}°
-              </div>
-              <div className="text-[10px] sm:text-xs text-white/80 hidden sm:block">{weather.label}</div>
-            </div>
-            <div className="w-8 h-8 sm:w-10 sm:h-10 lg:w-12 lg:h-12 rounded-lg sm:rounded-xl bg-white/10 flex items-center justify-center">
-              <WeatherIcon size={18} className="text-white sm:hidden" />
-              <WeatherIcon size={20} className="text-white hidden sm:block lg:hidden" />
-              <WeatherIcon size={24} className="text-white hidden lg:block" />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Weather details (top left, below main content on mobile, inline on desktop) */}
+      {/* Weather info overlay - very compact to avoid overlap with content */}
       {!loading && weather && (
-        <div className="absolute top-2 left-2 sm:top-4 sm:left-4 z-20 hidden sm:flex gap-2 text-white/80 text-xs">
-          <div className="flex items-center gap-1.5 bg-black/20 backdrop-blur-sm rounded-full px-2.5 py-1">
-            <Droplets size={12} />
+        <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 bg-black/25 backdrop-blur-sm rounded-lg px-2 py-1 border border-white/10">
+          <div className="w-5 h-5 rounded bg-white/10 flex items-center justify-center">
+            <WeatherIcon size={12} className="text-white/90" />
+          </div>
+          <span className="text-sm font-medium text-white">{weather.temperature}°</span>
+          <span className="text-[10px] text-white/60 hidden sm:inline">{weather.label}</span>
+        </div>
+      )}
+
+      {/* Weather details - small pills in top left */}
+      {!loading && weather && (
+        <div className="absolute top-2 left-2 z-20 hidden sm:flex gap-1.5 text-white/70 text-[10px]">
+          <div className="flex items-center gap-1 bg-black/20 backdrop-blur-sm rounded-full px-2 py-0.5">
+            <Droplets size={10} />
             <span>{weather.humidity}%</span>
           </div>
-          <div className="flex items-center gap-1.5 bg-black/20 backdrop-blur-sm rounded-full px-2.5 py-1">
-            <Wind size={12} />
-            <span>{weather.windSpeed} km/h</span>
+          <div className="flex items-center gap-1 bg-black/20 backdrop-blur-sm rounded-full px-2 py-0.5">
+            <Wind size={10} />
+            <span>{weather.windSpeed}km/h</span>
           </div>
         </div>
       )}
