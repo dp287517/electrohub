@@ -222,53 +222,64 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
 
     // 1️⃣ Vérifie le token Bubble
     const user = await verifyBubbleToken(token);
+    console.log(`[auth/bubble] 📧 User: ${user.email}`);
 
     // 2️⃣ Cherche l'utilisateur en base pour récupérer department_id, company_id, site_id
-    let dbUser = null;
-    try {
-      // D'abord chercher dans haleon_users (pour les utilisateurs @haleon.com)
-      if (user.email && user.email.endsWith('@haleon.com')) {
-        try {
-          const haleonResult = await pool.query(
-            `SELECT id, email, name, department_id, site_id, allowed_apps
-             FROM haleon_users WHERE email = $1 LIMIT 1`,
-            [user.email]
-          );
-          if (haleonResult.rows[0]) {
-            dbUser = haleonResult.rows[0];
-            // Haleon users belong to company_id = 1 (Haleon)
-            dbUser.company_id = 1;
-          }
-        } catch (e) {
-          // Table haleon_users might not exist, continue to users table
-        }
-      }
+    // On cherche dans TOUTES les tables et on fusionne les données
+    let haleonUser = null;
+    let mainUser = null;
 
-      // Si pas trouvé dans haleon_users, chercher dans users
-      if (!dbUser) {
-        const result = await pool.query(
-          `SELECT id, email, name, department_id, company_id, site_id
-           FROM users WHERE email = $1 LIMIT 1`,
-          [user.email]
-        );
-        dbUser = result.rows[0] || null;
-      }
-    } catch (dbErr) {
-      console.warn('[auth/bubble] DB lookup failed:', dbErr.message);
+    // Chercher dans haleon_users
+    try {
+      const haleonResult = await pool.query(
+        `SELECT id, email, name, department_id, site_id, allowed_apps
+         FROM haleon_users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [user.email]
+      );
+      haleonUser = haleonResult.rows[0] || null;
+      console.log(`[auth/bubble] haleon_users: ${haleonUser ? JSON.stringify({ id: haleonUser.id, dept: haleonUser.department_id, site: haleonUser.site_id }) : 'NOT FOUND'}`);
+    } catch (e) {
+      console.log(`[auth/bubble] haleon_users ERROR: ${e.message}`);
     }
 
-    // 3️⃣ Crée un JWT local enrichi avec les infos de la base
+    // Chercher dans users
+    try {
+      const result = await pool.query(
+        `SELECT id, email, name, department_id, company_id, site_id, role, allowed_apps
+         FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [user.email]
+      );
+      mainUser = result.rows[0] || null;
+      console.log(`[auth/bubble] users: ${mainUser ? JSON.stringify({ id: mainUser.id, dept: mainUser.department_id, company: mainUser.company_id, site: mainUser.site_id }) : 'NOT FOUND'}`);
+    } catch (e) {
+      console.log(`[auth/bubble] users ERROR: ${e.message}`);
+    }
+
+    // 3️⃣ Fusionner les données - priorité à haleon_users pour le department_id
+    // car c'est là que le département est mis à jour depuis le dashboard
+    const isHaleon = user.email && user.email.toLowerCase().endsWith('@haleon.com');
+
+    // Utiliser les données de haleon_users en priorité si disponibles, sinon fallback sur users
+    const department_id = haleonUser?.department_id || mainUser?.department_id || null;
+    const site_id = haleonUser?.site_id || mainUser?.site_id || (isHaleon ? 1 : null);
+    const company_id = mainUser?.company_id || (isHaleon ? 1 : null);
+    const role = mainUser?.role || 'site';
+    const allowed_apps = haleonUser?.allowed_apps || mainUser?.allowed_apps || null;
+
+    console.log(`[auth/bubble] ✅ Merged: department_id=${department_id}, company_id=${company_id}, site_id=${site_id}`);
+
+    // 4️⃣ Crée un JWT local enrichi avec les infos de la base
     const enrichedUser = {
       ...user,
-      department_id: dbUser?.department_id || null,
-      company_id: dbUser?.company_id || null,
-      site_id: dbUser?.site_id || null,
-      role: dbUser?.role || 'site',
-      allowed_apps: dbUser?.allowed_apps || null,
+      department_id,
+      company_id,
+      site_id,
+      role,
+      allowed_apps,
     };
     const jwtToken = signLocalJWT(enrichedUser);
 
-    // 4️⃣ Stocke en cookie + renvoie au front
+    // 5️⃣ Stocke en cookie + renvoie au front
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie("token", jwtToken, {
       httpOnly: true,
@@ -279,6 +290,107 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
   } catch (err) {
     console.error("Bubble auth failed:", err);
     res.status(401).json({ error: err.message || "Invalid Bubble token" });
+  }
+});
+
+/* ================================================================
+   🔵 Save User Profile (department, site)
+   ================================================================ */
+app.put("/api/user/profile", express.json(), async (req, res) => {
+  try {
+    // Get user from JWT token
+    const token = req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const secret = process.env.JWT_SECRET || "devsecret";
+    const decoded = jwt.verify(token, secret);
+    const email = decoded.email;
+
+    if (!email) {
+      return res.status(401).json({ error: "Invalid token - no email" });
+    }
+
+    const { department_id, site_id } = req.body;
+    console.log(`[profile] 📧 Updating user ${email}: department_id=${department_id}, site_id=${site_id}`);
+
+    // Update haleon_users table (for @haleon.com users)
+    if (email.toLowerCase().endsWith('@haleon.com')) {
+      // Upsert into haleon_users
+      await pool.query(`
+        INSERT INTO haleon_users (email, department_id, site_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (email) DO UPDATE SET
+          department_id = COALESCE($2, haleon_users.department_id),
+          site_id = COALESCE($3, haleon_users.site_id),
+          updated_at = NOW()
+      `, [email.toLowerCase(), department_id, site_id || 1]);
+      console.log(`[profile] ✅ Updated haleon_users for ${email}`);
+    }
+
+    // Also update users table if user exists there
+    try {
+      await pool.query(`
+        UPDATE users SET
+          department_id = COALESCE($2, department_id),
+          site_id = COALESCE($3, site_id),
+          updated_at = NOW()
+        WHERE LOWER(email) = LOWER($1)
+      `, [email, department_id, site_id]);
+    } catch (e) {
+      // Ignore if users table doesn't have the user
+    }
+
+    // Generate a new JWT with updated info
+    const newPayload = {
+      ...decoded,
+      department_id: department_id || decoded.department_id,
+      site_id: site_id || decoded.site_id,
+    };
+    const newToken = jwt.sign(newPayload, secret, { expiresIn: "7d" });
+
+    // Set new cookie
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie("token", newToken, {
+      httpOnly: true,
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction
+    });
+
+    res.json({ ok: true, user: newPayload, jwt: newToken });
+  } catch (err) {
+    console.error("[profile] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================================================================
+   🔵 Public endpoints for departments and sites (for profile selection)
+   ================================================================ */
+app.get("/api/departments", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, code, name, company_id, site_id
+      FROM departments
+      ORDER BY name ASC
+    `);
+    res.json({ departments: result.rows });
+  } catch (err) {
+    res.json({ departments: [] });
+  }
+});
+
+app.get("/api/sites", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, code, name, company_id, city, country
+      FROM sites
+      ORDER BY name ASC
+    `);
+    res.json({ sites: result.rows });
+  } catch (err) {
+    res.json({ sites: [] });
   }
 });
 
