@@ -297,16 +297,30 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
    🔵 Save User Profile (department, site)
    ================================================================ */
 app.put("/api/user/profile", express.json(), async (req, res) => {
+  console.log(`[profile] 🔵 PUT /api/user/profile called`);
+  console.log(`[profile] Body:`, req.body);
+  console.log(`[profile] Cookies:`, req.cookies?.token ? 'present' : 'missing');
+  console.log(`[profile] Auth header:`, req.headers.authorization ? 'present' : 'missing');
+
   try {
     // Get user from JWT token
     const token = req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
+      console.log(`[profile] ❌ No token found`);
       return res.status(401).json({ error: "Not authenticated" });
     }
 
     const secret = process.env.JWT_SECRET || "devsecret";
-    const decoded = jwt.verify(token, secret);
+    let decoded;
+    try {
+      decoded = jwt.verify(token, secret);
+    } catch (jwtErr) {
+      console.log(`[profile] ❌ JWT verify failed:`, jwtErr.message);
+      return res.status(401).json({ error: "Invalid token: " + jwtErr.message });
+    }
+
     const email = decoded.email;
+    console.log(`[profile] 📧 Email from token: ${email}`);
 
     if (!email) {
       return res.status(401).json({ error: "Invalid token - no email" });
@@ -315,40 +329,68 @@ app.put("/api/user/profile", express.json(), async (req, res) => {
     const { department_id, site_id } = req.body;
     console.log(`[profile] 📧 Updating user ${email}: department_id=${department_id}, site_id=${site_id}`);
 
+    let dbUpdated = false;
+
     // Update haleon_users table (for @haleon.com users)
     if (email.toLowerCase().endsWith('@haleon.com')) {
-      // Upsert into haleon_users
-      await pool.query(`
-        INSERT INTO haleon_users (email, department_id, site_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (email) DO UPDATE SET
-          department_id = COALESCE($2, haleon_users.department_id),
-          site_id = COALESCE($3, haleon_users.site_id),
-          updated_at = NOW()
-      `, [email.toLowerCase(), department_id, site_id || 1]);
-      console.log(`[profile] ✅ Updated haleon_users for ${email}`);
+      try {
+        // Upsert into haleon_users
+        await pool.query(`
+          INSERT INTO haleon_users (email, department_id, site_id)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (email) DO UPDATE SET
+            department_id = COALESCE($2, haleon_users.department_id),
+            site_id = COALESCE($3, haleon_users.site_id),
+            updated_at = NOW()
+        `, [email.toLowerCase(), department_id, site_id || 1]);
+        console.log(`[profile] ✅ Updated haleon_users for ${email}`);
+        dbUpdated = true;
+      } catch (haleonErr) {
+        console.error(`[profile] ⚠️ haleon_users update failed:`, haleonErr.message);
+        // Try alternate approach - just UPDATE if INSERT fails due to missing columns
+        try {
+          await pool.query(`
+            UPDATE haleon_users SET
+              department_id = COALESCE($2, department_id),
+              site_id = COALESCE($3, site_id)
+            WHERE LOWER(email) = LOWER($1)
+          `, [email, department_id, site_id || 1]);
+          console.log(`[profile] ✅ Updated haleon_users (UPDATE only) for ${email}`);
+          dbUpdated = true;
+        } catch (updateErr) {
+          console.error(`[profile] ⚠️ haleon_users UPDATE also failed:`, updateErr.message);
+        }
+      }
     }
 
     // Also update users table if user exists there
     try {
-      await pool.query(`
+      const result = await pool.query(`
         UPDATE users SET
           department_id = COALESCE($2, department_id),
           site_id = COALESCE($3, site_id),
           updated_at = NOW()
         WHERE LOWER(email) = LOWER($1)
+        RETURNING id
       `, [email, department_id, site_id]);
+      if (result.rowCount > 0) {
+        console.log(`[profile] ✅ Updated users table for ${email}`);
+        dbUpdated = true;
+      }
     } catch (e) {
-      // Ignore if users table doesn't have the user
+      console.log(`[profile] ⚠️ users table update skipped:`, e.message);
     }
+
+    console.log(`[profile] DB updated: ${dbUpdated}`);
 
     // Generate a new JWT with updated info
     const newPayload = {
       ...decoded,
-      department_id: department_id || decoded.department_id,
-      site_id: site_id || decoded.site_id,
+      department_id: department_id ?? decoded.department_id,
+      site_id: site_id ?? decoded.site_id,
     };
     const newToken = jwt.sign(newPayload, secret, { expiresIn: "7d" });
+    console.log(`[profile] ✅ New JWT generated with department_id=${newPayload.department_id}, site_id=${newPayload.site_id}`);
 
     // Set new cookie
     const isProduction = process.env.NODE_ENV === 'production';
@@ -360,7 +402,7 @@ app.put("/api/user/profile", express.json(), async (req, res) => {
 
     res.json({ ok: true, user: newPayload, jwt: newToken });
   } catch (err) {
-    console.error("[profile] Error:", err);
+    console.error("[profile] ❌ Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -375,9 +417,22 @@ app.get("/api/departments", async (req, res) => {
       FROM departments
       ORDER BY name ASC
     `);
+    console.log(`[departments] Found ${result.rows.length} departments`);
     res.json({ departments: result.rows });
   } catch (err) {
-    res.json({ departments: [] });
+    console.error(`[departments] Error:`, err.message);
+    // Return fallback data if table doesn't exist
+    res.json({
+      departments: [
+        { id: 1, name: 'Maintenance', code: 'MAINT' },
+        { id: 2, name: 'Engineering', code: 'ENG' },
+        { id: 3, name: 'Operations', code: 'OPS' },
+        { id: 4, name: 'Quality', code: 'QA' },
+        { id: 5, name: 'Safety', code: 'SAFE' },
+        { id: 6, name: 'IT', code: 'IT' },
+      ],
+      fallback: true
+    });
   }
 });
 
@@ -388,9 +443,21 @@ app.get("/api/sites", async (req, res) => {
       FROM sites
       ORDER BY name ASC
     `);
+    console.log(`[sites] Found ${result.rows.length} sites`);
     res.json({ sites: result.rows });
   } catch (err) {
-    res.json({ sites: [] });
+    console.error(`[sites] Error:`, err.message);
+    // Return fallback data if table doesn't exist
+    res.json({
+      sites: [
+        { id: 1, name: 'Nyon', code: 'NYO', city: 'Nyon', country: 'Switzerland' },
+        { id: 2, name: 'Geneva', code: 'GVA', city: 'Geneva', country: 'Switzerland' },
+        { id: 3, name: 'Lausanne', code: 'LSN', city: 'Lausanne', country: 'Switzerland' },
+        { id: 4, name: 'Zurich', code: 'ZRH', city: 'Zurich', country: 'Switzerland' },
+        { id: 5, name: 'Basel', code: 'BSL', city: 'Basel', country: 'Switzerland' },
+      ],
+      fallback: true
+    });
   }
 });
 
