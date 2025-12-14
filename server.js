@@ -226,13 +226,33 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     // 2️⃣ Cherche l'utilisateur en base pour récupérer department_id, company_id, site_id
     let dbUser = null;
     try {
-      // Only select columns that are guaranteed to exist
-      const result = await pool.query(
-        `SELECT id, email, name, department_id, company_id, site_id
-         FROM users WHERE email = $1 LIMIT 1`,
-        [user.email]
-      );
-      dbUser = result.rows[0] || null;
+      // D'abord chercher dans haleon_users (pour les utilisateurs @haleon.com)
+      if (user.email && user.email.endsWith('@haleon.com')) {
+        try {
+          const haleonResult = await pool.query(
+            `SELECT id, email, name, department_id, site_id, allowed_apps
+             FROM haleon_users WHERE email = $1 LIMIT 1`,
+            [user.email]
+          );
+          if (haleonResult.rows[0]) {
+            dbUser = haleonResult.rows[0];
+            // Haleon users belong to company_id = 1 (Haleon)
+            dbUser.company_id = 1;
+          }
+        } catch (e) {
+          // Table haleon_users might not exist, continue to users table
+        }
+      }
+
+      // Si pas trouvé dans haleon_users, chercher dans users
+      if (!dbUser) {
+        const result = await pool.query(
+          `SELECT id, email, name, department_id, company_id, site_id
+           FROM users WHERE email = $1 LIMIT 1`,
+          [user.email]
+        );
+        dbUser = result.rows[0] || null;
+      }
     } catch (dbErr) {
       console.warn('[auth/bubble] DB lookup failed:', dbErr.message);
     }
