@@ -177,7 +177,8 @@ app.post("/api/auth/login", express.json(), async (req, res) => {
     process.env.JWT_SECRET || "devsecret",
     { expiresIn: "2h" }
   );
-  res.cookie("token", token, { httpOnly: true, sameSite: "lax" });
+  const isProduction = process.env.NODE_ENV === 'production';
+  res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
   res.json({ ok: true });
 });
 
@@ -198,7 +199,8 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
     process.env.JWT_SECRET || "devsecret",
     { expiresIn: "2h" }
   );
-  res.cookie("token", token, { httpOnly: true, sameSite: "lax" });
+  const isProduction = process.env.NODE_ENV === 'production';
+  res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
   res.json({ token });
 });
 
@@ -225,7 +227,12 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     const jwtToken = signLocalJWT(user);
 
     // 3️⃣ Stocke en cookie + renvoie au front
-    res.cookie("token", jwtToken, { httpOnly: true, sameSite: "lax" });
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie("token", jwtToken, {
+      httpOnly: true,
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction
+    });
     res.json({ ok: true, user, jwt: jwtToken });
   } catch (err) {
     console.error("Bubble auth failed:", err);
