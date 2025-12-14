@@ -106,16 +106,16 @@ const pool = new Pool({
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+
+  // Create table first (without indexes that depend on new columns)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      company_id INTEGER,
-      site_id INTEGER,
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '', -- "Équipement (macro)" (nom du plan)
-      sub_equipment TEXT DEFAULT '', -- "Sous-Équipement" (nom de la forme)
+      equipment TEXT DEFAULT '',
+      sub_equipment TEXT DEFAULT '',
       type TEXT DEFAULT '',
       manufacturer TEXT DEFAULT '',
       manufacturer_ref TEXT DEFAULT '',
@@ -133,9 +133,24 @@ async function ensureSchema() {
       updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_eq_next ON atex_equipments(next_check_date);
-    CREATE INDEX IF NOT EXISTS idx_atex_eq_company ON atex_equipments(company_id);
-    CREATE INDEX IF NOT EXISTS idx_atex_eq_site ON atex_equipments(site_id);
   `);
+
+  // Add multi-tenant columns if they don't exist (for existing databases)
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS company_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS site_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
+  // Now create indexes on multi-tenant columns (columns are guaranteed to exist)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_company ON atex_equipments(company_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_site ON atex_equipments(site_id);`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
