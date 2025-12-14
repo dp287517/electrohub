@@ -749,29 +749,73 @@ router.delete("/users/external/:id", adminOnly, async (req, res) => {
 // HALEON USERS - Bubble/Internal Users
 // ============================================================
 
-// GET /api/admin/users/haleon - Liste les utilisateurs Haleon
+// GET /api/admin/users/haleon - Liste les utilisateurs Haleon (combine plusieurs sources)
 router.get("/users/haleon", adminOnly, async (req, res) => {
   try {
-    // D'abord essayer la table haleon_users
+    const allUsers = new Map(); // Utilise Map pour dédupliquer par email
+
+    // 1. Chercher dans haleon_users
     try {
-      const result = await pool.query(`
-        SELECT h.*, s.name as site_name, d.name as department_name
+      const haleonResult = await pool.query(`
+        SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
+               h.created_at, h.updated_at, s.name as site_name, d.name as department_name,
+               'haleon_users' as source
         FROM haleon_users h
         LEFT JOIN sites s ON h.site_id = s.id
         LEFT JOIN departments d ON h.department_id = d.id
-        ORDER BY h.email ASC
       `);
-      return res.json({ users: result.rows, source: 'haleon_users' });
+      haleonResult.rows.forEach(u => allUsers.set(u.email.toLowerCase(), u));
     } catch (e) {
-      // Table n'existe pas, fallback sur askv_users
-      const result = await pool.query(`
-        SELECT DISTINCT email, name, role, sector, created_at
+      // Table haleon_users n'existe pas, continuer
+    }
+
+    // 2. Chercher dans askv_users (utilisateurs Ask Veeva)
+    try {
+      const askvResult = await pool.query(`
+        SELECT DISTINCT ON (LOWER(email))
+               id, email, name, role as askv_role, sector, created_at,
+               'askv_users' as source
         FROM askv_users
         WHERE email LIKE '%@haleon.com'
-        ORDER BY email ASC
+        ORDER BY LOWER(email), created_at DESC
       `);
-      return res.json({ users: result.rows, source: 'askv_users' });
+      askvResult.rows.forEach(u => {
+        const key = u.email.toLowerCase();
+        if (!allUsers.has(key)) {
+          allUsers.set(key, u);
+        }
+      });
+    } catch (e) {
+      // Table askv_users n'existe pas, continuer
     }
+
+    // 3. Chercher dans users (utilisateurs principaux @haleon.com)
+    try {
+      const usersResult = await pool.query(`
+        SELECT u.id, u.email, u.name, u.department_id, u.site_id, u.company_id,
+               u.allowed_apps, u.role, u.is_active, u.created_at, u.updated_at,
+               s.name as site_name, d.name as department_name,
+               'users' as source
+        FROM users u
+        LEFT JOIN sites s ON u.site_id = s.id
+        LEFT JOIN departments d ON u.department_id = d.id
+        WHERE u.email LIKE '%@haleon.com'
+      `);
+      usersResult.rows.forEach(u => {
+        const key = u.email.toLowerCase();
+        if (!allUsers.has(key)) {
+          allUsers.set(key, u);
+        }
+      });
+    } catch (e) {
+      // Erreur, continuer
+    }
+
+    const users = Array.from(allUsers.values()).sort((a, b) =>
+      (a.email || '').localeCompare(b.email || '')
+    );
+
+    res.json({ users, source: 'combined' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
