@@ -409,55 +409,44 @@ app.put("/api/user/profile", express.json(), async (req, res) => {
 
 /* ================================================================
    🔵 Public endpoints for departments and sites (for profile selection)
+   Same queries as admin endpoints to ensure consistency
    ================================================================ */
 app.get("/api/departments", async (req, res) => {
   try {
+    // Use same query as admin endpoint for consistency
     const result = await pool.query(`
-      SELECT id, code, name, company_id, site_id
-      FROM departments
-      ORDER BY name ASC
+      SELECT d.id, d.code, d.name, d.company_id, d.site_id,
+             c.name as company_name, s.name as site_name
+      FROM departments d
+      LEFT JOIN companies c ON d.company_id = c.id
+      LEFT JOIN sites s ON d.site_id = s.id
+      ORDER BY d.name ASC
     `);
-    console.log(`[departments] Found ${result.rows.length} departments`);
+    console.log(`[departments] Found ${result.rows.length} departments from DB`);
     res.json({ departments: result.rows });
   } catch (err) {
     console.error(`[departments] Error:`, err.message);
-    // Return fallback data if table doesn't exist
-    res.json({
-      departments: [
-        { id: 1, name: 'Maintenance', code: 'MAINT' },
-        { id: 2, name: 'Engineering', code: 'ENG' },
-        { id: 3, name: 'Operations', code: 'OPS' },
-        { id: 4, name: 'Quality', code: 'QA' },
-        { id: 5, name: 'Safety', code: 'SAFE' },
-        { id: 6, name: 'IT', code: 'IT' },
-      ],
-      fallback: true
-    });
+    // Return empty array - don't use fallback data with wrong IDs
+    res.json({ departments: [], error: err.message });
   }
 });
 
 app.get("/api/sites", async (req, res) => {
   try {
+    // Use same query as admin endpoint for consistency
     const result = await pool.query(`
-      SELECT id, code, name, company_id, city, country
-      FROM sites
-      ORDER BY name ASC
+      SELECT s.id, s.code, s.name, s.company_id, s.city, s.country,
+             c.name as company_name
+      FROM sites s
+      LEFT JOIN companies c ON s.company_id = c.id
+      ORDER BY s.name ASC
     `);
-    console.log(`[sites] Found ${result.rows.length} sites`);
+    console.log(`[sites] Found ${result.rows.length} sites from DB`);
     res.json({ sites: result.rows });
   } catch (err) {
     console.error(`[sites] Error:`, err.message);
-    // Return fallback data if table doesn't exist
-    res.json({
-      sites: [
-        { id: 1, name: 'Nyon', code: 'NYO', city: 'Nyon', country: 'Switzerland' },
-        { id: 2, name: 'Geneva', code: 'GVA', city: 'Geneva', country: 'Switzerland' },
-        { id: 3, name: 'Lausanne', code: 'LSN', city: 'Lausanne', country: 'Switzerland' },
-        { id: 4, name: 'Zurich', code: 'ZRH', city: 'Zurich', country: 'Switzerland' },
-        { id: 5, name: 'Basel', code: 'BSL', city: 'Basel', country: 'Switzerland' },
-      ],
-      fallback: true
-    });
+    // Return empty array - don't use fallback data with wrong IDs
+    res.json({ sites: [], error: err.message });
   }
 });
 

@@ -97,32 +97,14 @@ function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
   );
 }
 
-// Default fallback sites and departments if DB is empty
-const FALLBACK_SITES = [
-  { id: 1, name: 'Nyon', code: 'NYO' },
-  { id: 2, name: 'Geneva', code: 'GVA' },
-  { id: 3, name: 'Lausanne', code: 'LSN' },
-  { id: 4, name: 'Zurich', code: 'ZRH' },
-  { id: 5, name: 'Basel', code: 'BSL' },
-];
-
-const FALLBACK_DEPARTMENTS = [
-  { id: 1, name: 'Maintenance' },
-  { id: 2, name: 'Engineering' },
-  { id: 3, name: 'Operations' },
-  { id: 4, name: 'Quality' },
-  { id: 5, name: 'Safety' },
-  { id: 6, name: 'IT' },
-];
-
-// Profile Edit Modal - now saves to database with department_id
+// Profile Edit Modal - saves to database with department_id and site_id
 function ProfileModal({ user, departments, sites, onClose, onSave }) {
-  // Use fallbacks if DB data is empty
-  const availableSites = sites?.length > 0 ? sites : FALLBACK_SITES;
-  const availableDepts = departments?.length > 0 ? departments : FALLBACK_DEPARTMENTS;
+  // Use actual DB data only - no fallbacks with fake IDs
+  const availableSites = sites || [];
+  const availableDepts = departments || [];
 
-  // Initialize with existing values or find by name
-  const initialSiteId = user?.site_id || availableSites.find(s => s.name === user?.site)?.id || 1;
+  // Initialize with existing values or find by name from actual data
+  const initialSiteId = user?.site_id || availableSites.find(s => s.name === user?.site)?.id || null;
   const initialDeptId = user?.department_id || availableDepts.find(d => d.name === user?.department)?.id || null;
 
   const [siteId, setSiteId] = useState(initialSiteId);
@@ -238,14 +220,20 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
             <MapPin size={16} />
             Site
           </label>
-          <select
-            value={siteId || ''}
-            onChange={(e) => setSiteId(e.target.value ? Number(e.target.value) : null)}
-            className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
-          >
-            <option value="">Select site...</option>
-            {availableSites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          {availableSites.length > 0 ? (
+            <select
+              value={siteId || ''}
+              onChange={(e) => setSiteId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
+            >
+              <option value="">Select site...</option>
+              {availableSites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          ) : (
+            <div className="px-4 py-3 bg-amber-50 text-amber-700 rounded-xl text-sm">
+              No sites available. Contact admin to add sites.
+            </div>
+          )}
         </div>
 
         {/* Department Select */}
@@ -254,14 +242,20 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
             <Briefcase size={16} />
             Department
           </label>
-          <select
-            value={departmentId || ''}
-            onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)}
-            className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
-          >
-            <option value="">Select department...</option>
-            {availableDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+          {availableDepts.length > 0 ? (
+            <select
+              value={departmentId || ''}
+              onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
+            >
+              <option value="">Select department...</option>
+              {availableDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          ) : (
+            <div className="px-4 py-3 bg-amber-50 text-amber-700 rounded-xl text-sm">
+              No departments available. Contact admin to add departments.
+            </div>
+          )}
         </div>
 
         {error && (
