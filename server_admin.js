@@ -28,6 +28,79 @@ function adminOnly(req, res, next) {
 // DATABASE EXPLORATION (PUBLIC - pour debug temporaire)
 // ============================================================
 
+// GET /api/admin/explore/tables - Liste des tables uniquement (léger)
+router.get("/explore/tables", async (req, res) => {
+  try {
+    const tablesResult = await pool.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      ORDER BY table_name
+    `);
+
+    const tables = [];
+    for (const row of tablesResult.rows) {
+      try {
+        const countResult = await pool.query(`SELECT COUNT(*) FROM "${row.table_name}"`);
+        tables.push({
+          name: row.table_name,
+          rows: parseInt(countResult.rows[0].count)
+        });
+      } catch (e) {
+        tables.push({ name: row.table_name, rows: -1 });
+      }
+    }
+
+    res.json({
+      totalTables: tables.length,
+      tables: tables.sort((a, b) => b.rows - a.rows)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/explore/:table - Données d'une table spécifique
+router.get("/explore/:table", async (req, res) => {
+  try {
+    const { table } = req.params;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+    // Vérifier que la table existe
+    const tableCheck = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = $1
+    `, [table]);
+
+    if (tableCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Table not found" });
+    }
+
+    // Colonnes
+    const colsResult = await pool.query(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1
+      ORDER BY ordinal_position
+    `, [table]);
+
+    // Count
+    const countResult = await pool.query(`SELECT COUNT(*) FROM "${table}"`);
+
+    // Données
+    const dataResult = await pool.query(`SELECT * FROM "${table}" LIMIT $1`, [limit]);
+
+    res.json({
+      table,
+      rowCount: parseInt(countResult.rows[0].count),
+      columns: colsResult.rows,
+      data: dataResult.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/explore - Vue complète publique (TEMPORAIRE)
 router.get("/explore", async (req, res) => {
   try {
