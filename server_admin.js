@@ -962,7 +962,6 @@ router.post("/migrate", adminOnly, async (req, res) => {
       CREATE TABLE IF NOT EXISTS companies (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
-        code TEXT UNIQUE,
         country TEXT NOT NULL DEFAULT 'Switzerland',
         city TEXT,
         logo BYTEA,
@@ -973,6 +972,10 @@ router.post("/migrate", adminOnly, async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // Add columns if they don't exist (for existing databases)
+    await addColumnIfNotExists('companies', 'code', 'TEXT UNIQUE');
+    await addColumnIfNotExists('companies', 'is_internal', 'BOOLEAN DEFAULT FALSE');
+    await addColumnIfNotExists('companies', 'settings', "JSONB DEFAULT '{}'::jsonb");
     logs.push('Table companies créée/vérifiée');
 
     // 2. Insérer Haleon
