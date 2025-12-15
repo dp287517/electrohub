@@ -1271,6 +1271,7 @@ router.post("/migrate", adminOnly, async (req, res) => {
     await addColumnIfNotExists('users', 'is_active', 'BOOLEAN DEFAULT TRUE');
     await addColumnIfNotExists('users', 'origin', "TEXT DEFAULT 'manual'");
     await addColumnIfNotExists('users', 'preferences', "JSONB DEFAULT '{}'::jsonb");
+    await addColumnIfNotExists('users', 'last_login', 'TIMESTAMPTZ');
     logs.push('Table users mise à jour');
 
     // 6. Créer haleon_users (pour compat)
