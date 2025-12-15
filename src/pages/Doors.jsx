@@ -455,7 +455,7 @@ const DetailPanel = ({
     if (!door?.id) return;
     setLoadingHistory(true);
     try {
-      const res = await api.doors.history(door.id).catch(() => ({}));
+      const res = await api.doors.listHistory(door.id).catch(() => ({}));
       setHistory(res?.history || res || []);
     } catch (e) {
       console.error(e);
@@ -687,7 +687,7 @@ const DetailPanel = ({
               {files.map(file => (
                 <a
                   key={file.id}
-                  href={api.doors.fileDownloadUrl(file.id)}
+                  href={file.download_url || file.inline_url || file.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 p-2 bg-white rounded-lg border border-gray-200 hover:border-rose-300 transition-colors"
@@ -1066,22 +1066,17 @@ export default function Doors() {
   // Load settings
   const loadSettings = useCallback(async () => {
     try {
-      const res = await api.doors.getSettings();
-      setSettings(res);
+      const res = await api.doors.settingsGet();
+      setSettings(res?.settings || res || {});
     } catch (err) {
       console.error('Load settings error:', err);
     }
   }, []);
 
-  // Load placements
+  // Load placements - doorsMaps.placedIds doesn't exist for doors, skip
   const loadPlacements = useCallback(async () => {
-    try {
-      const response = await api.doorsMaps.placedIds();
-      const ids = (response?.placed_ids || []).map(String);
-      setPlacedIds(new Set(ids));
-    } catch (e) {
-      console.error("Load placements error:", e);
-    }
+    // No placedIds API for doors - keep empty set
+    setPlacedIds(new Set());
   }, []);
 
   // Effects
@@ -1209,7 +1204,7 @@ export default function Doors() {
 
     setIsDeleting(true);
     try {
-      await api.doors.delete(deleteTarget.id);
+      await api.doors.remove(deleteTarget.id);
       setDoors(prev => prev.filter(d => d.id !== deleteTarget.id));
 
       if (selectedDoor?.id === deleteTarget.id) {
@@ -1243,7 +1238,7 @@ export default function Doors() {
   };
 
   const handleSaveSettings = async (newSettings) => {
-    await api.doors.updateSettings(newSettings);
+    await api.doors.settingsSet(newSettings);
     setSettings(newSettings);
   };
 
@@ -1255,8 +1250,9 @@ export default function Doors() {
   const tree = useMemo(() => {
     const result = {};
     const query = searchQuery.toLowerCase();
+    const doorsList = Array.isArray(doors) ? doors : [];
 
-    const filtered = doors.filter(d => {
+    const filtered = doorsList.filter(d => {
       if (!query) return true;
       return (
         d.name?.toLowerCase().includes(query) ||
@@ -1287,11 +1283,12 @@ export default function Doors() {
 
   // Stats
   const stats = useMemo(() => {
-    const total = doors.length;
-    const aFaire = doors.filter(d => d.status === STATUS.A_FAIRE).length;
-    const enCours = doors.filter(d => d.status === STATUS.EN_COURS).length;
-    const enRetard = doors.filter(d => d.status === STATUS.EN_RETARD).length;
-    const placed = doors.filter(d => placedIds.has(String(d.id))).length;
+    const doorsList = Array.isArray(doors) ? doors : [];
+    const total = doorsList.length;
+    const aFaire = doorsList.filter(d => d.status === STATUS.A_FAIRE).length;
+    const enCours = doorsList.filter(d => d.status === STATUS.EN_COURS).length;
+    const enRetard = doorsList.filter(d => d.status === STATUS.EN_RETARD).length;
+    const placed = doorsList.filter(d => placedIds.has(String(d.id))).length;
     return { total, aFaire, enCours, enRetard, placed };
   }, [doors, placedIds]);
 
