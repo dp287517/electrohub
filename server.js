@@ -315,7 +315,8 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
     }
 
     // 2️⃣ Vérifier le mot de passe avec bcrypt
-    const bcrypt = await import('bcryptjs');
+    const bcryptModule = await import('bcryptjs');
+    const bcrypt = bcryptModule.default || bcryptModule;
     const validPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!validPassword) {
