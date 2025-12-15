@@ -165,16 +165,18 @@ async function deviceEstimatedOrParamCostGBP(row) {
 }
 
 async function computeSwitchboardTotals(site) {
+  // Support global role: if site is null/undefined, return all switchboards
+  const hasSite = site && site.trim() !== '';
   const r = await pool.query(`
-    SELECT s.id AS switchboard_id, s.name, s.building_code, s.floor,
+    SELECT s.id AS switchboard_id, s.name, s.building_code, s.floor, s.site,
            d.id AS device_id, d.device_type, d.in_amps,
            op.replacement_cost, op.manufacture_date, op.avg_life_years
     FROM switchboards s
     LEFT JOIN devices d ON d.switchboard_id = s.id
     LEFT JOIN obsolescence_parameters op
-      ON op.device_id = d.id AND op.switchboard_id = s.id AND op.site = $1
-    WHERE s.site = $1
-  `, [site]);
+      ON op.device_id = d.id AND op.switchboard_id = s.id AND op.site = s.site
+    ${hasSite ? 'WHERE s.site = $1' : ''}
+  `, hasSite ? [site] : []);
 
   const bySB = new Map();
   for (const row of r.rows) {
@@ -183,6 +185,7 @@ async function computeSwitchboardTotals(site) {
       name: row.name,
       building_code: row.building_code,
       floor: row.floor,
+      site: row.site,
       devices: [],
     });
     bySB.get(row.switchboard_id).devices.push(row);
@@ -210,6 +213,7 @@ async function computeSwitchboardTotals(site) {
       name: sb.name,
       building_code: sb.building_code,
       floor: sb.floor,
+      site: sb.site,
       device_count: n,
       service_year,
       avg_life_years,
@@ -234,22 +238,23 @@ function estimateHvDeviceCostGBP(dev) {
 }
 
 async function computeHvTotals(site) {
-  // On lit les tables HV existantes (pas de modif server_hv)
+  // Support global role: if site is null/undefined, return all HV equipments
+  const hasSite = site && site.trim() !== '';
   const eq = await pool.query(`
-    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor
+    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site
     FROM hv_equipments e
-    WHERE e.site = $1
+    ${hasSite ? 'WHERE e.site = $1' : ''}
     ORDER BY e.id ASC
-  `, [site]);
+  `, hasSite ? [site] : []);
 
   const out = [];
   for (const row of eq.rows) {
     const devs = await pool.query(`
       SELECT d.*
       FROM hv_devices d
-      WHERE d.site = $1 AND d.hv_equipment_id = $2
+      WHERE d.hv_equipment_id = $1
       ORDER BY d.id ASC
-    `, [site, row.hv_equipment_id]);
+    `, [row.hv_equipment_id]);
 
     const n = devs.rows.length;
     const base = 5000 + 2000 * Math.max(0, n - 2); // châssis/liaisons HV
@@ -266,6 +271,7 @@ async function computeHvTotals(site) {
       name: row.name,
       building_code: row.building_code || 'Unknown',
       floor: row.floor || '',
+      site: row.site,
       device_count: n,
       service_year,
       avg_life_years,
@@ -358,11 +364,13 @@ app.post('/api/obsolescence/reset', async (req, res) => {
 app.get('/api/obsolescence/buildings', async (req, res) => {
   try {
     const { siteName, role } = getSiteFilter(req);
-    const site = siteName || siteOf(req);
+    // For global/admin users: no site filter (pass null), for site users: require site
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
     const { asset = 'all' } = req.query;
     if (role === 'site' && !site) return res.status(400).json({ error: 'Missing site' });
 
     const totals = await pickTotalsByAsset(site, String(asset));
+    console.log(`[OBS BUILDINGS] Loaded ${totals.length} items for role=${role}, site=${site || 'all'}`);
     const grouped = new Map();
     for (const it of totals) {
       const key = it.building_code || 'Unknown';
@@ -382,7 +390,8 @@ app.get('/api/obsolescence/buildings', async (req, res) => {
 app.get('/api/obsolescence/switchboards', async (req, res) => {
   try {
     const { siteName, role } = getSiteFilter(req);
-    const site = siteName || siteOf(req);
+    // For global/admin users: no site filter (pass null), for site users: require site
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
     const { building, asset = 'sb' } = req.query;
     if ((role === 'site' && !site) || !building) return res.status(400).json({ error: 'Missing params' });
 
