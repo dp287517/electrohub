@@ -1,5 +1,6 @@
 // ==============================
 // server_vsd.js — VSD (Variateurs de Fréquence) CMMS microservice (ESM)
+// ✅ VERSION 2.0 - MULTI-TENANT (Site)
 // ==============================
 import express from "express";
 import cors from "cors";
@@ -13,6 +14,7 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
 import { createRequire } from "module";
+import { getSiteFilter } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -104,6 +106,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      site TEXT DEFAULT 'Nyon',
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
@@ -124,11 +127,11 @@ async function ensureSchema() {
       photo_content BYTEA NULL,
       created_at TIMESTAMP DEFAULT now(),
       updated_at TIMESTAMP DEFAULT now(),
-      
+
       -- NOUVEAUX CHAMPS D'EXPLOITATION/UI
       tag TEXT DEFAULT '',
       model TEXT DEFAULT '',
-      serial_number TEXT DEFAULT '', 
+      serial_number TEXT DEFAULT '',
       ip_address TEXT DEFAULT '',
       protocol TEXT DEFAULT '',
       floor TEXT DEFAULT '',
@@ -140,6 +143,9 @@ async function ensureSchema() {
     
     -- AJOUT DES COLONNES MANQUANTES (pour les DB existantes)
     DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='site') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN site TEXT DEFAULT 'Nyon';
+      END IF;
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='tag') THEN
         ALTER TABLE vsd_equipments ADD COLUMN tag TEXT DEFAULT '';
       END IF;
@@ -173,6 +179,7 @@ async function ensureSchema() {
     END $$;
 
     CREATE INDEX IF NOT EXISTS idx_vsd_eq_next ON vsd_equipments(next_check_date);
+    CREATE INDEX IF NOT EXISTS idx_vsd_eq_site ON vsd_equipments(site);
   `);
   // ... (Autres tables non modifiées)
   await pool.query(`
@@ -366,6 +373,9 @@ Réponds en JSON strict avec ces champs uniquement.`;
 // GET /api/vsd/equipments
 app.get("/api/vsd/equipments", async (req, res) => {
   try {
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'e' });
+    if (role === 'site' && !siteName) return res.status(400).json({ ok: false, error: 'Missing site (X-Site header)' });
+
     const { rows } = await pool.query(`
       SELECT e.*,
              (SELECT result FROM vsd_checks c
@@ -373,8 +383,10 @@ app.get("/api/vsd/equipments", async (req, res) => {
               ORDER BY c.date DESC NULLS LAST
               LIMIT 1) AS last_result
         FROM vsd_equipments e
+       WHERE ${siteWhere}
        ORDER BY e.name
-    `);
+    `, siteParams);
+    console.log(`[VSD] Loaded ${rows.length} equipments for role=${role}, site=${siteName || 'all'}`);
     for (const r of rows) {
       r.photo_url =
         (r.photo_content && r.photo_content.length) || r.photo_path
@@ -428,6 +440,7 @@ app.get("/api/vsd/equipments/:id", async (req, res) => {
 app.post("/api/vsd/equipments", async (req, res) => {
   try {
     const u = getUser(req);
+    const site = req.header("X-Site") || req.body?.site || "Nyon";
     const {
       name = "",
       building = "",
@@ -458,15 +471,15 @@ app.post("/api/vsd/equipments", async (req, res) => {
     } = req.body || {};
     const { rows } = await pool.query(
       `INSERT INTO vsd_equipments(
-         name, building, zone, equipment, sub_equipment, type,
-         manufacturer, manufacturer_ref, power_kw, voltage, 
+         site, name, building, zone, equipment, sub_equipment, type,
+         manufacturer, manufacturer_ref, power_kw, voltage,
          current_nominal, ip_rating, comment,
          installed_at, next_check_date,
          tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING *`,
       [
-        name, building, zone, equipment, sub_equipment, type,
+        site, name, building, zone, equipment, sub_equipment, type,
         manufacturer, manufacturer_ref, power_kw, voltage,
         current_nominal, ip_rating, comment,
         installed_at || null,
