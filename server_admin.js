@@ -658,7 +658,8 @@ router.post("/users/external", adminOnly, express.json(), async (req, res) => {
     const userRole = validRoles.includes(role) ? role : 'site';
 
     // Hash password (bcrypt)
-    const bcrypt = await import('bcryptjs');
+    const bcryptModule = await import('bcryptjs');
+    const bcrypt = bcryptModule.default || bcryptModule;
     const password_hash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(`
@@ -704,7 +705,8 @@ router.put("/users/external/:id", adminOnly, express.json(), async (req, res) =>
 
     // Si nouveau mot de passe fourni
     if (password) {
-      const bcrypt = await import('bcryptjs');
+      const bcryptModule = await import('bcryptjs');
+      const bcrypt = bcryptModule.default || bcryptModule;
       const password_hash = await bcrypt.hash(password, 10);
       query = `
         UPDATE users
