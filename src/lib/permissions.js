@@ -38,7 +38,36 @@ export function getUserPermissions(email) {
     };
   }
 
-  // Check Haleon users (Bubble)
+  // 🔥 FIRST: Check logged-in user data (from JWT/login)
+  // This is the most reliable source for external users
+  try {
+    const loggedInUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    if (loggedInUser?.email?.toLowerCase() === email?.toLowerCase()) {
+      // External user logged in - use their allowed_apps from JWT
+      if (loggedInUser.allowed_apps && Array.isArray(loggedInUser.allowed_apps)) {
+        return {
+          isAdmin: loggedInUser.role === 'admin' || loggedInUser.role === 'superadmin',
+          isExternal: loggedInUser.source === 'local' || loggedInUser.origin === 'external',
+          apps: loggedInUser.allowed_apps,
+          role: loggedInUser.role,
+          ...loggedInUser,
+        };
+      }
+      // Haleon/Bubble user without specific restrictions
+      if (loggedInUser.source === 'bubble') {
+        return {
+          isAdmin: false,
+          isHaleon: true,
+          apps: ALL_APPS.map(a => a.id),
+          ...loggedInUser,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[permissions] Error reading eh_user:', e);
+  }
+
+  // Check Haleon users (Bubble) from admin cache
   const haleonUsers = JSON.parse(localStorage.getItem('eh_admin_haleon_users') || '[]');
   const haleonUser = haleonUsers.find(u => u.email?.toLowerCase() === email?.toLowerCase());
   if (haleonUser) {
@@ -50,14 +79,14 @@ export function getUserPermissions(email) {
     };
   }
 
-  // Check external users
+  // Check external users from admin cache
   const externalUsers = JSON.parse(localStorage.getItem('eh_admin_users') || '[]');
   const externalUser = externalUsers.find(u => u.email?.toLowerCase() === email?.toLowerCase());
   if (externalUser) {
     return {
       isAdmin: false,
       isExternal: true,
-      apps: externalUser.apps || [],
+      apps: externalUser.apps || externalUser.allowed_apps || [],
       ...externalUser,
     };
   }
