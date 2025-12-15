@@ -17,7 +17,7 @@ import pg from "pg";
 import StreamZip from "node-stream-zip";
 import sharp from "sharp";
 import { createRequire } from "module";
-import { extractTenantFromRequest, getTenantFilter, addTenantToData } from "./lib/tenant-filter.js";
+import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -150,6 +150,25 @@ async function ensureSchema() {
   // Now create indexes on multi-tenant columns (columns are guaranteed to exist)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_company ON atex_equipments(company_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_site ON atex_equipments(site_id);`);
+
+  // 🔥 MIGRATION: Peupler company_id/site_id pour les équipements existants (NULL)
+  // Utilise le premier site trouvé comme valeur par défaut
+  try {
+    const defaultSiteRes = await pool.query(`SELECT id, company_id FROM sites ORDER BY id LIMIT 1`);
+    if (defaultSiteRes.rows[0]) {
+      const defaultSite = defaultSiteRes.rows[0];
+      const updateRes = await pool.query(`
+        UPDATE atex_equipments
+        SET company_id = $1, site_id = $2
+        WHERE company_id IS NULL OR site_id IS NULL
+      `, [defaultSite.company_id, defaultSite.id]);
+      if (updateRes.rowCount > 0) {
+        console.log(`[ATEX] Migration: ${updateRes.rowCount} équipements mis à jour avec company_id=${defaultSite.company_id}, site_id=${defaultSite.id}`);
+      }
+    }
+  } catch (migrationErr) {
+    console.warn(`[ATEX] Migration tenant warning:`, migrationErr.message);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
@@ -362,7 +381,9 @@ app.get("/api/atex/equipments", async (req, res) => {
     console.time('[ATEX] GET /api/atex/equipments'); // 🔍 Log de timing
 
     // 🏢 MULTI-TENANT: Extraire les infos tenant depuis la requête
-    const tenant = extractTenantFromRequest(req);
+    // 🔥 Enrichir avec site_id depuis X-Site si manquant (pour utilisateurs externes)
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
     const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
 
     const q = (req.query.q || "").toString().trim().toLowerCase();
@@ -515,7 +536,9 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
 app.post("/api/atex/equipments", async (req, res) => {
   try {
     // 🏢 MULTI-TENANT: Extraire les infos tenant
-    const tenant = extractTenantFromRequest(req);
+    // 🔥 Enrichir avec site_id depuis X-Site si manquant (pour utilisateurs externes)
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
 
     const {
       name = "",
