@@ -453,12 +453,23 @@ export default function Dashboard() {
     setTimeout(() => setMounted(true), 100);
 
     // Fetch departments and sites for profile modal (public endpoints)
+    // AND refresh user permissions from DB (in case admin changed allowed_apps)
     Promise.all([
       fetch('/api/departments').then(r => r.json()).catch(() => ({ departments: [] })),
-      fetch('/api/sites').then(r => r.json()).catch(() => ({ sites: [] }))
-    ]).then(([deptsRes, sitesRes]) => {
+      fetch('/api/sites').then(r => r.json()).catch(() => ({ sites: [] })),
+      fetch('/api/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([deptsRes, sitesRes, meRes]) => {
       setDepartments(deptsRes.departments || []);
       setSites(sitesRes.sites || []);
+
+      // Update user with fresh data from DB (syncs allowed_apps changes)
+      if (meRes?.ok && meRes.user) {
+        const currentUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
+        const updatedUser = { ...currentUser, ...meRes.user };
+        localStorage.setItem('eh_user', JSON.stringify(updatedUser));
+        setUser(updatedUser);
+        console.log('[Dashboard] Refreshed user permissions from DB');
+      }
     });
   }, []);
 
