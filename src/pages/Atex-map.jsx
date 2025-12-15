@@ -739,47 +739,61 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2️⃣ Rendu PDF -> image HAUTE QUALITÉ pour plans ATEX
+        // 2️⃣ Rendu PDF -> image ULTRA HAUTE QUALITÉ pour plans ATEX
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = window.devicePixelRatio || 1;
 
-          // 🔥 HAUTE RÉSOLUTION pour lisibilité des textes sur plans ATEX
-          // - Mobile: limite à 4096px pour éviter crash mémoire
-          // - Desktop: jusqu'à 8192px pour texte ultra-net
+          // 🔥🔥 ULTRA HAUTE RÉSOLUTION pour lisibilité parfaite des textes
+          // - Mobile: jusqu'à 6144px (compromis qualité/mémoire)
+          // - Desktop: jusqu'à 16384px pour texte cristallin
           const isMobile = isMobileDevice() || window.innerWidth < 768;
-          const maxBitmapW = isMobile ? 4096 : 8192;
-          const qualityMultiplier = isMobile ? 2.0 : 3.0; // Plus de résolution sur desktop
-          const targetBitmapW = Math.min(maxBitmapW, Math.max(2048, Math.floor(containerW * dpr * qualityMultiplier)));
+          const maxBitmapW = isMobile ? 6144 : 16384;
+          const qualityMultiplier = isMobile ? 3.0 : 5.0;
+          const targetBitmapW = Math.min(maxBitmapW, Math.max(3072, Math.floor(containerW * dpr * qualityMultiplier)));
 
           loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
           const baseVp = page.getViewport({ scale: 1 });
 
-          // Scale augmenté pour meilleure lisibilité (jusqu'à 5.0 sur desktop)
-          const maxScale = isMobile ? 3.0 : 5.0;
-          const safeScale = Math.min(maxScale, Math.max(1.0, targetBitmapW / baseVp.width));
+          // Scale très élevé pour lisibilité maximale (jusqu'à 8.0 sur desktop)
+          const maxScale = isMobile ? 4.0 : 8.0;
+          const safeScale = Math.min(maxScale, Math.max(1.5, targetBitmapW / baseVp.width));
           const viewport = page.getViewport({ scale: safeScale });
 
           const canvas = document.createElement("canvas");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
-          // 🔥 Context avec qualité optimale pour texte
+
+          // 🔥 Context optimisé pour rendu texte haute qualité
           const ctx = canvas.getContext("2d", {
-            alpha: true,
-            desynchronized: false, // Meilleure qualité de rendu
+            alpha: false, // Pas de transparence = meilleur rendu texte
+            desynchronized: false,
+            willReadFrequently: false,
           });
-          // Améliorer l'anti-aliasing du texte
+
+          // Fond blanc pour meilleur contraste
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Anti-aliasing haute qualité pour le texte
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
 
-          renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
+          renderTaskRef.current = page.render({
+            canvasContext: ctx,
+            viewport,
+            intent: 'display', // Optimisé pour affichage écran
+            annotationMode: 2, // Inclure les annotations
+          });
           await renderTaskRef.current.promise;
 
-          // PNG haute qualité
-          const dataUrl = canvas.toDataURL("image/png", 1.0);
+          // PNG non compressé pour qualité maximale
+          const dataUrl = canvas.toDataURL("image/png");
           setImgSize({ w: canvas.width, h: canvas.height });
+
+          console.log(`[ATEX] PDF rendu: ${canvas.width}x${canvas.height}px (scale: ${safeScale.toFixed(2)})`);
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
           const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);

@@ -5,7 +5,7 @@ import {
   GitBranch, CreditCard, Cog, Flame, Wrench, Users, MessageCircle,
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
   Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase,
-  Shield, Globe, Crown, Star
+  Shield, Globe, Crown, Star, RefreshCcw, Repeat
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
@@ -121,6 +121,80 @@ function RoleBadge({ role }) {
         <Icon size={10} />
       </div>
       <span>{config.label}</span>
+    </div>
+  );
+}
+
+// Site Switcher for Global/Admin users
+function SiteSwitcher({ currentSite, sites, companyId, onSiteChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  // Filter sites by company if companyId is provided
+  const availableSites = companyId
+    ? sites.filter(s => s.company_id === companyId)
+    : sites;
+
+  if (availableSites.length <= 1) return null;
+
+  const handleSiteChange = (site) => {
+    setIsOpen(false);
+    onSiteChange(site);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl shadow-lg hover:from-emerald-600 hover:to-teal-600 transition-all"
+      >
+        <Globe size={16} />
+        <span className="font-medium">{currentSite || 'Choisir un site'}</span>
+        <ChevronDown size={16} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+
+          {/* Dropdown */}
+          <div className="absolute top-full mt-2 left-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-100 min-w-[200px] max-h-[300px] overflow-auto animate-scaleIn">
+            <div className="p-2">
+              <p className="text-xs text-gray-500 px-3 py-2 font-medium uppercase tracking-wide">
+                Changer de site ({availableSites.length})
+              </p>
+              {availableSites.map(site => (
+                <button
+                  key={site.id}
+                  onClick={() => handleSiteChange(site)}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 transition-all ${
+                    site.name === currentSite
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'hover:bg-gray-50 text-gray-700'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                    site.name === currentSite
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    <MapPin size={14} />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-medium">{site.name}</p>
+                    {site.company_name && (
+                      <p className="text-xs text-gray-400">{site.company_name}</p>
+                    )}
+                  </div>
+                  {site.name === currentSite && (
+                    <Check size={16} className="text-emerald-500" />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -430,6 +504,44 @@ export default function Dashboard() {
     return user?.role || 'site';
   }, [user?.role]);
 
+  // Check if user can switch sites (global or admin role)
+  const canSwitchSites = userRole === 'global' || userRole === 'admin' || userRole === 'superadmin';
+
+  // Get company_id for filtering sites
+  const userCompanyId = useMemo(() => {
+    if (user?.company_id) return user.company_id;
+    if (user?.site_id && sites.length) {
+      const s = sites.find(s => s.id === user.site_id);
+      return s?.company_id || null;
+    }
+    return null;
+  }, [user?.company_id, user?.site_id, sites]);
+
+  // Handle site change for Global users
+  const handleSiteChange = (newSite) => {
+    const updatedUser = {
+      ...user,
+      site: newSite.name,
+      site_id: newSite.id,
+    };
+    setUser(updatedUser);
+    localStorage.setItem('eh_user', JSON.stringify(updatedUser));
+
+    // Update the JWT token with new site
+    const token = localStorage.getItem('eh_token');
+    if (token) {
+      // Call API to update site preference
+      fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ site_id: newSite.id })
+      }).catch(console.error);
+    }
+  };
+
   // Get allowed apps for current user
   const allowedApps = useMemo(() => {
     return getAllowedApps(user?.email);
@@ -553,31 +665,48 @@ export default function Dashboard() {
             {/* User info cards */}
             <div className="flex flex-wrap gap-3">
               {/* Company card (read-only) */}
+              {/* Company card */}
               <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px]">
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Briefcase size={14} />
-                  Company
+                  Société
                 </div>
                 <p className="text-white font-semibold text-sm truncate max-w-[140px]">{companyName || '—'}</p>
               </div>
-              <button
-                onClick={() => setShowProfileModal(true)}
-                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
-              >
-                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
-                  <Building size={14} />
-                  Site
-                  <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+
+              {/* Site selector - Different for Global vs Site users */}
+              {canSwitchSites ? (
+                <div className="flex flex-col gap-1">
+                  <SiteSwitcher
+                    currentSite={site}
+                    sites={sites}
+                    companyId={userCompanyId}
+                    onSiteChange={handleSiteChange}
+                  />
+                  <span className="text-white/50 text-[10px] text-center">
+                    Cliquez pour changer de site
+                  </span>
                 </div>
-                <p className="text-white font-semibold text-sm">{site || '—'}</p>
-              </button>
+              ) : (
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
+                >
+                  <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
+                    <Building size={14} />
+                    Site
+                    <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <p className="text-white font-semibold text-sm">{site || '—'}</p>
+                </button>
+              )}
               <button
                 onClick={() => setShowProfileModal(true)}
                 className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
               >
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Users size={14} />
-                  Department
+                  Département
                   <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
                 <p className="text-white font-semibold text-sm">{departmentName || '—'}</p>
@@ -585,7 +714,7 @@ export default function Dashboard() {
               <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[100px]">
                 <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
                   <Grid3X3 size={14} />
-                  Apps
+                  Applis
                 </div>
                 <p className="text-white font-semibold text-sm">{visibleElectricalApps.length + visibleOtherApps.length}</p>
               </div>
