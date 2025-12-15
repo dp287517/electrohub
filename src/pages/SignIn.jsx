@@ -13,15 +13,18 @@ export default function SignIn() {
     const email = form.get('email');
     const password = form.get('password');
     try {
-      const { token } = await post('/api/auth/signin', { email, password });
-      localStorage.setItem('eh_token', token);
-      localStorage.setItem(
-        'eh_user',
-        JSON.stringify({ email, site: 'Nyon', department: 'Maintenance' })
-      );
+      const res = await post('/api/auth/signin', { email, password });
+
+      // Store token
+      localStorage.setItem('eh_token', res.token);
+
+      // Store full user data from server (includes site, company, department, role)
+      localStorage.setItem('eh_user', JSON.stringify(res.user));
+
+      console.log(`[SignIn] Login successful:`, res.user);
       navigate('/dashboard');
     } catch (err) {
-      alert('Sign in failed: ' + err.message);
+      alert('Connexion échouée: ' + (err.message || 'Erreur inconnue'));
     }
   }
 

@@ -191,17 +191,107 @@ app.post("/api/auth/logout", async (_req, res) => {
    🔥 Routes manquantes ajoutées pour compatibilité front actuelle
    ================================================================ */
 
-// /api/auth/signin : identique à /login mais renvoie aussi { token }
+// /api/auth/signin : Login pour utilisateurs externes (avec mot de passe)
 app.post("/api/auth/signin", express.json(), async (req, res) => {
-  const { email, site = process.env.DEFAULT_SITE || "Nyon" } = req.body || {};
-  const token = jwt.sign(
-    { id: email || "user", name: email || "user", site },
-    process.env.JWT_SECRET || "devsecret",
-    { expiresIn: "7d" }  // Extended from 2h to 7 days
-  );
-  const isProduction = process.env.NODE_ENV === 'production';
-  res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
-  res.json({ token });
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email et mot de passe requis" });
+  }
+
+  try {
+    // 1️⃣ Chercher l'utilisateur dans la table users
+    const result = await pool.query(
+      `SELECT u.id, u.email, u.name, u.password_hash, u.department_id, u.company_id, u.site_id,
+              u.role, u.allowed_apps, u.is_active,
+              s.name as site_name, d.name as department_name, c.name as company_name
+       FROM users u
+       LEFT JOIN sites s ON u.site_id = s.id
+       LEFT JOIN departments d ON u.department_id = d.id
+       LEFT JOIN companies c ON u.company_id = c.id
+       WHERE LOWER(u.email) = LOWER($1) LIMIT 1`,
+      [email]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      console.log(`[auth/signin] ❌ User not found: ${email}`);
+      return res.status(401).json({ error: "Email ou mot de passe incorrect" });
+    }
+
+    if (!user.is_active) {
+      console.log(`[auth/signin] ❌ User inactive: ${email}`);
+      return res.status(401).json({ error: "Compte désactivé" });
+    }
+
+    if (!user.password_hash) {
+      console.log(`[auth/signin] ❌ No password set for: ${email}`);
+      return res.status(401).json({ error: "Utilisez la connexion Bubble/SSO" });
+    }
+
+    // 2️⃣ Vérifier le mot de passe avec bcrypt
+    const bcrypt = await import('bcryptjs');
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!validPassword) {
+      console.log(`[auth/signin] ❌ Invalid password for: ${email}`);
+      return res.status(401).json({ error: "Email ou mot de passe incorrect" });
+    }
+
+    // 3️⃣ Créer le JWT avec toutes les infos tenant
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        name: user.name || user.email.split('@')[0],
+        site: user.site_name || 'Default',
+        site_id: user.site_id,
+        company_id: user.company_id,
+        department_id: user.department_id,
+        role: user.role || 'site',
+        allowed_apps: user.allowed_apps,
+        source: 'local'
+      },
+      process.env.JWT_SECRET || "devsecret",
+      { expiresIn: "7d" }
+    );
+
+    // 4️⃣ Mettre à jour last_login
+    await pool.query(
+      `UPDATE users SET last_login = NOW() WHERE id = $1`,
+      [user.id]
+    ).catch(e => console.log(`[auth/signin] last_login update failed: ${e.message}`));
+
+    // 5️⃣ Logger la connexion
+    console.log(`[auth/signin] ✅ Login successful: ${email} (company=${user.company_id}, site=${user.site_id}, role=${user.role})`);
+
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
+
+    // Retourner les infos utilisateur complètes
+    res.json({
+      ok: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name || user.email.split('@')[0],
+        site: user.site_name,
+        site_id: user.site_id,
+        company_id: user.company_id,
+        company: user.company_name,
+        department: user.department_name,
+        department_id: user.department_id,
+        role: user.role || 'site',
+        allowed_apps: user.allowed_apps
+      }
+    });
+
+  } catch (err) {
+    console.error(`[auth/signin] Error:`, err);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
 });
 
 // /api/auth/signup : placeholder pour inscription (à brancher sur DB plus tard)
