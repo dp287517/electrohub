@@ -1053,8 +1053,8 @@ export default function Doors() {
     setIsLoading(true);
     try {
       const res = await api.doors.list({});
-      const list = res?.doors || res || [];
-      setDoors(list);
+      const list = res?.items || res?.doors || res || [];
+      setDoors(Array.isArray(list) ? list : []);
     } catch (err) {
       console.error('Load doors error:', err);
       showToast('Erreur lors du chargement', 'error');
@@ -1067,7 +1067,11 @@ export default function Doors() {
   const loadSettings = useCallback(async () => {
     try {
       const res = await api.doors.settingsGet();
-      setSettings(res?.settings || res || {});
+      // API returns { ok, checklist_template, frequency } directly
+      setSettings({
+        checklist_template: res?.checklist_template || [],
+        frequency: res?.frequency || 'monthly'
+      });
     } catch (err) {
       console.error('Load settings error:', err);
     }
