@@ -81,6 +81,16 @@ function getIdentity() {
           name = String(u.name || u.displayName);
       } catch {}
     }
+    // Check "eh_user" localStorage (Bubble login stores user data here)
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName))
+          name = String(x.name || x.displayName);
+      } catch {}
+    }
   } catch {}
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
