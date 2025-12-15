@@ -27,11 +27,22 @@ function getIdentity() {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
     if (!name) name = localStorage.getItem("name") || localStorage.getItem("username") || null;
 
+    // Check "user" localStorage
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
         if (!name && u?.name) name = String(u.name);
+      } catch {}
+    }
+
+    // Check "eh_user" localStorage (Bubble login stores user data here)
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
       } catch {}
     }
   }
