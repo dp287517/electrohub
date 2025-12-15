@@ -550,12 +550,12 @@ export const api = {
     fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
     fileUrl: (id, { bust = false } = {}) =>
       withBust(
-        `${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`,
+        `${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}?site=${currentSite()}`,
         bust
       ),
     previewUrl: (id, { bust = false } = {}) =>
       withBust(
-        `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`,
+        `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}?site=${currentSite()}`,
         bust
       ),
   },
@@ -585,7 +585,7 @@ export const api = {
 
     photoUrl: (id, { bust = false } = {}) =>
       withBust(
-        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`,
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo?site=${currentSite()}`,
         bust
       ),
 
@@ -668,14 +668,14 @@ export const api = {
       withBust(
         `${API_BASE}/api/doors/doors/${encodeURIComponent(
           id
-        )}/nonconformities.pdf`,
+        )}/nonconformities.pdf?site=${currentSite()}`,
         bust
       ),
     nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
       withBust(
         `${API_BASE}/api/doors/doors/${encodeURIComponent(
           id
-        )}/nonconformities.pdf`,
+        )}/nonconformities.pdf?site=${currentSite()}`,
         bust
       ),
 
@@ -707,37 +707,38 @@ export const api = {
       withBust(
         `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
           logical_name
-        )}/file`,
+        )}/file?site=${currentSite()}`,
         bust
       ),
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
           id
-        )}/file`,
+        )}/file?site=${currentSite()}`,
         bust
       ),
     planFileUrlCompatById: (id, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(
           id
-        )}/file`,
+        )}/file?site=${currentSite()}`,
         bust
       ),
     planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const site = currentSite();
       if (typeof plan === "string") {
         if (isUuid(plan) || isNumericId(plan)) {
           return withBust(
             `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
               plan
-            )}/file`,
+            )}/file?site=${site}`,
             bust
           );
         }
         return withBust(
           `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
             plan
-          )}/file`,
+          )}/file?site=${site}`,
           bust
         );
       }
@@ -745,7 +746,7 @@ export const api = {
         return withBust(
           `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
             plan.id
-          )}/file`,
+          )}/file?site=${site}`,
           bust
         );
       }
@@ -753,7 +754,7 @@ export const api = {
       return withBust(
         `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
           logical
-        )}/file`,
+        )}/file?site=${site}`,
         bust
       );
     },
@@ -802,7 +803,7 @@ export const api = {
       withBust(
         `${API_BASE}/api/atex/equipments/${encodeURIComponent(
           equipmentId
-        )}/photo${thumb ? '?thumb=1' : ''}`,
+        )}/photo?site=${currentSite()}${thumb ? '&thumb=1' : ''}`,
         bust
       ),
 
@@ -967,15 +968,16 @@ export const api = {
       withBust(
         `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
           logical_name
-        )}`,
+        )}&site=${currentSite()}`,
         bust
       ),
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`,
+        `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}&site=${currentSite()}`,
         bust
       ),
     planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const site = currentSite();
       const key =
         typeof plan === "string"
           ? plan
@@ -984,10 +986,10 @@ export const api = {
         isUuid(key) || isNumericId(key)
           ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(
               key
-            )}`
+            )}&site=${site}`
           : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
               key
-            )}`;
+            )}&site=${site}`;
       return withBust(url, bust);
     },
     positions: (logical_name, page_index = 0) =>
@@ -1161,7 +1163,7 @@ export const api = {
 
     photoUrl: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/vsd/equipments/${encodeURIComponent(id)}/photo`,
+        `${API_BASE}/api/vsd/equipments/${encodeURIComponent(id)}/photo?site=${currentSite()}`,
         bust
       ),
     uploadPhoto: (id, file) => {
@@ -1228,25 +1230,26 @@ export const api = {
       withBust(
         `${API_BASE}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(
           logical_name
-        )}`,
+        )}&site=${currentSite()}`,
         bust
       ),
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(id)}`,
+        `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(id)}&site=${currentSite()}`,
         bust
       ),
     planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const site = currentSite();
       const key =
         typeof plan === "string"
           ? plan
           : plan?.id || plan?.logical_name || "";
       const url =
         isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(key)}`
+          ? `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
           : `${API_BASE}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(
               key
-            )}`;
+            )}&site=${site}`;
       return withBust(url, bust);
     },
     positions: (logical_name, page_index = 0) =>
@@ -1333,7 +1336,7 @@ export const api = {
 
     photoUrl: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`,
+        `${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo?site=${currentSite()}`,
         bust
       ),
 
@@ -1374,17 +1377,18 @@ export const api = {
       withBust(
         `${API_BASE}/api/meca/maps/planFile?logical_name=${encodeURIComponent(
           logical_name
-        )}`,
+        )}&site=${currentSite()}`,
         bust
       ),
 
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(
-        `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(id)}`,
+        `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(id)}&site=${currentSite()}`,
         bust
       ),
 
     planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const site = currentSite();
       const key =
         typeof plan === "string"
           ? plan
@@ -1392,10 +1396,10 @@ export const api = {
 
       const url =
         isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(key)}`
+          ? `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
           : `${API_BASE}/api/meca/maps/planFile?logical_name=${encodeURIComponent(
               key
-            )}`;
+            )}&site=${site}`;
 
       return withBust(url, bust);
     },
@@ -1601,9 +1605,9 @@ export const api = {
     certificates: () => get("/api/learn-ex/certificates"),
     verifyCertificate: (number) =>
       get(`/api/learn-ex/certificates/verify/${number}`),
-    certificatePdfUrl: (id) => `${API_BASE}/api/learn-ex/certificates/${id}/pdf`,
+    certificatePdfUrl: (id) => `${API_BASE}/api/learn-ex/certificates/${id}/pdf?site=${currentSite()}`,
     stats: () => get("/api/learn-ex/stats"),
-    imageUrl: (name) => `${API_BASE}/api/learn-ex/images/${name}`,
+    imageUrl: (name) => `${API_BASE}/api/learn-ex/images/${name}?site=${currentSite()}`,
   },
 
   /* ======================================================================

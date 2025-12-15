@@ -1,14 +1,75 @@
 // server_loopcalc.js
+// ✅ VERSION 2.0 - MULTI-TENANT (Company + Site)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import PDFDocument from 'pdfkit';
+import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// 🔥 Database schema initialization
+async function ensureSchema() {
+  // Create table with multi-tenant columns
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS loop_calcs (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER,
+      site_id INTEGER,
+      project TEXT,
+      voltage NUMERIC,
+      cable_type TEXT,
+      resistance NUMERIC,
+      capacitance NUMERIC,
+      inductance NUMERIC,
+      distance NUMERIC,
+      max_current NUMERIC,
+      safety_factor NUMERIC,
+      compliance TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Add multi-tenant columns if missing
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE loop_calcs ADD COLUMN IF NOT EXISTS company_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE loop_calcs ADD COLUMN IF NOT EXISTS site_id INTEGER;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
+  // Create indexes
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_loop_calcs_company ON loop_calcs(company_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_loop_calcs_site ON loop_calcs(site_id);`);
+
+  // Migration: populate company_id/site_id for existing records
+  try {
+    const defaultSiteRes = await pool.query(`SELECT id, company_id FROM sites ORDER BY id LIMIT 1`);
+    if (defaultSiteRes.rows[0]) {
+      const defaultSite = defaultSiteRes.rows[0];
+      const updateRes = await pool.query(`
+        UPDATE loop_calcs
+        SET company_id = $1, site_id = $2
+        WHERE company_id IS NULL OR site_id IS NULL
+      `, [defaultSite.company_id, defaultSite.id]);
+      if (updateRes.rowCount > 0) {
+        console.log(`[LOOPCALC] Migration: ${updateRes.rowCount} calculations updated with company_id=${defaultSite.company_id}, site_id=${defaultSite.id}`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[LOOPCALC] Migration tenant warning:`, e.message);
+  }
+
+  console.log('[LOOPCALC] ✅ Schema verified');
+}
 
 const app = express();
 app.use(helmet());
@@ -19,7 +80,7 @@ app.use(cookieParser());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Site,X-User-Email,X-User-Name');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
@@ -70,10 +131,15 @@ app.get('/api/loopcalc/calculations/:id', async (req, res) => {
 // query: q, compliance, project, sort=created_at|project|voltage|distance|compliance , dir=asc|desc , page=1 , pageSize=20
 app.get('/api/loopcalc/calculations', async (req, res) => {
   try {
+    // 🏢 MULTI-TENANT: Extract and enrich tenant info
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
+    const tenantFilter = getTenantFilter(tenant);
+
     const { q, compliance, project, sort = 'created_at', dir = 'desc', page = '1', pageSize = '20' } = req.query;
-    const where = [];
-    const vals = [];
-    let i = 1;
+    const where = [tenantFilter.where];
+    const vals = [...tenantFilter.params];
+    let i = tenantFilter.nextParam;
 
     if (q) {
       where.push(`(project ILIKE $${i} OR cable_type ILIKE $${i})`);
@@ -93,7 +159,7 @@ app.get('/api/loopcalc/calculations', async (req, res) => {
     const limit = Math.min(parseInt(pageSize,10) || 20, 100);
     const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const whereSql = `WHERE ${where.join(' AND ')}`;
     const { rows } = await pool.query(
       `SELECT id, project, voltage, cable_type, resistance, capacitance, inductance, distance, max_current, safety_factor, compliance, created_at
        FROM loop_calcs
@@ -115,6 +181,10 @@ app.get('/api/loopcalc/calculations', async (req, res) => {
 // ---- CREATE (compute + store)
 app.post('/api/loopcalc/calculations', async (req, res) => {
   try {
+    // 🏢 MULTI-TENANT: Extract and enrich tenant info
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
+
     const payload = {
       project: req.body.project || null,
       voltage: Number(req.body.voltage),
@@ -136,11 +206,12 @@ app.post('/api/loopcalc/calculations', async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO loop_calcs
-        (project, voltage, cable_type, resistance, capacitance, inductance, distance, max_current, safety_factor, compliance, created_at)
+        (company_id, site_id, project, voltage, cable_type, resistance, capacitance, inductance, distance, max_current, safety_factor, compliance, created_at)
        VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW())
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())
        RETURNING *`,
       [
+        tenant.companyId, tenant.siteId,
         payload.project, payload.voltage, payload.cable_type, payload.resistance,
         payload.capacitance, payload.inductance, payload.distance,
         payload.max_current, payload.safety_factor, calc.compliance
@@ -344,5 +415,13 @@ app.get('/api/loopcalc/:id/report', async (req, res) => {
   }
 });
 
+// Start server
 const port = process.env.LOOPCALC_PORT || 3002;
-app.listen(port, () => console.log(`LoopCalc service running on :${port}`));
+ensureSchema()
+  .then(() => {
+    app.listen(port, () => console.log(`[LOOPCALC] ✅ Service running on :${port}`));
+  })
+  .catch(err => {
+    console.error('[LOOPCALC] ❌ Schema initialization failed:', err.message);
+    process.exit(1);
+  });
