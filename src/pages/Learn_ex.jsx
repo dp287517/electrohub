@@ -59,8 +59,6 @@ const ICON_MAP = {
   UserCheck,
 };
 
-const API_BASE = '/api/learn-ex';
-
 // ============================================================================
 // COMPOSANTS UTILITAIRES
 // ============================================================================
@@ -255,11 +253,12 @@ export default function LearnEx() {
   async function loadInitialData() {
     setLoading(true);
     try {
+      // 🔥 Utiliser l'API layer avec headers d'identification (X-User-Email, X-Site)
       const [configRes, modulesRes, sessionRes, historyRes] = await Promise.all([
-        fetch(`${API_BASE}/config`).then((r) => r.json()),
-        fetch(`${API_BASE}/modules`).then((r) => r.json()),
-        fetch(`${API_BASE}/sessions/current`).then((r) => r.json()),
-        fetch(`${API_BASE}/history`).then((r) => r.json()),
+        api.learnEx.config(),
+        api.learnEx.modules(),
+        api.learnEx.getCurrentSession(),
+        api.learnEx.history(),
       ]);
 
       setConfig(configRes);
@@ -281,8 +280,7 @@ export default function LearnEx() {
   async function openModule(moduleId) {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/modules/${moduleId}`);
-      const moduleData = await res.json();
+      const moduleData = await api.learnEx.getModule(moduleId);
       setCurrentModule(moduleData);
       setCurrentSection(0);
       setView('module');
@@ -325,20 +323,12 @@ export default function LearnEx() {
   async function submitModuleQuiz() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/modules/${currentModule.id}/quiz/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          answers: quizAnswers,
-          sessionId: session?.id,
-        }),
-      });
-      const results = await res.json();
+      const results = await api.learnEx.checkModuleQuiz(currentModule.id, quizAnswers, session?.id);
       setQuizResults(results);
 
       // Recharger la session pour mettre à jour la progression
-      const sessionRes = await fetch(`${API_BASE}/sessions/current`);
-      setSession(await sessionRes.json());
+      const sessionRes = await api.learnEx.getCurrentSession();
+      setSession(sessionRes);
     } catch (err) {
       console.error('Error submitting quiz:', err);
       setError('Erreur lors de la soumission du quiz');
@@ -354,8 +344,7 @@ export default function LearnEx() {
   async function startFinalExam() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/final-exam`);
-      const data = await res.json();
+      const data = await api.learnEx.finalExam();
       setExamQuestions(data.questions);
       setExamAnswers({});
       setExamResults(null);
@@ -386,16 +375,7 @@ export default function LearnEx() {
     if (examTimerRef.current) clearInterval(examTimerRef.current);
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/final-exam/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session?.id,
-          answers: examAnswers,
-          timeSpent: 30 * 60 - examTimeLeft,
-        }),
-      });
-      const results = await res.json();
+      const results = await api.learnEx.submitExam(session?.id, examAnswers, 30 * 60 - examTimeLeft);
       setExamResults(results);
       setView('result');
 
@@ -406,8 +386,8 @@ export default function LearnEx() {
       }
 
       // Recharger l'historique
-      const historyRes = await fetch(`${API_BASE}/history`);
-      setHistory(await historyRes.json());
+      const historyRes = await api.learnEx.history();
+      setHistory(historyRes);
     } catch (err) {
       console.error('Error submitting exam:', err);
       setError("Erreur lors de la soumission de l'examen");
@@ -418,8 +398,46 @@ export default function LearnEx() {
 
   function downloadCertificate() {
     if (certificate) {
-      window.open(`${API_BASE}/certificates/${certificate.id}/pdf`, '_blank');
+      // Utiliser l'URL avec le site pour l'identification
+      window.open(api.learnEx.certificatePdfUrl(certificate.id), '_blank');
     }
+  }
+
+  // Nouvelle fonction - Génération automatique du certificat basée sur les quiz
+  async function generateAndDownloadCertificate() {
+    setLoading(true);
+    try {
+      const result = await api.learnEx.autoCertificate();
+
+      if (result.success && result.certificate) {
+        setCertificate(result.certificate);
+        setShowConfetti(true);
+        setTimeout(() => setShowConfetti(false), 8000);
+
+        // Recharger l'historique
+        const historyRes = await api.learnEx.history();
+        setHistory(historyRes);
+
+        // Ouvrir le PDF automatiquement
+        window.open(api.learnEx.certificatePdfUrl(result.certificate.id), '_blank');
+      }
+    } catch (err) {
+      console.error('Error generating certificate:', err);
+      const message = err.message || "Erreur lors de la génération du certificat";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Vérifier si l'utilisateur a déjà un certificat valide
+  function hasValidCertificate() {
+    return history.some(h => h.certificate_number && new Date(h.valid_until) > new Date());
+  }
+
+  // Récupérer le certificat valide
+  function getValidCertificate() {
+    return history.find(h => h.certificate_number && new Date(h.valid_until) > new Date());
   }
 
   // ============================================================================
@@ -509,13 +527,25 @@ export default function LearnEx() {
             <div className="mt-4 flex items-center justify-between">
               <span className="text-sm text-gray-500">
                 {progressPct === 100
-                  ? 'Formation terminée ! Passez l\'examen final.'
+                  ? (hasValidCertificate()
+                      ? 'Formation complète ! Votre certificat est disponible.'
+                      : 'Formation terminée ! Obtenez votre certificat.')
                   : `${Math.round(progressPct)}% complété`}
               </span>
-              {progressPct === 100 && !examResults?.passed && (
-                <Button onClick={startFinalExam} icon={GraduationCap}>
-                  Passer l'examen
-                </Button>
+              {progressPct === 100 && (
+                hasValidCertificate() ? (
+                  <Button
+                    onClick={() => window.open(api.learnEx.certificatePdfUrl(getValidCertificate().id), '_blank')}
+                    icon={Download}
+                    variant="success"
+                  >
+                    Télécharger mon certificat
+                  </Button>
+                ) : (
+                  <Button onClick={generateAndDownloadCertificate} icon={Award}>
+                    Obtenir mon certificat
+                  </Button>
+                )
               )}
             </div>
           </Card>
@@ -590,25 +620,53 @@ export default function LearnEx() {
           </div>
         </div>
 
-        {/* Examen final */}
+        {/* Certificat - Afficher quand tous les modules sont complétés */}
         {canTakeExam() && (
-          <Card className="p-6 border-2 border-yellow-400 bg-yellow-50">
-            <div className="flex items-center gap-4">
-              <div className="p-4 bg-yellow-400 rounded-xl">
-                <GraduationCap className="w-8 h-8 text-yellow-900" />
+          hasValidCertificate() ? (
+            <Card className="p-6 border-2 border-green-400 bg-green-50">
+              <div className="flex items-center gap-4">
+                <div className="p-4 bg-green-500 rounded-xl">
+                  <Award className="w-8 h-8 text-white" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-gray-900">Certificat obtenu</h3>
+                  <p className="text-sm text-gray-600">
+                    Votre certificat ATEX Niveau 0 est valable 3 ans.
+                    N'oubliez pas de le renouveler avant expiration.
+                  </p>
+                  <p className="text-xs text-green-600 mt-1">
+                    Valide jusqu'au {new Date(getValidCertificate().valid_until).toLocaleDateString('fr-FR')}
+                  </p>
+                </div>
+                <Button
+                  onClick={() => window.open(api.learnEx.certificatePdfUrl(getValidCertificate().id), '_blank')}
+                  variant="success"
+                  size="lg"
+                  icon={Download}
+                >
+                  Télécharger
+                </Button>
               </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold text-gray-900">Examen final</h3>
-                <p className="text-sm text-gray-600">
-                  Testez vos connaissances avec le QCM de 20 questions. 
-                  Score minimum : {config?.passingScore || 70}%
-                </p>
+            </Card>
+          ) : (
+            <Card className="p-6 border-2 border-blue-400 bg-blue-50">
+              <div className="flex items-center gap-4">
+                <div className="p-4 bg-blue-500 rounded-xl">
+                  <GraduationCap className="w-8 h-8 text-white" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-gray-900">Formation terminée !</h3>
+                  <p className="text-sm text-gray-600">
+                    Vous avez complété tous les modules avec succès.
+                    Obtenez votre certificat ATEX Niveau 0 (valable 3 ans).
+                  </p>
+                </div>
+                <Button onClick={generateAndDownloadCertificate} variant="primary" size="lg" icon={Award}>
+                  Obtenir mon certificat
+                </Button>
               </div>
-              <Button onClick={startFinalExam} variant="warning" size="lg" icon={Play}>
-                Commencer
-              </Button>
-            </div>
-          </Card>
+            </Card>
+          )
         )}
 
         {/* Certificats obtenus */}
@@ -646,7 +704,7 @@ export default function LearnEx() {
                           icon={Download}
                           onClick={() =>
                             window.open(
-                              `${API_BASE}/certificates/${h.certificate_number}/pdf`,
+                              api.learnEx.certificatePdfUrl(h.certificate_number),
                               '_blank'
                             )
                           }
@@ -766,7 +824,7 @@ export default function LearnEx() {
             {section.image && (
               <div className="h-64 bg-gradient-to-br from-gray-100 to-gray-200 relative overflow-hidden">
                 <img
-                  src={`${API_BASE}/images/${section.image}`}
+                  src={api.learnEx.imageUrl(section.image)}
                   alt={section.title}
                   className="w-full h-full object-cover"
                   onError={(e) => {

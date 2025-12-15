@@ -1856,6 +1856,121 @@ app.get("/api/learn-ex/history", async (req, res) => {
   }
 });
 
+// Certificat - Génération automatique basée sur les quiz modules
+// Appelé quand l'utilisateur a complété tous les modules avec succès
+app.post("/api/learn-ex/auto-certificate", async (req, res) => {
+  const user = extractUser(req);
+
+  try {
+    // 1. Vérifier qu'il n'y a pas déjà un certificat valide
+    const existingCert = await pool.query(
+      `SELECT * FROM learn_ex_certificates
+       WHERE user_email = $1 AND valid_until > NOW()
+       ORDER BY issued_at DESC LIMIT 1`,
+      [user.email]
+    );
+
+    if (existingCert.rows.length > 0) {
+      return res.json({
+        success: true,
+        certificate: existingCert.rows[0],
+        message: "Certificat existant trouvé",
+      });
+    }
+
+    // 2. Récupérer la session en cours
+    const sessionRes = await pool.query(
+      `SELECT * FROM learn_ex_sessions
+       WHERE user_email = $1
+       ORDER BY created_at DESC LIMIT 1`,
+      [user.email]
+    );
+
+    if (sessionRes.rows.length === 0) {
+      return res.status(400).json({ error: "Aucune session trouvée" });
+    }
+
+    const session = sessionRes.rows[0];
+
+    // 3. Vérifier que tous les modules sont complétés
+    const progressRes = await pool.query(
+      `SELECT module_id, quiz_score, completed_at
+       FROM learn_ex_progress
+       WHERE session_id = $1`,
+      [session.id]
+    );
+
+    const totalModules = FORMATION_CONFIG.totalModules;
+    const completedModules = progressRes.rows.filter(p => p.completed_at);
+
+    if (completedModules.length < totalModules) {
+      return res.status(400).json({
+        error: "Formation incomplète",
+        message: `${completedModules.length}/${totalModules} modules complétés`,
+      });
+    }
+
+    // 4. Calculer le score moyen des quiz
+    const quizScores = completedModules.map(p => p.quiz_score || 0);
+    const averageScore = Math.round(
+      quizScores.reduce((a, b) => a + b, 0) / quizScores.length
+    );
+
+    // 5. Vérifier que le score moyen est suffisant
+    if (averageScore < FORMATION_CONFIG.passingScore) {
+      return res.status(400).json({
+        error: "Score insuffisant",
+        message: `Score moyen: ${averageScore}%, minimum requis: ${FORMATION_CONFIG.passingScore}%`,
+      });
+    }
+
+    // 6. Générer le certificat
+    const certNumber = `ATEX-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 6)
+      .toUpperCase()}`;
+    const validUntil = new Date();
+    validUntil.setFullYear(validUntil.getFullYear() + 3);
+
+    const certRes = await pool.query(
+      `INSERT INTO learn_ex_certificates
+        (session_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        session.id,
+        certNumber,
+        user.email,
+        user.name,
+        user.site,
+        FORMATION_CONFIG.title,
+        averageScore,
+        validUntil,
+      ]
+    );
+
+    // 7. Mettre à jour le statut de la session
+    await pool.query(
+      `UPDATE learn_ex_sessions
+       SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+       WHERE id = $1`,
+      [session.id]
+    );
+
+    console.log(`[LearnEx] Auto-certificate generated for ${user.email}: ${certNumber} (score: ${averageScore}%)`);
+
+    res.json({
+      success: true,
+      certificate: certRes.rows[0],
+      message: "Certificat généré avec succès !",
+      averageScore,
+    });
+  } catch (err) {
+    console.error("[LearnEx] Error generating auto-certificate:", err);
+    res.status(500).json({ error: "Erreur lors de la génération du certificat" });
+  }
+});
+
 // Certificats - Liste des certificats d'un utilisateur
 app.get("/api/learn-ex/certificates", async (req, res) => {
   const user = extractUser(req);
@@ -1908,13 +2023,14 @@ app.get("/api/learn-ex/certificates/verify/:number", async (req, res) => {
   }
 });
 
-// Certificat - Générer le PDF
+// Certificat - Générer le PDF (Design professionnel)
 app.get("/api/learn-ex/certificates/:id/pdf", async (req, res) => {
   const { id } = req.params;
+  const site = req.headers["x-site"] || req.query?.site || "Default";
 
   try {
     const result = await pool.query(
-      `SELECT * FROM learn_ex_certificates WHERE id = $1`,
+      `SELECT * FROM learn_ex_certificates WHERE id = $1 OR certificate_number = $1`,
       [id]
     );
 
@@ -1924,124 +2040,333 @@ app.get("/api/learn-ex/certificates/:id/pdf", async (req, res) => {
 
     const cert = result.rows[0];
 
-    // Créer le PDF
+    // Récupérer les paramètres du site pour le logo
+    let siteSettings = {};
+    try {
+      const settingsRes = await pool.query(
+        `SELECT * FROM site_settings WHERE site = $1`,
+        [site]
+      );
+      siteSettings = settingsRes.rows[0] || {};
+    } catch (e) {
+      console.log("[LearnEx] No site_settings found, using defaults");
+    }
+
+    // Créer le PDF - format paysage pour un certificat professionnel
     const doc = new PDFDocument({
       size: "A4",
       layout: "landscape",
-      margins: { top: 50, bottom: 50, left: 50, right: 50 },
+      margins: { top: 40, bottom: 40, left: 40, right: 40 },
     });
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=certificat-${cert.certificate_number}.pdf`
+      `attachment; filename=certificat-ATEX-${cert.certificate_number}.pdf`
     );
 
     doc.pipe(res);
 
-    // Fond dégradé simulé (bordure)
-    doc.rect(20, 20, doc.page.width - 40, doc.page.height - 40).lineWidth(3).stroke("#1E40AF");
-    doc.rect(30, 30, doc.page.width - 60, doc.page.height - 60).lineWidth(1).stroke("#3B82F6");
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+    const centerX = pageWidth / 2;
 
-    // En-tête
-    doc
-      .fontSize(14)
-      .fillColor("#6B7280")
-      .text("FORMATION PROFESSIONNELLE", 0, 60, { align: "center" });
+    // ========================================================================
+    // FOND ET BORDURES DÉCORATIVES
+    // ========================================================================
 
-    doc
-      .fontSize(36)
-      .fillColor("#1E40AF")
-      .font("Helvetica-Bold")
-      .text("CERTIFICAT DE FORMATION", 0, 90, { align: "center" });
+    // Fond légèrement crème pour effet parchemin
+    doc.rect(0, 0, pageWidth, pageHeight).fill("#FEFDFB");
 
-    doc
-      .fontSize(24)
-      .fillColor("#DC2626")
-      .text("ATEX NIVEAU 0", 0, 140, { align: "center" });
+    // Bordure externe dorée épaisse
+    doc.rect(15, 15, pageWidth - 30, pageHeight - 30)
+       .lineWidth(4)
+       .stroke("#B8860B");
 
-    doc
-      .fontSize(14)
-      .fillColor("#4B5563")
-      .font("Helvetica")
-      .text("Sensibilisation pour intervenants en zone ATEX", 0, 175, {
-        align: "center",
-      });
+    // Bordure interne dorée fine
+    doc.rect(25, 25, pageWidth - 50, pageHeight - 50)
+       .lineWidth(1.5)
+       .stroke("#DAA520");
 
-    // Ligne décorative
-    doc
-      .moveTo(200, 210)
-      .lineTo(doc.page.width - 200, 210)
-      .lineWidth(2)
-      .stroke("#F59E0B");
+    // Coins décoratifs (motifs d'angle)
+    const cornerSize = 30;
+    const corners = [
+      { x: 35, y: 35 },
+      { x: pageWidth - 35 - cornerSize, y: 35 },
+      { x: 35, y: pageHeight - 35 - cornerSize },
+      { x: pageWidth - 35 - cornerSize, y: pageHeight - 35 - cornerSize }
+    ];
 
-    // Corps
-    doc
-      .fontSize(14)
-      .fillColor("#374151")
-      .text("Ce certificat atteste que", 0, 240, { align: "center" });
+    corners.forEach(corner => {
+      doc.rect(corner.x, corner.y, cornerSize, cornerSize)
+         .lineWidth(1)
+         .stroke("#DAA520");
+      // Diagonale décorative
+      doc.moveTo(corner.x, corner.y)
+         .lineTo(corner.x + cornerSize, corner.y + cornerSize)
+         .lineWidth(0.5)
+         .stroke("#DAA520");
+    });
 
-    doc
-      .fontSize(28)
-      .fillColor("#1F2937")
-      .font("Helvetica-Bold")
-      .text(cert.user_name || "Participant", 0, 270, { align: "center" });
+    // ========================================================================
+    // EN-TÊTE AVEC LOGO
+    // ========================================================================
 
-    doc
-      .fontSize(14)
-      .fillColor("#374151")
-      .font("Helvetica")
-      .text("a suivi avec succès la formation", 0, 315, { align: "center" });
+    let headerY = 55;
 
-    doc
-      .fontSize(18)
-      .fillColor("#1E40AF")
-      .font("Helvetica-Bold")
-      .text(`"${cert.formation_title}"`, 0, 340, { align: "center" });
+    // Logo entreprise à gauche (si disponible)
+    if (siteSettings.logo) {
+      try {
+        doc.image(siteSettings.logo, 60, headerY, { width: 80 });
+      } catch (e) {
+        // Logo non disponible
+      }
+    }
 
-    doc
-      .fontSize(14)
-      .fillColor("#374151")
-      .font("Helvetica")
-      .text(`avec un score de ${cert.score}%`, 0, 375, { align: "center" });
+    // Symbole ATEX à droite (hexagone explosion)
+    const atexX = pageWidth - 130;
+    const atexY = headerY + 15;
+    doc.save();
+    // Hexagone jaune/orange pour ATEX
+    doc.polygon(
+      [atexX, atexY - 25],
+      [atexX + 22, atexY - 12],
+      [atexX + 22, atexY + 12],
+      [atexX, atexY + 25],
+      [atexX - 22, atexY + 12],
+      [atexX - 22, atexY - 12]
+    ).fillAndStroke("#FEF3C7", "#F59E0B");
 
-    // Informations
-    const infoY = 420;
-    doc.fontSize(11).fillColor("#6B7280");
+    // "Ex" au centre de l'hexagone
+    doc.fontSize(16)
+       .fillColor("#B45309")
+       .font("Helvetica-Bold")
+       .text("Ex", atexX - 12, atexY - 8, { width: 24, align: "center" });
+    doc.restore();
 
-    doc.text(`N° de certificat : ${cert.certificate_number}`, 100, infoY);
-    doc.text(
-      `Date d'émission : ${new Date(cert.issued_at).toLocaleDateString("fr-FR")}`,
-      100,
-      infoY + 20
-    );
-    doc.text(
-      `Valide jusqu'au : ${new Date(cert.valid_until).toLocaleDateString("fr-FR")}`,
-      100,
-      infoY + 40
-    );
+    // ========================================================================
+    // TITRE PRINCIPAL
+    // ========================================================================
 
-    doc.text("Formation conforme aux exigences", doc.page.width - 300, infoY);
-    doc.text("réglementaires ATEX", doc.page.width - 300, infoY + 20);
-    doc.text("(Directive 1999/92/CE)", doc.page.width - 300, infoY + 40);
+    // Ligne décorative supérieure
+    doc.moveTo(150, headerY + 70)
+       .lineTo(pageWidth - 150, headerY + 70)
+       .lineWidth(1)
+       .stroke("#DAA520");
 
-    // Pied de page
-    doc
-      .fontSize(10)
-      .fillColor("#9CA3AF")
-      .text(
-        "Ce certificat peut être vérifié en ligne avec le numéro de certificat",
-        0,
-        doc.page.height - 80,
-        { align: "center" }
-      );
+    // "CERTIFICAT DE FORMATION"
+    doc.fontSize(12)
+       .fillColor("#6B7280")
+       .font("Helvetica")
+       .text("FORMATION PROFESSIONNELLE SÉCURITÉ", 0, headerY + 80, { align: "center", width: pageWidth });
 
-    // QR Code simulé (texte)
-    doc
-      .fontSize(8)
-      .text(`Vérification : ${cert.certificate_number}`, 0, doc.page.height - 60, {
-        align: "center",
-      });
+    doc.fontSize(32)
+       .fillColor("#1E3A5F")
+       .font("Helvetica-Bold")
+       .text("CERTIFICAT", 0, headerY + 100, { align: "center", width: pageWidth });
+
+    doc.fontSize(16)
+       .fillColor("#4B5563")
+       .font("Helvetica")
+       .text("ATEX NIVEAU 0 - SENSIBILISATION", 0, headerY + 140, { align: "center", width: pageWidth });
+
+    // Ligne décorative avec étoiles
+    const lineY = headerY + 170;
+    doc.moveTo(200, lineY)
+       .lineTo(centerX - 30, lineY)
+       .lineWidth(1)
+       .stroke("#DAA520");
+
+    // Étoile centrale
+    doc.fontSize(14).fillColor("#DAA520").text("★", centerX - 7, lineY - 7);
+
+    doc.moveTo(centerX + 30, lineY)
+       .lineTo(pageWidth - 200, lineY)
+       .stroke("#DAA520");
+
+    // ========================================================================
+    // CORPS DU CERTIFICAT
+    // ========================================================================
+
+    const bodyY = headerY + 190;
+
+    doc.fontSize(13)
+       .fillColor("#374151")
+       .font("Helvetica")
+       .text("Ce certificat atteste que", 0, bodyY, { align: "center", width: pageWidth });
+
+    // Nom du participant (en grand, souligné)
+    const participantName = cert.user_name || "Participant";
+    doc.fontSize(26)
+       .fillColor("#1E3A5F")
+       .font("Helvetica-Bold")
+       .text(participantName, 0, bodyY + 25, { align: "center", width: pageWidth });
+
+    // Soulignement élégant sous le nom
+    const nameWidth = doc.widthOfString(participantName);
+    doc.moveTo(centerX - nameWidth/2 - 20, bodyY + 55)
+       .lineTo(centerX + nameWidth/2 + 20, bodyY + 55)
+       .lineWidth(1)
+       .stroke("#DAA520");
+
+    doc.fontSize(13)
+       .fillColor("#374151")
+       .font("Helvetica")
+       .text("a suivi avec succès la formation obligatoire", 0, bodyY + 70, { align: "center", width: pageWidth });
+
+    // Titre de la formation
+    doc.fontSize(16)
+       .fillColor("#B45309")
+       .font("Helvetica-Bold")
+       .text("« Sensibilisation ATEX pour Intervenants »", 0, bodyY + 95, { align: "center", width: pageWidth });
+
+    doc.fontSize(11)
+       .fillColor("#6B7280")
+       .font("Helvetica")
+       .text("Conformément à la Directive européenne 1999/92/CE (ATEX 137)", 0, bodyY + 120, { align: "center", width: pageWidth });
+
+    // Score dans un encadré
+    const scoreBoxX = centerX - 60;
+    const scoreBoxY = bodyY + 145;
+    doc.roundedRect(scoreBoxX, scoreBoxY, 120, 35, 5)
+       .fillAndStroke("#ECFDF5", "#10B981");
+    doc.fontSize(11)
+       .fillColor("#065F46")
+       .font("Helvetica")
+       .text("Score obtenu", scoreBoxX, scoreBoxY + 5, { width: 120, align: "center" });
+    doc.fontSize(16)
+       .font("Helvetica-Bold")
+       .text(`${cert.score}%`, scoreBoxX, scoreBoxY + 18, { width: 120, align: "center" });
+
+    // ========================================================================
+    // INFORMATIONS DE VALIDITÉ
+    // ========================================================================
+
+    const infoY = bodyY + 195;
+
+    // Boîte d'information à gauche
+    doc.roundedRect(80, infoY, 200, 75, 5)
+       .fillAndStroke("#F8FAFC", "#E2E8F0");
+
+    doc.fontSize(9)
+       .fillColor("#64748B")
+       .font("Helvetica-Bold")
+       .text("INFORMATIONS", 90, infoY + 8, { width: 180 });
+
+    doc.fontSize(9)
+       .fillColor("#475569")
+       .font("Helvetica")
+       .text(`N° Certificat: ${cert.certificate_number}`, 90, infoY + 25)
+       .text(`Émis le: ${new Date(cert.issued_at).toLocaleDateString("fr-FR")}`, 90, infoY + 40)
+       .text(`Site: ${cert.site || site}`, 90, infoY + 55);
+
+    // Boîte de validité à droite (mise en avant)
+    doc.roundedRect(pageWidth - 280, infoY, 200, 75, 5)
+       .fillAndStroke("#FEF3C7", "#F59E0B");
+
+    doc.fontSize(9)
+       .fillColor("#92400E")
+       .font("Helvetica-Bold")
+       .text("VALIDITÉ (3 ANS)", pageWidth - 270, infoY + 8, { width: 180 });
+
+    doc.fontSize(11)
+       .fillColor("#78350F")
+       .font("Helvetica-Bold")
+       .text(`Valide jusqu'au`, pageWidth - 270, infoY + 28)
+       .fontSize(14)
+       .text(`${new Date(cert.valid_until).toLocaleDateString("fr-FR")}`, pageWidth - 270, infoY + 45);
+
+    doc.fontSize(8)
+       .fillColor("#92400E")
+       .font("Helvetica")
+       .text("Recyclage obligatoire avant expiration", pageWidth - 270, infoY + 63);
+
+    // ========================================================================
+    // SIGNATURES ET VALIDATION
+    // ========================================================================
+
+    const signY = infoY + 95;
+
+    // Signature gauche - Formateur
+    doc.fontSize(8)
+       .fillColor("#6B7280")
+       .font("Helvetica")
+       .text("Le Responsable Formation", 100, signY, { width: 150, align: "center" });
+
+    doc.moveTo(100, signY + 35)
+       .lineTo(250, signY + 35)
+       .lineWidth(0.5)
+       .stroke("#9CA3AF");
+
+    doc.text(siteSettings.company_name || "ElectroHub Formation", 100, signY + 40, { width: 150, align: "center" });
+
+    // Cachet central (sceau officiel)
+    const sealX = centerX;
+    const sealY = signY + 25;
+    doc.circle(sealX, sealY, 28)
+       .lineWidth(2)
+       .stroke("#1E3A5F");
+    doc.circle(sealX, sealY, 22)
+       .lineWidth(1)
+       .stroke("#1E3A5F");
+    doc.fontSize(7)
+       .fillColor("#1E3A5F")
+       .font("Helvetica-Bold")
+       .text("CERTIFIÉ", sealX - 20, sealY - 12, { width: 40, align: "center" })
+       .text("CONFORME", sealX - 20, sealY - 3, { width: 40, align: "center" })
+       .text("✓", sealX - 5, sealY + 8, { width: 10 });
+
+    // Signature droite - Entreprise
+    doc.fontSize(8)
+       .fillColor("#6B7280")
+       .font("Helvetica")
+       .text("Pour l'entreprise", pageWidth - 250, signY, { width: 150, align: "center" });
+
+    doc.moveTo(pageWidth - 250, signY + 35)
+       .lineTo(pageWidth - 100, signY + 35)
+       .lineWidth(0.5)
+       .stroke("#9CA3AF");
+
+    doc.text("Direction HSE", pageWidth - 250, signY + 40, { width: 150, align: "center" });
+
+    // ========================================================================
+    // PIED DE PAGE
+    // ========================================================================
+
+    const footerY = pageHeight - 55;
+
+    // QR Code simulé (encadré)
+    const qrSize = 35;
+    doc.rect(60, footerY - 10, qrSize, qrSize)
+       .fillAndStroke("#FFFFFF", "#374151");
+    doc.fontSize(6)
+       .fillColor("#374151")
+       .text("SCAN", 60, footerY + 2, { width: qrSize, align: "center" })
+       .text("QR", 60, footerY + 10, { width: qrSize, align: "center" });
+
+    // Texte de vérification
+    doc.fontSize(8)
+       .fillColor("#9CA3AF")
+       .font("Helvetica")
+       .text(
+         `Ce certificat peut être vérifié en ligne: ${cert.certificate_number}`,
+         110,
+         footerY,
+         { width: pageWidth - 220 }
+       );
+
+    doc.fontSize(7)
+       .text(
+         "Formation conforme aux exigences réglementaires ATEX (Directive 1999/92/CE) - Zones à atmosphères explosives",
+         110,
+         footerY + 12,
+         { width: pageWidth - 220 }
+       );
+
+    // Version du document
+    doc.fontSize(6)
+       .fillColor("#CBD5E1")
+       .text(`Document généré automatiquement - v${FORMATION_CONFIG.version}`, pageWidth - 180, footerY + 15, { width: 140, align: "right" });
 
     doc.end();
   } catch (err) {
