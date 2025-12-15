@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -72,10 +73,10 @@ ensureSchema().catch(e => console.error('[SELECTIVITY SCHEMA] error:', e.message
 // LIST Pairs amont/aval
 app.get('/api/selectivity/pairs', async (req, res) => {
   try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'd' });
+    if (role === 'site' && !siteName) return res.status(400).json({ error: 'Missing site' });
     const { q, switchboard, building, floor, sort = 'name', dir = 'desc', page = '1', pageSize = '18' } = req.query;
-    const where = ['d.site = $1 AND d.parent_id IS NOT NULL']; const vals = [site]; let i = 2;
+    const where = [`${siteWhere} AND d.parent_id IS NOT NULL`]; const vals = [...siteParams]; let i = siteParams.length + 1;
     if (q) { where.push(`(d.name ILIKE $${i} OR u.name ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (switchboard) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
     if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
@@ -84,7 +85,7 @@ app.get('/api/selectivity/pairs', async (req, res) => {
     const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
     const sql = `
-      SELECT 
+      SELECT
         d.id AS downstream_id, d.name AS downstream_name, d.device_type AS downstream_type, d.settings AS downstream_settings,
         u.id AS upstream_id, u.name AS upstream_name, u.device_type AS upstream_type, u.settings AS upstream_settings,
         s.id AS switchboard_id, s.name AS switchboard_name,
@@ -92,13 +93,14 @@ app.get('/api/selectivity/pairs', async (req, res) => {
       FROM devices d
       JOIN devices u ON d.parent_id = u.id
       JOIN switchboards s ON d.switchboard_id = s.id
-      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND u.id = sc.upstream_id AND sc.site = $1
+      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND u.id = sc.upstream_id AND sc.site = d.site
       WHERE ${where.join(' AND ')}
       ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
     `;
     const rows = await pool.query(sql, vals);
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM devices d JOIN devices u ON d.parent_id = u.id JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`, vals);
+    console.log(`[SELECTIVITY PAIRS] Loaded ${rows.rows.length} pairs for role=${role}, site=${siteName || 'all'}`);
     res.json({ data: rows.rows, total: count.rows[0].total });
   } catch (e) {
     console.error('[SELECTIVITY PAIRS] error:', e);

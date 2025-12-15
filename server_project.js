@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import pg from "pg";
 import multer from "multer";
 import OpenAI from "openai";
+import { getSiteFilter } from "./lib/tenant-filter.js";
 
 dotenv.config();
 const { Pool } = pg;
@@ -194,7 +195,10 @@ app.post("/api/projects/admin/ensure", async (_req, res) => {
  */
 app.get("/api/projects/projects", async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'p' });
+    const site = siteName || siteOf(req);
+    if (role === 'site' && !site) return res.status(400).json({ error: 'Missing site' });
+
     const q = String(req.query.q || "").trim();
     const wbsOnly = bool(req.query.wbs_only);
     const health = String(req.query.health || "").trim().toLowerCase(); // ok|warn|critical
@@ -214,8 +218,8 @@ app.get("/api/projects/projects", async (req, res) => {
     const stepFilters = stepKeys.filter(k => bool(req.query[k]));
 
     // Build WHERE with parameters
-    const where = ["p.site = $1"];
-    const params = [site];
+    const where = [siteWhere];
+    const params = [...siteParams];
     let i = params.length;
 
     if (q)               { params.push(`%${q.toLowerCase()}%`); where.push(`LOWER(p.title) LIKE $${++i}`); }

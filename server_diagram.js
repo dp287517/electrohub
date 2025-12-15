@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -54,8 +55,14 @@ app.get('/api/diagram/debug', async (req, res) => {
 
 app.get('/api/diagram/view', async (req, res) => {
   try {
-    let site = siteOf(req);
-    if (!site) {
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    let site = siteName;
+
+    // For global/admin users without explicit site, show all data
+    if (!site && (role === 'global' || role === 'admin' || role === 'superadmin')) {
+      // Don't require site for global users
+    } else if (!site) {
+      // Try to find a default site for site-level users
       try {
         const s1 = await pool.query(`SELECT site FROM switchboards WHERE site IS NOT NULL LIMIT 1`);
         if (s1.rows.length) site = s1.rows[0].site;
@@ -65,7 +72,8 @@ app.get('/api/diagram/view', async (req, res) => {
         }
       } catch {}
     }
-    if (!site) return res.json({ nodes: [], edges: [], warning: 'No site configured / no data found', debug: { site: null } });
+
+    if (!site && role === 'site') return res.json({ nodes: [], edges: [], warning: 'No site configured / no data found', debug: { site: null } });
 
     const mode = String(req.query.mode || 'all').toLowerCase();
     const buildingFilter = (req.query.building || '').toString();
@@ -81,19 +89,19 @@ app.get('/api/diagram/view', async (req, res) => {
     const pushNode = (node) => { if (!seenNode.has(node.id)) { seenNode.add(node.id); nodes.push(node); } };
     const pushEdge = (edge) => { const id = `${edge.source}::${edge.target}::${edge.type || 'default'}`; if (!seenEdge.has(id)) { seenEdge.add(id); edges.push({ animated: true, ...edge }); } };
 
-    let debug = { site, mode, filters: { building: buildingFilter, rootSwitchId, rootHvId }, counts: {} };
+    let debug = { site: site || 'all', role, mode, filters: { building: buildingFilter, rootSwitchId, rootHvId }, counts: {} };
 
     // LV
     if (mode === 'lv' || mode === 'all') {
-      let sbWhere = ['site = $1'];
-      const sbVals = [site]; let i = 2;
+      let sbWhere = [siteWhere];
+      const sbVals = [...siteParams]; let i = siteParams.length + 1;
       if (rootSwitchId) { sbWhere.push(`id = $${i++}`); sbVals.push(rootSwitchId); }
       if (buildingFilter) { sbWhere.push(`building_code ILIKE $${i++}`); sbVals.push(`%${buildingFilter}%`); }
       const sbRows = await pool.query(`SELECT id, name, code, building_code, floor, room, regime_neutral, is_principal FROM switchboards WHERE ${sbWhere.join(' AND ')} ORDER BY is_principal DESC, created_at ASC`, sbVals);
       debug.counts.lv_switchboards = sbRows.rowCount;
       const sbIds = sbRows.rows.map(r => r.id);
       if (sbIds.length) {
-        const devRows = await pool.query(`SELECT d.*, s.name AS switchboard_name, s.code AS switchboard_code, s.building_code, s.floor, s.room FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE s.site = $1 AND d.switchboard_id = ANY($2::int[]) ORDER BY d.created_at ASC`, [site, sbIds]);
+        const devRows = await pool.query(`SELECT d.*, s.name AS switchboard_name, s.code AS switchboard_code, s.building_code, s.floor, s.room FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE d.switchboard_id = ANY($1::int[]) ORDER BY d.created_at ASC`, [sbIds]);
         debug.counts.lv_devices = devRows.rowCount;
 
         const byId = new Map();
@@ -148,15 +156,15 @@ app.get('/api/diagram/view', async (req, res) => {
 
     // HV
     if (mode === 'hv' || mode === 'all') {
-      let hvWhere = ['site = $1'];
-      const hvVals = [site]; let j = 2;
+      let hvWhere = [siteWhere];
+      const hvVals = [...siteParams]; let j = siteParams.length + 1;
       if (rootHvId) { hvWhere.push(`id = $${j++}`); hvVals.push(rootHvId); }
       if (buildingFilter) { hvWhere.push(`building_code ILIKE $${j++}`); hvVals.push(`%${buildingFilter}%`); }
       const hvRows = await pool.query(`SELECT id, name, code, building_code, floor, room, is_principal FROM hv_equipments WHERE ${hvWhere.join(' AND ')} ORDER BY is_principal DESC, created_at ASC`, hvVals);
       debug.counts.hv_equipments = hvRows.rowCount;
       const hvIds = hvRows.rows.map(r => r.id);
       if (hvIds.length) {
-        const devRows = await pool.query(`SELECT d.*, h.name AS hv_name, h.code AS hv_code, h.building_code FROM hv_devices d JOIN hv_equipments h ON d.hv_equipment_id = h.id WHERE h.site = $1 AND d.hv_equipment_id = ANY($2::int[]) ORDER BY d.created_at ASC`, [site, hvIds]);
+        const devRows = await pool.query(`SELECT d.*, h.name AS hv_name, h.code AS hv_code, h.building_code FROM hv_devices d JOIN hv_equipments h ON d.hv_equipment_id = h.id WHERE d.hv_equipment_id = ANY($1::int[]) ORDER BY d.created_at ASC`, [hvIds]);
         debug.counts.hv_devices = devRows.rowCount;
 
         const byId = new Map();
