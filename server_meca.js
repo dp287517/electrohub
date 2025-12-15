@@ -13,7 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
-import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 
 dotenv.config();
 
@@ -200,6 +200,24 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_company ON meca_equipments(company_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_site ON meca_equipments(site_id);`);
 
+  // 🔥 MIGRATION: Peupler company_id/site_id pour les équipements existants (NULL)
+  try {
+    const defaultSiteRes = await pool.query(`SELECT id, company_id FROM sites ORDER BY id LIMIT 1`);
+    if (defaultSiteRes.rows[0]) {
+      const defaultSite = defaultSiteRes.rows[0];
+      const updateRes = await pool.query(`
+        UPDATE meca_equipments
+        SET company_id = $1, site_id = $2
+        WHERE company_id IS NULL OR site_id IS NULL
+      `, [defaultSite.company_id, defaultSite.id]);
+      if (updateRes.rowCount > 0) {
+        console.log(`[MECA] Migration: ${updateRes.rowCount} équipements mis à jour avec company_id=${defaultSite.company_id}, site_id=${defaultSite.id}`);
+      }
+    }
+  } catch (migrationErr) {
+    console.warn(`[MECA] Migration tenant warning:`, migrationErr.message);
+  }
+
   // Fichiers attachés
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meca_files (
@@ -295,7 +313,9 @@ async function logEvent(action, details = {}, user = {}) {
 app.get("/api/meca/equipments", async (req, res) => {
   try {
     // 🏢 MULTI-TENANT: Extraire les infos tenant
-    const tenant = extractTenantFromRequest(req);
+    // 🔥 Enrichir avec site_id depuis X-Site si manquant (pour utilisateurs externes)
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
     const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
 
     const { rows } = await pool.query(`
@@ -344,7 +364,9 @@ app.post("/api/meca/equipments", async (req, res) => {
   try {
     const u = getUser(req);
     // 🏢 MULTI-TENANT: Extraire les infos tenant
-    const tenant = extractTenantFromRequest(req);
+    // 🔥 Enrichir avec site_id depuis X-Site si manquant (pour utilisateurs externes)
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
 
     const {
       name = "",
