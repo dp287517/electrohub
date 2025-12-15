@@ -396,6 +396,118 @@ app.post("/api/auth/signup", express.json(), async (_req, res) => {
   res.status(201).json({ ok: true });
 });
 
+// /api/auth/me : Rafraîchit les permissions utilisateur depuis la DB
+// Permet de synchroniser les changements faits par l'admin sans déconnexion
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    // 1️⃣ Extraire l'email depuis le JWT (cookie ou header)
+    let token = req.cookies?.token;
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        token = authHeader.slice(7);
+      }
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: "Non authentifié" });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || "devsecret");
+    } catch (e) {
+      return res.status(401).json({ error: "Token invalide" });
+    }
+
+    const email = decoded.email;
+    if (!email) {
+      return res.status(401).json({ error: "Email manquant dans le token" });
+    }
+
+    // 2️⃣ Récupérer les données actuelles depuis la DB
+    // Chercher dans users (external users)
+    let userData = null;
+    const userResult = await pool.query(
+      `SELECT u.id, u.email, u.name, u.department_id, u.company_id, u.site_id,
+              u.role, u.allowed_apps, u.origin,
+              s.name as site_name, c.name as company_name, d.name as department_name
+       FROM users u
+       LEFT JOIN sites s ON s.id = u.site_id
+       LEFT JOIN companies c ON c.id = u.company_id
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE LOWER(u.email) = LOWER($1) LIMIT 1`,
+      [email]
+    );
+    userData = userResult.rows[0];
+
+    // Si pas dans users, chercher dans haleon_users
+    if (!userData) {
+      const haleonResult = await pool.query(
+        `SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
+                s.name as site_name, s.company_id, c.name as company_name, d.name as department_name
+         FROM haleon_users h
+         LEFT JOIN sites s ON s.id = h.site_id
+         LEFT JOIN companies c ON c.id = s.company_id
+         LEFT JOIN departments d ON d.id = h.department_id
+         WHERE LOWER(h.email) = LOWER($1) LIMIT 1`,
+        [email]
+      );
+      userData = haleonResult.rows[0];
+      if (userData) {
+        userData.origin = 'haleon';
+        userData.role = userData.role || 'site';
+      }
+    }
+
+    if (!userData) {
+      // Utilisateur non trouvé en DB, retourner les infos du JWT
+      return res.json({
+        ok: true,
+        user: {
+          id: decoded.id,
+          email: decoded.email,
+          name: decoded.name,
+          site: decoded.site,
+          site_id: decoded.site_id,
+          company_id: decoded.company_id,
+          role: decoded.role || 'site',
+          allowed_apps: decoded.allowed_apps,
+          source: decoded.source
+        },
+        fromDb: false
+      });
+    }
+
+    // 3️⃣ Retourner les données mises à jour depuis la DB
+    console.log(`[auth/me] ✅ Refreshed permissions for ${email}: allowed_apps=${JSON.stringify(userData.allowed_apps)}`);
+
+    res.json({
+      ok: true,
+      user: {
+        id: userData.id,
+        email: userData.email,
+        name: userData.name || userData.email.split('@')[0],
+        site: userData.site_name,
+        site_id: userData.site_id,
+        company_id: userData.company_id,
+        company: userData.company_name,
+        department: userData.department_name,
+        department_id: userData.department_id,
+        role: userData.role || 'site',
+        allowed_apps: userData.allowed_apps,
+        origin: userData.origin,
+        source: decoded.source || 'local'
+      },
+      fromDb: true
+    });
+
+  } catch (err) {
+    console.error(`[auth/me] Error:`, err);
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
 /* ================================================================
    🔵 Auth via Bubble (nouvelle route)
    ================================================================ */
