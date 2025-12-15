@@ -4,7 +4,7 @@ import {
   Shield, UserPlus, Users, Key, Trash2, Search, Plus, X, Check,
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
-  Square, ChevronDown, Sparkles, Database, Loader2
+  Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
@@ -669,6 +669,230 @@ function SitesTab({ sites, onRefresh, loading }) {
 }
 
 // ============== DEPARTMENTS TAB ==============
+// ============== AUTH AUDIT TAB ==============
+function AuthAuditTab() {
+  const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [filter, setFilter] = useState({ action: '', email: '', success: '' });
+  const pageSize = 30;
+
+  const fetchAuditData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: page.toString(), pageSize: pageSize.toString() });
+      if (filter.action) params.append('action', filter.action);
+      if (filter.email) params.append('email', filter.email);
+      if (filter.success !== '') params.append('success', filter.success);
+
+      const [eventsRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/auth-audit?${params}`, getAuthOptions()),
+        fetch(`${API_BASE}/auth-audit/stats?days=7`, getAuthOptions())
+      ]);
+
+      if (eventsRes.ok) {
+        const data = await eventsRes.json();
+        setEvents(data.data || []);
+        setTotal(data.total || 0);
+      }
+      if (statsRes.ok) {
+        setStats(await statsRes.json());
+      }
+    } catch (err) {
+      console.error('[AuthAudit] Error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, filter]);
+
+  useEffect(() => { fetchAuditData(); }, [fetchAuditData]);
+
+  const formatDate = (ts) => {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  return (
+    <div className="space-y-6">
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 text-green-600 mb-2"><LogIn size={18} /><span className="text-sm font-medium">Logins (7j)</span></div>
+            <div className="text-2xl font-bold">{stats.global?.total_logins || 0}</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 text-red-600 mb-2"><AlertTriangle size={18} /><span className="text-sm font-medium">Failed (7j)</span></div>
+            <div className="text-2xl font-bold">{stats.global?.failed_logins || 0}</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 text-orange-600 mb-2"><LogOut size={18} /><span className="text-sm font-medium">Logouts (7j)</span></div>
+            <div className="text-2xl font-bold">{stats.global?.total_logouts || 0}</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 text-blue-600 mb-2"><Users size={18} /><span className="text-sm font-medium">Unique Users</span></div>
+            <div className="text-2xl font-bold">{stats.global?.unique_users || 0}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Failed (Security alert) */}
+      {stats?.recentFailed?.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <h3 className="font-semibold text-red-800 mb-3 flex items-center gap-2"><AlertTriangle size={18} />Failed Login Attempts (24h)</h3>
+          <div className="space-y-2">
+            {stats.recentFailed.slice(0, 5).map((f, i) => (
+              <div key={i} className="flex items-center justify-between text-sm bg-white rounded-lg p-2">
+                <span className="font-medium text-gray-800">{f.email || 'unknown'}</span>
+                <span className="text-gray-500">{f.ip_address}</span>
+                <span className="text-xs text-gray-400">{formatDate(f.ts)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-gray-100 p-4">
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-xs text-gray-500 mb-1 block">Email</label>
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by email..."
+                value={filter.email}
+                onChange={(e) => { setFilter({ ...filter, email: e.target.value }); setPage(1); }}
+                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-sm"
+              />
+            </div>
+          </div>
+          <div className="w-40">
+            <label className="text-xs text-gray-500 mb-1 block">Action</label>
+            <select
+              value={filter.action}
+              onChange={(e) => { setFilter({ ...filter, action: e.target.value }); setPage(1); }}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+            >
+              <option value="">All</option>
+              <option value="LOGIN">Login</option>
+              <option value="LOGIN_FAILED">Failed</option>
+              <option value="LOGOUT">Logout</option>
+            </select>
+          </div>
+          <div className="w-32">
+            <label className="text-xs text-gray-500 mb-1 block">Status</label>
+            <select
+              value={filter.success}
+              onChange={(e) => { setFilter({ ...filter, success: e.target.value }); setPage(1); }}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+            >
+              <option value="">All</option>
+              <option value="true">Success</option>
+              <option value="false">Failed</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button onClick={fetchAuditData} className="px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 flex items-center gap-2">
+              <RefreshCw size={16} />Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Events Table */}
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center text-gray-500"><Loader2 size={24} className="animate-spin mx-auto mb-2" />Loading...</div>
+        ) : events.length === 0 ? (
+          <div className="p-8 text-center text-gray-500"><History size={48} className="mx-auto text-gray-300 mb-4" /><p>No events found</p></div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Date/Time</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Action</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Email</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Name</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Role</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Company</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Site</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">IP</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-700">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {events.map((ev) => (
+                  <tr key={ev.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(ev.ts)}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                        ev.action === 'LOGIN' ? 'bg-green-100 text-green-700' :
+                        ev.action === 'LOGIN_FAILED' ? 'bg-red-100 text-red-700' :
+                        ev.action === 'LOGOUT' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {ev.action === 'LOGIN' && <LogIn size={12} />}
+                        {ev.action === 'LOGIN_FAILED' && <AlertTriangle size={12} />}
+                        {ev.action === 'LOGOUT' && <LogOut size={12} />}
+                        {ev.action}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{ev.email || '-'}</td>
+                    <td className="px-4 py-3 text-gray-600">{ev.user_name || '-'}</td>
+                    <td className="px-4 py-3">
+                      {ev.role && <span className={`px-2 py-0.5 rounded text-xs ${
+                        ev.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                        ev.role === 'global' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                      }`}>{ev.role}</span>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">{ev.company_name || '-'}</td>
+                    <td className="px-4 py-3 text-gray-600">{ev.site_name || '-'}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">{ev.ip_address || '-'}</td>
+                    <td className="px-4 py-3">
+                      {ev.success ? (
+                        <span className="inline-flex items-center gap-1 text-green-600"><Check size={14} />OK</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-red-600" title={ev.error_message}><X size={14} />Fail</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+            <span className="text-sm text-gray-500">{total} events</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage(Math.max(1, page - 1))}
+                disabled={page === 1}
+                className="px-3 py-1 rounded border border-gray-200 text-sm disabled:opacity-50"
+              >Previous</button>
+              <span className="px-3 py-1 text-sm text-gray-600">Page {page} / {totalPages}</span>
+              <button
+                onClick={() => setPage(Math.min(totalPages, page + 1))}
+                disabled={page === totalPages}
+                className="px-3 py-1 rounded border border-gray-200 text-sm disabled:opacity-50"
+              >Next</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DepartmentsTab({ departments, onRefresh, loading }) {
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -838,6 +1062,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} icon={Building2} count={companies.length}>Companies</TabButton>
             <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
+            <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
           </div>
         </div>
       </div>
@@ -852,6 +1077,7 @@ export default function Admin() {
             {activeTab === 'companies' && <CompaniesTab companies={companies} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'sites' && <SitesTab sites={sites} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'auth-audit' && <AuthAuditTab />}
           </>
         )}
       </div>

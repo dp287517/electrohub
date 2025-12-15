@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -113,10 +114,19 @@ app.post('/api/arcflash/reset', async (req, res) => {
 // LIST Arc points
 app.get('/api/arcflash/points', async (req, res) => {
   try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
+    // Use getSiteFilter for role-based access (global/admin see all sites)
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'd' });
+
+    // For site role without site header, block access
+    if (role === 'site' && !siteName) {
+      return res.status(400).json({ error: 'Missing site' });
+    }
+
     const { q, switchboard, building, floor, sort = 'name', dir = 'desc', page = '1', pageSize = '18' } = req.query;
-    const where = ['d.site = $1']; const vals = [site]; let i = 2;
+    const where = [siteWhere];
+    const vals = [...siteParams];
+    let i = siteParams.length + 1;
+
     if (q) { where.push(`(d.name ILIKE $${i} OR s.name ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (switchboard && !isNaN(Number(switchboard))) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
     if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
@@ -125,16 +135,20 @@ app.get('/api/arcflash/points', async (req, res) => {
     const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
     const orderCol = sortSafe(sort);
+    // For arcflash JOIN, use siteName if available, otherwise match all
+    const arcJoinCondition = siteName ? `AND ac.site = '${siteName.replace(/'/g, "''")}'` : '';
+    const apJoinCondition = siteName ? `AND ap.site = '${siteName.replace(/'/g, "''")}'` : '';
+
     const sql = `
-      SELECT 
+      SELECT
         d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.poles, d.parent_id,
-        s.id AS switchboard_id, s.name AS switchboard_name, s.building_code, s.floor, s.room,
+        s.id AS switchboard_id, s.name AS switchboard_name, s.building_code, s.floor, s.room, s.site,
         ac.status, ac.incident_energy, ac.ppe_category,
         ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka
-      FROM devices d 
-      JOIN switchboards s ON d.switchboard_id = s.id 
-      LEFT JOIN arcflash_checks ac ON d.id = ac.device_id AND s.id = ac.switchboard_id AND ac.site = $1
-      LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $1
+      FROM devices d
+      JOIN switchboards s ON d.switchboard_id = s.id
+      LEFT JOIN arcflash_checks ac ON d.id = ac.device_id AND s.id = ac.switchboard_id ${arcJoinCondition}
+      LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id ${apJoinCondition}
       WHERE ${where.join(' AND ')}
       ORDER BY ${orderCol === 'name' ? 'd.name' : (orderCol === 'code' ? 'd.code' : 's.building_code')} ${dirSafe(dir)}
       LIMIT $${i} OFFSET $${i+1}
@@ -147,7 +161,7 @@ app.get('/api/arcflash/points', async (req, res) => {
       vals.slice(0, i-1)
     );
 
-    res.json({ data, total: Number(total) });
+    res.json({ data, total: Number(total), role });
   } catch (e) {
     console.error('[ARC POINTS] error:', e.message, e.stack);
     res.status(500).json({ error: 'Points fetch failed', details: e.message });

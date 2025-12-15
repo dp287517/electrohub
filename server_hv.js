@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
 import multer from 'multer';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -99,9 +100,11 @@ app.get('/api/hv/health', (_req, res) => res.json({ ok: true, ts: Date.now(), op
 // ---------------- HV Equipments CRUD ----------------
 app.get('/api/hv/equipments', async (req, res) => {
   try {
-    const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    // Site role requires a site, global/admin can see all
+    if (role === 'site' && !siteName) return res.status(400).json({ error: 'Missing site' });
     const { q, building, floor, room, sort = 'created_at', dir = 'desc', page = '1', pageSize = '18' } = req.query;
-    const where = ['site = $1']; const vals = [site]; let i = 2;
+    const where = [siteWhere]; const vals = [...siteParams]; let i = siteParams.length + 1;
     if (q) { where.push(`(name ILIKE $${i} OR code ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (building) { where.push(`building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
     if (floor) { where.push(`floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
@@ -221,7 +224,9 @@ app.delete('/api/hv/devices/:id', async (req, res) => {
 // ---------------- BT devices suggestions (fail-soft) ----------------
 app.get('/api/hv/lv-devices', async (req, res) => {
   try {
-    const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    // Site role requires a site, global/admin can see all
+    if (role === 'site' && !siteName) return res.status(400).json({ error: 'Missing site' });
     const q = (req.query.q || '').toString().trim();
 
     const exists = await pool.query(`
@@ -240,7 +245,7 @@ app.get('/api/hv/lv-devices', async (req, res) => {
     const hasSwitchboard = names.includes('switchboard_name');
     const hasReference = names.includes('reference');
 
-    const where = ['site = $1']; const vals = [site]; let i = 2;
+    const where = [siteWhere]; const vals = [...siteParams]; let i = siteParams.length + 1;
     if (q) {
       if (hasReference) { where.push(`(name ILIKE $${i} OR reference ILIKE $${i})`); }
       else { where.push(`name ILIKE $${i}`); }
