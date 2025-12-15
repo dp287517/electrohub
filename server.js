@@ -15,6 +15,68 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
+// ============================================================
+// AUTH AUDIT LOG - Traçage des connexions/déconnexions
+// ============================================================
+async function ensureAuthAuditTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auth_audit_log (
+        id SERIAL PRIMARY KEY,
+        ts TIMESTAMPTZ DEFAULT NOW(),
+        action TEXT NOT NULL,
+        email TEXT,
+        user_name TEXT,
+        user_id INTEGER,
+        company_id INTEGER,
+        site_id INTEGER,
+        role TEXT,
+        source TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        success BOOLEAN DEFAULT TRUE,
+        error_message TEXT,
+        details JSONB DEFAULT '{}'::jsonb
+      );
+      CREATE INDEX IF NOT EXISTS idx_auth_audit_ts ON auth_audit_log(ts);
+      CREATE INDEX IF NOT EXISTS idx_auth_audit_email ON auth_audit_log(email);
+      CREATE INDEX IF NOT EXISTS idx_auth_audit_action ON auth_audit_log(action);
+    `);
+    console.log('[AUTH] Audit table ready');
+  } catch (e) {
+    console.error('[AUTH] Audit table error:', e.message);
+  }
+}
+ensureAuthAuditTable();
+
+async function logAuthEvent(req, action, data = {}) {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'] || null;
+
+    await pool.query(`
+      INSERT INTO auth_audit_log (action, email, user_name, user_id, company_id, site_id, role, source, ip_address, user_agent, success, error_message, details)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `, [
+      action,
+      data.email || null,
+      data.name || null,
+      data.user_id || null,
+      data.company_id || null,
+      data.site_id || null,
+      data.role || null,
+      data.source || 'unknown',
+      ip,
+      userAgent,
+      data.success !== false,
+      data.error || null,
+      JSON.stringify(data.details || {})
+    ]);
+  } catch (e) {
+    console.error('[AUTH AUDIT] Log failed:', e.message);
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -182,7 +244,26 @@ app.post("/api/auth/login", express.json(), async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/auth/logout", async (_req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
+  // Extraire l'utilisateur depuis le JWT avant de le supprimer
+  try {
+    const token = req.cookies?.token;
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || "devsecret");
+      await logAuthEvent(req, 'LOGOUT', {
+        email: decoded.email,
+        name: decoded.name,
+        user_id: decoded.id,
+        company_id: decoded.company_id,
+        site_id: decoded.site_id,
+        role: decoded.role,
+        source: decoded.source || 'unknown'
+      });
+    }
+  } catch (e) {
+    // Token invalide ou expiré - logger quand même
+    await logAuthEvent(req, 'LOGOUT', { source: 'unknown', details: { reason: 'token_invalid' } });
+  }
   res.clearCookie("token");
   res.json({ ok: true });
 });
@@ -217,16 +298,19 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
 
     if (!user) {
       console.log(`[auth/signin] ❌ User not found: ${email}`);
+      await logAuthEvent(req, 'LOGIN_FAILED', { email, source: 'local', success: false, error: 'User not found' });
       return res.status(401).json({ error: "Email ou mot de passe incorrect" });
     }
 
     if (!user.is_active) {
       console.log(`[auth/signin] ❌ User inactive: ${email}`);
+      await logAuthEvent(req, 'LOGIN_FAILED', { email, source: 'local', success: false, error: 'Account inactive' });
       return res.status(401).json({ error: "Compte désactivé" });
     }
 
     if (!user.password_hash) {
       console.log(`[auth/signin] ❌ No password set for: ${email}`);
+      await logAuthEvent(req, 'LOGIN_FAILED', { email, source: 'local', success: false, error: 'No password set' });
       return res.status(401).json({ error: "Utilisez la connexion Bubble/SSO" });
     }
 
@@ -236,6 +320,7 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
 
     if (!validPassword) {
       console.log(`[auth/signin] ❌ Invalid password for: ${email}`);
+      await logAuthEvent(req, 'LOGIN_FAILED', { email, source: 'local', success: false, error: 'Invalid password' });
       return res.status(401).json({ error: "Email ou mot de passe incorrect" });
     }
 
@@ -263,7 +348,17 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
       [user.id]
     ).catch(e => console.log(`[auth/signin] last_login update failed: ${e.message}`));
 
-    // 5️⃣ Logger la connexion
+    // 5️⃣ Logger la connexion dans l'audit trail
+    await logAuthEvent(req, 'LOGIN', {
+      email: user.email,
+      name: user.name,
+      user_id: user.id,
+      company_id: user.company_id,
+      site_id: user.site_id,
+      role: user.role,
+      source: 'local',
+      details: { site_name: user.site_name, company_name: user.company_name }
+    });
     console.log(`[auth/signin] ✅ Login successful: ${email} (company=${user.company_id}, site=${user.site_id}, role=${user.role})`);
 
     const isProduction = process.env.NODE_ENV === 'production';
@@ -369,7 +464,19 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     };
     const jwtToken = signLocalJWT(enrichedUser);
 
-    // 5️⃣ Stocke en cookie + renvoie au front
+    // 5️⃣ Logger la connexion dans l'audit trail
+    await logAuthEvent(req, 'LOGIN', {
+      email: enrichedUser.email,
+      name: enrichedUser.name,
+      user_id: mainUser?.id || haleonUser?.id,
+      company_id,
+      site_id,
+      role,
+      source: 'bubble',
+      details: { isHaleon, site: enrichedUser.site }
+    });
+
+    // 6️⃣ Stocke en cookie + renvoie au front
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie("token", jwtToken, {
       httpOnly: true,
@@ -379,6 +486,7 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     res.json({ ok: true, user: enrichedUser, jwt: jwtToken });
   } catch (err) {
     console.error("Bubble auth failed:", err);
+    await logAuthEvent(req, 'LOGIN_FAILED', { source: 'bubble', success: false, error: err.message });
     res.status(401).json({ error: err.message || "Invalid Bubble token" });
   }
 });

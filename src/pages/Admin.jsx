@@ -275,10 +275,19 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [companyFilter, setCompanyFilter] = useState('');
+  const [siteFilter, setSiteFilter] = useState('');
   const [saving, setSaving] = useState(false);
   const [newPasswords, setNewPasswords] = useState({});
 
-  const filtered = users.filter(u => u.email?.toLowerCase().includes(searchQuery.toLowerCase()) || u.name?.toLowerCase().includes(searchQuery.toLowerCase()) || u.company_name?.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filtered = users.filter(u => {
+    const matchesSearch = u.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          u.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          u.company_name?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCompany = !companyFilter || u.company_id === Number(companyFilter);
+    const matchesSite = !siteFilter || u.site_id === Number(siteFilter);
+    return matchesSearch && matchesCompany && matchesSite;
+  });
 
   const handleSave = async (userData, isNew = false) => {
     setSaving(true);
@@ -343,14 +352,30 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row gap-4 mb-6">
-        <div className="flex-1 relative">
-          <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input type="text" placeholder="Search external users..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 outline-none" />
+      <div className="flex flex-col gap-4 mb-6">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="text" placeholder="Search external users..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 outline-none" />
+          </div>
+          <button onClick={() => setShowCreate(true)} className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl shadow-lg">
+            <UserPlus size={20} />New External User
+          </button>
         </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl shadow-lg">
-          <UserPlus size={20} />New External User
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <select value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-gray-200 outline-none bg-white text-sm">
+            <option value="">All Companies</option>
+            {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-gray-200 outline-none bg-white text-sm">
+            <option value="">All Sites</option>
+            {sites.filter(s => !companyFilter || s.company_id === Number(companyFilter)).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          {(companyFilter || siteFilter) && (
+            <button onClick={() => { setCompanyFilter(''); setSiteFilter(''); }} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700">Clear filters</button>
+          )}
+          <span className="ml-auto text-sm text-gray-500">{filtered.length} user{filtered.length !== 1 ? 's' : ''}</span>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -368,6 +393,11 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  {user.role && user.role !== 'site' && (
+                    <span className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 ${user.role === 'admin' ? 'bg-red-50 text-red-600' : user.role === 'global' ? 'bg-amber-50 text-amber-600' : 'bg-gray-50 text-gray-600'}`}>
+                      <Shield size={12} />{user.role}
+                    </span>
+                  )}
                   {user.company_name && <span className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg flex items-center gap-1"><Building2 size={12} />{user.company_name}</span>}
                   {user.site_name && <span className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg">{user.site_name}</span>}
                   <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.allowed_apps?.length || 0} apps</span>
@@ -401,20 +431,21 @@ function ExternalUserModal({ user, sites, companies, departments, saving, onClos
   const [companyId, setCompanyId] = useState(user?.company_id || '');
   const [siteId, setSiteId] = useState(user?.site_id || sites[0]?.id || 1);
   const [departmentId, setDepartmentId] = useState(user?.department_id || departments[0]?.id || null);
+  const [role, setRole] = useState(user?.role || 'site');
   const [password, setPassword] = useState(user ? '' : generatePassword());
   const [showPassword, setShowPassword] = useState(false);
   const [selectedApps, setSelectedApps] = useState(user?.allowed_apps || []);
 
   return (
     <Modal title={user ? 'Edit External User' : 'New External User'} icon={UserPlus} onClose={onClose} wide>
-      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], company_id: companyId || null, site_id: siteId, department_id: departmentId, password: password || undefined, allowed_apps: selectedApps }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], company_id: companyId || null, site_id: siteId, department_id: departmentId, role, password: password || undefined, allowed_apps: selectedApps }); }} className="space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Mail size={14} />Email *</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required disabled={!!user} /></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Name</label>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" /></div>
         </div>
-        <div className="grid sm:grid-cols-3 gap-4">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Building2 size={14} />Company</label>
             <select value={companyId} onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : '')} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
               <option value="">No company</option>
@@ -422,12 +453,18 @@ function ExternalUserModal({ user, sites, companies, departments, saving, onClos
             </select></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />Site</label>
             <select value={siteId} onChange={(e) => setSiteId(Number(e.target.value))} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
-              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {sites.filter(s => !companyId || s.company_id === companyId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Department</label>
             <select value={departmentId || ''} onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
               <option value="">No department</option>
-              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {departments.filter(d => !siteId || d.site_id === siteId).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select></div>
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Shield size={14} />Role</label>
+            <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
+              <option value="site">Site - Can only see their site</option>
+              <option value="global">Global - Can see all company sites</option>
+              <option value="admin">Admin - Can manage users</option>
             </select></div>
         </div>
         {!user && (
