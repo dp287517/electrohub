@@ -1605,6 +1605,7 @@ export const api = {
     certificates: () => get("/api/learn-ex/certificates"),
     verifyCertificate: (number) =>
       get(`/api/learn-ex/certificates/verify/${number}`),
+    autoCertificate: () => post("/api/learn-ex/auto-certificate", {}),
     certificatePdfUrl: (id) => `${API_BASE}/api/learn-ex/certificates/${id}/pdf?site=${currentSite()}`,
     stats: () => get("/api/learn-ex/stats"),
     imageUrl: (name) => `${API_BASE}/api/learn-ex/images/${name}?site=${currentSite()}`,
