@@ -1,13 +1,49 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Cloud, Sun, CloudRain, CloudSnow, CloudLightning, CloudFog, Wind, Droplets } from 'lucide-react';
 
-// Site coordinates (Switzerland locations)
+// Site coordinates (Switzerland and European locations)
 const SITE_COORDINATES = {
+  // Switzerland - French-speaking
   'Nyon': { lat: 46.3833, lon: 6.2333 },
   'Geneva': { lat: 46.2044, lon: 6.1432 },
+  'Genève': { lat: 46.2044, lon: 6.1432 },
   'Lausanne': { lat: 46.5197, lon: 6.6323 },
+  'Montreux': { lat: 46.4312, lon: 6.9106 },
+  'Fribourg': { lat: 46.8065, lon: 7.1620 },
+  'Neuchâtel': { lat: 46.9920, lon: 6.9311 },
+  'Sion': { lat: 46.2333, lon: 7.3500 },
+  'Martigny': { lat: 46.1028, lon: 7.0722 },
+  // Switzerland - German-speaking
   'Zurich': { lat: 47.3769, lon: 8.5417 },
+  'Zürich': { lat: 47.3769, lon: 8.5417 },
   'Basel': { lat: 47.5596, lon: 7.5886 },
+  'Bern': { lat: 46.9481, lon: 7.4474 },
+  'Berne': { lat: 46.9481, lon: 7.4474 },
+  'Lucerne': { lat: 47.0502, lon: 8.3093 },
+  'Luzern': { lat: 47.0502, lon: 8.3093 },
+  'St. Gallen': { lat: 47.4245, lon: 9.3767 },
+  'Winterthur': { lat: 47.5001, lon: 8.7241 },
+  'Zug': { lat: 47.1662, lon: 8.5159 },
+  'Aarau': { lat: 47.3925, lon: 8.0442 },
+  'Baden': { lat: 47.4734, lon: 8.3064 },
+  // Switzerland - Italian-speaking
+  'Lugano': { lat: 46.0037, lon: 8.9511 },
+  'Locarno': { lat: 46.1708, lon: 8.7992 },
+  'Bellinzona': { lat: 46.1944, lon: 9.0262 },
+  // Other European cities
+  'Paris': { lat: 48.8566, lon: 2.3522 },
+  'Lyon': { lat: 45.7640, lon: 4.8357 },
+  'Milan': { lat: 45.4642, lon: 9.1900 },
+  'Milano': { lat: 45.4642, lon: 9.1900 },
+  'Munich': { lat: 48.1351, lon: 11.5820 },
+  'München': { lat: 48.1351, lon: 11.5820 },
+  'Frankfurt': { lat: 50.1109, lon: 8.6821 },
+  'Vienna': { lat: 48.2082, lon: 16.3738 },
+  'Wien': { lat: 48.2082, lon: 16.3738 },
+  'Brussels': { lat: 50.8503, lon: 4.3517 },
+  'Bruxelles': { lat: 50.8503, lon: 4.3517 },
+  'Amsterdam': { lat: 52.3676, lon: 4.9041 },
+  'London': { lat: 51.5074, lon: -0.1278 },
 };
 
 // Weather code to condition mapping (WMO codes)
