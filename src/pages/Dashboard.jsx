@@ -4,7 +4,8 @@ import {
   Zap, Recycle, Puzzle, TrendingUp, AlertTriangle, RefreshCw,
   GitBranch, CreditCard, Cog, Flame, Wrench, Users, MessageCircle,
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
-  Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase
+  Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase,
+  Shield, Globe, Crown, Star
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
@@ -74,6 +75,56 @@ function AppCard({ label, to, description, icon, color, index }) {
   );
 }
 
+// Role Badge component with icons and colors
+function RoleBadge({ role }) {
+  const roleConfig = {
+    superadmin: {
+      label: 'Super Admin',
+      icon: Crown,
+      color: 'from-amber-400 to-yellow-500',
+      textColor: 'text-amber-900',
+      bgColor: 'bg-gradient-to-r from-amber-100 to-yellow-100',
+      borderColor: 'border-amber-300',
+    },
+    admin: {
+      label: 'Admin',
+      icon: Shield,
+      color: 'from-purple-400 to-indigo-500',
+      textColor: 'text-purple-900',
+      bgColor: 'bg-gradient-to-r from-purple-100 to-indigo-100',
+      borderColor: 'border-purple-300',
+    },
+    global: {
+      label: 'Global',
+      icon: Globe,
+      color: 'from-emerald-400 to-teal-500',
+      textColor: 'text-emerald-900',
+      bgColor: 'bg-gradient-to-r from-emerald-100 to-teal-100',
+      borderColor: 'border-emerald-300',
+    },
+    site: {
+      label: 'Site',
+      icon: MapPin,
+      color: 'from-blue-400 to-cyan-500',
+      textColor: 'text-blue-900',
+      bgColor: 'bg-gradient-to-r from-blue-100 to-cyan-100',
+      borderColor: 'border-blue-300',
+    },
+  };
+
+  const config = roleConfig[role] || roleConfig.site;
+  const Icon = config.icon;
+
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ${config.bgColor} ${config.textColor} border ${config.borderColor} text-xs font-medium shadow-sm`}>
+      <div className={`w-4 h-4 rounded-full bg-gradient-to-br ${config.color} flex items-center justify-center text-white`}>
+        <Icon size={10} />
+      </div>
+      <span>{config.label}</span>
+    </div>
+  );
+}
+
 // Section Header component
 function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
   return (
@@ -87,7 +138,7 @@ function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
         </div>
         <div className="text-left">
           <h2 className="font-bold text-lg text-gray-900 group-hover:text-brand-700 transition-colors">{title}</h2>
-          <p className="text-sm text-gray-500">{count} applications</p>
+          <p className="text-sm text-gray-500">{count} {count > 1 ? 'applications' : 'application'}</p>
         </div>
       </div>
       <div className={`w-10 h-10 rounded-xl bg-gray-100 group-hover:bg-brand-50 flex items-center justify-center transition-all duration-300 ${isOpen ? 'rotate-180 bg-brand-50' : ''}`}>
@@ -320,9 +371,9 @@ export default function Dashboard() {
     setUser(storedUser);
 
     const hour = new Date().getHours();
-    if (hour < 12) setGreeting('Good morning');
-    else if (hour < 18) setGreeting('Good afternoon');
-    else setGreeting('Good evening');
+    if (hour < 12) setGreeting('Bonjour');
+    else if (hour < 18) setGreeting('Bon après-midi');
+    else setGreeting('Bonsoir');
 
     // Trigger mount animations
     setTimeout(() => setMounted(true), 100);
@@ -373,6 +424,11 @@ export default function Dashboard() {
     }
     return null;
   }, [user?.company, user?.site_id, siteName, sites]);
+
+  // Get user role - defaults to 'site' for normal users
+  const userRole = useMemo(() => {
+    return user?.role || 'site';
+  }, [user?.role]);
 
   // Get allowed apps for current user
   const allowedApps = useMemo(() => {
@@ -481,9 +537,12 @@ export default function Dashboard() {
                   <Sparkles size={16} className="text-yellow-300 animate-pulse" />
                   {greeting}
                 </p>
-                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white mt-1 drop-shadow-lg">
-                  {user?.name || 'Welcome back'}
-                </h1>
+                <div className="flex items-center gap-3 mt-1">
+                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white drop-shadow-lg">
+                    {user?.name || 'Bienvenue'}
+                  </h1>
+                  <RoleBadge role={userRole} />
+                </div>
                 <p className="text-white/70 mt-1 flex items-center gap-2">
                   <Calendar size={14} />
                   {currentDate}
@@ -542,7 +601,7 @@ export default function Dashboard() {
           <div className="mb-6">
             <SectionHeader
               icon={Wrench}
-              title="Utilities & Tools"
+              title="Utilitaires & Outils"
               count={visibleOtherApps.length}
               isOpen={showOther}
               onToggle={() => setShowOther(v => !v)}
@@ -564,7 +623,7 @@ export default function Dashboard() {
           <div className="mb-6">
             <SectionHeader
               icon={Zap}
-              title="Electrical Controls"
+              title="Contrôles Électriques"
               count={visibleElectricalApps.length}
               isOpen={showElectrical}
               onToggle={() => setShowElectrical(v => !v)}
@@ -585,7 +644,7 @@ export default function Dashboard() {
         <div className={`text-center py-10 transition-all duration-1000 delay-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur rounded-full shadow-sm border border-gray-100">
             <Zap size={16} className="text-brand-500" />
-            <span className="text-gray-500 text-sm">ElectroHub — Your centralized electrical management platform</span>
+            <span className="text-gray-500 text-sm">ElectroHub — Votre plateforme centralisée de gestion électrique</span>
           </div>
         </div>
       </div>
