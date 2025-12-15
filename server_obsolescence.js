@@ -8,6 +8,7 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import multer from 'multer';
 import axios from 'axios';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -356,9 +357,10 @@ app.post('/api/obsolescence/reset', async (req, res) => {
 // ---------- BUILDINGS (asset filter) ----------
 app.get('/api/obsolescence/buildings', async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { siteName, role } = getSiteFilter(req);
+    const site = siteName || siteOf(req);
     const { asset = 'all' } = req.query;
-    if (!site) return res.status(400).json({ error: 'Missing site' });
+    if (role === 'site' && !site) return res.status(400).json({ error: 'Missing site' });
 
     const totals = await pickTotalsByAsset(site, String(asset));
     const grouped = new Map();
@@ -379,9 +381,10 @@ app.get('/api/obsolescence/buildings', async (req, res) => {
 // ---------- SWITCHBOARDS/HV (asset filter) ----------
 app.get('/api/obsolescence/switchboards', async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { siteName, role } = getSiteFilter(req);
+    const site = siteName || siteOf(req);
     const { building, asset = 'sb' } = req.query;
-    if (!site || !building) return res.status(400).json({ error: 'Missing params' });
+    if ((role === 'site' && !site) || !building) return res.status(400).json({ error: 'Missing params' });
 
     const now = new Date().getFullYear();
     const items = await pickTotalsByAsset(site, String(asset));

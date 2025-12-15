@@ -6,6 +6,7 @@ import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
 import pg from "pg";
+import { getSiteFilter } from "./lib/tenant-filter.js";
 
 dotenv.config();
 
@@ -642,16 +643,18 @@ app.delete("/api/switchboard/maps/positions/switchboard/:switchboardId", async (
 // GET /api/switchboard/maps/placed - Liste des switchboards placés sur au moins un plan
 app.get("/api/switchboard/maps/placed", async (req, res) => {
   try {
-    const site = getSite(req);
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    const site = siteName || getSite(req);
+    if (role === 'site' && !site) return res.status(400).json({ ok: false, error: 'Missing site' });
 
     const { rows } = await pool.query(
-      `SELECT DISTINCT switchboard_id, 
+      `SELECT DISTINCT switchboard_id,
               COUNT(*) as position_count,
               array_agg(DISTINCT logical_name) as plans
-       FROM switchboard_positions 
-       WHERE site = $1
+       FROM switchboard_positions
+       WHERE ${siteWhere}
        GROUP BY switchboard_id`,
-      [site]
+      siteParams
     );
 
     const placedIds = rows.map(r => r.switchboard_id);
@@ -673,7 +676,9 @@ app.get("/api/switchboard/maps/placed", async (req, res) => {
 // GET /api/switchboard/maps/unplaced - Liste des switchboards NON placés
 app.get("/api/switchboard/maps/unplaced", async (req, res) => {
   try {
-    const site = getSite(req);
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    const site = siteName || getSite(req);
+    if (role === 'site' && !site) return res.status(400).json({ ok: false, error: 'Missing site' });
     const u = getUser(req);
 
     // Récupérer tous les switchboards
@@ -684,8 +689,8 @@ app.get("/api/switchboard/maps/unplaced", async (req, res) => {
 
     // Récupérer les IDs des switchboards placés
     const { rows } = await pool.query(
-      `SELECT DISTINCT switchboard_id FROM switchboard_positions WHERE site = $1`,
-      [site]
+      `SELECT DISTINCT switchboard_id FROM switchboard_positions WHERE ${siteWhere}`,
+      siteParams
     );
     const placedIds = new Set(rows.map(r => r.switchboard_id));
 

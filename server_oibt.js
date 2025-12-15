@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import pg from "pg";
 import multer from "multer";
+import { getSiteFilter } from "./lib/tenant-filter.js";
 
 dotenv.config();
 const { Pool } = pg;
@@ -184,15 +185,20 @@ app.get("/api/oibt/health", (_req, res) => res.json({ ok: true, ts: Date.now() }
 // LIST (+ attachments + last_uploads)
 app.get("/api/oibt/projects", async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req);
+    const site = siteName || siteOf(req);
+    if (role === 'site' && !site) return res.status(400).json({ error: 'Missing site' });
+
     const q = String(req.query.q || "").trim().toLowerCase();
+    const baseWhere = role === 'site' ? 'site=$1' : '1=1';
+    const baseParams = role === 'site' ? [site] : [];
 
     const rows = (
       await pool.query(
         q
-          ? `SELECT * FROM oibt_projects WHERE site=$1 AND LOWER(title) LIKE $2 ORDER BY created_at DESC`
-          : `SELECT * FROM oibt_projects WHERE site=$1 ORDER BY created_at DESC`,
-        q ? [site, `%${q}%`] : [site]
+          ? `SELECT * FROM oibt_projects WHERE ${baseWhere} AND LOWER(title) LIKE $${baseParams.length + 1} ORDER BY created_at DESC`
+          : `SELECT * FROM oibt_projects WHERE ${baseWhere} ORDER BY created_at DESC`,
+        q ? [...baseParams, `%${q}%`] : baseParams
       )
     ).rows;
 
@@ -486,8 +492,13 @@ app.get("/api/oibt/projects/download-file", async (req, res) => {
 // LIST (flags + timestamps + YEAR)
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { siteName, role } = getSiteFilter(req);
+    const site = siteName || siteOf(req);
+    if (role === 'site' && !site) return res.status(400).json({ error: 'Missing site' });
+
     const q = String(req.query.q || "").trim().toLowerCase();
+    const baseWhere = role === 'site' ? 'site=$1' : '1=1';
+    const baseParams = role === 'site' ? [site] : [];
 
     const { rows } = await pool.query(
       q
@@ -499,7 +510,7 @@ app.get("/api/oibt/periodics", async (req, res) => {
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
            FROM oibt_periodics
-           WHERE site=$1 AND LOWER(building) LIKE $2
+           WHERE ${baseWhere} AND LOWER(building) LIKE $${baseParams.length + 1}
            ORDER BY created_at DESC`
         : `SELECT id, site, building, year,
                  report_received, defect_report_received, confirmation_received,
@@ -509,9 +520,9 @@ app.get("/api/oibt/periodics", async (req, res) => {
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
            FROM oibt_periodics
-           WHERE site=$1
+           WHERE ${baseWhere}
            ORDER BY created_at DESC`,
-      q ? [site, `%${q}%`] : [site]
+      q ? [...baseParams, `%${q}%`] : baseParams
     );
 
     res.json({ data: rows });
