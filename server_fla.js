@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -100,10 +101,11 @@ ensureSchema().catch(e => console.error('[FLA SCHEMA] error:', e.message));
 // LIST Fault points (based on switchboards/devices)
 app.get('/api/faultlevel/points', async (req, res) => {
   try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'd' });
+    // Site role requires a site, global/admin can see all
+    if (role === 'site' && !siteName) return res.status(400).json({ error: 'Missing site' });
     const { q, switchboard, building, floor, sort = 'name', dir = 'desc', page = '1', pageSize = '18' } = req.query;
-    const where = ['d.site = $1']; const vals = [site]; let i = 2;
+    const where = [siteWhere]; const vals = [...siteParams]; let i = siteParams.length + 1;
     if (q) { where.push(`(d.name ILIKE $${i} OR s.name ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (switchboard) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
     if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
@@ -112,24 +114,24 @@ app.get('/api/faultlevel/points', async (req, res) => {
     const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
     const sql = `
-      SELECT 
+      SELECT
         d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.poles,
         s.id AS switchboard_id, s.name AS switchboard_name, s.regime_neutral,
         fc.status AS status, fc.phase_type AS check_phase_type, fc.fault_level_ka,
         fp.line_length, fp.source_impedance, fp.cable_resistivity, fp.phase_type
       FROM devices d
       JOIN switchboards s ON d.switchboard_id = s.id
-      LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = $1
-      LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $1 AND fc.phase_type = COALESCE(fp.phase_type, CASE WHEN d.poles IN (1,2) THEN 'single' ELSE 'three' END)
+      LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = d.site
+      LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = d.site AND fc.phase_type = COALESCE(fp.phase_type, CASE WHEN d.poles IN (1,2) THEN 'single' ELSE 'three' END)
       WHERE ${where.join(' AND ')}
       ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
     `;
     const rows = await pool.query(sql, vals);
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`, vals);
-    
-    console.log(`[FLA POINTS] Loaded ${rows.rows.length} points for site=${site}, sample: ${JSON.stringify(rows.rows[0] || {})}`);
-    
+
+    console.log(`[FLA POINTS] Loaded ${rows.rows.length} points for role=${role}, site=${siteName || 'all'}`);
+
     res.json({ 
       data: rows.rows.map(r => ({ 
         ...r, 

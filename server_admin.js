@@ -1536,4 +1536,141 @@ router.post("/query", adminOnly, express.json(), async (req, res) => {
   }
 });
 
+// ============================================================
+// AUTH AUDIT LOG - Historique des connexions/déconnexions
+// ============================================================
+
+// GET /api/admin/auth-audit - Liste les événements d'authentification
+router.get("/auth-audit", adminOnly, async (req, res) => {
+  try {
+    const { page = '1', pageSize = '50', action, email, success, from, to } = req.query;
+    const limit = Math.min(parseInt(pageSize) || 50, 200);
+    const offset = ((parseInt(page) || 1) - 1) * limit;
+
+    // Build WHERE clause
+    const where = [];
+    const params = [];
+    let i = 1;
+
+    if (action) {
+      where.push(`action = $${i}`);
+      params.push(action);
+      i++;
+    }
+    if (email) {
+      where.push(`email ILIKE $${i}`);
+      params.push(`%${email}%`);
+      i++;
+    }
+    if (success !== undefined && success !== '') {
+      where.push(`success = $${i}`);
+      params.push(success === 'true' || success === true);
+      i++;
+    }
+    if (from) {
+      where.push(`ts >= $${i}`);
+      params.push(from);
+      i++;
+    }
+    if (to) {
+      where.push(`ts <= $${i}`);
+      params.push(to);
+      i++;
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    // Get total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM auth_audit_log ${whereClause}`,
+      params
+    );
+
+    // Get data
+    const result = await pool.query(`
+      SELECT a.*, c.name as company_name, s.name as site_name
+      FROM auth_audit_log a
+      LEFT JOIN companies c ON a.company_id = c.id
+      LEFT JOIN sites s ON a.site_id = s.id
+      ${whereClause}
+      ORDER BY a.ts DESC
+      LIMIT $${i} OFFSET $${i + 1}
+    `, [...params, limit, offset]);
+
+    res.json({
+      data: result.rows,
+      total: countResult.rows[0].total,
+      page: parseInt(page) || 1,
+      pageSize: limit,
+      totalPages: Math.ceil(countResult.rows[0].total / limit)
+    });
+  } catch (err) {
+    console.error("[auth-audit] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/auth-audit/stats - Statistiques des connexions
+router.get("/auth-audit/stats", adminOnly, async (req, res) => {
+  try {
+    const { days = '7' } = req.query;
+    const daysInt = Math.min(parseInt(days) || 7, 90);
+
+    // Global stats
+    const globalStats = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE action = 'LOGIN' AND success = true)::int AS total_logins,
+        COUNT(*) FILTER (WHERE action = 'LOGIN_FAILED')::int AS failed_logins,
+        COUNT(*) FILTER (WHERE action = 'LOGOUT')::int AS total_logouts,
+        COUNT(DISTINCT email)::int AS unique_users
+      FROM auth_audit_log
+      WHERE ts > NOW() - INTERVAL '${daysInt} days'
+    `);
+
+    // Daily breakdown
+    const dailyStats = await pool.query(`
+      SELECT
+        DATE(ts) AS date,
+        COUNT(*) FILTER (WHERE action = 'LOGIN' AND success = true)::int AS logins,
+        COUNT(*) FILTER (WHERE action = 'LOGIN_FAILED')::int AS failed
+      FROM auth_audit_log
+      WHERE ts > NOW() - INTERVAL '${daysInt} days'
+      GROUP BY DATE(ts)
+      ORDER BY DATE(ts) DESC
+    `);
+
+    // Top users
+    const topUsers = await pool.query(`
+      SELECT email, COUNT(*)::int AS login_count
+      FROM auth_audit_log
+      WHERE action = 'LOGIN' AND success = true
+        AND ts > NOW() - INTERVAL '${daysInt} days'
+      GROUP BY email
+      ORDER BY login_count DESC
+      LIMIT 10
+    `);
+
+    // Recent failed attempts
+    const recentFailed = await pool.query(`
+      SELECT email, ip_address, ts, error_message
+      FROM auth_audit_log
+      WHERE action = 'LOGIN_FAILED'
+        AND ts > NOW() - INTERVAL '24 hours'
+      ORDER BY ts DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      period: `${daysInt} days`,
+      global: globalStats.rows[0],
+      daily: dailyStats.rows,
+      topUsers: topUsers.rows,
+      recentFailed: recentFailed.rows
+    });
+  } catch (err) {
+    console.error("[auth-audit/stats] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
