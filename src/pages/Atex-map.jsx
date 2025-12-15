@@ -739,33 +739,46 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2️⃣ Rendu PDF -> image (MÊME PARAMÈTRES QUE SWITCHBOARD_MAP)
+        // 2️⃣ Rendu PDF -> image HAUTE QUALITÉ pour plans ATEX
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = window.devicePixelRatio || 1;
 
-          // 🚀 PARAMÈTRES IDENTIQUES À SWITCHBOARD_MAP (rapide et efficace)
-          const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5)));
+          // 🔥 HAUTE RÉSOLUTION pour lisibilité des textes sur plans ATEX
+          // - Mobile: limite à 4096px pour éviter crash mémoire
+          // - Desktop: jusqu'à 8192px pour texte ultra-net
+          const isMobile = isMobileDevice() || window.innerWidth < 768;
+          const maxBitmapW = isMobile ? 4096 : 8192;
+          const qualityMultiplier = isMobile ? 2.0 : 3.0; // Plus de résolution sur desktop
+          const targetBitmapW = Math.min(maxBitmapW, Math.max(2048, Math.floor(containerW * dpr * qualityMultiplier)));
 
           loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
           const baseVp = page.getViewport({ scale: 1 });
 
-          // Scale limité comme Switchboard (0.5 à 3.0)
-          const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
+          // Scale augmenté pour meilleure lisibilité (jusqu'à 5.0 sur desktop)
+          const maxScale = isMobile ? 3.0 : 5.0;
+          const safeScale = Math.min(maxScale, Math.max(1.0, targetBitmapW / baseVp.width));
           const viewport = page.getViewport({ scale: safeScale });
 
           const canvas = document.createElement("canvas");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
-          const ctx = canvas.getContext("2d", { alpha: true });
+          // 🔥 Context avec qualité optimale pour texte
+          const ctx = canvas.getContext("2d", {
+            alpha: true,
+            desynchronized: false, // Meilleure qualité de rendu
+          });
+          // Améliorer l'anti-aliasing du texte
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
 
           renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
           await renderTaskRef.current.promise;
 
-          // PNG comme Switchboard (meilleure qualité, assez rapide)
-          const dataUrl = canvas.toDataURL("image/png");
+          // PNG haute qualité
+          const dataUrl = canvas.toDataURL("image/png", 1.0);
           setImgSize({ w: canvas.width, h: canvas.height });
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
@@ -777,7 +790,8 @@ export default function AtexMap({
 
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 1);
-          m.setMaxZoom(fitZoom2 + 6);
+          // 🔥 Zoom max augmenté pour lire les textes fins
+          m.setMaxZoom(fitZoom2 + 8);
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [8, 8] });
 

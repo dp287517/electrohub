@@ -102,6 +102,34 @@
 .leaflet-container {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
+
+/* 🔥 HAUTE QUALITÉ D'IMAGE - Améliore la lisibilité des textes sur plans */
+.leaflet-container .leaflet-image-layer,
+.leaflet-container .leaflet-overlay-pane img {
+  /* Rendu haute qualité pour texte net */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  /* Pour le zoom, smooth est meilleur */
+  transform-origin: 0 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Au zoom élevé (quand on lit le texte), utiliser un rendu plus net */
+.leaflet-container.leaflet-zoom-anim .leaflet-image-layer {
+  image-rendering: auto;
+}
+
+/* GPU acceleration pour fluidité du zoom/pan */
+.leaflet-pane {
+  will-change: transform;
+}
+
+/* Meilleur rendu pour les overlays (zones, marqueurs) */
+.leaflet-overlay-pane {
+  image-rendering: auto;
+}
+
 /* Assure un fond neutre derrière les overlays */
 .leaflet-container .leaflet-overlay-pane svg { overflow: visible; }
 

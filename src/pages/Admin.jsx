@@ -394,12 +394,25 @@ function ExternalUsersTab({ users, sites, companies, departments, onRefresh, loa
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {user.role && user.role !== 'site' && (
-                    <span className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 ${user.role === 'admin' ? 'bg-red-50 text-red-600' : user.role === 'global' ? 'bg-amber-50 text-amber-600' : 'bg-gray-50 text-gray-600'}`}>
-                      <Shield size={12} />{user.role}
+                    <span className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 font-medium ${
+                      user.role === 'admin' ? 'bg-purple-100 text-purple-700 border border-purple-200' :
+                      user.role === 'global' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {user.role === 'global' ? <Globe size={12} /> : <Shield size={12} />}
+                      {user.role === 'global' ? 'Global' : user.role === 'admin' ? 'Admin' : user.role}
                     </span>
                   )}
                   {user.company_name && <span className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg flex items-center gap-1"><Building2 size={12} />{user.company_name}</span>}
-                  {user.site_name && <span className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg">{user.site_name}</span>}
+                  {(user.role === 'global' || user.role === 'admin') ? (
+                    <span className="text-xs px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg flex items-center gap-1">
+                      <Globe size={12} />Tous les sites
+                    </span>
+                  ) : user.site_name && (
+                    <span className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded-lg flex items-center gap-1">
+                      <MapPin size={12} />{user.site_name}
+                    </span>
+                  )}
                   <span className="text-xs px-2 py-1 bg-green-50 text-green-600 rounded-lg">{user.allowed_apps?.length || 0} apps</span>
                 </div>
                 <div className="flex gap-2">
@@ -436,35 +449,84 @@ function ExternalUserModal({ user, sites, companies, departments, saving, onClos
   const [showPassword, setShowPassword] = useState(false);
   const [selectedApps, setSelectedApps] = useState(user?.allowed_apps || []);
 
+  // Count sites per company for global role info
+  const companySites = companyId ? sites.filter(s => s.company_id === Number(companyId)) : sites;
+  const isGlobalOrAdmin = role === 'global' || role === 'admin';
+
   return (
-    <Modal title={user ? 'Edit External User' : 'New External User'} icon={UserPlus} onClose={onClose} wide>
+    <Modal title={user ? 'Modifier utilisateur externe' : 'Nouvel utilisateur externe'} icon={UserPlus} onClose={onClose} wide>
       <form onSubmit={(e) => { e.preventDefault(); if (!email.trim()) return; onSave({ email: email.toLowerCase().trim(), name: name || email.split('@')[0], company_id: companyId || null, site_id: siteId, department_id: departmentId, role, password: password || undefined, allowed_apps: selectedApps }); }} className="space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Mail size={14} />Email *</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required disabled={!!user} /></div>
-          <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" /></div>
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Nom</label>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Jean Dupont" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" /></div>
         </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Building2 size={14} />Company</label>
-            <select value={companyId} onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : '')} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
-              <option value="">No company</option>
+
+        {/* Role selection - prominent position with clear explanations */}
+        <div className="p-4 bg-gradient-to-r from-gray-50 to-slate-50 rounded-xl border border-gray-200">
+          <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+            <Shield size={16} className="text-indigo-600" />
+            Niveau d'accès
+          </label>
+          <div className="grid sm:grid-cols-3 gap-3">
+            <button type="button" onClick={() => setRole('site')}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${role === 'site' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${role === 'site' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                  <MapPin size={16} />
+                </div>
+                <span className={`font-semibold ${role === 'site' ? 'text-blue-700' : 'text-gray-700'}`}>Site</span>
+              </div>
+              <p className="text-xs text-gray-500">Accès limité à <strong>un seul site</strong></p>
+            </button>
+            <button type="button" onClick={() => setRole('global')}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${role === 'global' ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${role === 'global' ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                  <Globe size={16} />
+                </div>
+                <span className={`font-semibold ${role === 'global' ? 'text-emerald-700' : 'text-gray-700'}`}>Global</span>
+              </div>
+              <p className="text-xs text-gray-500">Accès à <strong>tous les sites</strong> de la société</p>
+            </button>
+            <button type="button" onClick={() => setRole('admin')}
+              className={`p-4 rounded-xl border-2 text-left transition-all ${role === 'admin' ? 'border-purple-500 bg-purple-50 ring-2 ring-purple-200' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${role === 'admin' ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                  <Shield size={16} />
+                </div>
+                <span className={`font-semibold ${role === 'admin' ? 'text-purple-700' : 'text-gray-700'}`}>Admin</span>
+              </div>
+              <p className="text-xs text-gray-500"><strong>Gestion des utilisateurs</strong> + tous les sites</p>
+            </button>
+          </div>
+          {isGlobalOrAdmin && companyId && (
+            <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-emerald-700 text-sm">
+              <Globe size={16} />
+              <span>Cet utilisateur aura accès aux <strong>{companySites.length} sites</strong> de cette société</span>
+            </div>
+          )}
+        </div>
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Building2 size={14} />Société {isGlobalOrAdmin && <span className="text-xs text-gray-400">(obligatoire pour Global)</span>}</label>
+            <select value={companyId} onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : '')} className={`w-full px-4 py-2.5 rounded-xl border outline-none ${isGlobalOrAdmin && !companyId ? 'border-amber-300 bg-amber-50' : 'border-gray-200'}`}>
+              <option value="">Aucune société</option>
               {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select></div>
-          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />Site</label>
+            </select>
+            {isGlobalOrAdmin && !companyId && <p className="text-xs text-amber-600 mt-1">⚠️ Sélectionnez une société pour le rôle {role}</p>}
+          </div>
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><MapPin size={14} />{isGlobalOrAdmin ? 'Site par défaut' : 'Site'}</label>
             <select value={siteId} onChange={(e) => setSiteId(Number(e.target.value))} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
-              {sites.filter(s => !companyId || s.company_id === companyId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select></div>
-          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Department</label>
+              {sites.filter(s => !companyId || s.company_id === Number(companyId)).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {isGlobalOrAdmin && <p className="text-xs text-gray-400 mt-1">Site affiché par défaut au login</p>}
+          </div>
+          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Briefcase size={14} />Département</label>
             <select value={departmentId || ''} onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
-              <option value="">No department</option>
+              <option value="">Aucun département</option>
               {departments.filter(d => !siteId || d.site_id === siteId).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select></div>
-          <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Shield size={14} />Role</label>
-            <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">
-              <option value="site">Site - Can only see their site</option>
-              <option value="global">Global - Can see all company sites</option>
-              <option value="admin">Admin - Can manage users</option>
             </select></div>
         </div>
         {!user && (
