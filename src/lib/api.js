@@ -1018,6 +1018,9 @@ export const api = {
         x_frac,
         y_frac,
       }),
+    // 🆕 Obtenir la position d'un équipement spécifique (pour navigation depuis liste)
+    getEquipmentPosition: (equipmentId) =>
+      get(`/api/atex/maps/position/${encodeURIComponent(equipmentId)}`),
 
     listSubareas: (planKey, page_index = 0) => {
       const key =

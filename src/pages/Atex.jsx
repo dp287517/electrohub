@@ -547,50 +547,43 @@ export default function Atex() {
   // 🆕 Fonction pour naviguer vers un équipement sur la carte
   async function goToEquipmentOnMap(eq) {
     if (!eq?.id) return;
-    setSelectedEquipmentId(eq.id);
 
     try {
-      // 1. Charger les plans si pas encore fait
-      let availablePlans = plans;
-      if (availablePlans.length === 0) {
-        const res = await api.atexMaps.listPlans();
-        availablePlans = res?.plans || [];
-        setPlans(availablePlans);
+      // 1. D'abord, chercher la position réelle de l'équipement via API
+      const positionData = await api.atexMaps.getEquipmentPosition(eq.id);
+
+      if (positionData?.found && positionData?.position) {
+        const pos = positionData.position;
+
+        // 2. Charger les plans si pas encore fait
+        let availablePlans = plans;
+        if (availablePlans.length === 0) {
+          const res = await api.atexMaps.listPlans();
+          availablePlans = res?.plans || [];
+          setPlans(availablePlans);
+        }
+
+        // 3. Trouver le plan exact par logical_name
+        const matchingPlan = availablePlans.find(p => p.logical_name === pos.logical_name);
+
+        if (matchingPlan) {
+          // 4. D'abord définir l'ID pour le highlight AVANT de changer le plan
+          setSelectedEquipmentId(eq.id);
+
+          // 5. Sélectionner le plan avec la bonne page
+          setSelectedPlan({ ...matchingPlan, _targetPageIndex: pos.page_index || 0 });
+          setMapRefreshTick(t => t + 1);
+
+          // 6. Basculer vers l'onglet Plans
+          setActiveTab("plans");
+          setToast(`📍 ${eq.name || "Équipement"} sur ${matchingPlan?.display_name || matchingPlan?.logical_name}`);
+          return;
+        }
       }
 
-      if (availablePlans.length === 0) {
-        setToast("Aucun plan ATEX disponible");
-        setActiveTab("plans");
-        return;
-      }
-
-      // 2. Trouver le plan correspondant à l'équipement
-      let matchingPlan = null;
-
-      // Priorité 1: correspondance exacte building + zone
-      if (eq.building && eq.zone) {
-        matchingPlan = availablePlans.find(
-          p => p.building === eq.building && p.zone === eq.zone
-        );
-      }
-
-      // Priorité 2: correspondance building uniquement
-      if (!matchingPlan && eq.building) {
-        matchingPlan = availablePlans.find(p => p.building === eq.building);
-      }
-
-      // Priorité 3: premier plan disponible
-      if (!matchingPlan) {
-        matchingPlan = availablePlans[0];
-      }
-
-      // 3. Sélectionner le plan et forcer le refresh
-      setSelectedPlan(matchingPlan);
-      setMapRefreshTick(t => t + 1);
-
-      // 4. Basculer vers l'onglet Plans
+      // Équipement non positionné sur un plan
+      setToast(`⚠️ ${eq.name || "Équipement"} n'est pas encore placé sur un plan`);
       setActiveTab("plans");
-      setToast(`🔍 ${eq.name || "Équipement"} sur ${matchingPlan?.display_name || matchingPlan?.logical_name || "le plan"}`);
 
     } catch (e) {
       console.error("[ATEX] goToEquipmentOnMap error:", e);
@@ -1476,8 +1469,9 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
           </div>
           {/* Carte sans padding excessif */}
           <AtexMap
-            key={`${selectedPlan.logical_name}:${mapRefreshTick}:${selectedEquipmentId || ''}`}
+            key={`${selectedPlan.logical_name}:${mapRefreshTick}:${selectedEquipmentId || ''}:${selectedPlan._targetPageIndex || 0}`}
             plan={selectedPlan}
+            pageIndex={selectedPlan._targetPageIndex || 0}
             selectedEquipmentId={selectedEquipmentId}
             onOpenEquipment={(eq) => {
               setSelectedEquipmentId(eq?.id || null);
@@ -1678,7 +1672,7 @@ function EquipmentDrawer({
                         📤 Changer la photo
                       </label>
                       <div className="flex flex-col sm:flex-row gap-2">
-                        <label className={`atex-btn atex-btn-secondary w-full sm:w-auto cursor-pointer relative ${aiPhotosCount > 0 ? "animate-pulse" : ""}`}>
+                        <label className={`atex-btn w-full sm:w-auto cursor-pointer relative ${aiPhotosCount > 0 ? "atex-btn-secondary animate-pulse" : "atex-btn-ai"}`}>
                           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
                           {aiPhotosCount > 0 ? `⏳ Analyse ${aiPhotosCount} photo(s)...` : "🤖 Analyse IA"}
                         </label>
