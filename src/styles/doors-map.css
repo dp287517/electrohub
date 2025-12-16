@@ -221,26 +221,13 @@
 .door-pick:hover::-webkit-scrollbar-thumb { background: #d1d5db; }
 
 /* -------------------------------------------------------------
-   Dark mode (léger) — si l’app passe en dark, on garde du contraste
+   Dark mode DÉSACTIVÉ - Toujours fond blanc pour les plans PDF
+   (les PDF sont généralement sur fond blanc, le dark mode les rend illisibles)
 -------------------------------------------------------------- */
 
-@media (prefers-color-scheme: dark) {
-  .leaflet-container { background: #0b0f13; }
-  .leaflet-wrapper { background: #0b0f13; }
-  .door-pick {
-    background: #0f172a;
-    border-color: #1f2937;
-    box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    color: #e5e7eb;
-  }
-  .door-pick::before {
-    border-color: transparent transparent #0f172a transparent;
-    filter: drop-shadow(0 -1px 0 #1f2937);
-  }
-  .door-pick button { color: #e5e7eb; }
-  .door-pick button:hover { background: #111827; }
-  :root { --door-ring: rgba(17, 24, 39, .9); }
-}
+/* Force le fond blanc même en dark mode système */
+.leaflet-container { background: #fff !important; }
+.leaflet-wrapper { background: #f3f4f6 !important; }
 
 /* -------------------------------------------------------------
    Impression : on fige et on coupe les animations
