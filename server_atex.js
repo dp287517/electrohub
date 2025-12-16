@@ -1412,10 +1412,12 @@ app.get("/api/atex/maps/position/:equipmentId", async (req, res) => {
     }
     const { rows } = await pool.query(
       `SELECT p.equipment_id, p.logical_name, p.plan_id, p.page_index, p.x_frac, p.y_frac,
-              pl.display_name, pl.building, pl.zone
+              pn.display_name, pl.building, pl.zone
        FROM atex_positions p
        LEFT JOIN atex_plans pl ON pl.logical_name = p.logical_name
+       LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
        WHERE p.equipment_id = $1
+       ORDER BY pl.version DESC NULLS LAST
        LIMIT 1`,
       [equipment_id]
     );
@@ -1432,7 +1434,7 @@ app.get("/api/atex/maps/position/:equipmentId", async (req, res) => {
         page_index: r.page_index || 0,
         x_frac: Number(r.x_frac),
         y_frac: Number(r.y_frac),
-        display_name: r.display_name,
+        display_name: r.display_name || r.logical_name,
         building: r.building,
         zone: r.zone,
       }
