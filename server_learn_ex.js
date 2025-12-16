@@ -16,10 +16,33 @@ const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.NEON_DATABASE_URL,
   // ✅ Configuration pour Neon serverless - éviter les timeouts
-  connectionTimeoutMillis: 10000,  // 10s max pour établir une connexion
+  connectionTimeoutMillis: 15000,  // 15s max pour établir une connexion (Neon cold start)
   idleTimeoutMillis: 30000,        // 30s avant de fermer une connexion idle
-  max: 5,                          // Limiter les connexions pour Neon free tier
+  max: 3,                          // Réduire pour Neon free tier
+  // ✅ Timeout sur les requêtes pour éviter les hangs
+  options: '-c statement_timeout=30000',  // 30s max par requête
 });
+
+// ✅ Helper pour les requêtes avec timeout et logging
+async function queryWithTimeout(text, params, timeoutMs = 25000) {
+  const start = Date.now();
+  const queryId = Math.random().toString(36).substr(2, 6);
+  console.log(`[LearnEx][Q:${queryId}] Starting query...`);
+
+  try {
+    const result = await Promise.race([
+      pool.query(text, params),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
+    console.log(`[LearnEx][Q:${queryId}] Done in ${Date.now() - start}ms, rows: ${result.rows?.length || 0}`);
+    return result;
+  } catch (err) {
+    console.error(`[LearnEx][Q:${queryId}] FAILED after ${Date.now() - start}ms:`, err.message);
+    throw err;
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +50,21 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "10mb" }));
+
+// ✅ Request logger - voir quelles requêtes arrivent
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`[LearnEx] >> ${req.method} ${req.path}`);
+  res.on('finish', () => {
+    console.log(`[LearnEx] << ${req.method} ${req.path} ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  next();
+});
+
+// ✅ Health check SANS base de données
+app.get("/api/learn-ex/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString(), service: "learn-ex" });
+});
 
 // ============================================================================
 // CONFIGURATION DE LA FORMATION
@@ -1900,7 +1938,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
 
     // 1. Vérifier qu'il n'y a pas déjà un certificat valide
     log("Query 1: checking existing cert");
-    const existingCert = await pool.query(
+    const existingCert = await queryWithTimeout(
       `SELECT * FROM learn_ex_certificates
        WHERE user_email = $1 AND valid_until > NOW()
        ORDER BY issued_at DESC LIMIT 1`,
@@ -1919,7 +1957,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
 
     // 2. Récupérer la session en cours
     log("Query 2: getting session");
-    const sessionRes = await pool.query(
+    const sessionRes = await queryWithTimeout(
       `SELECT * FROM learn_ex_sessions
        WHERE user_email = $1
        ORDER BY created_at DESC LIMIT 1`,
@@ -1936,7 +1974,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
 
     // 3. Vérifier que tous les modules sont complétés
     log("Query 3: getting progress", { session_id: session.id });
-    const progressRes = await pool.query(
+    const progressRes = await queryWithTimeout(
       `SELECT module_id, quiz_score, completed_at
        FROM learn_ex_module_progress
        WHERE session_id = $1`,
@@ -1982,7 +2020,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     log("Query 4: inserting certificate");
     let certRes;
     try {
-      certRes = await pool.query(
+      certRes = await queryWithTimeout(
         `INSERT INTO learn_ex_certificates
           (session_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -2003,7 +2041,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
       // Si colonne site manquante, essayer sans
       if (insertErr.message.includes('site') || insertErr.code === '42703') {
         log("Query 4: Retrying without site column");
-        certRes = await pool.query(
+        certRes = await queryWithTimeout(
           `INSERT INTO learn_ex_certificates
             (session_id, certificate_number, user_email, user_name, formation_title, score, valid_until)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -2018,7 +2056,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
 
     // 7. Mettre à jour le statut de la session
     log("Query 5: updating session status");
-    await pool.query(
+    await queryWithTimeout(
       `UPDATE learn_ex_sessions
        SET status = 'completed', completed_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
