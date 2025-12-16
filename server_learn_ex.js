@@ -13,7 +13,13 @@ import fs from "fs";
 
 dotenv.config();
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  // ✅ Configuration pour Neon serverless - éviter les timeouts
+  connectionTimeoutMillis: 10000,  // 10s max pour établir une connexion
+  idleTimeoutMillis: 30000,        // 30s avant de fermer une connexion idle
+  max: 5,                          // Limiter les connexions pour Neon free tier
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1444,6 +1450,7 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_learn_sessions_status ON learn_ex_sessions(status);
       CREATE INDEX IF NOT EXISTS idx_learn_certificates_user ON learn_ex_certificates(user_email);
       CREATE INDEX IF NOT EXISTS idx_learn_certificates_number ON learn_ex_certificates(certificate_number);
+      CREATE INDEX IF NOT EXISTS idx_learn_module_progress_session ON learn_ex_module_progress(session_id);
     `);
     console.log("[LearnEx] Database tables initialized");
   } finally {
@@ -1860,17 +1867,24 @@ app.get("/api/learn-ex/history", async (req, res) => {
 // Appelé quand l'utilisateur a complété tous les modules avec succès
 app.post("/api/learn-ex/auto-certificate", async (req, res) => {
   const user = extractUser(req);
+  const startTime = Date.now();
+  const log = (step, data = {}) => console.log(`[LearnEx][auto-cert] ${step}`, { ...data, elapsed: Date.now() - startTime + 'ms' });
 
   try {
+    log("START", { user: user.email });
+
     // 1. Vérifier qu'il n'y a pas déjà un certificat valide
+    log("Query 1: checking existing cert");
     const existingCert = await pool.query(
       `SELECT * FROM learn_ex_certificates
        WHERE user_email = $1 AND valid_until > NOW()
        ORDER BY issued_at DESC LIMIT 1`,
       [user.email]
     );
+    log("Query 1: done", { found: existingCert.rows.length });
 
     if (existingCert.rows.length > 0) {
+      log("Returning existing certificate");
       return res.json({
         success: true,
         certificate: existingCert.rows[0],
@@ -1879,31 +1893,37 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     }
 
     // 2. Récupérer la session en cours
+    log("Query 2: getting session");
     const sessionRes = await pool.query(
       `SELECT * FROM learn_ex_sessions
        WHERE user_email = $1
        ORDER BY created_at DESC LIMIT 1`,
       [user.email]
     );
+    log("Query 2: done", { found: sessionRes.rows.length });
 
     if (sessionRes.rows.length === 0) {
+      log("No session found");
       return res.status(400).json({ error: "Aucune session trouvée" });
     }
 
     const session = sessionRes.rows[0];
 
     // 3. Vérifier que tous les modules sont complétés
+    log("Query 3: getting progress", { session_id: session.id });
     const progressRes = await pool.query(
       `SELECT module_id, quiz_score, completed_at
        FROM learn_ex_module_progress
        WHERE session_id = $1`,
       [session.id]
     );
+    log("Query 3: done", { rows: progressRes.rows.length });
 
     const totalModules = FORMATION_CONFIG.totalModules;
     const completedModules = progressRes.rows.filter(p => p.completed_at);
 
     if (completedModules.length < totalModules) {
+      log("Formation incomplete", { completed: completedModules.length, total: totalModules });
       return res.status(400).json({
         error: "Formation incomplète",
         message: `${completedModules.length}/${totalModules} modules complétés`,
@@ -1915,9 +1935,11 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     const averageScore = Math.round(
       quizScores.reduce((a, b) => a + b, 0) / quizScores.length
     );
+    log("Average score calculated", { averageScore, scores: quizScores });
 
     // 5. Vérifier que le score moyen est suffisant
     if (averageScore < FORMATION_CONFIG.passingScore) {
+      log("Score too low", { averageScore, required: FORMATION_CONFIG.passingScore });
       return res.status(400).json({
         error: "Score insuffisant",
         message: `Score moyen: ${averageScore}%, minimum requis: ${FORMATION_CONFIG.passingScore}%`,
@@ -1932,6 +1954,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     const validUntil = new Date();
     validUntil.setFullYear(validUntil.getFullYear() + 3);
 
+    log("Query 4: inserting certificate");
     const certRes = await pool.query(
       `INSERT INTO learn_ex_certificates
         (session_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
@@ -1948,16 +1971,19 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
         validUntil,
       ]
     );
+    log("Query 4: done");
 
     // 7. Mettre à jour le statut de la session
+    log("Query 5: updating session status");
     await pool.query(
       `UPDATE learn_ex_sessions
        SET status = 'completed', completed_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
       [session.id]
     );
+    log("Query 5: done");
 
-    console.log(`[LearnEx] Auto-certificate generated for ${user.email}: ${certNumber} (score: ${averageScore}%)`);
+    log("SUCCESS", { certNumber, averageScore });
 
     res.json({
       success: true,
@@ -1966,6 +1992,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
       averageScore,
     });
   } catch (err) {
+    log("ERROR", { error: err.message, stack: err.stack });
     console.error("[LearnEx] Error generating auto-certificate:", err);
     res.status(500).json({ error: "Erreur lors de la génération du certificat" });
   }
