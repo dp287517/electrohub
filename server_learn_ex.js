@@ -1980,22 +1980,40 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     validUntil.setFullYear(validUntil.getFullYear() + 3);
 
     log("Query 4: inserting certificate");
-    const certRes = await pool.query(
-      `INSERT INTO learn_ex_certificates
-        (session_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        session.id,
-        certNumber,
-        user.email,
-        user.name,
-        user.site,
-        FORMATION_CONFIG.title,
-        averageScore,
-        validUntil,
-      ]
-    );
+    let certRes;
+    try {
+      certRes = await pool.query(
+        `INSERT INTO learn_ex_certificates
+          (session_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          session.id,
+          certNumber,
+          user.email,
+          user.name,
+          user.site || null,
+          FORMATION_CONFIG.title,
+          averageScore,
+          validUntil,
+        ]
+      );
+    } catch (insertErr) {
+      log("Query 4: INSERT FAILED", { error: insertErr.message, code: insertErr.code });
+      // Si colonne site manquante, essayer sans
+      if (insertErr.message.includes('site') || insertErr.code === '42703') {
+        log("Query 4: Retrying without site column");
+        certRes = await pool.query(
+          `INSERT INTO learn_ex_certificates
+            (session_id, certificate_number, user_email, user_name, formation_title, score, valid_until)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [session.id, certNumber, user.email, user.name, FORMATION_CONFIG.title, averageScore, validUntil]
+        );
+      } else {
+        throw insertErr;
+      }
+    }
     log("Query 4: done");
 
     // 7. Mettre à jour le statut de la session
@@ -2504,7 +2522,30 @@ app.get("/api/learn-ex/images/:name", (req, res) => {
 const PORT = process.env.LEARN_EX_PORT || 3040;
 
 initDB()
-  .then(() => {
+  .then(async () => {
+    // ✅ Test de connexion et vérification du schéma
+    try {
+      const testStart = Date.now();
+      const testResult = await pool.query(`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'learn_ex_certificates'
+        ORDER BY ordinal_position
+      `);
+      const columns = testResult.rows.map(r => r.column_name);
+      console.log(`[LearnEx] DB Test OK (${Date.now() - testStart}ms)`);
+      console.log(`[LearnEx] Certificates columns: ${columns.join(', ')}`);
+
+      // Vérifier que la colonne site existe
+      if (!columns.includes('site')) {
+        console.error('[LearnEx] ⚠️ CRITICAL: "site" column missing from learn_ex_certificates!');
+        console.log('[LearnEx] Running migration to add site column...');
+        await pool.query(`ALTER TABLE learn_ex_certificates ADD COLUMN IF NOT EXISTS site VARCHAR(255)`);
+        console.log('[LearnEx] ✅ site column added');
+      }
+    } catch (testErr) {
+      console.error('[LearnEx] DB Test FAILED:', testErr.message);
+    }
+
     app.listen(PORT, () => {
       console.log(`[LearnEx] Server running on port ${PORT}`);
       console.log(`[LearnEx] Formation: ${FORMATION_CONFIG.title}`);
