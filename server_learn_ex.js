@@ -1450,6 +1450,7 @@ async function initDB() {
         certificate_number VARCHAR(50) UNIQUE NOT NULL,
         user_email VARCHAR(255) NOT NULL,
         user_name VARCHAR(255) NOT NULL,
+        site VARCHAR(255),
         formation_title VARCHAR(255) NOT NULL,
         score INT NOT NULL,
         issued_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1457,6 +1458,13 @@ async function initDB() {
         pdf_generated BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+
+      -- Migration: ajouter la colonne site si elle n'existe pas
+      DO $$ BEGIN
+        ALTER TABLE learn_ex_certificates ADD COLUMN site VARCHAR(255);
+      EXCEPTION WHEN duplicate_column THEN
+        NULL;
+      END $$;
 
       -- Index pour les recherches
       CREATE INDEX IF NOT EXISTS idx_learn_sessions_user ON learn_ex_sessions(user_email);
@@ -1708,9 +1716,9 @@ app.post("/api/learn-ex/final-exam/submit", async (req, res) => {
 
       const certRes = await client.query(
         `
-        INSERT INTO learn_ex_certificates 
-          (session_id, result_id, certificate_number, user_email, user_name, formation_title, score, valid_until)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO learn_ex_certificates
+          (session_id, result_id, certificate_number, user_email, user_name, site, formation_title, score, valid_until)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
       `,
         [
@@ -1719,6 +1727,7 @@ app.post("/api/learn-ex/final-exam/submit", async (req, res) => {
           certNumber,
           user.email,
           user.name,
+          user.site || null,
           FORMATION_CONFIG.title,
           percentage,
           validUntil,
