@@ -83,7 +83,22 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 // Sécurité & cookies
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
+      connectSrc: ["'self'", "https:", "wss:"],
+      mediaSrc: ["'self'", "data:", "blob:"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'self'"],
+      workerSrc: ["'self'", "blob:"],
+    },
+  },
+}));
 app.use(cookieParser());
 
 // ⚠️ NOTE: switchboardMapApp a un body-parser qui parse TOUS les bodies AVANT les proxies.
@@ -218,7 +233,8 @@ app.use("/api/doors", mkProxy(doorsTarget, { withRestream: true }));
 // >>> Meca (Maintenance Mécanique) : re-stream nécessaire pour upload
 app.use("/api/meca", mkProxy(mecaTarget, { withRestream: true }));
 
-app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true }));
+// >>> Learn-Ex (formation ATEX) : timeout étendu pour génération de certificats
+app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true, timeoutMs: 60000 }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
