@@ -1005,6 +1005,8 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
   const [items, setItems] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [uploadingIndex, setUploadingIndex] = useState(null);
+  const photoInputRefs = useRef({});
 
   useEffect(() => {
     if (door?.current_check?.items) {
@@ -1014,7 +1016,8 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
         index,
         label,
         value: null,
-        comment: ''
+        comment: '',
+        photos: []
       })));
     }
   }, [door, settings]);
@@ -1023,6 +1026,28 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
     setItems(prev => prev.map((item, i) =>
       i === index ? { ...item, [field]: value } : item
     ));
+  };
+
+  const handlePhotoUpload = async (index, file) => {
+    if (!file || !door?.id || !door?.current_check?.id) return;
+
+    setUploadingIndex(index);
+    try {
+      // Upload photo for this checklist item
+      const res = await api.doors.uploadCheckPhoto(door.id, door.current_check.id, index, file);
+      const photoUrl = res?.url || res?.photo_url;
+      if (photoUrl) {
+        setItems(prev => prev.map((item, i) =>
+          i === index ? { ...item, photos: [...(item.photos || []), photoUrl] } : item
+        ));
+        showToast('Photo ajoutée', 'success');
+      }
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      showToast('Erreur lors de l\'upload', 'error');
+    } finally {
+      setUploadingIndex(null);
+    }
   };
 
   const handleSave = async (close = false) => {
@@ -1110,7 +1135,8 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
               </button>
             </div>
 
-            {item.value === 'non_conforme' && (
+            {/* Comment field - always visible */}
+            <div className="space-y-2">
               <input
                 type="text"
                 value={item.comment || ''}
@@ -1118,7 +1144,48 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
                 className={inputBaseClass}
                 placeholder="Commentaire (optionnel)"
               />
-            )}
+
+              {/* Photo upload */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  ref={el => photoInputRefs.current[index] = el}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) {
+                      handlePhotoUpload(index, e.target.files[0]);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => photoInputRefs.current[index]?.click()}
+                  disabled={uploadingIndex === index}
+                  className="px-3 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-100 transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {uploadingIndex === index ? (
+                    <RefreshCw size={14} className="animate-spin" />
+                  ) : (
+                    <Camera size={14} />
+                  )}
+                  Photo
+                </button>
+
+                {/* Show existing photos */}
+                {item.photos?.length > 0 && item.photos.map((photo, photoIdx) => (
+                  <a
+                    key={photoIdx}
+                    href={photo}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 hover:border-rose-400 transition-colors"
+                  >
+                    <img src={photo} alt="" className="w-full h-full object-cover" />
+                  </a>
+                ))}
+              </div>
+            </div>
           </div>
         ))}
       </div>

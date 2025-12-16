@@ -856,6 +856,7 @@ export default function DoorsMap() {
 
   const urlParamsHandledRef = useRef(false);
   const targetDoorIdRef = useRef(null);
+  const allPositionsRef = useRef({}); // Store all positions for all plans
 
   // Plans
   const [plans, setPlans] = useState([]);
@@ -925,11 +926,20 @@ export default function DoorsMap() {
       let planToSelect = null;
       let pageIdx = 0;
 
-      if (urlPlanKey && !urlParamsHandledRef.current) {
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlDoorId) targetDoorIdRef.current = urlDoorId;
+      // Clear URL params
+      if ((urlDoorId || urlPlanKey) && !urlParamsHandledRef.current) {
         urlParamsHandledRef.current = true;
         setSearchParams({}, { replace: true });
+      }
+
+      if (urlPlanKey) {
+        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
+        if (urlDoorId) targetDoorIdRef.current = urlDoorId;
+      }
+
+      // If door ID provided without plan, we'll find the plan later after loading positions
+      if (urlDoorId && !urlPlanKey) {
+        targetDoorIdRef.current = urlDoorId;
       }
 
       if (!planToSelect) {
@@ -961,9 +971,32 @@ export default function DoorsMap() {
   useEffect(() => {
     if (!pdfReady || !targetDoorIdRef.current) return;
     const targetId = targetDoorIdRef.current;
-    targetDoorIdRef.current = null;
-    setTimeout(() => viewerRef.current?.highlightMarker(targetId), 300);
-  }, [pdfReady]);
+
+    // Check if door is on current plan
+    const isOnCurrentPlan = initialPoints.some(p => p.door_id === targetId || String(p.door_id) === String(targetId));
+
+    if (isOnCurrentPlan) {
+      targetDoorIdRef.current = null;
+      setTimeout(() => viewerRef.current?.highlightMarker(targetId), 300);
+    }
+    // If not on current plan, we'll handle it after placedIds is refreshed
+  }, [pdfReady, initialPoints]);
+
+  // After positions are loaded, check if we need to navigate to a different plan for the target door
+  useEffect(() => {
+    if (!targetDoorIdRef.current || Object.keys(allPositionsRef.current).length === 0) return;
+
+    const targetId = targetDoorIdRef.current;
+    const doorInfo = allPositionsRef.current[targetId];
+
+    if (doorInfo) {
+      // Check if door is on a different plan/page
+      if (doorInfo.plan.logical_name !== selectedPlan?.logical_name || doorInfo.pageIndex !== pageIndex) {
+        // Navigate to the correct plan
+        navigateToDoor(targetId);
+      }
+    }
+  }, [placedIds, selectedPlan, pageIndex, navigateToDoor]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -980,20 +1013,70 @@ export default function DoorsMap() {
   const refreshPlacedIds = async () => {
     try {
       const placed = new Set();
+      const allPositions = {};
       for (const plan of plans) {
         try {
-          const positions = await api.doorsMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
-          const list = positions?.items || positions?.points || [];
-          list.forEach(p => {
-            if (p.door_id) placed.add(p.door_id);
-          });
+          // Get positions for all pages (assume max 20 pages)
+          for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
+            const positions = await api.doorsMaps.positionsAuto(plan.logical_name, pageIdx).catch(() => ({}));
+            const list = positions?.items || positions?.points || [];
+            if (list.length === 0 && pageIdx > 0) break; // No more pages
+            list.forEach(p => {
+              if (p.door_id) {
+                placed.add(p.door_id);
+                // Store the position info for navigation
+                allPositions[p.door_id] = {
+                  plan,
+                  pageIndex: pageIdx,
+                  position: p
+                };
+              }
+            });
+          }
         } catch {}
       }
+      allPositionsRef.current = allPositions;
       setPlacedIds(placed);
     } catch (e) {
       console.error("Erreur chargement placements portes:", e);
     }
   };
+
+  // Find which plan a door is on
+  const findDoorPlanInfo = useCallback((doorId) => {
+    return allPositionsRef.current[doorId] || null;
+  }, []);
+
+  // Navigate to a door on its plan
+  const navigateToDoor = useCallback(async (doorId) => {
+    const info = findDoorPlanInfo(doorId);
+    if (!info) return false;
+
+    const { plan, pageIndex: targetPage } = info;
+
+    // If already on this plan and page, just highlight
+    if (selectedPlan?.logical_name === plan.logical_name && pageIndex === targetPage) {
+      viewerRef.current?.highlightMarker(doorId);
+      return true;
+    }
+
+    // Need to switch plan/page
+    targetDoorIdRef.current = doorId;
+    setPdfReady(false);
+
+    if (selectedPlan?.logical_name !== plan.logical_name) {
+      setSelectedPlan(plan);
+    }
+    if (pageIndex !== targetPage) {
+      setPageIndex(targetPage);
+    }
+
+    // Refresh positions for new plan/page
+    const positions = await refreshPositions(plan, targetPage);
+    setInitialPoints(positions || []);
+
+    return true;
+  }, [selectedPlan, pageIndex, findDoorPlanInfo, refreshPositions]);
 
   const loadDoors = async () => {
     setLoadingDoors(true);
@@ -1254,12 +1337,21 @@ export default function DoorsMap() {
                     isPlacedSomewhere={placedIds.has(d.id)}
                     isPlacedElsewhere={placedIds.has(d.id) && !isPlacedHere(d.id)}
                     isSelected={selectedDoorId === d.id}
-                    onClick={() => {
+                    onClick={async () => {
+                      // First check if door is on current plan
                       const pos = initialPoints.find(p => p.door_id === d.id);
                       if (pos) {
                         setSelectedPosition(pos);
                         setSelectedDoor(d);
                         viewerRef.current?.highlightMarker(d.id);
+                      } else if (placedIds.has(d.id)) {
+                        // Door is placed on a different plan - navigate to it
+                        setSelectedDoor(d);
+                        await navigateToDoor(d.id);
+                      } else {
+                        // Door is not placed anywhere - just select it
+                        setSelectedDoor(d);
+                        setSelectedPosition(null);
                       }
                     }}
                     onPlace={(door) => setPlacementMode(door)}
@@ -1419,12 +1511,21 @@ export default function DoorsMap() {
                     isPlacedSomewhere={placedIds.has(d.id)}
                     isPlacedElsewhere={placedIds.has(d.id) && !isPlacedHere(d.id)}
                     isSelected={selectedDoorId === d.id}
-                    onClick={() => {
+                    onClick={async () => {
+                      // First check if door is on current plan
                       const pos = initialPoints.find(p => p.door_id === d.id);
                       if (pos) {
                         setSelectedPosition(pos);
                         setSelectedDoor(d);
                         viewerRef.current?.highlightMarker(d.id);
+                      } else if (placedIds.has(d.id)) {
+                        // Door is placed on a different plan - navigate to it
+                        setSelectedDoor(d);
+                        await navigateToDoor(d.id);
+                      } else {
+                        // Door is not placed anywhere - just select it
+                        setSelectedDoor(d);
+                        setSelectedPosition(null);
                       }
                       setShowSidebar(false);
                     }}
