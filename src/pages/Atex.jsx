@@ -115,6 +115,8 @@ export default function Atex() {
   const initialRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [history, setHistory] = useState([]);
+  const [aiPhotosCount, setAiPhotosCount] = useState(0);
+  const [massComplianceRunning, setMassComplianceRunning] = useState(false);
 
   // Plans
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -416,6 +418,7 @@ export default function Atex() {
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
+    setAiPhotosCount(list.length);
     try {
       const res = await api.atex.analyzePhotoBatch(list);
       const s = res?.extracted || res || {};
@@ -433,9 +436,53 @@ export default function Atex() {
         applyIfValid("type", s.type);
         return safe;
       });
-      setToast("Analyse photos terminée");
+      setToast(`Analyse de ${list.length} photo(s) terminée`);
     } catch {
       setToast("Analyse photos indisponible");
+    } finally {
+      setAiPhotosCount(0);
+    }
+  }
+
+  /* ----------------------------- Mass Compliance Check ----------------------------- */
+  async function runMassComplianceCheck() {
+    if (massComplianceRunning) return;
+    setMassComplianceRunning(true);
+    let checked = 0;
+    let errors = 0;
+
+    try {
+      for (const item of items) {
+        if (!item.id) continue;
+        try {
+          const body = {
+            atex_mark_gas: item.atex_mark_gas || "",
+            atex_mark_dust: item.atex_mark_dust || "",
+            target_gas: item.zoning_gas ?? null,
+            target_dust: item.zoning_dust ?? null,
+          };
+
+          const res = (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
+            (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
+
+          const decision = res?.decision || null;
+          const rationale = res?.rationale || "";
+          const source = res?.source || "unknown";
+
+          if (decision && api.atex.applyCompliance) {
+            await api.atex.applyCompliance(item.id, { decision, rationale, source });
+          }
+          checked++;
+        } catch {
+          errors++;
+        }
+      }
+      await reload();
+      setToast(`Vérification terminée: ${checked} équipements analysés${errors > 0 ? `, ${errors} erreurs` : ""}`);
+    } catch {
+      setToast("Erreur lors de la vérification en masse");
+    } finally {
+      setMassComplianceRunning(false);
     }
   }
 
@@ -465,7 +512,12 @@ export default function Atex() {
         await api.atex.applyCompliance(editing.id, { decision, rationale, source });
       }
 
-      setEditing((cur) => ({ ...(cur || {}), compliance_state: decision || cur?.compliance_state || "na" }));
+      setEditing((cur) => ({
+        ...(cur || {}),
+        compliance_state: decision || cur?.compliance_state || "na",
+        compliance_rationale: rationale || "",
+        compliance_source: source || "unknown"
+      }));
 
       try {
         const hist = await api.atex.getEquipmentHistory(editing.id);
@@ -834,6 +886,7 @@ export default function Atex() {
           onVerifyCompliance={verifyComplianceIA}
           asDateInput={asDateInput}
           next36MonthsISO={next36MonthsISO}
+          aiPhotosCount={aiPhotosCount}
         />
       )}
     </div>
@@ -876,8 +929,8 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
         <StatCard label="En retard" value={stats.enRetard} color="orange" icon="🕐" />
       </div>
 
-      {/* Zones Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+      {/* Zones Stats + Mass Compliance Check */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 sm:p-4">
           <div className="flex items-center gap-3">
             <span className="text-xl sm:text-2xl">💨</span>
@@ -896,6 +949,27 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
             </div>
           </div>
         </div>
+        <button
+          onClick={runMassComplianceCheck}
+          disabled={massComplianceRunning || items.length === 0}
+          className={`rounded-xl p-3 sm:p-4 border-2 border-dashed transition-all ${
+            massComplianceRunning
+              ? "bg-blue-50 border-blue-300 cursor-wait"
+              : "bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200 hover:border-blue-400 hover:shadow-md cursor-pointer"
+          } disabled:opacity-50`}
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xl sm:text-2xl">{massComplianceRunning ? "⏳" : "🤖"}</span>
+            <div className="text-left">
+              <p className="text-xs sm:text-sm text-blue-700 font-medium">
+                {massComplianceRunning ? "Analyse en cours..." : "Vérification IA en masse"}
+              </p>
+              <p className="text-lg sm:text-xl font-bold text-blue-800">
+                {massComplianceRunning ? "Patientez" : `${items.length} équip.`}
+              </p>
+            </div>
+          </div>
+        </button>
       </div>
 
       {/* Overdue Alerts */}
@@ -1447,6 +1521,7 @@ function EquipmentDrawer({
   onVerifyCompliance,
   asDateInput,
   next36MonthsISO,
+  aiPhotosCount = 0,
 }) {
   const [activeSection, setActiveSection] = useState("info");
 
@@ -1547,9 +1622,15 @@ function EquipmentDrawer({
               {statusLabel(editing.status)}
             </span>
             {editing.compliance_state === "conforme" ? (
-              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500 text-white border border-emerald-400">✓ Conforme</span>
+              <span
+                className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500 text-white border border-emerald-400 cursor-help"
+                title={editing.compliance_rationale || "Équipement conforme aux exigences ATEX"}
+              >✓ Conforme</span>
             ) : editing.compliance_state === "non_conforme" ? (
-              <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500 text-white border border-red-400">✗ Non conforme</span>
+              <span
+                className="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500 text-white border border-red-400 cursor-help"
+                title={editing.compliance_rationale || "Équipement non conforme aux exigences ATEX"}
+              >✗ Non conforme</span>
             ) : null}
             {editing.zoning_gas != null && (
               <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500 text-white border border-amber-400">💨 Gaz {editing.zoning_gas}</span>
@@ -1594,9 +1675,9 @@ function EquipmentDrawer({
                         📤 Changer la photo
                       </label>
                       <div className="flex flex-col sm:flex-row gap-2">
-                        <label className="atex-btn atex-btn-secondary w-full sm:w-auto cursor-pointer">
+                        <label className={`atex-btn atex-btn-secondary w-full sm:w-auto cursor-pointer relative ${aiPhotosCount > 0 ? "animate-pulse" : ""}`}>
                           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
-                          🤖 Analyse IA
+                          {aiPhotosCount > 0 ? `⏳ Analyse ${aiPhotosCount} photo(s)...` : "🤖 Analyse IA"}
                         </label>
                         <button onClick={onVerifyCompliance} className="atex-btn atex-btn-secondary w-full sm:w-auto">
                           ✅ Conformité IA
@@ -1935,23 +2016,23 @@ function EquipmentDrawer({
               <div className="atex-section">
                 <div className="atex-section-title">👤 Informations de création</div>
                 <div className="grid sm:grid-cols-2 gap-4">
-                  {(editing.created_by_name || editing.created_by_email) && (
+                  {(editing.created_by_name || editing.created_by_email || editing.created_by || editing.created_at) && (
                     <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
                       <div className="text-xs text-gray-500 mb-1">Créé par</div>
                       <CreatedByBadge
-                        name={editing.created_by_name}
+                        name={editing.created_by_name || editing.created_by}
                         email={editing.created_by_email}
                         date={editing.created_at}
                         size="md"
                       />
                     </div>
                   )}
-                  {(editing.updated_by_name || editing.updated_by_email || editing.updated_at) && (
+                  {(editing.updated_by_name || editing.updated_by_email || editing.updated_by || editing.user_email || editing.updated_at) && (
                     <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
                       <div className="text-xs text-gray-500 mb-1">Dernière modification</div>
                       <LastModifiedBadge
-                        actor_name={editing.updated_by_name}
-                        actor_email={editing.updated_by_email}
+                        actor_name={editing.updated_by_name || editing.updated_by || editing.user_name}
+                        actor_email={editing.updated_by_email || editing.user_email}
                         date={editing.updated_at}
                         action="updated"
                         showIcon={false}
