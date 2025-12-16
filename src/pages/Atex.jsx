@@ -831,6 +831,9 @@ export default function Atex() {
             overdueList={overdueList}
             upcomingList={upcomingList}
             onOpenEquipment={openEdit}
+            items={items}
+            runMassComplianceCheck={runMassComplianceCheck}
+            massComplianceRunning={massComplianceRunning}
           />
         )}
 
@@ -897,7 +900,7 @@ export default function Atex() {
 // DASHBOARD TAB
 // ============================================================
 
-function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment }) {
+function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items, runMassComplianceCheck, massComplianceRunning }) {
   const StatCard = ({ label, value, color, icon }) => {
     const colors = {
       blue: "bg-blue-50 text-blue-800 border-blue-200",
