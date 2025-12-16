@@ -333,6 +333,144 @@ const SettingsModal = ({ isOpen, onClose, settings, onSave, showToast }) => {
   );
 };
 
+// Calendar Modal
+const CalendarModal = ({ isOpen, onClose, events = [], onDayClick }) => {
+  const [cursor, setCursor] = useState(() => dayjs().startOf('month'));
+
+  if (!isOpen) return null;
+
+  const start = cursor.startOf('week');
+  const end = cursor.endOf('month').endOf('week');
+  const days = [];
+  let d = start;
+  while (d.isBefore(end) || d.isSame(end, 'day')) {
+    days.push(d);
+    d = d.add(1, 'day');
+  }
+
+  const eventMap = new Map();
+  for (const e of events) {
+    const k = dayjs(e.date).format('YYYY-MM-DD');
+    const arr = eventMap.get(k) || [];
+    arr.push(e);
+    eventMap.set(k, arr);
+  }
+
+  const getStatusColor = (status) => {
+    if (status === 'en_retard') return 'bg-red-100 text-red-700';
+    if (status === 'en_cours_30') return 'bg-amber-100 text-amber-700';
+    return 'bg-emerald-100 text-emerald-700';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
+        <div className="bg-gradient-to-r from-rose-500 to-red-600 p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-xl">
+                <Calendar size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Calendrier des contrôles</h2>
+                <p className="text-rose-200 text-sm">Visualisez les prochains contrôles</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X size={24} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-lg text-gray-900">{cursor.format('MMMM YYYY')}</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCursor(cursor.subtract(1, 'month'))}
+                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
+              >
+                ◀ Précédent
+              </button>
+              <button
+                onClick={() => setCursor(dayjs().startOf('month'))}
+                className="px-3 py-1.5 bg-rose-100 text-rose-700 hover:bg-rose-200 rounded-lg text-sm font-medium"
+              >
+                Aujourd'hui
+              </button>
+              <button
+                onClick={() => setCursor(cursor.add(1, 'month'))}
+                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
+              >
+                Suivant ▶
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-2">
+            {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((l) => (
+              <div key={l} className="px-2 py-1 text-center font-medium">{l}</div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1">
+            {days.map((day) => {
+              const key = day.format('YYYY-MM-DD');
+              const dayEvents = eventMap.get(key) || [];
+              const isCurMonth = day.month() === cursor.month();
+              const isToday = day.isSame(dayjs(), 'day');
+
+              return (
+                <button
+                  key={key}
+                  onClick={() => dayEvents.length > 0 && onDayClick?.({ date: key, events: dayEvents })}
+                  disabled={dayEvents.length === 0}
+                  className={`
+                    border rounded-lg p-2 text-left min-h-[80px] transition-all
+                    ${isCurMonth ? 'bg-white' : 'bg-gray-50 text-gray-400'}
+                    ${isToday ? 'ring-2 ring-rose-500' : ''}
+                    ${dayEvents.length > 0 ? 'hover:border-rose-300 hover:shadow-sm cursor-pointer' : 'cursor-default'}
+                  `}
+                >
+                  <div className={`text-xs mb-1 font-medium ${isToday ? 'text-rose-600' : ''}`}>
+                    {day.format('D')}
+                  </div>
+                  <div className="flex flex-wrap gap-0.5">
+                    {dayEvents.slice(0, 3).map((ev, i) => (
+                      <span
+                        key={i}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium truncate max-w-full ${getStatusColor(ev.status)}`}
+                        title={ev.door_name}
+                      >
+                        {ev.door_name || ev.door_id}
+                      </span>
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <span className="text-[10px] text-gray-500 font-medium">+{dayEvents.length - 3}</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center gap-4 text-xs text-gray-500 border-t pt-4">
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-emerald-100"></span> À faire
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-amber-100"></span> Sous 30 jours
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-red-100"></span> En retard
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Mobile Tree Drawer
 const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, selectedDoor, onSelectDoor, placedIds }) => {
   if (!isOpen) return null;
@@ -456,9 +594,12 @@ const DetailPanel = ({
     setLoadingHistory(true);
     try {
       const res = await api.doors.listHistory(door.id).catch(() => ({}));
-      setHistory(res?.history || res || []);
+      // API returns { ok, checks: [...] }
+      const checks = Array.isArray(res?.checks) ? res.checks : [];
+      setHistory(checks);
     } catch (e) {
       console.error(e);
+      setHistory([]);
     } finally {
       setLoadingHistory(false);
     }
@@ -653,20 +794,20 @@ const DetailPanel = ({
                   <div key={check.id} className="bg-white rounded-lg p-3 border border-gray-200">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-900">
-                        {dayjs(check.closed_at).format('DD/MM/YYYY')}
+                        {dayjs(check.date || check.closed_at).format('DD/MM/YYYY')}
                       </span>
-                      <Badge variant={check.status === 'ok' ? 'success' : 'danger'}>
-                        {check.status === 'ok' ? 'Conforme' : 'Non conforme'}
+                      <Badge variant={check.result === 'conforme' ? 'success' : 'danger'}>
+                        {check.result === 'conforme' ? 'Conforme' : 'Non conforme'}
                       </Badge>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Par {check.closed_by_name || check.closed_by_email || 'Inconnu'}
+                      Par {check.user || 'Inconnu'}
                     </p>
-                    {check.result_counts && (
+                    {(check.counts || check.result_counts) && (
                       <div className="flex gap-2 mt-2 text-xs">
-                        <span className="text-emerald-600">{check.result_counts.conforme || 0} OK</span>
-                        <span className="text-red-600">{check.result_counts.nc || 0} NC</span>
-                        <span className="text-gray-400">{check.result_counts.na || 0} N/A</span>
+                        <span className="text-emerald-600">{(check.counts || check.result_counts)?.conforme || 0} OK</span>
+                        <span className="text-red-600">{(check.counts || check.result_counts)?.nc || 0} NC</span>
+                        <span className="text-gray-400">{(check.counts || check.result_counts)?.na || 0} N/A</span>
                       </div>
                     )}
                   </div>
@@ -1045,6 +1186,8 @@ export default function Doors() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -1083,6 +1226,18 @@ export default function Doors() {
     setPlacedIds(new Set());
   }, []);
 
+  // Load calendar events
+  const loadCalendar = useCallback(async () => {
+    try {
+      const res = await api.doors.calendar?.() || {};
+      const events = Array.isArray(res?.events) ? res.events : [];
+      setCalendarEvents(events);
+    } catch (err) {
+      console.error('Load calendar error:', err);
+      setCalendarEvents([]);
+    }
+  }, []);
+
   // Effects
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -1095,6 +1250,13 @@ export default function Doors() {
     loadSettings();
     loadPlacements();
   }, [loadDoors, loadSettings, loadPlacements]);
+
+  // Load calendar when modal opens
+  useEffect(() => {
+    if (showCalendarModal) {
+      loadCalendar();
+    }
+  }, [showCalendarModal, loadCalendar]);
 
   // URL params handling
   useEffect(() => {
@@ -1337,6 +1499,13 @@ export default function Doors() {
           {/* Actions */}
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowCalendarModal(true)}
+              className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
+              title="Calendrier des contrôles"
+            >
+              <Calendar size={20} />
+            </button>
+            <button
               onClick={() => setShowSettingsModal(true)}
               className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
               title="Paramètres"
@@ -1537,6 +1706,29 @@ export default function Doors() {
         settings={settings}
         onSave={handleSaveSettings}
         showToast={showToast}
+      />
+
+      <CalendarModal
+        isOpen={showCalendarModal}
+        onClose={() => setShowCalendarModal(false)}
+        events={calendarEvents}
+        onDayClick={({ events: dayEvents }) => {
+          if (dayEvents.length > 0) {
+            // Navigate to the first door's detail
+            const firstEvent = dayEvents[0];
+            if (firstEvent.door_id) {
+              setSearchParams({ door: firstEvent.door_id.toString() });
+              const foundDoor = doors.find(d => d.id === firstEvent.door_id || d.id === String(firstEvent.door_id));
+              if (foundDoor) {
+                setSelectedDoor(foundDoor);
+                if (foundDoor.building) {
+                  setExpandedBuildings(prev => ({ ...prev, [foundDoor.building]: true }));
+                }
+              }
+            }
+            setShowCalendarModal(false);
+          }
+        }}
       />
 
       {/* Toast */}
