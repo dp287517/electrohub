@@ -1301,6 +1301,54 @@ input[readonly] {
   padding-left: 1.5rem;
 }
 
+/* ----------- Animation bouton Analyse IA ----------- */
+@keyframes ai-button-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.2);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(59, 130, 246, 0.6), 0 0 25px rgba(59, 130, 246, 0.3);
+    transform: scale(1.02);
+  }
+}
+
+.atex-btn-ai {
+  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%) !important;
+  color: white !important;
+  border: none !important;
+  animation: ai-button-glow 2s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
+}
+
+.atex-btn-ai::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    45deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 70%
+  );
+  animation: ai-shine 3s ease-in-out infinite;
+}
+
+@keyframes ai-shine {
+  0% { transform: translateX(-100%) rotate(45deg); }
+  100% { transform: translateX(100%) rotate(45deg); }
+}
+
+.atex-btn-ai:hover {
+  animation: none;
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.5), 0 0 30px rgba(59, 130, 246, 0.3);
+  transform: scale(1.05);
+}
+
 .atex-timeline::before {
   content: '';
   position: absolute;

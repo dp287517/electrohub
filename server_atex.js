@@ -1403,6 +1403,45 @@ app.get("/api/atex/maps/positions", async (req, res) => {
     res.json({ items });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+// ✅ Position d'un équipement spécifique (pour navigation depuis liste)
+app.get("/api/atex/maps/position/:equipmentId", async (req, res) => {
+  try {
+    const equipment_id = String(req.params.equipmentId);
+    if (!equipment_id || !isUuid(equipment_id)) {
+      return res.status(400).json({ ok: false, error: "equipment_id invalide" });
+    }
+    const { rows } = await pool.query(
+      `SELECT p.equipment_id, p.logical_name, p.plan_id, p.page_index, p.x_frac, p.y_frac,
+              pl.display_name, pl.building, pl.zone
+       FROM atex_positions p
+       LEFT JOIN atex_plans pl ON pl.logical_name = p.logical_name
+       WHERE p.equipment_id = $1
+       LIMIT 1`,
+      [equipment_id]
+    );
+    if (rows.length === 0) {
+      return res.json({ found: false, position: null });
+    }
+    const r = rows[0];
+    res.json({
+      found: true,
+      position: {
+        equipment_id: r.equipment_id,
+        logical_name: r.logical_name,
+        plan_id: r.plan_id,
+        page_index: r.page_index || 0,
+        x_frac: Number(r.x_frac),
+        y_frac: Number(r.y_frac),
+        display_name: r.display_name,
+        building: r.building,
+        zone: r.zone,
+      }
+    });
+  } catch (e) {
+    console.error('[getEquipmentPosition] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 // ✅ Subareas — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/subareas", async (req, res) => {
   try {

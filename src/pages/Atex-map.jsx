@@ -1038,14 +1038,27 @@ export default function AtexMap({
       log("createEquipmentAtFrac blocked - already creating", {}, "warn");
       return;
     }
+    // ✅ Validation des coordonnées et du plan
+    const logicalName = plan.logical_name || plan.id;
+    if (!logicalName) {
+      log("createEquipmentAtFrac error - plan sans logical_name ni id", { plan: safeJson(plan) }, "error");
+      alert("Erreur: plan invalide (pas de logical_name)");
+      return;
+    }
+    if (typeof xf !== "number" || typeof yf !== "number" || isNaN(xf) || isNaN(yf)) {
+      log("createEquipmentAtFrac error - coordonnées invalides", { xf, yf }, "error");
+      alert("Erreur: coordonnées invalides");
+      return;
+    }
     creatingEquipmentRef.current = true;
     const end = timeStart("createEquipmentAtFrac");
     try {
       const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Création ATEX: ID manquant");
+      log("setPosition params", { id, logicalName, plan_id: plan.id, pageIndex, xf, yf });
       const resp = await api.atexMaps.setPosition(id, {
-        logical_name: plan.logical_name,
+        logical_name: logicalName,
         plan_id: plan.id,
         page_index: pageIndex,
         x_frac: Math.round(xf * 1e6) / 1e6,
@@ -1125,8 +1138,13 @@ export default function AtexMap({
             });
 
             // 2️⃣ SAUVEGARDER LA POSITION - AWAIT comme Switchboard!
+            const logicalNameForSave = plan?.logical_name || plan?.id;
+            if (!logicalNameForSave) {
+              log("setPosition skipped - no logical_name or id", { plan: safeJson(plan) }, "warn");
+              return;
+            }
             await api.atexMaps.setPosition(p.id, {
-              logical_name: plan?.logical_name,
+              logical_name: logicalNameForSave,
               plan_id: plan?.id,
               page_index: pageIndex,
               x_frac: Math.round(xf * 1e6) / 1e6,
