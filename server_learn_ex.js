@@ -19,8 +19,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 15000,  // 15s max pour établir une connexion (Neon cold start)
   idleTimeoutMillis: 30000,        // 30s avant de fermer une connexion idle
   max: 3,                          // Réduire pour Neon free tier
-  // ✅ Timeout sur les requêtes pour éviter les hangs
-  options: '-c statement_timeout=30000',  // 30s max par requête
+  // Note: statement_timeout géré via queryWithTimeout (Promise.race) car non supporté par Neon pooler
 });
 
 // ✅ Helper pour les requêtes avec timeout et logging
