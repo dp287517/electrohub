@@ -1895,7 +1895,7 @@ app.post("/api/learn-ex/auto-certificate", async (req, res) => {
     // 3. Vérifier que tous les modules sont complétés
     const progressRes = await pool.query(
       `SELECT module_id, quiz_score, completed_at
-       FROM learn_ex_progress
+       FROM learn_ex_module_progress
        WHERE session_id = $1`,
       [session.id]
     );
