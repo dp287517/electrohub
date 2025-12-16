@@ -167,10 +167,14 @@ function fromLatLngToFrac(latlng, baseLayer) {
 }
 
 // 🔥 DÉTECTION DE ZONE CÔTÉ FRONTEND (ne dépend plus du backend lent)
+// ✅ FIX: Retourne la zone la plus PETITE contenant le point (plus spécifique)
 function findContainingSubarea(xf, yf, subareas) {
   if (!subareas || typeof subareas !== 'object') return null;
 
   const list = Array.isArray(subareas) ? subareas : Object.values(subareas);
+
+  // Collecter toutes les zones contenant le point avec leur aire
+  const candidates = [];
 
   for (const sa of list) {
     if (!sa) continue;
@@ -182,7 +186,8 @@ function findContainingSubarea(xf, yf, subareas) {
       const y1 = Math.min(sa.y1 ?? 0, sa.y2 ?? 1);
       const y2 = Math.max(sa.y1 ?? 0, sa.y2 ?? 1);
       if (xf >= x1 && xf <= x2 && yf >= y1 && yf <= y2) {
-        return sa;
+        const area = (x2 - x1) * (y2 - y1);
+        candidates.push({ sa, area });
       }
     }
 
@@ -193,7 +198,8 @@ function findContainingSubarea(xf, yf, subareas) {
       const r = sa.r ?? 0.1;
       const dist = Math.sqrt((xf - cx) ** 2 + (yf - cy) ** 2);
       if (dist <= r) {
-        return sa;
+        const area = Math.PI * r * r;
+        candidates.push({ sa, area });
       }
     }
 
@@ -208,11 +214,22 @@ function findContainingSubarea(xf, yf, subareas) {
           inside = !inside;
         }
       }
-      if (inside) return sa;
+      if (inside) {
+        // Calcul aire polygone (formule du lacet)
+        let area = 0;
+        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+          area += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1]);
+        }
+        area = Math.abs(area / 2);
+        candidates.push({ sa, area });
+      }
     }
   }
 
-  return null;
+  // ✅ Retourner la zone avec la plus petite aire (la plus spécifique)
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.area - b.area);
+  return candidates[0].sa;
 }
 
 // 🔥 Nouveau design des marqueurs ATEX avec icône SVG et gradient (style Switchboard)

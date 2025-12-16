@@ -1247,7 +1247,7 @@ export default function Doors() {
   };
 
   const handleNavigateToMap = (d) => {
-    navigate('/app/doors-map?door=' + d.id);
+    navigate('/app/doors/map?door=' + d.id);
   };
 
   // Build tree structure: Building > Floor > Doors
@@ -1344,7 +1344,7 @@ export default function Doors() {
               <Settings size={20} />
             </button>
             <button
-              onClick={() => navigate('/app/doors-map')}
+              onClick={() => navigate('/app/doors/map')}
               className="px-4 py-2 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 flex items-center gap-2"
             >
               <MapPin size={18} />
