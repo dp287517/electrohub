@@ -992,11 +992,19 @@ export default function DoorsMap() {
     if (doorInfo) {
       // Check if door is on a different plan/page
       if (doorInfo.plan.logical_name !== selectedPlan?.logical_name || doorInfo.pageIndex !== pageIndex) {
-        // Navigate to the correct plan
-        navigateToDoor(targetId);
+        // Navigate to the correct plan - inline navigation to avoid circular deps
+        const { plan, pageIndex: targetPage } = doorInfo;
+        setPdfReady(false);
+        if (selectedPlan?.logical_name !== plan.logical_name) {
+          setSelectedPlan(plan);
+        }
+        if (pageIndex !== targetPage) {
+          setPageIndex(targetPage);
+        }
+        refreshPositions(plan, targetPage).then(positions => setInitialPoints(positions || []));
       }
     }
-  }, [placedIds, selectedPlan, pageIndex, navigateToDoor]);
+  }, [placedIds, selectedPlan, pageIndex, refreshPositions]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -1043,12 +1051,12 @@ export default function DoorsMap() {
   };
 
   // Find which plan a door is on
-  const findDoorPlanInfo = useCallback((doorId) => {
+  const findDoorPlanInfo = (doorId) => {
     return allPositionsRef.current[doorId] || null;
-  }, []);
+  };
 
   // Navigate to a door on its plan
-  const navigateToDoor = useCallback(async (doorId) => {
+  const navigateToDoor = async (doorId) => {
     const info = findDoorPlanInfo(doorId);
     if (!info) return false;
 
@@ -1076,7 +1084,7 @@ export default function DoorsMap() {
     setInitialPoints(positions || []);
 
     return true;
-  }, [selectedPlan, pageIndex, findDoorPlanInfo, refreshPositions]);
+  };
 
   const loadDoors = async () => {
     setLoadingDoors(true);
