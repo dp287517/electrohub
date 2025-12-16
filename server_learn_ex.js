@@ -1382,8 +1382,21 @@ const FINAL_QCM = [
 // ============================================================================
 
 async function initDB() {
-  const client = await pool.connect();
+  console.log("[LearnEx] initDB starting...");
+  const startTime = Date.now();
+
+  let client;
   try {
+    console.log("[LearnEx] Acquiring database connection...");
+    client = await pool.connect();
+    console.log("[LearnEx] Connection acquired in", Date.now() - startTime, "ms");
+  } catch (connErr) {
+    console.error("[LearnEx] Failed to connect to database:", connErr.message);
+    throw connErr;
+  }
+
+  try {
+    console.log("[LearnEx] Creating/verifying tables...");
     await client.query(`
       -- Table des sessions de formation
       CREATE TABLE IF NOT EXISTS learn_ex_sessions (
@@ -1452,9 +1465,12 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_learn_certificates_number ON learn_ex_certificates(certificate_number);
       CREATE INDEX IF NOT EXISTS idx_learn_module_progress_session ON learn_ex_module_progress(session_id);
     `);
-    console.log("[LearnEx] Database tables initialized");
+    console.log("[LearnEx] Database tables initialized successfully");
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+      console.log("[LearnEx] Database connection released");
+    }
   }
 }
 
