@@ -566,6 +566,7 @@ export default function AtexMap({
   const baseReadyRef = useRef(false);
   const indexedRef = useRef({ key: "", done: false });
   const draggingRef = useRef(false);
+  const creatingEquipmentRef = useRef(false);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [unsavedIds] = useState(() => new Set());
   const [drawing, setDrawing] = useState(DRAW_NONE);
@@ -1032,6 +1033,12 @@ export default function AtexMap({
   }
   async function createEquipmentAtFrac(xf, yf, droppedFiles /* optional */) {
     if (!plan || !baseLayerRef.current) return;
+    // Prevent double-creation
+    if (creatingEquipmentRef.current) {
+      log("createEquipmentAtFrac blocked - already creating", {}, "warn");
+      return;
+    }
+    creatingEquipmentRef.current = true;
     const end = timeStart("createEquipmentAtFrac");
     try {
       const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
@@ -1055,7 +1062,10 @@ export default function AtexMap({
     } catch (e) {
       console.error(e);
       alert("Erreur création équipement");
-    } finally { end(); }
+    } finally {
+      creatingEquipmentRef.current = false;
+      end();
+    }
   }
   async function createEquipmentAtCenter(droppedFiles) {
     if (!plan || !baseLayerRef.current) return;
