@@ -23,6 +23,7 @@ import Project from './pages/Project.jsx';
 import Comp from './pages/Comp.jsx';
 import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
+import DoorsMap from './pages/Doors_map.jsx';
 import Dcf from './pages/Dcf.jsx';
 import LearnEx from './pages/Learn_ex.jsx';
 import SwitchboardDiagram from './pages/SwitchboardDiagram.jsx';
@@ -89,6 +90,7 @@ export default function App() {
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
           <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
+          <Route path="/app/doors/map" element={<ProtectedRoute><DoorsMap /></ProtectedRoute>} />
           <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
           <Route path="/app/dcf" element={<ProtectedRoute><Dcf /></ProtectedRoute>} />
           <Route path="/app/switchboards/:id/diagram" element={<ProtectedRoute><SwitchboardDiagram /></ProtectedRoute>} />
