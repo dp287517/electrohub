@@ -11,8 +11,6 @@ import {
   CircleDot, Layers, ChevronUp, X, Check, Eye
 } from 'lucide-react';
 import { Line, Doughnut, Radar, Bar } from 'react-chartjs-2';
-import { Gantt, ViewMode } from 'gantt-task-react';
-import 'gantt-task-react/dist/index.css';
 import jsPDF from 'jspdf';
 
 import {
@@ -255,7 +253,6 @@ export default function Obsolescence() {
   const [selectedBuilding, setSelectedBuilding] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
   const [expandedBuildings, setExpandedBuildings] = useState({});
-  const [ganttViewMode, setGanttViewMode] = useState(ViewMode.Year);
 
   // UI state
   const [busy, setBusy] = useState(false);
@@ -519,10 +516,16 @@ export default function Obsolescence() {
   // ==================== NAVIGATION ====================
 
   const navigateToItem = (item) => {
-    if (item.kind === 'sb') navigate(`/app/switchboards?switchboard=${item.switchboard_id}`);
-    else if (item.kind === 'hv') navigate(`/app/hv?hv=${item.hv_equipment_id}`);
-    else if (item.kind === 'vsd') navigate(`/app/vsd?vsd=${item.vsd_id}`);
-    else if (item.kind === 'meca') navigate(`/app/meca?meca=${item.meca_id}`);
+    const id = item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id;
+    if (item.kind === 'sb') navigate(`/app/switchboards?switchboard=${id}`);
+    else if (item.kind === 'hv') navigate(`/app/hv?hv=${id}`);
+    else if (item.kind === 'vsd') navigate(`/app/vsd?vsd=${id}`);
+    else if (item.kind === 'meca') navigate(`/app/meca?meca=${id}`);
+  };
+
+  // Get display name (prefer code over name)
+  const getItemDisplayName = (item) => {
+    return item.code || item.name || `${(item.kind || 'item').toUpperCase()}-${item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id}`;
   };
 
   // ==================== AI ASSISTANT ====================
@@ -1015,7 +1018,7 @@ END:VCALENDAR`;
                               <Icon size={20} style={{ color: ASSET_COLORS[item.kind] || '#6b7280' }} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-gray-900 truncate">{item.name}</p>
+                              <p className="font-semibold text-gray-900 truncate">{getItemDisplayName(item)}</p>
                               <p className="text-sm text-gray-500">{item.building_code} • {ASSET_LABELS[item.kind]}</p>
                             </div>
                             <div className="text-right">
@@ -1099,7 +1102,7 @@ END:VCALENDAR`;
                                 <div className="p-2 rounded-lg" style={{ backgroundColor: withAlpha(ASSET_COLORS[item.kind] || '#6b7280', 0.1) }}>
                                   <Icon size={16} style={{ color: ASSET_COLORS[item.kind] || '#6b7280' }} />
                                 </div>
-                                <span className="font-medium text-gray-900">{item.name}</span>
+                                <span className="font-medium text-gray-900">{getItemDisplayName(item)}</span>
                               </div>
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-600">{ASSET_LABELS[item.kind] || item.kind}</td>
@@ -1144,141 +1147,50 @@ END:VCALENDAR`;
         {/* ===== ROLL-UP (TIMELINE) TAB ===== */}
         {tab === 'roll-up' && (
           <div className="space-y-6">
-            {/* Timeline Controls */}
-            <AnimatedCard>
-              <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-gray-900">Asset Lifecycle Timeline</h2>
-                    <p className="text-gray-500 mt-1">Visualize replacement schedules across your portfolio</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-gray-500">View:</span>
-                    {[ViewMode.Month, ViewMode.Year].map(mode => (
-                      <button
-                        key={mode}
-                        onClick={() => setGanttViewMode(mode)}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${ganttViewMode === mode
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                      >
-                        {mode === ViewMode.Month ? 'Monthly' : 'Yearly'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Legend */}
-                <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-gray-50 rounded-xl">
-                  <span className="text-sm font-medium text-gray-600">Legend:</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded" style={{ backgroundColor: URGENCY_COLORS.critical }} />
-                    <span className="text-sm text-gray-600">Critical (&lt;5y)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded" style={{ backgroundColor: URGENCY_COLORS.warning }} />
-                    <span className="text-sm text-gray-600">Warning (5-10y)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded" style={{ backgroundColor: URGENCY_COLORS.ok }} />
-                    <span className="text-sm text-gray-600">OK (&gt;10y)</span>
-                  </div>
-                </div>
-
-                {/* Gantt Chart */}
-                {ganttTasks.length > 0 ? (
-                  <div className="overflow-auto rounded-xl border border-gray-200" style={{ height: Math.min(700, 80 + ganttTasks.length * 50) }}>
-                    <Gantt
-                      tasks={ganttTasks}
-                      viewMode={ganttViewMode}
-                      columnWidth={ganttViewMode === ViewMode.Month ? 50 : 100}
-                      listCellWidth="250px"
-                      rowHeight={45}
-                      barCornerRadius={6}
-                      todayColor="rgba(16, 185, 129, 0.2)"
-                      fontSize="13px"
-                      onDoubleClick={(task) => {
-                        const [kind, id] = task.id.split('-');
-                        if (kind === 'sb') navigate(`/app/switchboards?switchboard=${id}`);
-                        else if (kind === 'hv') navigate(`/app/hv?hv=${id}`);
-                        else if (kind === 'vsd') navigate(`/app/vsd?vsd=${id}`);
-                        else if (kind === 'meca') navigate(`/app/meca?meca=${id}`);
-                      }}
-                      TooltipContent={({ task }) => (
-                        <div className="bg-gray-900 text-white px-4 py-3 rounded-xl shadow-xl max-w-xs">
-                          <p className="font-bold">{task.name}</p>
-                          <p className="text-sm text-gray-300 mt-1">{task.building}</p>
-                          <div className="mt-2 pt-2 border-t border-gray-700 grid grid-cols-2 gap-2 text-sm">
-                            <div>
-                              <span className="text-gray-400">Type:</span>
-                              <span className="ml-1">{ASSET_LABELS[task.kind] || task.kind}</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-400">Cost:</span>
-                              <span className="ml-1">£{(task.cost || 0).toLocaleString('en-GB')}</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-400">End:</span>
-                              <span className="ml-1">{task.end.getFullYear()}</span>
-                            </div>
-                            <div>
-                              <span className="text-gray-400">Remaining:</span>
-                              <span className="ml-1">{task.remaining_years}y</span>
-                            </div>
-                          </div>
-                          <p className="text-xs text-gray-400 mt-2">Double-click to view details</p>
-                        </div>
-                      )}
-                    />
-                  </div>
-                ) : (
-                  <div className="h-96 flex items-center justify-center text-gray-500">
-                    <div className="text-center">
-                      <Clock size={48} className="mx-auto mb-4 text-gray-300" />
-                      <p className="font-medium">No timeline data available</p>
-                      <p className="text-sm">Add assets to see their lifecycle timeline</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </AnimatedCard>
-
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <AnimatedCard delay={100}>
+              <AnimatedCard delay={0}>
                 <div className="bg-gradient-to-br from-red-500 to-rose-600 rounded-2xl p-6 text-white shadow-lg">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-red-100 font-medium">Due within 5 years</p>
+                      <p className="text-red-100 font-medium">Critique (&lt;5 ans)</p>
                       <p className="text-4xl font-bold mt-2">
                         {ganttTasks.filter(t => t.urgency === 'critical').length}
+                      </p>
+                      <p className="text-red-200 text-sm mt-1">
+                        £{ganttTasks.filter(t => t.urgency === 'critical').reduce((a, t) => a + (t.cost || 0), 0).toLocaleString('en-GB')}
                       </p>
                     </div>
                     <AlertTriangle size={40} className="text-red-200" />
                   </div>
                 </div>
               </AnimatedCard>
-              <AnimatedCard delay={200}>
+              <AnimatedCard delay={100}>
                 <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-6 text-white shadow-lg">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-amber-100 font-medium">Due 5-10 years</p>
+                      <p className="text-amber-100 font-medium">Attention (5-10 ans)</p>
                       <p className="text-4xl font-bold mt-2">
                         {ganttTasks.filter(t => t.urgency === 'warning').length}
+                      </p>
+                      <p className="text-amber-200 text-sm mt-1">
+                        £{ganttTasks.filter(t => t.urgency === 'warning').reduce((a, t) => a + (t.cost || 0), 0).toLocaleString('en-GB')}
                       </p>
                     </div>
                     <Clock size={40} className="text-amber-200" />
                   </div>
                 </div>
               </AnimatedCard>
-              <AnimatedCard delay={300}>
+              <AnimatedCard delay={200}>
                 <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl p-6 text-white shadow-lg">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-emerald-100 font-medium">OK (&gt;10 years)</p>
+                      <p className="text-emerald-100 font-medium">OK (&gt;10 ans)</p>
                       <p className="text-4xl font-bold mt-2">
                         {ganttTasks.filter(t => t.urgency === 'ok').length}
+                      </p>
+                      <p className="text-emerald-200 text-sm mt-1">
+                        £{ganttTasks.filter(t => t.urgency === 'ok').reduce((a, t) => a + (t.cost || 0), 0).toLocaleString('en-GB')}
                       </p>
                     </div>
                     <Check size={40} className="text-emerald-200" />
@@ -1286,6 +1198,221 @@ END:VCALENDAR`;
                 </div>
               </AnimatedCard>
             </div>
+
+            {/* Timeline View - Grouped by Year */}
+            <AnimatedCard delay={300}>
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+                <div className="px-6 py-5 border-b bg-gradient-to-r from-gray-50 to-white">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">Planning de remplacement</h2>
+                      <p className="text-gray-500 text-sm mt-1">Équipements classés par année de fin de vie</p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-red-500" />
+                        <span className="text-xs text-gray-600">Critique</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-amber-500" />
+                        <span className="text-xs text-gray-600">Attention</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-emerald-500" />
+                        <span className="text-xs text-gray-600">OK</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {ganttTasks.length > 0 ? (
+                  <div className="divide-y divide-gray-100">
+                    {(() => {
+                      // Group tasks by year
+                      const byYear = {};
+                      ganttTasks.forEach(task => {
+                        const year = task.end.getFullYear();
+                        if (!byYear[year]) byYear[year] = [];
+                        byYear[year].push(task);
+                      });
+                      const years = Object.keys(byYear).sort((a, b) => Number(a) - Number(b));
+                      const currentYear = new Date().getFullYear();
+
+                      return years.map((year, yearIdx) => {
+                        const tasksInYear = byYear[year];
+                        const yearCost = tasksInYear.reduce((a, t) => a + (t.cost || 0), 0);
+                        const yearsFromNow = Number(year) - currentYear;
+                        const isExpanded = expandedBuildings[`year-${year}`] !== false;
+
+                        return (
+                          <div key={year} className="group">
+                            {/* Year Header */}
+                            <button
+                              onClick={() => setExpandedBuildings(prev => ({ ...prev, [`year-${year}`]: !isExpanded }))}
+                              className="w-full px-6 py-4 flex items-center gap-4 hover:bg-gray-50 transition-colors"
+                            >
+                              <div className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center font-bold shadow-lg ${
+                                yearsFromNow < 5 ? 'bg-gradient-to-br from-red-500 to-rose-600 text-white' :
+                                yearsFromNow <= 10 ? 'bg-gradient-to-br from-amber-500 to-orange-600 text-white' :
+                                'bg-gradient-to-br from-emerald-500 to-teal-600 text-white'
+                              }`}>
+                                <span className="text-2xl">{year}</span>
+                              </div>
+                              <div className="flex-1 text-left">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-lg font-bold text-gray-900">{tasksInYear.length} équipement{tasksInYear.length > 1 ? 's' : ''}</span>
+                                  <Badge variant={yearsFromNow < 5 ? 'danger' : yearsFromNow <= 10 ? 'warning' : 'success'}>
+                                    {yearsFromNow <= 0 ? 'Dépassé!' : `dans ${yearsFromNow} an${yearsFromNow > 1 ? 's' : ''}`}
+                                  </Badge>
+                                </div>
+                                <p className="text-gray-500 text-sm mt-1">
+                                  CAPEX estimé: <span className="font-semibold text-gray-700">£{yearCost.toLocaleString('en-GB')}</span>
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-4">
+                                {/* Mini type distribution */}
+                                <div className="hidden md:flex items-center gap-1">
+                                  {['sb', 'hv', 'vsd', 'meca'].map(kind => {
+                                    const count = tasksInYear.filter(t => t.kind === kind).length;
+                                    if (count === 0) return null;
+                                    const Icon = ASSET_ICONS[kind];
+                                    return (
+                                      <div key={kind} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-100">
+                                        <Icon size={12} style={{ color: ASSET_COLORS[kind] }} />
+                                        <span className="text-xs font-medium text-gray-600">{count}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                {isExpanded ? <ChevronUp size={20} className="text-gray-400" /> : <ChevronDown size={20} className="text-gray-400" />}
+                              </div>
+                            </button>
+
+                            {/* Expanded Items */}
+                            {isExpanded && (
+                              <div className="px-6 pb-4">
+                                <div className="ml-20 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                  {tasksInYear.map((task, idx) => {
+                                    const Icon = ASSET_ICONS[task.kind] || CircleDot;
+                                    const [kind, id] = task.id.split('-');
+                                    return (
+                                      <div
+                                        key={task.id}
+                                        onClick={() => {
+                                          if (kind === 'sb') navigate(`/app/switchboards?switchboard=${id}`);
+                                          else if (kind === 'hv') navigate(`/app/hv?hv=${id}`);
+                                          else if (kind === 'vsd') navigate(`/app/vsd?vsd=${id}`);
+                                          else if (kind === 'meca') navigate(`/app/meca?meca=${id}`);
+                                        }}
+                                        className="group/card flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-md cursor-pointer transition-all bg-white"
+                                      >
+                                        <div
+                                          className="p-2 rounded-xl transition-colors"
+                                          style={{ backgroundColor: withAlpha(ASSET_COLORS[task.kind] || '#6b7280', 0.1) }}
+                                        >
+                                          <Icon size={18} style={{ color: ASSET_COLORS[task.kind] || '#6b7280' }} />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="font-semibold text-gray-900 truncate group-hover/card:text-emerald-600 transition-colors">
+                                            {task.name}
+                                          </p>
+                                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                                            <span>{task.building}</span>
+                                            <span>•</span>
+                                            <span>{ASSET_LABELS[task.kind]}</span>
+                                          </div>
+                                        </div>
+                                        <div className="text-right">
+                                          <p className="font-semibold text-gray-900 text-sm">£{(task.cost || 0).toLocaleString('en-GB')}</p>
+                                          <div className={`w-full h-1.5 rounded-full mt-1 overflow-hidden bg-gray-200`}>
+                                            <div
+                                              className="h-full rounded-full transition-all"
+                                              style={{
+                                                width: `${task.progress}%`,
+                                                backgroundColor: task.urgency === 'critical' ? URGENCY_COLORS.critical : task.urgency === 'warning' ? URGENCY_COLORS.warning : URGENCY_COLORS.ok
+                                              }}
+                                            />
+                                          </div>
+                                        </div>
+                                        <ExternalLink size={16} className="text-gray-300 group-hover/card:text-emerald-500 transition-colors" />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <div className="h-96 flex items-center justify-center text-gray-500">
+                    <div className="text-center">
+                      <Clock size={48} className="mx-auto mb-4 text-gray-300" />
+                      <p className="font-medium">Aucune donnée de timeline</p>
+                      <p className="text-sm">Ajoutez des équipements pour voir leur cycle de vie</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </AnimatedCard>
+
+            {/* Visual Timeline Bar */}
+            {ganttTasks.length > 0 && (
+              <AnimatedCard delay={400}>
+                <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
+                  <h3 className="text-lg font-bold text-gray-900 mb-4">Vue chronologique</h3>
+                  <div className="relative">
+                    {/* Timeline axis */}
+                    <div className="flex items-center gap-1 overflow-x-auto pb-4">
+                      {(() => {
+                        const currentYear = new Date().getFullYear();
+                        const years = Array.from({ length: 20 }, (_, i) => currentYear + i);
+                        const tasksByYear = {};
+                        ganttTasks.forEach(t => {
+                          const y = t.end.getFullYear();
+                          if (!tasksByYear[y]) tasksByYear[y] = [];
+                          tasksByYear[y].push(t);
+                        });
+
+                        return years.map(year => {
+                          const tasks = tasksByYear[year] || [];
+                          const count = tasks.length;
+                          const maxHeight = 120;
+                          const height = count > 0 ? Math.min(maxHeight, 20 + count * 15) : 20;
+                          const cost = tasks.reduce((a, t) => a + (t.cost || 0), 0);
+                          const yearsFromNow = year - currentYear;
+                          const color = yearsFromNow < 5 ? URGENCY_COLORS.critical : yearsFromNow <= 10 ? URGENCY_COLORS.warning : URGENCY_COLORS.ok;
+
+                          return (
+                            <div key={year} className="flex flex-col items-center min-w-[50px]">
+                              <div
+                                className="w-10 rounded-t-lg transition-all hover:opacity-80 cursor-pointer relative group"
+                                style={{
+                                  height: `${height}px`,
+                                  backgroundColor: count > 0 ? withAlpha(color, 0.8) : '#e5e7eb'
+                                }}
+                                title={count > 0 ? `${count} équipements - £${cost.toLocaleString('en-GB')}` : 'Aucun équipement'}
+                              >
+                                {count > 0 && (
+                                  <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                                    {count} • £{(cost / 1000).toFixed(0)}k
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1 font-medium">
+                                {year.toString().slice(-2)}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              </AnimatedCard>
+            )}
           </div>
         )}
 
