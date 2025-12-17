@@ -5,7 +5,7 @@ import {
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2,
   Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Settings, Info, Download, RefreshCw, Eye, AlertCircle,
-  FileText, Share2, Activity, Target, Gauge, Bolt, TrendingUp,
+  FileText, Share2, Activity, Target, Gauge, TrendingUp,
   Shield, Clock, Calculator, BarChart3, PieChart, Layers,
   ArrowRight, Play, Check, XCircle, HelpCircle, Book, Cpu,
   ChevronLeft, Filter, RotateCcw
@@ -167,7 +167,7 @@ const FaultResultCard = ({ result, params, onExportPDF }) => {
         <div className={`p-6 bg-gradient-to-r ${status.status === 'danger' ? 'from-red-500 to-rose-600' : status.status === 'warning' ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-cyan-600'} text-white`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="p-3 bg-white/20 rounded-2xl"><Bolt size={32} /></div>
+              <div className="p-3 bg-white/20 rounded-2xl"><Zap size={32} /></div>
               <div>
                 <h3 className="text-2xl font-bold">Résultat du calcul</h3>
                 <p className="text-white/80">IEC 60909-0</p>
@@ -182,7 +182,7 @@ const FaultResultCard = ({ result, params, onExportPDF }) => {
 
         <div className="p-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <StatCard icon={Bolt} label='Ik" (Initial)' value={result.Ik_kA.toFixed(2)} unit="kA" color="blue" description="Courant de court-circuit initial" />
+            <StatCard icon={Zap} label='Ik" (Initial)' value={result.Ik_kA.toFixed(2)} unit="kA" color="blue" description="Courant de court-circuit initial" />
             <StatCard icon={TrendingUp} label="Ip (Crête)" value={result.Ip_kA.toFixed(2)} unit="kA" color="purple" description="Courant de crête" />
             <StatCard icon={Clock} label="Ib (Coupure)" value={result.Ib_kA.toFixed(2)} unit="kA" color="cyan" description="Courant de coupure" />
             <StatCard icon={Activity} label="Ith (Thermique)" value={result.Ith_kA.toFixed(2)} unit="kA" color="amber" description="Équivalent thermique 1s" />
@@ -532,7 +532,7 @@ export default function FaultLevelAssessment() {
         <div className="max-w-[95vw] mx-auto px-4 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="p-4 bg-white/20 rounded-2xl"><Bolt size={36} /></div>
+              <div className="p-4 bg-white/20 rounded-2xl"><Zap size={36} /></div>
               <div>
                 <h1 className="text-3xl lg:text-4xl font-bold">Fault Level Assessment</h1>
                 <p className="text-blue-100 mt-1">Calcul de courant de court-circuit selon IEC 60909-0</p>
