@@ -582,6 +582,7 @@ export default function MobileEquipmentsMap() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
 
   const viewerRef = useRef(null);
 
@@ -590,14 +591,27 @@ export default function MobileEquipmentsMap() {
   const placedHereIds = useMemo(() => new Set(positions.map(p => p.equipment_id)), [positions]);
 
   const filteredEquipments = useMemo(() => {
-    if (!search) return equipments;
-    const q = search.toLowerCase();
-    return equipments.filter(e =>
-      (e.name || "").toLowerCase().includes(q) ||
-      (e.building || "").toLowerCase().includes(q) ||
-      (e.category || "").toLowerCase().includes(q)
-    );
-  }, [equipments, search]);
+    let list = equipments;
+
+    // Filter by search
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(e =>
+        (e.name || "").toLowerCase().includes(q) ||
+        (e.building || "").toLowerCase().includes(q) ||
+        (e.category || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Filter by placement status
+    if (filterMode === "placed") {
+      list = list.filter(e => placedIds.has(e.id));
+    } else if (filterMode === "unplaced") {
+      list = list.filter(e => !placedIds.has(e.id));
+    }
+
+    return list;
+  }, [equipments, search, filterMode, placedIds]);
 
   // Load plans and equipments
   useEffect(() => {
@@ -610,7 +624,7 @@ export default function MobileEquipmentsMap() {
         ]);
 
         setPlans(plansRes.plans || []);
-        setEquipments(equipRes.equipments || equipRes.data || []);
+        setEquipments(equipRes.items || equipRes.equipments || equipRes.data || []);
 
         // Restore or select first plan
         const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
@@ -886,7 +900,7 @@ export default function MobileEquipmentsMap() {
         {/* Sidebar */}
         {sidebarOpen && (
           <div className="w-80 bg-white border-l flex flex-col flex-shrink-0">
-            <div className="p-3 border-b">
+            <div className="p-3 border-b space-y-2">
               <div className="relative">
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -896,6 +910,17 @@ export default function MobileEquipmentsMap() {
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm bg-white text-gray-900"
                 />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous ({equipments.length})
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés ({equipments.filter(e => !placedIds.has(e.id)).length})
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés ({placedIds.size})
+                </Btn>
               </div>
             </div>
 
