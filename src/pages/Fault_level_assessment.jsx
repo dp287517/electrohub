@@ -3,12 +3,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Zap, AlertTriangle, CheckCircle, XCircle, Building2, ChevronDown, ChevronRight,
   Settings, Download, RefreshCw, AlertCircle, Activity, TrendingUp, Shield,
-  Info, Book, Cpu, Filter, Search
+  Info, Book, Cpu, Filter, Search, BarChart3
 } from 'lucide-react';
 import { get } from '../lib/api.js';
 import { calculateFaultLevel, STANDARD_PARAMS, getCableSection } from '../lib/electrical-calculations.js';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement,
+  Title, Tooltip, Legend
+} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -16,6 +23,201 @@ import 'jspdf-autotable';
 
 const cardClass = "bg-white rounded-xl border shadow-sm overflow-hidden";
 const badgeClass = "px-2 py-1 rounded-full text-xs font-semibold";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Fault Current Comparison Chart - Ik" vs Icu for all boards
+const FaultCurrentComparisonChart = ({ switchboards, devicesByBoard, analyses }) => {
+  const chartData = useMemo(() => {
+    const boardsWithData = switchboards
+      .filter(b => analyses[b.id] && (devicesByBoard[b.id]?.length || 0) > 0)
+      .sort((a, b) => (analyses[b.id]?.Ik_kA || 0) - (analyses[a.id]?.Ik_kA || 0))
+      .slice(0, 15);
+
+    if (boardsWithData.length === 0) return null;
+
+    return {
+      labels: boardsWithData.map(b => b.code || b.name.slice(0, 12)),
+      datasets: [
+        {
+          label: 'Ik" (kA)',
+          data: boardsWithData.map(b => analyses[b.id]?.Ik_kA || 0),
+          backgroundColor: boardsWithData.map(b => {
+            const analysis = analyses[b.id];
+            const devices = devicesByBoard[b.id] || [];
+            const mainDevice = devices.find(d => d.is_main_incoming) || devices[0];
+            const icuOk = !mainDevice?.icu_ka || analysis.Ik_kA <= mainDevice.icu_ka;
+            return icuOk ? 'rgba(34, 197, 94, 0.8)' : 'rgba(239, 68, 68, 0.8)';
+          }),
+          borderRadius: 6
+        },
+        {
+          label: 'Icu (kA)',
+          data: boardsWithData.map(b => {
+            const devices = devicesByBoard[b.id] || [];
+            const mainDevice = devices.find(d => d.is_main_incoming) || devices[0];
+            return mainDevice?.icu_ka || 0;
+          }),
+          backgroundColor: 'rgba(59, 130, 246, 0.5)',
+          borderColor: 'rgb(59, 130, 246)',
+          borderWidth: 2,
+          borderRadius: 6
+        }
+      ]
+    };
+  }, [switchboards, devicesByBoard, analyses]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'top' },
+      title: { display: true, text: 'Comparaison Ik" vs Icu par tableau', font: { size: 14, weight: 'bold' } },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} kA`
+        }
+      }
+    },
+    scales: {
+      x: { ticks: { font: { size: 10 } } },
+      y: { title: { display: true, text: 'kA' }, beginAtZero: true }
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border p-4 shadow-lg mb-6">
+      <div className="h-72">
+        <Bar data={chartData} options={options} />
+      </div>
+      <div className="flex justify-center gap-6 mt-3 text-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-green-500"></div>
+          <span>Ik" ≤ Icu (OK)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-red-500"></div>
+          <span>Ik" &gt; Icu (Danger)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-blue-400"></div>
+          <span>Icu nominal</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Device-level chart within a switchboard - IMPROVED VERSION
+const DeviceFaultChart = ({ board, devices, boardAnalysis }) => {
+  const chartData = useMemo(() => {
+    if (!boardAnalysis || devices.length < 2) return null;
+
+    const deviceData = devices.map(dev => {
+      const devFla = calculateFaultLevel({
+        voltage_v: board.voltage_v || 400,
+        source_fault_ka: boardAnalysis.Ik_kA,
+        cable_length_m: dev.cable_length_m || 15,
+        cable_section_mm2: dev.cable_section_mm2 || getCableSection(dev.in_amps || 100),
+      });
+      return {
+        name: dev.name || dev.reference || 'Device',
+        ik: devFla.Ik_kA,
+        icu: dev.icu_ka || 0,
+        ok: !dev.icu_ka || devFla.Ik_kA <= dev.icu_ka
+      };
+    });
+
+    return {
+      labels: deviceData.map(d => d.name),
+      datasets: [
+        {
+          label: 'Ik" calculé',
+          data: deviceData.map(d => d.ik),
+          backgroundColor: deviceData.map(d => d.ok ? 'rgba(34, 197, 94, 0.85)' : 'rgba(239, 68, 68, 0.85)'),
+          borderColor: deviceData.map(d => d.ok ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)'),
+          borderWidth: 2,
+          borderRadius: 6,
+          barPercentage: 0.7
+        },
+        {
+          label: 'Icu nominal',
+          data: deviceData.map(d => d.icu),
+          backgroundColor: 'rgba(59, 130, 246, 0.4)',
+          borderColor: 'rgb(59, 130, 246)',
+          borderWidth: 2,
+          borderRadius: 6,
+          barPercentage: 0.7
+        }
+      ]
+    };
+  }, [board, devices, boardAnalysis]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: { boxWidth: 16, padding: 15, font: { size: 12, weight: '500' } }
+      },
+      title: {
+        display: true,
+        text: 'Comparaison Ik" vs Icu par départ',
+        font: { size: 14, weight: 'bold' },
+        padding: { bottom: 15 }
+      },
+      tooltip: {
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        padding: 12,
+        titleFont: { size: 13 },
+        bodyFont: { size: 12 },
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.x.toFixed(2)} kA`
+        }
+      }
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Courant (kA)', font: { size: 12, weight: '500' } },
+        beginAtZero: true,
+        grid: { color: 'rgba(0,0,0,0.06)' },
+        ticks: { font: { size: 11 } }
+      },
+      y: {
+        ticks: { font: { size: 11 }, padding: 8 },
+        grid: { display: false }
+      }
+    }
+  };
+
+  const chartHeight = Math.max(200, devices.length * 50);
+
+  return (
+    <div className="mt-4 p-4 bg-gradient-to-br from-gray-50 to-blue-50 rounded-xl border">
+      <div style={{ height: chartHeight }}>
+        <Bar data={chartData} options={options} />
+      </div>
+      <div className="flex justify-center gap-6 mt-4 text-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-green-500 border-2 border-green-600"></div>
+          <span className="text-gray-700">Ik" ≤ Icu (Conforme)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-red-500 border-2 border-red-600"></div>
+          <span className="text-gray-700">Ik" &gt; Icu (Sous-dimensionné)</span>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COMPONENTS
@@ -135,12 +337,17 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
                 </div>
               )}
 
+              {/* Device Fault Chart */}
+              {devices.length > 1 && (
+                <DeviceFaultChart board={board} devices={devices} boardAnalysis={analysis} />
+              )}
+
               {/* Per-Device Analysis */}
               {devices.length > 1 && (
                 <details className="group">
                   <summary className="cursor-pointer text-sm font-medium text-gray-700 flex items-center gap-2">
                     <ChevronRight size={16} className="group-open:rotate-90 transition-transform" />
-                    Analyse par départ ({devices.length} devices)
+                    Tableau détaillé ({devices.length} devices)
                   </summary>
                   <div className="mt-3 overflow-x-auto">
                     <table className="w-full text-sm">
@@ -407,9 +614,14 @@ export default function FaultLevelAssessment() {
 
   return (
     <section className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-cyan-50">
+      <style>{`
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+      `}</style>
+
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 text-white">
-        <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="max-w-[95vw] mx-auto px-4 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="p-4 bg-white/20 rounded-2xl">
@@ -441,9 +653,9 @@ export default function FaultLevelAssessment() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-[95vw] mx-auto px-4 py-6">
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 animate-slideUp">
           <div className="bg-white rounded-xl p-4 shadow-sm border">
             <div className="text-3xl font-bold text-gray-900">{stats.total}</div>
             <div className="text-sm text-gray-500">Tableaux analysés</div>
@@ -462,60 +674,100 @@ export default function FaultLevelAssessment() {
           </div>
         </div>
 
-        {/* Filters & Settings */}
-        <div className="bg-white rounded-xl p-4 shadow-sm border mb-6">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        {/* Filters & Settings - IMPROVED */}
+        <div className="bg-white rounded-2xl p-5 shadow-lg border mb-6">
+          <div className="flex flex-col gap-4">
+            {/* Search Bar - More prominent */}
+            <div className="relative">
+              <Search size={22} className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-500" />
               <input
                 type="text"
-                placeholder="Rechercher un tableau..."
+                placeholder="🔍 Rechercher par nom ou code du tableau..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border rounded-lg"
+                className="w-full pl-12 pr-4 py-3.5 text-lg border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all placeholder-gray-400"
               />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <XCircle size={20} />
+                </button>
+              )}
             </div>
-            <select
-              value={filterStatus}
-              onChange={e => setFilterStatus(e.target.value)}
-              className="px-4 py-2 border rounded-lg"
-            >
-              <option value="all">Tous les statuts</option>
-              <option value="ok">Conformes</option>
-              <option value="danger">Sous-dimensionnés</option>
-              <option value="empty">Sans devices</option>
-            </select>
-            <details className="relative">
-              <summary className="px-4 py-2 border rounded-lg cursor-pointer flex items-center gap-2 hover:bg-gray-50">
-                <Settings size={18} />
-                Paramètres réseau
-              </summary>
-              <div className="absolute right-0 mt-2 p-4 bg-white rounded-xl shadow-xl border z-10 w-72">
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Pcc réseau (kA)</label>
-                    <input
-                      type="number"
-                      value={settings.upstreamFaultKa}
-                      onChange={e => setSettings(s => ({ ...s, upstreamFaultKa: Number(e.target.value) }))}
-                      className="w-full px-3 py-2 border rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Transformateur (kVA)</label>
-                    <select
-                      value={settings.transformerKva}
-                      onChange={e => setSettings(s => ({ ...s, transformerKva: Number(e.target.value) }))}
-                      className="w-full px-3 py-2 border rounded-lg"
+
+            {/* Filter Buttons & Settings */}
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              {/* Status Filter Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-500 mr-2">Filtrer:</span>
+                {[
+                  { key: 'all', label: 'Tous', icon: Building2, color: 'gray' },
+                  { key: 'ok', label: 'Conformes', icon: CheckCircle, color: 'green' },
+                  { key: 'danger', label: 'Sous-dimensionnés', icon: AlertTriangle, color: 'red' },
+                  { key: 'empty', label: 'Sans devices', icon: XCircle, color: 'gray' }
+                ].map(f => {
+                  const Icon = f.icon;
+                  const isActive = filterStatus === f.key;
+                  const colors = {
+                    gray: isActive ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                    green: isActive ? 'bg-green-600 text-white' : 'bg-green-50 text-green-700 hover:bg-green-100',
+                    red: isActive ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+                  };
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => setFilterStatus(f.key)}
+                      className={`px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-all ${colors[f.color]}`}
                     >
-                      {Object.keys(STANDARD_PARAMS.transformers).map(kva => (
-                        <option key={kva} value={kva}>{kva} kVA</option>
-                      ))}
-                    </select>
+                      <Icon size={16} />
+                      {f.label}
+                      {f.key !== 'all' && (
+                        <span className={`px-1.5 py-0.5 rounded-full text-xs ${isActive ? 'bg-white/20' : 'bg-black/10'}`}>
+                          {f.key === 'ok' ? stats.ok : f.key === 'danger' ? stats.danger : stats.empty}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Settings Button */}
+              <details className="relative">
+                <summary className="px-5 py-2.5 bg-blue-50 text-blue-700 border-2 border-blue-200 rounded-xl cursor-pointer flex items-center gap-2 hover:bg-blue-100 font-medium transition-all">
+                  <Settings size={18} />
+                  Paramètres réseau
+                </summary>
+                <div className="absolute right-0 mt-2 p-5 bg-white rounded-2xl shadow-2xl border z-10 w-80">
+                  <h4 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+                    <Cpu size={18} className="text-blue-600" />
+                    Configuration du réseau
+                  </h4>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Pcc réseau amont (kA)</label>
+                      <input
+                        type="number"
+                        value={settings.upstreamFaultKa}
+                        onChange={e => setSettings(s => ({ ...s, upstreamFaultKa: Number(e.target.value) }))}
+                        className="w-full px-4 py-2.5 border-2 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Puissance de court-circuit au point de livraison</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Transformateur HTA/BT</label>
+                      <select
+                        value={settings.transformerKva}
+                        onChange={e => setSettings(s => ({ ...s, transformerKva: Number(e.target.value) }))}
+                        className="w-full px-4 py-2.5 border-2 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      >
+                        {Object.keys(STANDARD_PARAMS.transformers).map(kva => (
+                          <option key={kva} value={kva}>{kva} kVA (Ukr: {STANDARD_PARAMS.transformers[kva]}%)</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </details>
+              </details>
+            </div>
           </div>
         </div>
 
@@ -526,8 +778,17 @@ export default function FaultLevelAssessment() {
             <p className="text-gray-500">Chargement et analyse de tous les tableaux...</p>
           </div>
         ) : (
-          /* Switchboards List */
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {/* Global Comparison Chart */}
+            {Object.keys(analyses).length > 0 && (
+              <FaultCurrentComparisonChart
+                switchboards={switchboards}
+                devicesByBoard={devicesByBoard}
+                analyses={analyses}
+              />
+            )}
+
+            {/* Switchboards List */}
             {filteredBoards.map(board => (
               <SwitchboardCard
                 key={board.id}

@@ -193,7 +193,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
             <p className="text-sm text-gray-500">
               {upstream.In}A → {downstream.In}A
-              {result.limitCurrent && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
+              {typeof result.limitCurrent === 'number' && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
             </p>
           </div>
         </div>
@@ -207,7 +207,12 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
 
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50">
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Trip Curve Chart */}
+          <div className="mb-4">
+            <MiniSelectivityChart upstream={upstream} downstream={downstream} result={result} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
               <p className="text-xs font-semibold text-purple-800 mb-1">AMONT</p>
               <p className="font-bold">{upstream.name}</p>
@@ -228,7 +233,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
           </div>
 
-          <table className="w-full text-xs">
+          <table className="w-full text-xs overflow-x-auto">
             <thead>
               <tr className="bg-gray-200">
                 <th className="px-2 py-1 text-left">Icc (A)</th>
@@ -388,6 +393,7 @@ export default function Selectivity() {
   const [expandedBoards, setExpandedBoards] = useState({});
   const [toast, setToast] = useState(null);
   const [filter, setFilter] = useState('all'); // all, issues, ok
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Auto-load all data on mount
   useEffect(() => {
@@ -518,13 +524,21 @@ export default function Selectivity() {
   // Filter boards
   const filteredBoards = useMemo(() => {
     return switchboards.filter(board => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        if (!board.name.toLowerCase().includes(query) && !board.code?.toLowerCase().includes(query)) {
+          return false;
+        }
+      }
+
       const pairs = analysisResults[board.id] || [];
       if (filter === 'all') return true;
       if (filter === 'issues') return pairs.some(p => !p.result.isSelective);
       if (filter === 'ok') return pairs.every(p => p.result.isSelective) && pairs.length > 0;
       return true;
     });
-  }, [switchboards, analysisResults, filter]);
+  }, [switchboards, analysisResults, filter, searchQuery]);
 
   // Export all to PDF
   const exportAllPDF = () => {
@@ -582,7 +596,7 @@ export default function Selectivity() {
         `${p.upstream.In}A`,
         p.downstream.name,
         `${p.downstream.In}A`,
-        p.result.limitCurrent ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
+        typeof p.result.limitCurrent === 'number' ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
         p.result.isSelective ? 'OK' : p.result.isPartiallySelective ? 'Partiel' : 'NON'
       ]);
 
@@ -662,20 +676,58 @@ export default function Selectivity() {
         </div>
       </div>
 
-      {/* Filter */}
+      {/* Filters - IMPROVED */}
       <div className="max-w-[95vw] mx-auto px-4 mt-6">
-        <div className="flex items-center gap-2 bg-white rounded-xl p-2 shadow-lg w-fit">
-          <Filter size={18} className="text-gray-400 ml-2" />
-          {[
-            { key: 'all', label: 'Tous' },
-            { key: 'issues', label: 'Problèmes' },
-            { key: 'ok', label: 'OK' }
-          ].map(f => (
-            <button key={f.key} onClick={() => setFilter(f.key)}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${filter === f.key ? 'bg-purple-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-              {f.label}
-            </button>
-          ))}
+        <div className="bg-white rounded-2xl p-5 shadow-lg border">
+          <div className="flex flex-col gap-4">
+            {/* Search Bar */}
+            <div className="relative">
+              <Filter size={22} className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-500" />
+              <input
+                type="text"
+                placeholder="🔍 Rechercher par nom ou code du tableau..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-12 pr-4 py-3.5 text-lg border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all placeholder-gray-400"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <X size={20} />
+                </button>
+              )}
+            </div>
+
+            {/* Filter Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-gray-500 mr-2">Filtrer par sélectivité:</span>
+              {[
+                { key: 'all', label: 'Tous', icon: Layers, color: 'gray', count: globalStats.boardsCount },
+                { key: 'ok', label: 'Sélectifs', icon: CheckCircle, color: 'green', count: globalStats.selective },
+                { key: 'issues', label: 'Problèmes', icon: AlertTriangle, color: 'red', count: globalStats.partial + globalStats.nonSelective }
+              ].map(f => {
+                const Icon = f.icon;
+                const isActive = filter === f.key;
+                const colors = {
+                  gray: isActive ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                  green: isActive ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                  red: isActive ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+                };
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={`px-4 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-all ${colors[f.color]}`}
+                  >
+                    <Icon size={16} />
+                    {f.label}
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${isActive ? 'bg-white/20' : 'bg-black/10'}`}>
+                      {f.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 

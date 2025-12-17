@@ -2722,7 +2722,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN devices d ON cs.device_id = d.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
-      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cs.hv_equipment_id = hv.id
       WHERE cs.site = $1
     `;
@@ -2879,7 +2879,7 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       LEFT JOIN devices d ON cr.device_id = d.id
       LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
-      LEFT JOIN me_equipments me ON cr.mobile_equipment_id = me.id
+      LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cr.hv_equipment_id = hv.id
       WHERE cr.site = $1
     `;
@@ -2948,7 +2948,7 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
       LEFT JOIN devices d ON cr.device_id = d.id
       LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
-      LEFT JOIN me_equipments me ON cr.mobile_equipment_id = me.id
+      LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
       WHERE cr.id = $1 AND cr.site = $2
     `, [id, site]);
 
@@ -3144,7 +3144,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN devices d ON cs.device_id = d.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
-      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       WHERE cs.site = $1
         AND cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
       ORDER BY cs.next_due_date ASC
@@ -3165,7 +3165,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN devices d ON cs.device_id = d.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
-      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       WHERE cs.site = $1 AND cs.next_due_date < CURRENT_DATE
       ORDER BY cs.next_due_date ASC
       LIMIT 20

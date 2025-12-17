@@ -312,7 +312,7 @@ async function computeSwitchboardTotals(site) {
   // Support global role: if site is null/undefined, return all switchboards
   const hasSite = site && site.trim() !== '';
   const r = await pool.query(`
-    SELECT s.id AS switchboard_id, s.name, s.building_code, s.floor, s.site,
+    SELECT s.id AS switchboard_id, s.name, s.code, s.building_code, s.floor, s.site,
            d.id AS device_id, d.device_type, d.in_amps,
            op.replacement_cost, op.manufacture_date, op.avg_life_years
     FROM switchboards s
@@ -327,6 +327,7 @@ async function computeSwitchboardTotals(site) {
     if (!bySB.has(row.switchboard_id)) bySB.set(row.switchboard_id, {
       switchboard_id: row.switchboard_id,
       name: row.name,
+      code: row.code,
       building_code: row.building_code,
       floor: row.floor,
       site: row.site,
@@ -355,6 +356,7 @@ async function computeSwitchboardTotals(site) {
       kind: 'sb',
       switchboard_id: sb.switchboard_id,
       name: sb.name,
+      code: sb.code,
       building_code: sb.building_code,
       floor: sb.floor,
       site: sb.site,
@@ -1002,7 +1004,9 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       return {
         start: new Date(mfgYear, 0, 1),
         end: new Date(endYear, 0, 1),
-        name: it.name,
+        name: it.code || it.name || `${it.kind.toUpperCase()}-${it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id}`,
+        display_name: it.name,
+        code: it.code,
         id: itemId,
         progress: Math.round(progress),
         type: 'task',
