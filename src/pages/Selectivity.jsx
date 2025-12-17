@@ -2,9 +2,9 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Zap, AlertTriangle, CheckCircle, X, Download, Shield, Clock, Calculator,
-  Activity, Target, Bolt, TrendingUp, Settings, Info, RefreshCw, Eye,
+  Activity, Target, TrendingUp, Settings, Info, RefreshCw, Eye,
   AlertCircle, Book, HelpCircle, GitBranch, Layers, ArrowRight, ArrowDown,
-  Check, XCircle, FileText, ChevronDown, ChevronRight, Network
+  Check, XCircle, FileText, ChevronDown, ChevronRight, Network, Building2
 } from 'lucide-react';
 import { api, get, post } from '../lib/api.js';
 import jsPDF from 'jspdf';
@@ -454,6 +454,111 @@ const DeviceSettingsForm = ({ title, icon: Icon, color, device, onChange }) => (
   </div>
 );
 
+// ==================== DEVICE SELECTOR WITH AUTO-FILL ====================
+
+const SwitchboardDeviceSelector = ({ label, onDeviceSelect, selectedDevice }) => {
+  const [switchboards, setSwitchboards] = useState([]);
+  const [devices, setDevices] = useState([]);
+  const [selectedSwitchboard, setSelectedSwitchboard] = useState('');
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadSwitchboards();
+  }, []);
+
+  const loadSwitchboards = async () => {
+    try {
+      const resp = await get('/api/switchboard/boards', { pageSize: 500 });
+      setSwitchboards(resp?.data || []);
+    } catch (err) { console.error('Failed to load switchboards', err); }
+  };
+
+  const loadDevices = async (switchboardId) => {
+    setLoading(true);
+    try {
+      const resp = await get(`/api/switchboard/boards/${switchboardId}/devices`);
+      setDevices(resp?.data || []);
+    } catch (err) { console.error('Failed to load devices', err); }
+    finally { setLoading(false); }
+  };
+
+  const handleSwitchboardChange = (e) => {
+    const sbId = e.target.value;
+    setSelectedSwitchboard(sbId);
+    setSelectedDeviceId('');
+    setDevices([]);
+    if (sbId) loadDevices(sbId);
+  };
+
+  const handleDeviceChange = (e) => {
+    const devId = e.target.value;
+    setSelectedDeviceId(devId);
+    const device = devices.find(d => String(d.id) === devId);
+    if (device && onDeviceSelect) {
+      // Extract trip unit settings if available
+      const settings = device.settings || {};
+      onDeviceSelect({
+        name: device.name || `${device.manufacturer || ''} ${device.reference || ''}`.trim(),
+        In: device.in_amps || 100,
+        Ir: settings.Ir || 1.0,
+        Tr: settings.Tr || 10,
+        Isd: settings.Isd || 8,
+        Tsd: settings.Tsd || 0.1,
+        Ii: settings.Ii || 10,
+        isMCCB: device.device_type?.includes('MCCB') || device.in_amps > 63,
+        // Keep original device info
+        _device: device
+      });
+    }
+  };
+
+  return (
+    <div className="p-4 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-200 mb-4">
+      <h4 className="font-semibold text-indigo-800 mb-3 flex items-center gap-2">
+        <Building2 size={16} />
+        {label}
+      </h4>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Tableau</label>
+          <select
+            value={selectedSwitchboard}
+            onChange={handleSwitchboardChange}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          >
+            <option value="">Sélectionner...</option>
+            {switchboards.map(sb => (
+              <option key={sb.id} value={sb.id}>{sb.name} ({sb.code})</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Device</label>
+          <select
+            value={selectedDeviceId}
+            onChange={handleDeviceChange}
+            disabled={!selectedSwitchboard || loading}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-100"
+          >
+            <option value="">{loading ? 'Chargement...' : 'Sélectionner...'}</option>
+            {devices.map(d => (
+              <option key={d.id} value={d.id}>
+                {d.name} - {d.in_amps}A {d.manufacturer || ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {selectedDevice?._device && (
+        <div className="mt-2 text-xs text-indigo-600">
+          ✓ {selectedDevice._device.manufacturer} {selectedDevice._device.reference} - Icu: {selectedDevice._device.icu_ka}kA
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ==================== MAIN COMPONENT ====================
 
 export default function Selectivity() {
@@ -632,6 +737,24 @@ export default function Selectivity() {
                   <Settings size={20} className="text-purple-600" />
                   Configuration des dispositifs
                 </h3>
+
+                {/* Upstream Device Selector */}
+                <SwitchboardDeviceSelector
+                  label="Sélectionner disjoncteur AMONT depuis tableau"
+                  onDeviceSelect={(device) => setUpstream({ ...upstream, ...device })}
+                  selectedDevice={upstream}
+                />
+
+                {/* Downstream Device Selector */}
+                <SwitchboardDeviceSelector
+                  label="Sélectionner disjoncteur AVAL depuis tableau"
+                  onDeviceSelect={(device) => setDownstream({ ...downstream, ...device })}
+                  selectedDevice={downstream}
+                />
+
+                <div className="border-t border-gray-200 pt-4 mt-4">
+                  <p className="text-xs text-gray-500 mb-4">Ou configurer manuellement :</p>
+                </div>
 
                 <div className="space-y-6">
                   <DeviceSettingsForm title="Disjoncteur Amont" icon={ArrowDown} color="purple" device={upstream} onChange={setUpstream} />

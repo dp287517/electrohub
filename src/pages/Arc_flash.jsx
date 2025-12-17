@@ -468,6 +468,21 @@ export default function ArcFlash() {
     enclosure_depth_mm: 203
   });
 
+  // Auto-fill params from selected device
+  useEffect(() => {
+    if (selectedDevice) {
+      const settings = selectedDevice.settings || {};
+      setParams(p => ({
+        ...p,
+        voltage_v: selectedDevice.voltage_v || p.voltage_v,
+        // Use Icu as estimate for bolted fault if available
+        bolted_fault_ka: selectedDevice.icu_ka || p.bolted_fault_ka,
+        // Arc duration based on trip time if available
+        arc_duration_s: settings.trip_time_s || p.arc_duration_s,
+      }));
+    }
+  }, [selectedDevice]);
+
   const handleCalculate = () => {
     try {
       const res = calculateArcFlash(params);
