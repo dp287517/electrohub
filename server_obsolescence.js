@@ -1,5 +1,5 @@
 // server_obsolescence.js
-// (CSP-safe, hybrid pricing with your bracket as floor, web-cost optional, + HV support + asset filter)
+// (CSP-safe, hybrid pricing with your bracket as floor, web-cost optional, + HV/VSD/MECA support + asset filter)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -13,6 +13,150 @@ import { getSiteFilter } from './lib/tenant-filter.js';
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// ========== VSD COST ESTIMATION ==========
+function estimateVsdCostGBP(vsd) {
+  const powerKw = Number(vsd?.power_kw || 0);
+  // VSD pricing based on power rating (UK installed prices)
+  if (powerKw <= 0.75) return 800;
+  if (powerKw <= 1.5) return 1000;
+  if (powerKw <= 2.2) return 1200;
+  if (powerKw <= 4) return 1500;
+  if (powerKw <= 7.5) return 2200;
+  if (powerKw <= 11) return 3000;
+  if (powerKw <= 15) return 3800;
+  if (powerKw <= 22) return 4800;
+  if (powerKw <= 30) return 6000;
+  if (powerKw <= 45) return 8000;
+  if (powerKw <= 55) return 10000;
+  if (powerKw <= 75) return 13000;
+  if (powerKw <= 90) return 16000;
+  if (powerKw <= 110) return 20000;
+  if (powerKw <= 132) return 25000;
+  if (powerKw <= 160) return 30000;
+  if (powerKw <= 200) return 38000;
+  if (powerKw <= 250) return 48000;
+  if (powerKw <= 315) return 60000;
+  if (powerKw <= 400) return 75000;
+  return 90000; // >400kW
+}
+
+// ========== MECA COST ESTIMATION ==========
+function estimateMecaCostGBP(meca) {
+  const category = String(meca?.category || '').toLowerCase();
+  const subcategory = String(meca?.subcategory || '').toLowerCase();
+  const powerKw = Number(meca?.power_kw || 0);
+
+  // Base cost by category
+  let baseCost = 5000;
+  if (category.includes('pump') || category.includes('pompe')) {
+    baseCost = powerKw <= 5 ? 3000 : powerKw <= 15 ? 6000 : powerKw <= 30 ? 12000 : powerKw <= 55 ? 20000 : 35000;
+  } else if (category.includes('compressor') || category.includes('compresseur')) {
+    baseCost = powerKw <= 5 ? 8000 : powerKw <= 15 ? 15000 : powerKw <= 30 ? 25000 : powerKw <= 55 ? 40000 : 65000;
+  } else if (category.includes('fan') || category.includes('ventilat')) {
+    baseCost = powerKw <= 5 ? 2000 : powerKw <= 15 ? 4000 : powerKw <= 30 ? 8000 : powerKw <= 55 ? 15000 : 25000;
+  } else if (category.includes('motor') || category.includes('moteur')) {
+    baseCost = powerKw <= 5 ? 1500 : powerKw <= 15 ? 3000 : powerKw <= 30 ? 6000 : powerKw <= 55 ? 12000 : 20000;
+  } else if (category.includes('conveyor') || category.includes('convoyeur')) {
+    baseCost = 15000;
+  } else if (category.includes('hvac') || category.includes('cta') || category.includes('ahu')) {
+    baseCost = 25000;
+  }
+
+  return Math.round(baseCost * 1.15); // +15% for installation
+}
+
+// ========== VSD TOTALS ==========
+async function computeVsdTotals(site) {
+  const hasSite = site && site.trim() !== '';
+  const query = `
+    SELECT
+      id, name, tag, building, floor, zone, manufacturer, model,
+      power_kw, voltage, ui_status, criticality, created_at
+    FROM vsd_equipments
+    ${hasSite ? 'WHERE site = $1' : ''}
+    ORDER BY id ASC
+  `;
+  const result = await pool.query(query, hasSite ? [site] : []);
+
+  return result.rows.map(vsd => {
+    // Estimate service year from created_at or default to 5 years ago
+    const createdAt = vsd.created_at ? new Date(vsd.created_at).getFullYear() : new Date().getFullYear() - 5;
+    const service_year = createdAt;
+    const avg_life_years = 15; // VSD typical lifespan
+
+    return {
+      kind: 'vsd',
+      vsd_id: vsd.id,
+      name: vsd.name || vsd.tag || `VSD-${vsd.id}`,
+      building_code: vsd.building || 'Unknown',
+      floor: vsd.floor || '',
+      site: site,
+      device_count: 1,
+      service_year,
+      avg_life_years,
+      estimated_cost_gbp: estimateVsdCostGBP(vsd),
+      manufacturer: vsd.manufacturer,
+      power_kw: vsd.power_kw,
+      status: vsd.ui_status,
+      criticality: vsd.criticality
+    };
+  });
+}
+
+// ========== MECA TOTALS ==========
+async function computeMecaTotals(site) {
+  const hasSite = site && site.trim() !== '';
+  const query = `
+    SELECT
+      id, name, tag, building, floor, zone, manufacturer, model,
+      category, subcategory, power_kw, ui_status, criticality,
+      installation_date, created_at
+    FROM meca_equipments
+    ${hasSite ? 'WHERE site = $1' : ''}
+    ORDER BY id ASC
+  `;
+  const result = await pool.query(query, hasSite ? [site] : []);
+
+  return result.rows.map(meca => {
+    // Use installation_date if available, otherwise estimate from created_at
+    let service_year;
+    if (meca.installation_date) {
+      service_year = new Date(meca.installation_date).getFullYear();
+    } else if (meca.created_at) {
+      service_year = new Date(meca.created_at).getFullYear() - 3; // Assume 3 years before entry
+    } else {
+      service_year = new Date().getFullYear() - 8;
+    }
+
+    // Lifespan varies by category
+    const category = String(meca.category || '').toLowerCase();
+    let avg_life_years = 20;
+    if (category.includes('pump') || category.includes('pompe')) avg_life_years = 15;
+    if (category.includes('compressor') || category.includes('compresseur')) avg_life_years = 12;
+    if (category.includes('fan') || category.includes('ventilat')) avg_life_years = 18;
+    if (category.includes('motor') || category.includes('moteur')) avg_life_years = 25;
+
+    return {
+      kind: 'meca',
+      meca_id: meca.id,
+      name: meca.name || meca.tag || `MECA-${meca.id}`,
+      building_code: meca.building || 'Unknown',
+      floor: meca.floor || '',
+      site: site,
+      device_count: 1,
+      service_year,
+      avg_life_years,
+      estimated_cost_gbp: estimateMecaCostGBP(meca),
+      manufacturer: meca.manufacturer,
+      category: meca.category,
+      subcategory: meca.subcategory,
+      power_kw: meca.power_kw,
+      status: meca.ui_status,
+      criticality: meca.criticality
+    };
+  });
+}
 
 let openai = null;
 try {
@@ -285,9 +429,62 @@ async function computeHvTotals(site) {
 async function pickTotalsByAsset(site, asset = 'all') {
   const sbs = await computeSwitchboardTotals(site);
   if (asset === 'sb') return sbs;
+
   const hvs = await computeHvTotals(site);
   if (asset === 'hv') return hvs;
-  return [...sbs, ...hvs];
+
+  // VSD support
+  let vsds = [];
+  try {
+    vsds = await computeVsdTotals(site);
+  } catch (e) {
+    console.log('[OBS] VSD table not available:', e.message);
+  }
+  if (asset === 'vsd') return vsds;
+
+  // MECA support
+  let mecas = [];
+  try {
+    mecas = await computeMecaTotals(site);
+  } catch (e) {
+    console.log('[OBS] MECA table not available:', e.message);
+  }
+  if (asset === 'meca') return mecas;
+
+  // Combined assets
+  return [...sbs, ...hvs, ...vsds, ...mecas];
+}
+
+// ---------- Get asset stats by type ----------
+async function getAssetStats(site) {
+  const sbs = await computeSwitchboardTotals(site);
+  const hvs = await computeHvTotals(site);
+  let vsds = [];
+  let mecas = [];
+  try { vsds = await computeVsdTotals(site); } catch {}
+  try { mecas = await computeMecaTotals(site); } catch {}
+
+  const now = new Date().getFullYear();
+  const calcStats = (items) => {
+    let totalCost = 0;
+    let urgent = 0, medium = 0, low = 0;
+    items.forEach(it => {
+      totalCost += it.estimated_cost_gbp || 0;
+      const remaining = (it.service_year || now - 10) + (it.avg_life_years || 25) - now;
+      if (remaining < 5) urgent++;
+      else if (remaining <= 10) medium++;
+      else low++;
+    });
+    return { count: items.length, totalCost, urgent, medium, low };
+  };
+
+  return {
+    switchboards: calcStats(sbs),
+    hv: calcStats(hvs),
+    vsd: calcStats(vsds),
+    meca: calcStats(mecas),
+    all: calcStats([...sbs, ...hvs, ...vsds, ...mecas])
+  };
 }
 
 // ---------- Obsolescence calc ----------
@@ -324,6 +521,69 @@ function calculateObsolescence(point) {
 app.get('/api/obsolescence/health', (_req, res) =>
   res.json({ ok: true, ts: Date.now(), openai: !!openai, web_cost: isWebCostEnabled })
 );
+
+// ---------- ASSET STATS (for dashboard cards) ----------
+app.get('/api/obsolescence/asset-stats', async (req, res) => {
+  try {
+    const { siteName, role } = getSiteFilter(req);
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
+    const stats = await getAssetStats(site);
+    res.json({ stats });
+  } catch (e) {
+    console.error('[OBS STATS]', e.message);
+    res.status(500).json({ error: 'Stats failed' });
+  }
+});
+
+// ---------- ALL ITEMS (flat list for tables) ----------
+app.get('/api/obsolescence/all-items', async (req, res) => {
+  try {
+    const { siteName, role } = getSiteFilter(req);
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
+    const { asset = 'all', building, sort = 'urgency', limit = 100 } = req.query;
+
+    let items = await pickTotalsByAsset(site, String(asset));
+    const now = new Date().getFullYear();
+
+    // Add computed fields
+    items = items.map(it => {
+      const serviceYear = it.service_year || (now - 10);
+      const avgLife = it.avg_life_years || 25;
+      const forecastYear = serviceYear + avgLife;
+      const remainingYears = forecastYear - now;
+      const urgencyScore = Math.min(100, Math.max(0, ((avgLife - remainingYears) / avgLife) * 100));
+      return {
+        ...it,
+        forecast_year: forecastYear,
+        remaining_years: remainingYears,
+        urgency_score: Math.round(urgencyScore),
+        urgency_level: remainingYears < 5 ? 'critical' : remainingYears <= 10 ? 'warning' : 'ok'
+      };
+    });
+
+    // Filter by building if specified
+    if (building) {
+      items = items.filter(it => it.building_code === building);
+    }
+
+    // Sort
+    if (sort === 'urgency') {
+      items.sort((a, b) => b.urgency_score - a.urgency_score);
+    } else if (sort === 'cost') {
+      items.sort((a, b) => b.estimated_cost_gbp - a.estimated_cost_gbp);
+    } else if (sort === 'year') {
+      items.sort((a, b) => a.forecast_year - b.forecast_year);
+    }
+
+    // Limit
+    items = items.slice(0, Number(limit));
+
+    res.json({ items, total: items.length });
+  } catch (e) {
+    console.error('[OBS ALL-ITEMS]', e.message);
+    res.status(500).json({ error: 'Items failed' });
+  }
+});
 
 // ---------- TEST DATA ----------
 app.post('/api/obsolescence/test-data', async (req, res) => {
@@ -699,7 +959,8 @@ app.post('/api/obsolescence/auto-check', async (req, res) => {
 // ---------- GANTT-DATA (asset filter) ----------
 app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
-    const site = siteOf(req);
+    const { siteName, role } = getSiteFilter(req);
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
     const rawB = req.query.building;
     const rawS = req.query.switchboard;
     const { asset = 'all' } = req.query;
@@ -714,20 +975,50 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
     );
     if (!filtered.length) filtered = totals;
 
+    const now = new Date().getFullYear();
     const tasks = filtered.map(it => {
-      const mfgYear = it.service_year || (new Date().getFullYear() - 10);
-      const life = it.avg_life_years || (it.kind === 'hv' ? 30 : 25);
+      const mfgYear = it.service_year || (now - 10);
+      let life = it.avg_life_years;
+      if (!life) {
+        if (it.kind === 'hv') life = 30;
+        else if (it.kind === 'vsd') life = 15;
+        else if (it.kind === 'meca') life = 20;
+        else life = 25;
+      }
+      const endYear = mfgYear + life;
+      const remaining = endYear - now;
+
+      // Get unique ID based on kind
+      let itemId;
+      if (it.kind === 'hv') itemId = `hv-${it.hv_equipment_id}`;
+      else if (it.kind === 'vsd') itemId = `vsd-${it.vsd_id}`;
+      else if (it.kind === 'meca') itemId = `meca-${it.meca_id}`;
+      else itemId = `sb-${it.switchboard_id}`;
+
+      // Calculate progress (how far through lifecycle)
+      const age = now - mfgYear;
+      const progress = Math.min(100, Math.max(0, (age / life) * 100));
+
       return {
         start: new Date(mfgYear, 0, 1),
-        end: new Date(mfgYear + life, 0, 1),
-        name: `${it.building_code || 'Bldg'} — ${it.name}`,
-        id: String(it.kind === 'hv' ? it.hv_equipment_id : it.switchboard_id),
-        progress: 0,
+        end: new Date(endYear, 0, 1),
+        name: it.name,
+        id: itemId,
+        progress: Math.round(progress),
         type: 'task',
         cost: it.estimated_cost_gbp,
-        building: it.building_code || 'Unknown'
+        building: it.building_code || 'Unknown',
+        kind: it.kind,
+        remaining_years: remaining,
+        urgency: remaining < 5 ? 'critical' : remaining <= 10 ? 'warning' : 'ok',
+        // For interoperability links
+        link_id: it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id
       };
     });
+
+    // Sort by urgency (soonest first)
+    tasks.sort((a, b) => a.end - b.end);
+
     res.json({ tasks });
   } catch (e) {
     console.error('[OBS GANTT]', e.message);
