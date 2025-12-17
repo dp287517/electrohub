@@ -980,7 +980,7 @@ export default function HighVoltage() {
   // Load switchboards for downstream connection
   const loadSwitchboards = useCallback(async () => {
     try {
-      const resp = await get('/api/switchboards', { pageSize: 1000 });
+      const resp = await get('/api/switchboard/boards', { pageSize: 1000 });
       setSwitchboards(resp?.data || []);
     } catch (err) {
       console.error('Failed to load switchboards', err);
