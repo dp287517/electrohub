@@ -28,7 +28,6 @@ const electricalApps = [
   { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️', color: 'from-red-400 to-rose-500' },
   { label: 'Loop Calculation', to: '/app/loopcalc', description: 'Intrinsic safety loop calculations & compliance', icon: '🔄', color: 'from-sky-400 to-blue-500' },
   { label: 'High Voltage Equipment', to: '/app/hv', description: 'Manage HV cells, cables, transformers, busbars & analyses', icon: '⚡', color: 'from-yellow-400 to-amber-500' },
-  { label: 'Diagram', to: '/app/diagram', description: 'Interactive LV/HV map with filters & statuses', icon: '📐', color: 'from-violet-400 to-purple-500' },
   { label: 'Project', to: '/app/projects', description: 'Financial project management: business case, PIP, WBS, offers', icon: '💳', color: 'from-green-400 to-emerald-500' },
   { label: 'Variable Speed Drives', to: '/app/vsd', description: 'VSD maintenance: frequency inverters, power ratings, checks', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
   { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
