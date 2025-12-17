@@ -885,22 +885,7 @@ export default function MobileEquipmentsMap() {
             </div>
           )}
 
-          <button
-            onClick={() => {
-              setCreateMode(true);
-              setPlacementMode(null);
-              setSelectedPosition(null);
-              setSelectedEquipment(null);
-            }}
-            disabled={!selectedPlan || createMode}
-            className="px-3 py-2 bg-cyan-600 text-white rounded-lg text-sm font-medium hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            title="Créer un nouvel équipement mobile sur le plan"
-          >
-            <Plus size={16} />
-            Nouvel équipement
-          </button>
-
-          <button
+<button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className={`p-2 rounded-lg transition-colors ${sidebarOpen ? "bg-cyan-100 text-cyan-700" : "hover:bg-gray-100"}`}
           >
@@ -914,24 +899,43 @@ export default function MobileEquipmentsMap() {
         {/* Map viewer */}
         <div className="flex-1 relative">
           {fileUrl ? (
-            <LeafletViewer
-              ref={viewerRef}
-              fileUrl={fileUrl}
-              pageIndex={pageIndex}
-              initialPoints={positions}
-              selectedId={selectedEquipment?.id}
-              placementActive={!!placementMode || createMode}
-              onClickPoint={handleSelectPosition}
-              onMovePoint={handleMovePosition}
-              onCreatePoint={(x, y) => {
-                if (createMode) {
-                  createEquipmentAtFrac(x, y);
-                } else {
-                  handleCreatePosition(x, y);
-                }
-              }}
-              onContextMenu={(pt, point) => setContextMenu({ position: pt, x: point.x, y: point.y })}
-            />
+            <>
+              <LeafletViewer
+                ref={viewerRef}
+                fileUrl={fileUrl}
+                pageIndex={pageIndex}
+                initialPoints={positions}
+                selectedId={selectedEquipment?.id}
+                placementActive={!!placementMode || createMode}
+                onClickPoint={handleSelectPosition}
+                onMovePoint={handleMovePosition}
+                onCreatePoint={(x, y) => {
+                  if (createMode) {
+                    createEquipmentAtFrac(x, y);
+                  } else {
+                    handleCreatePosition(x, y);
+                  }
+                }}
+                onContextMenu={(pt, point) => setContextMenu({ position: pt, x: point.x, y: point.y })}
+              />
+
+              {/* Floating toolbar inside Leaflet */}
+              <div className="absolute top-3 left-3 z-[5000] flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    setCreateMode(true);
+                    setPlacementMode(null);
+                    setSelectedPosition(null);
+                    setSelectedEquipment(null);
+                  }}
+                  disabled={createMode}
+                  className="w-10 h-10 rounded-xl border-none bg-gradient-to-br from-cyan-500 to-teal-600 text-white shadow-lg cursor-pointer text-lg flex items-center justify-center transition-all hover:from-cyan-400 hover:to-teal-500 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Créer un nouvel équipement mobile"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
+            </>
           ) : (
             <EmptyState
               icon={MapPin}
