@@ -1745,11 +1745,12 @@ app.post("/api/mobile-equipment/maps/uploadZip", uploadZip.single("zip"), async 
 app.get("/api/mobile-equipment/maps/plans", async (_req, res) => {
   try {
     // Use VSD plans (vsd_plans, vsd_plan_names) for symbiosis with VSD module
+    // Note: vsd_plans doesn't have created_at, use version for ordering
     const q = `
       WITH latest AS (
-        SELECT DISTINCT ON (logical_name) id, logical_name, version, page_count, created_at
+        SELECT DISTINCT ON (logical_name) id, logical_name, version, page_count
         FROM vsd_plans
-        ORDER BY logical_name, created_at DESC
+        ORDER BY logical_name, version DESC
       ),
       names AS (
         SELECT logical_name, COALESCE(display_name, logical_name) AS display_name
@@ -1817,7 +1818,7 @@ app.get("/api/mobile-equipment/maps/plan/:logical/file", async (req, res) => {
     if (!logical) return res.status(400).send("logical");
     // Use VSD plans for symbiosis
     const { rows } = await pool.query(
-      `SELECT file_path, content FROM vsd_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT file_path, content FROM vsd_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
       [logical]
     );
     const row = rows[0];
