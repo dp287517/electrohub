@@ -390,7 +390,7 @@ export default function ArcFlash() {
   };
 
   return (
-    <section className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
+    <section className="max-w-[95vw] mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} />}
       <header className="mb-8">
         <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Arc Flash Analysis</h1>

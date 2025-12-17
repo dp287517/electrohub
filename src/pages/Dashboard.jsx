@@ -641,7 +641,7 @@ export default function Dashboard() {
 
       {/* Hero Section with Weather Background */}
       <WeatherBackground site={site}>
-        <div className={`max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+        <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
             {/* Welcome message */}
             <div className="flex items-center gap-5">
@@ -736,7 +736,7 @@ export default function Dashboard() {
       </WeatherBackground>
 
       {/* Main Content */}
-      <div className={`max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+      <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
         {/* Utilities Section */}
         {visibleOtherApps.length > 0 && (
           <div className="mb-6">

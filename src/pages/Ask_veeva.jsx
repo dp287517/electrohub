@@ -1042,7 +1042,7 @@ export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
 
   return (
-    <section className="max-w-[1400px] 2xl:max-w-[1600px] mx-auto px-3 sm:px-4">
+    <section className="max-w-[95vw] mx-auto px-3 sm:px-4">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
         {/* Bouton "page de présentation" supprimé */}
