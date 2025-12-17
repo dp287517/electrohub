@@ -41,6 +41,8 @@ import {
   ArrowLeft,
   Calendar,
   Clock,
+  Upload,
+  Plus,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -1226,10 +1228,14 @@ export default function SwitchboardMap() {
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedBoard, setSelectedBoard] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Ref to prevent double creation
+  const creatingRef = useRef(false);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null); // { position, x, y }
@@ -1492,6 +1498,45 @@ export default function SwitchboardMap() {
     return handleSetPositionById(board.id, xFrac, yFrac);
   };
 
+  // Create a new switchboard directly from the plan
+  const createBoardAtFrac = async (xFrac, yFrac) => {
+    if (creatingRef.current) return;
+    if (!stableSelectedPlan) return;
+
+    creatingRef.current = true;
+    try {
+      // Create switchboard with minimal data
+      const created = await api.switchboard.createBoard({ name: "" });
+      const id = created?.id || created?.switchboard?.id || created?.board?.id;
+      if (!id) throw new Error("Échec création tableau électrique");
+
+      // Set position on the plan
+      await api.switchboardMaps.setPosition({
+        switchboard_id: id,
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id || null,
+        page_index: pageIndex,
+        x_frac: xFrac,
+        y_frac: yFrac,
+      });
+
+      // Reload data
+      await loadSwitchboards();
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
+      await refreshPlacedIds();
+
+      // Open the switchboard detail page
+      navigate(`/app/switchboard?board=${id}`);
+    } catch (err) {
+      console.error("Erreur création tableau électrique:", err);
+      alert("Erreur lors de la création du tableau électrique");
+    } finally {
+      creatingRef.current = false;
+      setCreateMode(false);
+    }
+  };
+
   const askDeletePosition = (position) => {
     setContextMenu(null);
     setConfirmState({ open: true, position });
@@ -1583,13 +1628,16 @@ export default function SwitchboardMap() {
     [stableSelectedPlan, pageIndex]
   );
 
-  // Callback stable pour création de point (mode placement)
+  // Callback stable pour création de point (mode placement ou création)
   const handleCreatePoint = useCallback(
     async (xFrac, yFrac) => {
-      if (!placementMode || !stableSelectedPlan) return;
-      await handleSetPosition(placementMode, xFrac, yFrac);
+      if (createMode) {
+        await createBoardAtFrac(xFrac, yFrac);
+      } else if (placementMode && stableSelectedPlan) {
+        await handleSetPosition(placementMode, xFrac, yFrac);
+      }
     },
-    [placementMode, stableSelectedPlan, pageIndex]
+    [placementMode, createMode, stableSelectedPlan, pageIndex]
   );
 
   const currentPlanIds = useMemo(() => {
@@ -1800,6 +1848,21 @@ export default function SwitchboardMap() {
               <Badge variant="warning">Non placés: {stats.unplaced}</Badge>
             </div>
 
+            <button
+              onClick={() => {
+                setCreateMode(true);
+                setPlacementMode(null);
+                setSelectedPosition(null);
+                setSelectedBoard(null);
+              }}
+              disabled={!selectedPlan || createMode}
+              className="px-3 py-2 bg-yellow-600 text-white rounded-lg text-sm font-medium hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Créer un nouveau tableau électrique sur le plan"
+            >
+              <Plus size={16} />
+              Nouveau tableau
+            </button>
+
             {/* Légende des couleurs */}
             <div className="hidden sm:flex items-center gap-2 text-xs border-l pl-2 ml-1">
               <span className="flex items-center gap-1">
@@ -2008,6 +2071,22 @@ export default function SwitchboardMap() {
               />
             )}
 
+            {/* Create mode indicator */}
+            {createMode && (
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
+                <div className="flex items-center gap-3 px-4 py-3 bg-yellow-600 text-white rounded-2xl shadow-xl">
+                  <Crosshair size={20} className="animate-pulse" />
+                  <div>
+                    <p className="font-semibold">Mode création actif</p>
+                    <p className="text-xs text-yellow-200">Cliquez sur le plan pour créer un nouveau tableau électrique</p>
+                  </div>
+                  <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+            )}
+
             {loadingPlans || !selectedPlan ? (
               <EmptyState
                 icon={MapIcon}
@@ -2036,7 +2115,7 @@ export default function SwitchboardMap() {
                   initialPoints={initialPoints}
                   selectedId={selectedSwitchboardId}
                   controlStatuses={controlStatuses}
-                  placementActive={!!placementMode}
+                  placementActive={!!placementMode || createMode}
                   onReady={() => {
                     setPdfReady(true);
                     // Charger le nombre de pages
@@ -2070,16 +2149,18 @@ export default function SwitchboardMap() {
             )}
 
             {/* detail panel */}
-            <DetailPanel
-              position={selectedPosition}
-              board={selectedBoard}
-              onClose={() => {
-                setSelectedPosition(null);
-                setSelectedBoard(null);
-              }}
-              onNavigate={handleNavigateToBoard}
-              onDelete={(pos) => askDeletePosition(pos)}
-            />
+            {!placementMode && !createMode && (
+              <DetailPanel
+                position={selectedPosition}
+                board={selectedBoard}
+                onClose={() => {
+                  setSelectedPosition(null);
+                  setSelectedBoard(null);
+                }}
+                onNavigate={handleNavigateToBoard}
+                onDelete={(pos) => askDeletePosition(pos)}
+              />
+            )}
 
             {/* Upcoming Controls Panel */}
             {showUpcomingPanel && (

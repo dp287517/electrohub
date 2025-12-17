@@ -37,6 +37,7 @@ import {
   Target,
   ArrowLeft,
   Upload,
+  Plus,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -878,10 +879,14 @@ export default function DoorsMap() {
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedDoor, setSelectedDoor] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Ref to prevent double creation
+  const creatingRef = useRef(false);
 
   // Context menu
   const [contextMenu, setContextMenu] = useState(null);
@@ -1124,6 +1129,44 @@ export default function DoorsMap() {
     }
   };
 
+  // Create a new door directly from the plan
+  const createDoorAtFrac = async (xFrac, yFrac) => {
+    if (creatingRef.current) return;
+    if (!stableSelectedPlan) return;
+
+    creatingRef.current = true;
+    try {
+      // Create door with minimal data
+      const created = await api.doors.create({ name: "", status: "a_faire" });
+      const id = created?.id || created?.door?.id;
+      if (!id) throw new Error("Échec création porte");
+
+      // Set position on the plan
+      await api.doorsMaps.setPosition(id, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id || null,
+        page_index: pageIndex,
+        x_frac: xFrac,
+        y_frac: yFrac,
+      });
+
+      // Reload data
+      await loadDoors();
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
+      await refreshPlacedIds();
+
+      // Open the door detail page
+      navigate(`/app/doors?door=${id}`);
+    } catch (err) {
+      console.error("Erreur création porte:", err);
+      alert("Erreur lors de la création de la porte");
+    } finally {
+      creatingRef.current = false;
+      setCreateMode(false);
+    }
+  };
+
   const askDeletePosition = (position) => {
     setContextMenu(null);
     setConfirmState({ open: true, position });
@@ -1242,6 +1285,21 @@ export default function DoorsMap() {
               <Badge variant="success">Localisées: {stats.placed}</Badge>
               <Badge variant="warning">Non localisées: {stats.unplaced}</Badge>
             </div>
+
+            <button
+              onClick={() => {
+                setCreateMode(true);
+                setPlacementMode(null);
+                setSelectedPosition(null);
+                setSelectedDoor(null);
+              }}
+              disabled={!selectedPlan || createMode}
+              className="px-3 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Créer une nouvelle porte sur le plan"
+            >
+              <Plus size={16} />
+              Nouvelle porte
+            </button>
 
             <button
               onClick={() => zipInputRef.current?.click()}
@@ -1421,12 +1479,14 @@ export default function DoorsMap() {
                   setSelectedDoor(d || null);
                 }}
                 onCreatePoint={(xFrac, yFrac) => {
-                  if (placementMode) {
+                  if (createMode) {
+                    createDoorAtFrac(xFrac, yFrac);
+                  } else if (placementMode) {
                     handleSetPosition(placementMode, xFrac, yFrac);
                   }
                 }}
                 onContextMenu={(meta, pos) => setContextMenu({ position: meta, x: pos.x, y: pos.y })}
-                placementActive={!!placementMode}
+                placementActive={!!placementMode || createMode}
               />
             </>
           )}
@@ -1436,8 +1496,24 @@ export default function DoorsMap() {
             <PlacementModeIndicator door={placementMode} onCancel={() => setPlacementMode(null)} />
           )}
 
+          {/* Create mode indicator */}
+          {createMode && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
+              <div className="flex items-center gap-3 px-4 py-3 bg-rose-600 text-white rounded-2xl shadow-xl">
+                <Crosshair size={20} className="animate-pulse" />
+                <div>
+                  <p className="font-semibold">Mode création actif</p>
+                  <p className="text-xs text-rose-200">Cliquez sur le plan pour créer une nouvelle porte</p>
+                </div>
+                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Detail panel */}
-          {selectedPosition && !placementMode && (
+          {selectedPosition && !placementMode && !createMode && (
             <DetailPanel
               position={selectedPosition}
               door={selectedDoor}
