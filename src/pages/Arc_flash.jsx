@@ -408,7 +408,7 @@ const DeviceSelector = ({ onSelect, selectedDevice }) => {
 
   const loadSwitchboards = async () => {
     try {
-      const resp = await get('/api/switchboards', { pageSize: 500 });
+      const resp = await get('/api/switchboard/boards', { pageSize: 500 });
       setSwitchboards(resp?.data || []);
     } catch (err) { console.error('Failed to load switchboards', err); }
   };
@@ -416,8 +416,8 @@ const DeviceSelector = ({ onSelect, selectedDevice }) => {
   const loadDevices = async (switchboardId) => {
     setLoading(true);
     try {
-      const resp = await get(`/api/switchboards/${switchboardId}/devices`);
-      setDevices(resp || []);
+      const resp = await get(`/api/switchboard/boards/${switchboardId}/devices`);
+      setDevices(resp?.data || []);
     } catch (err) { console.error('Failed to load devices', err); }
     finally { setLoading(false); }
   };
