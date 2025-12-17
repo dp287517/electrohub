@@ -6,7 +6,8 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
-  Tag, Hash, Factory, Gauge, Thermometer, Network, Info, Droplet, Wind
+  Tag, Hash, Factory, Gauge, Thermometer, Network, Info, Droplet, Wind,
+  FolderPlus, Folder, ChevronUp, GripVertical
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -737,13 +738,362 @@ const DetailPanel = ({
   );
 };
 
+// ==================== CATEGORIES SETTINGS PANEL ====================
+
+const CategoriesSettingsPanel = ({ onClose, showToast }) => {
+  const [categories, setCategories] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [expandedCategories, setExpandedCategories] = useState({});
+
+  // Form state for new category
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+
+  // Form state for new subcategory
+  const [newSubcategoryName, setNewSubcategoryName] = useState('');
+  const [addingSubcategoryTo, setAddingSubcategoryTo] = useState(null);
+
+  // Edit state
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [editingSubcategory, setEditingSubcategory] = useState(null);
+  const [editName, setEditName] = useState('');
+
+  const loadCategories = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.meca.listCategories();
+      setCategories(res?.categories || []);
+    } catch (err) {
+      console.error('Load categories error:', err);
+      showToast?.('Erreur lors du chargement des catégories', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
+  // Category CRUD
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) return;
+    setIsAddingCategory(true);
+    try {
+      await api.meca.createCategory({ name: newCategoryName.trim() });
+      showToast?.('Catégorie créée', 'success');
+      setNewCategoryName('');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la création', 'error');
+    } finally {
+      setIsAddingCategory(false);
+    }
+  };
+
+  const handleUpdateCategory = async (id) => {
+    if (!editName.trim()) return;
+    try {
+      await api.meca.updateCategory(id, { name: editName.trim() });
+      showToast?.('Catégorie modifiée', 'success');
+      setEditingCategory(null);
+      setEditName('');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la modification', 'error');
+    }
+  };
+
+  const handleDeleteCategory = async (id, name) => {
+    if (!window.confirm(`Supprimer la catégorie "${name}" et toutes ses sous-catégories ?`)) return;
+    try {
+      await api.meca.deleteCategory(id);
+      showToast?.('Catégorie supprimée', 'success');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la suppression', 'error');
+    }
+  };
+
+  // Subcategory CRUD
+  const handleAddSubcategory = async (categoryId) => {
+    if (!newSubcategoryName.trim()) return;
+    try {
+      await api.meca.createSubcategory({
+        category_id: categoryId,
+        name: newSubcategoryName.trim()
+      });
+      showToast?.('Sous-catégorie créée', 'success');
+      setNewSubcategoryName('');
+      setAddingSubcategoryTo(null);
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la création', 'error');
+    }
+  };
+
+  const handleUpdateSubcategory = async (id) => {
+    if (!editName.trim()) return;
+    try {
+      await api.meca.updateSubcategory(id, { name: editName.trim() });
+      showToast?.('Sous-catégorie modifiée', 'success');
+      setEditingSubcategory(null);
+      setEditName('');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la modification', 'error');
+    }
+  };
+
+  const handleDeleteSubcategory = async (id, name) => {
+    if (!window.confirm(`Supprimer la sous-catégorie "${name}" ?`)) return;
+    try {
+      await api.meca.deleteSubcategory(id);
+      showToast?.('Sous-catégorie supprimée', 'success');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la suppression', 'error');
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-6 text-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Settings size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Paramètres</h2>
+              <p className="text-orange-100 text-sm">Gérer les catégories et sous-catégories</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+            <X size={20} />
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw size={32} className="animate-spin text-orange-500" />
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Add Category Form */}
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <FolderPlus size={18} className="text-orange-500" />
+                Ajouter une catégorie d'équipement
+              </h3>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newCategoryName}
+                  onChange={e => setNewCategoryName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddCategory()}
+                  placeholder="Ex: Porte Automatique, Ascenseur..."
+                  className={inputBaseClass}
+                />
+                <button
+                  onClick={handleAddCategory}
+                  disabled={!newCategoryName.trim() || isAddingCategory}
+                  className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+                >
+                  {isAddingCategory ? <RefreshCw size={16} className="animate-spin" /> : <Plus size={16} />}
+                  Ajouter
+                </button>
+              </div>
+            </div>
+
+            {/* Categories List */}
+            {categories.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <Folder size={48} className="mx-auto mb-3 text-gray-300" />
+                <p>Aucune catégorie définie</p>
+                <p className="text-sm mt-1">Commencez par créer une catégorie d'équipement</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {categories.map(cat => (
+                  <div key={cat.id} className="border rounded-xl overflow-hidden bg-white shadow-sm">
+                    {/* Category Header */}
+                    <div className="flex items-center gap-3 p-4 bg-gray-50 border-b">
+                      <button
+                        onClick={() => setExpandedCategories(prev => ({ ...prev, [cat.id]: !prev[cat.id] }))}
+                        className="p-1 hover:bg-gray-200 rounded"
+                      >
+                        {expandedCategories[cat.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                      </button>
+
+                      <Folder size={20} className="text-orange-500" />
+
+                      {editingCategory === cat.id ? (
+                        <div className="flex-1 flex gap-2">
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={e => setEditName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleUpdateCategory(cat.id)}
+                            className="flex-1 px-3 py-1.5 border rounded-lg text-sm"
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => handleUpdateCategory(cat.id)}
+                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
+                          >
+                            <CheckCircle size={18} />
+                          </button>
+                          <button
+                            onClick={() => { setEditingCategory(null); setEditName(''); }}
+                            className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
+                          >
+                            <X size={18} />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="flex-1 font-semibold text-gray-900">{cat.name}</span>
+                          <span className="text-xs text-gray-400 bg-gray-200 px-2 py-0.5 rounded-full">
+                            {cat.subcategories?.length || 0} sous-cat.
+                          </span>
+                          <button
+                            onClick={() => { setEditingCategory(cat.id); setEditName(cat.name); }}
+                            className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCategory(cat.id, cat.name)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Subcategories */}
+                    {expandedCategories[cat.id] && (
+                      <div className="p-4 space-y-2">
+                        {/* Add Subcategory */}
+                        {addingSubcategoryTo === cat.id ? (
+                          <div className="flex gap-2 mb-3">
+                            <input
+                              type="text"
+                              value={newSubcategoryName}
+                              onChange={e => setNewSubcategoryName(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleAddSubcategory(cat.id)}
+                              placeholder="Nom de la sous-catégorie..."
+                              className="flex-1 px-3 py-2 border rounded-lg text-sm"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleAddSubcategory(cat.id)}
+                              disabled={!newSubcategoryName.trim()}
+                              className="px-3 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 disabled:opacity-50"
+                            >
+                              Ajouter
+                            </button>
+                            <button
+                              onClick={() => { setAddingSubcategoryTo(null); setNewSubcategoryName(''); }}
+                              className="px-3 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50"
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setAddingSubcategoryTo(cat.id)}
+                            className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-orange-400 hover:text-orange-600 flex items-center justify-center gap-2"
+                          >
+                            <Plus size={16} />
+                            Ajouter une sous-catégorie
+                          </button>
+                        )}
+
+                        {/* Subcategories List */}
+                        {(cat.subcategories || []).length === 0 ? (
+                          <p className="text-sm text-gray-400 text-center py-2">
+                            Aucune sous-catégorie
+                          </p>
+                        ) : (
+                          <div className="space-y-1">
+                            {(cat.subcategories || []).map(sub => (
+                              <div key={sub.id} className="flex items-center gap-3 py-2 px-3 bg-gray-50 rounded-lg">
+                                <Cog size={14} className="text-gray-400" />
+
+                                {editingSubcategory === sub.id ? (
+                                  <div className="flex-1 flex gap-2">
+                                    <input
+                                      type="text"
+                                      value={editName}
+                                      onChange={e => setEditName(e.target.value)}
+                                      onKeyDown={e => e.key === 'Enter' && handleUpdateSubcategory(sub.id)}
+                                      className="flex-1 px-2 py-1 border rounded text-sm"
+                                      autoFocus
+                                    />
+                                    <button
+                                      onClick={() => handleUpdateSubcategory(sub.id)}
+                                      className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
+                                    >
+                                      <CheckCircle size={16} />
+                                    </button>
+                                    <button
+                                      onClick={() => { setEditingSubcategory(null); setEditName(''); }}
+                                      className="p-1 text-gray-400 hover:bg-gray-100 rounded"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <span className="flex-1 text-sm text-gray-700">{sub.name}</span>
+                                    <button
+                                      onClick={() => { setEditingSubcategory(sub.id); setEditName(sub.name); }}
+                                      className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                      style={{ opacity: 1 }}
+                                    >
+                                      <Edit3 size={14} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteSubcategory(sub.id, sub.name)}
+                                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ==================== EDIT FORM COMPONENT ====================
 
-const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
+const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) => {
   const [form, setForm] = useState({
     name: '',
     tag: '',
     category: '',
+    category_id: '',
+    subcategory_id: '',
     equipment_type: '',
     manufacturer: '',
     model: '',
@@ -776,6 +1126,8 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
         name: equipment.name || '',
         tag: equipment.tag || '',
         category: equipment.category || '',
+        category_id: equipment.category_id || '',
+        subcategory_id: equipment.subcategory_id || '',
         equipment_type: equipment.equipment_type || '',
         manufacturer: equipment.manufacturer || '',
         model: equipment.model || '',
@@ -801,6 +1153,29 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
       });
     }
   }, [equipment]);
+
+  // Get subcategories for the selected category
+  const selectedCategory = categories.find(c => c.id === form.category_id);
+  const subcategories = selectedCategory?.subcategories || [];
+
+  const handleCategoryChange = (categoryId) => {
+    const cat = categories.find(c => c.id === categoryId);
+    setForm(f => ({
+      ...f,
+      category_id: categoryId,
+      category: cat?.name || '',
+      subcategory_id: '' // Reset subcategory when category changes
+    }));
+  };
+
+  const handleSubcategoryChange = (subcategoryId) => {
+    const sub = subcategories.find(s => s.id === subcategoryId);
+    setForm(f => ({
+      ...f,
+      subcategory_id: subcategoryId,
+      equipment_type: sub?.name || f.equipment_type // Use subcategory name as equipment type
+    }));
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -838,7 +1213,8 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
     showToast?.('Données appliquées', 'success');
   };
 
-  const CATEGORIES = [
+  // Fallback categories if none defined in DB
+  const FALLBACK_CATEGORIES = [
     'Pompe', 'Ventilateur', 'Compresseur', 'Moteur', 'Convoyeur',
     'Agitateur', 'Broyeur', 'Malaxeur', 'Extracteur', 'Autre'
   ];
@@ -906,25 +1282,54 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
-              <select
-                value={form.category}
-                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                className={selectBaseClass}
-              >
-                <option value="">—</option>
-                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Folder size={14} className="inline mr-1 text-orange-500" />
+                Équipement (catégorie)
+              </label>
+              {categories.length > 0 ? (
+                <select
+                  value={form.category_id}
+                  onChange={e => handleCategoryChange(e.target.value)}
+                  className={selectBaseClass}
+                >
+                  <option value="">— Sélectionner —</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              ) : (
+                <select
+                  value={form.category}
+                  onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                  className={selectBaseClass}
+                >
+                  <option value="">—</option>
+                  {FALLBACK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-              <input
-                type="text"
-                value={form.equipment_type}
-                onChange={e => setForm(f => ({ ...f, equipment_type: e.target.value }))}
-                className={inputBaseClass}
-                placeholder="Centrifuge, volumétrique..."
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                <Cog size={14} className="inline mr-1 text-gray-400" />
+                Sous-équipement
+              </label>
+              {categories.length > 0 && form.category_id ? (
+                <select
+                  value={form.subcategory_id}
+                  onChange={e => handleSubcategoryChange(e.target.value)}
+                  className={selectBaseClass}
+                  disabled={!form.category_id}
+                >
+                  <option value="">— Sélectionner —</option>
+                  {subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={form.equipment_type}
+                  onChange={e => setForm(f => ({ ...f, equipment_type: e.target.value }))}
+                  className={inputBaseClass}
+                  placeholder="Moteur, capteur..."
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Fabricant</label>
@@ -1223,8 +1628,11 @@ export default function Meca() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
 
-  // View mode
-  const [viewMode, setViewMode] = useState('detail'); // 'detail' | 'edit'
+  // Categories state
+  const [categories, setCategories] = useState([]);
+
+  // View mode: 'detail' | 'edit' | 'settings'
+  const [viewMode, setViewMode] = useState('detail');
 
   // Placement state
   const [placedIds, setPlacedIds] = useState(new Set());
@@ -1268,6 +1676,15 @@ export default function Meca() {
     }
   }, []);
 
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await api.meca.listCategories();
+      setCategories(res?.categories || []);
+    } catch (err) {
+      console.error('Load categories error:', err);
+    }
+  }, []);
+
   // Effects
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -1278,7 +1695,8 @@ export default function Meca() {
   useEffect(() => {
     loadEquipments();
     loadPlacements();
-  }, [loadEquipments, loadPlacements]);
+    loadCategories();
+  }, [loadEquipments, loadPlacements, loadCategories]);
 
   // Refresh placements on visibility change
   useEffect(() => {
@@ -1492,6 +1910,14 @@ export default function Meca() {
             </button>
 
             <button
+              onClick={() => { setSelectedEquipment(null); setViewMode('settings'); }}
+              className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
+            >
+              <Settings size={16} />
+              Paramètres
+            </button>
+
+            <button
               onClick={handleNewEquipment}
               className="px-3 py-2 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-lg text-sm font-medium hover:from-orange-600 hover:to-amber-700 flex items-center gap-2"
             >
@@ -1585,13 +2011,19 @@ export default function Meca() {
 
         {/* Main Content Area */}
         <div className="flex-1 min-h-[calc(100vh-120px)]">
-          {selectedEquipment ? (
+          {viewMode === 'settings' ? (
+            <CategoriesSettingsPanel
+              onClose={() => { setViewMode('detail'); loadCategories(); }}
+              showToast={showToast}
+            />
+          ) : selectedEquipment ? (
             viewMode === 'edit' ? (
               <EditForm
                 equipment={selectedEquipment}
                 onSave={handleSaveEquipment}
                 onCancel={() => selectedEquipment?.id ? setViewMode('detail') : handleCloseEquipment()}
                 showToast={showToast}
+                categories={categories}
               />
             ) : (
               <DetailPanel

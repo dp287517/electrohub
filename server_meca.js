@@ -288,6 +288,54 @@ async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_meca_events_ts ON meca_events(ts DESC);
   `);
+
+  // ========== EQUIPMENT CATEGORIES & SUBCATEGORIES ==========
+
+  // Catégories d'équipements (ex: Porte Automatique, Ascenseur, CVC...)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meca_equipment_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      icon TEXT DEFAULT '',
+      color TEXT DEFAULT '#f97316',
+      display_order INTEGER DEFAULT 0,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_cat_company ON meca_equipment_categories(company_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_cat_site ON meca_equipment_categories(site_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_cat_order ON meca_equipment_categories(display_order);`);
+
+  // Sous-catégories d'équipements (ex: Moteur, Capteur, Carte électronique...)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meca_equipment_subcategories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      category_id UUID NOT NULL REFERENCES meca_equipment_categories(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      display_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_subcat_category ON meca_equipment_subcategories(category_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_subcat_order ON meca_equipment_subcategories(display_order);`);
+
+  // Add subcategory_id to equipments table if not exists
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS subcategory_id UUID REFERENCES meca_equipment_subcategories(id) ON DELETE SET NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES meca_equipment_categories(id) ON DELETE SET NULL;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 }
 
 // -------------------------------------------------
@@ -1033,6 +1081,244 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
       u
     );
 
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// -------------------------------------------------
+// API EQUIPMENT CATEGORIES
+// -------------------------------------------------
+
+// GET /api/meca/categories - List all categories with their subcategories
+app.get("/api/meca/categories", async (req, res) => {
+  try {
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
+    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'c' });
+
+    const { rows: categories } = await pool.query(`
+      SELECT c.*
+        FROM meca_equipment_categories c
+       WHERE ${tenantFilter.where}
+       ORDER BY c.display_order, c.name
+    `, tenantFilter.params);
+
+    // Get subcategories for each category
+    for (const cat of categories) {
+      const { rows: subcats } = await pool.query(`
+        SELECT * FROM meca_equipment_subcategories
+         WHERE category_id = $1
+         ORDER BY display_order, name
+      `, [cat.id]);
+      cat.subcategories = subcats;
+    }
+
+    res.json({ ok: true, categories });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/meca/categories/:id - Get single category with subcategories
+app.get("/api/meca/categories/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const { rows } = await pool.query(
+      `SELECT * FROM meca_equipment_categories WHERE id=$1`,
+      [id]
+    );
+    if (!rows[0]) return res.status(404).json({ ok: false, error: "Category not found" });
+
+    const category = rows[0];
+    const { rows: subcats } = await pool.query(`
+      SELECT * FROM meca_equipment_subcategories
+       WHERE category_id = $1
+       ORDER BY display_order, name
+    `, [id]);
+    category.subcategories = subcats;
+
+    res.json({ ok: true, category });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/meca/categories - Create category
+app.post("/api/meca/categories", async (req, res) => {
+  try {
+    const u = getUser(req);
+    const baseTenant = extractTenantFromRequest(req);
+    const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
+
+    const { name = "", description = "", icon = "", color = "#f97316", display_order = 0 } = req.body || {};
+
+    if (!name.trim()) {
+      return res.status(400).json({ ok: false, error: "Name is required" });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO meca_equipment_categories(company_id, site_id, name, description, icon, color, display_order)
+      VALUES($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [tenant.companyId, tenant.siteId, name.trim(), description, icon, color, display_order]);
+
+    const category = rows[0];
+    category.subcategories = [];
+
+    await logEvent("meca_category_created", { id: category.id, name: category.name }, u);
+    res.json({ ok: true, category });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PUT /api/meca/categories/:id - Update category
+app.put("/api/meca/categories/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const u = getUser(req);
+    const { name, description, icon, color, display_order } = req.body || {};
+
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+
+    if (name !== undefined) { fields.push(`name=$${idx++}`); vals.push(name.trim()); }
+    if (description !== undefined) { fields.push(`description=$${idx++}`); vals.push(description); }
+    if (icon !== undefined) { fields.push(`icon=$${idx++}`); vals.push(icon); }
+    if (color !== undefined) { fields.push(`color=$${idx++}`); vals.push(color); }
+    if (display_order !== undefined) { fields.push(`display_order=$${idx++}`); vals.push(display_order); }
+
+    fields.push("updated_at=now()");
+    vals.push(id);
+
+    await pool.query(
+      `UPDATE meca_equipment_categories SET ${fields.join(", ")} WHERE id=$${idx}`,
+      vals
+    );
+
+    const { rows } = await pool.query(`SELECT * FROM meca_equipment_categories WHERE id=$1`, [id]);
+    const category = rows[0];
+    if (category) {
+      const { rows: subcats } = await pool.query(`
+        SELECT * FROM meca_equipment_subcategories WHERE category_id = $1 ORDER BY display_order, name
+      `, [id]);
+      category.subcategories = subcats;
+    }
+
+    await logEvent("meca_category_updated", { id, fields: Object.keys(req.body || {}) }, u);
+    res.json({ ok: true, category });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/meca/categories/:id - Delete category
+app.delete("/api/meca/categories/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const u = getUser(req);
+    const { rows: old } = await pool.query(`SELECT name FROM meca_equipment_categories WHERE id=$1`, [id]);
+    await pool.query(`DELETE FROM meca_equipment_categories WHERE id=$1`, [id]);
+    await logEvent("meca_category_deleted", { id, name: old[0]?.name }, u);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// -------------------------------------------------
+// API EQUIPMENT SUBCATEGORIES
+// -------------------------------------------------
+
+// GET /api/meca/subcategories?category_id=... - List subcategories for a category
+app.get("/api/meca/subcategories", async (req, res) => {
+  try {
+    const categoryId = req.query.category_id;
+    let query = `SELECT * FROM meca_equipment_subcategories`;
+    let params = [];
+
+    if (categoryId) {
+      query += ` WHERE category_id = $1`;
+      params.push(categoryId);
+    }
+    query += ` ORDER BY display_order, name`;
+
+    const { rows } = await pool.query(query, params);
+    res.json({ ok: true, subcategories: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/meca/subcategories - Create subcategory
+app.post("/api/meca/subcategories", async (req, res) => {
+  try {
+    const u = getUser(req);
+    const { category_id, name = "", description = "", display_order = 0 } = req.body || {};
+
+    if (!category_id) {
+      return res.status(400).json({ ok: false, error: "category_id is required" });
+    }
+    if (!name.trim()) {
+      return res.status(400).json({ ok: false, error: "Name is required" });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO meca_equipment_subcategories(category_id, name, description, display_order)
+      VALUES($1, $2, $3, $4)
+      RETURNING *
+    `, [category_id, name.trim(), description, display_order]);
+
+    await logEvent("meca_subcategory_created", { id: rows[0].id, name: rows[0].name, category_id }, u);
+    res.json({ ok: true, subcategory: rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PUT /api/meca/subcategories/:id - Update subcategory
+app.put("/api/meca/subcategories/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const u = getUser(req);
+    const { name, description, display_order, category_id } = req.body || {};
+
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+
+    if (name !== undefined) { fields.push(`name=$${idx++}`); vals.push(name.trim()); }
+    if (description !== undefined) { fields.push(`description=$${idx++}`); vals.push(description); }
+    if (display_order !== undefined) { fields.push(`display_order=$${idx++}`); vals.push(display_order); }
+    if (category_id !== undefined) { fields.push(`category_id=$${idx++}`); vals.push(category_id); }
+
+    fields.push("updated_at=now()");
+    vals.push(id);
+
+    await pool.query(
+      `UPDATE meca_equipment_subcategories SET ${fields.join(", ")} WHERE id=$${idx}`,
+      vals
+    );
+
+    const { rows } = await pool.query(`SELECT * FROM meca_equipment_subcategories WHERE id=$1`, [id]);
+    await logEvent("meca_subcategory_updated", { id, fields: Object.keys(req.body || {}) }, u);
+    res.json({ ok: true, subcategory: rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/meca/subcategories/:id - Delete subcategory
+app.delete("/api/meca/subcategories/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const u = getUser(req);
+    const { rows: old } = await pool.query(`SELECT name FROM meca_equipment_subcategories WHERE id=$1`, [id]);
+    await pool.query(`DELETE FROM meca_equipment_subcategories WHERE id=$1`, [id]);
+    await logEvent("meca_subcategory_deleted", { id, name: old[0]?.name }, u);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

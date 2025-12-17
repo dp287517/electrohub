@@ -1364,6 +1364,24 @@ export const api = {
 
     deleteFile: (fileId) =>
       del(`/api/meca/files/${encodeURIComponent(fileId)}`),
+
+    // Categories
+    listCategories: () => get("/api/meca/categories"),
+    getCategory: (id) => get(`/api/meca/categories/${encodeURIComponent(id)}`),
+    createCategory: (payload) => post("/api/meca/categories", payload),
+    updateCategory: (id, payload) =>
+      put(`/api/meca/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) =>
+      del(`/api/meca/categories/${encodeURIComponent(id)}`),
+
+    // Subcategories
+    listSubcategories: (categoryId) =>
+      get("/api/meca/subcategories", categoryId ? { category_id: categoryId } : {}),
+    createSubcategory: (payload) => post("/api/meca/subcategories", payload),
+    updateSubcategory: (id, payload) =>
+      put(`/api/meca/subcategories/${encodeURIComponent(id)}`, payload),
+    deleteSubcategory: (id) =>
+      del(`/api/meca/subcategories/${encodeURIComponent(id)}`),
   },
 
   /** --- MECA MAPS --- */
