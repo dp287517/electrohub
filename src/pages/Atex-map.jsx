@@ -1053,7 +1053,9 @@ export default function AtexMap({
     creatingEquipmentRef.current = true;
     const end = timeStart("createEquipmentAtFrac");
     try {
-      const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
+      // Create equipment with auto-generated name
+      const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const created = await api.atex.createEquipment({ name: `Nouvel ATEX ${timestamp}`, status: "a_faire" });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Création ATEX: ID manquant");
       log("setPosition params", { id, logicalName, plan_id: plan.id, pageIndex, xf, yf });
