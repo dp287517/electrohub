@@ -47,6 +47,65 @@ if (typeof document !== 'undefined' && !document.getElementById('control-styles'
 }
 
 // ============================================================
+// HELPER: Get equipment display name and link
+// ============================================================
+const getEquipmentDisplay = (item) => {
+  // Determine equipment type and name
+  if (item.meca_equipment_id) {
+    return {
+      name: item.meca_equipment_name || item.equipment_name || `Équip. méca #${item.meca_equipment_id}`,
+      type: 'meca',
+      icon: '⚙️',
+      link: `/app/meca?meca=${item.meca_equipment_id}`,
+      category: item.meca_category || item.category || ''
+    };
+  }
+  if (item.vsd_equipment_id) {
+    return {
+      name: item.vsd_equipment_name || item.equipment_name || `Variateur #${item.vsd_equipment_id}`,
+      type: 'vsd',
+      icon: '🔌',
+      link: `/app/vsd?vsd=${item.vsd_equipment_id}`,
+      category: ''
+    };
+  }
+  if (item.mobile_equipment_id) {
+    return {
+      name: item.mobile_equipment_name || item.equipment_name || `Équip. mobile #${item.mobile_equipment_id}`,
+      type: 'mobile',
+      icon: '🚜',
+      link: `/app/mobile-equipment?equip=${item.mobile_equipment_id}`,
+      category: item.mobile_category || item.category || ''
+    };
+  }
+  if (item.device_id) {
+    return {
+      name: `Disj. ${item.device_position || item.device_id}`,
+      type: 'device',
+      icon: '🔲',
+      link: item.switchboard_id ? `/app/switchboards?board=${item.switchboard_id}` : null,
+      category: ''
+    };
+  }
+  if (item.switchboard_id) {
+    return {
+      name: item.switchboard_code || item.switchboard_name || `Tableau #${item.switchboard_id}`,
+      type: 'switchboard',
+      icon: '⚡',
+      link: `/app/switchboards?board=${item.switchboard_id}`,
+      category: ''
+    };
+  }
+  return {
+    name: item.equipment_name || 'Équipement inconnu',
+    type: 'unknown',
+    icon: '📦',
+    link: null,
+    category: ''
+  };
+};
+
+// ============================================================
 // ANIMATED CARD COMPONENT
 // ============================================================
 const AnimatedCard = ({ children, delay = 0, className = '' }) => (
@@ -861,23 +920,29 @@ function DashboardTab({ dashboard, navigate, onStartControl }) {
             <span className="animate-bounce-slow">🚨</span> Contrôles en retard
           </h3>
           <div className="space-y-2">
-            {overdue_list.slice(0, 3).map((s) => (
-              <div key={s.id} className="bg-white rounded-lg p-3 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-xl flex-shrink-0">⚠️</span>
-                  <div className="min-w-0">
-                    <p className="font-medium text-gray-900 truncate">{s.template_name}</p>
-                    <p className="text-sm text-gray-500 truncate">{s.switchboard_code || s.switchboard_name}</p>
+            {overdue_list.slice(0, 3).map((s) => {
+              const equipDisplay = getEquipmentDisplay(s);
+              return (
+                <div key={s.id} className="bg-white rounded-lg p-3 flex items-center justify-between shadow-sm">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xl flex-shrink-0">⚠️</span>
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{s.template_name}</p>
+                      <p className="text-sm text-gray-500 truncate flex items-center gap-1">
+                        <span>{equipDisplay.icon}</span>
+                        {equipDisplay.name}
+                      </p>
+                    </div>
                   </div>
+                  <button
+                    onClick={() => onStartControl(s)}
+                    className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 flex-shrink-0"
+                  >
+                    Faire
+                  </button>
                 </div>
-                <button
-                  onClick={() => onStartControl(s)}
-                  className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 flex-shrink-0"
-                >
-                  Faire
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -889,25 +954,29 @@ function DashboardTab({ dashboard, navigate, onStartControl }) {
             <span>📅</span> Prochains contrôles
           </h3>
           <div className="space-y-2">
-            {upcoming.slice(0, 3).map((s) => (
-              <div key={s.id} className="bg-white rounded-lg p-3 flex items-center justify-between shadow-sm">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-xl flex-shrink-0">📋</span>
-                  <div className="min-w-0">
-                    <p className="font-medium text-gray-900 truncate">{s.template_name}</p>
-                    <p className="text-sm text-gray-500 truncate">
-                      {s.switchboard_code || s.switchboard_name} • {new Date(s.next_due_date).toLocaleDateString("fr-FR")}
-                    </p>
+            {upcoming.slice(0, 3).map((s) => {
+              const equipDisplay = getEquipmentDisplay(s);
+              return (
+                <div key={s.id} className="bg-white rounded-lg p-3 flex items-center justify-between shadow-sm">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xl flex-shrink-0">📋</span>
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{s.template_name}</p>
+                      <p className="text-sm text-gray-500 truncate flex items-center gap-1">
+                        <span>{equipDisplay.icon}</span>
+                        {equipDisplay.name} • {new Date(s.next_due_date).toLocaleDateString("fr-FR")}
+                      </p>
+                    </div>
                   </div>
+                  <button
+                    onClick={() => onStartControl(s)}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex-shrink-0"
+                  >
+                    Faire
+                  </button>
                 </div>
-                <button
-                  onClick={() => onStartControl(s)}
-                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex-shrink-0"
-                >
-                  Faire
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -942,6 +1011,7 @@ function SchedulesTab({ schedules, onStartControl, onDelete, navigate }) {
     <div className="divide-y">
       {schedules.map((s, idx) => {
         const isOverdue = s.next_due_date && new Date(s.next_due_date) < new Date();
+        const equipDisplay = getEquipmentDisplay(s);
         return (
           <div
             key={s.id}
@@ -959,40 +1029,45 @@ function SchedulesTab({ schedules, onStartControl, onDelete, navigate }) {
                   </span>
                 </div>
                 <button
-                  onClick={() => s.switchboard_id && navigate(`/app/switchboards?board=${s.switchboard_id}`)}
-                  className="text-sm text-blue-600 hover:underline mt-1"
+                  onClick={() => equipDisplay.link && navigate(equipDisplay.link)}
+                  className="text-sm text-blue-600 hover:underline mt-1 flex items-center gap-1"
                 >
-                  {s.switchboard_code || s.switchboard_name || `Disj. ${s.device_position}`}
+                  <span>{equipDisplay.icon}</span>
+                  {equipDisplay.name}
                 </button>
                 <p className="text-xs text-gray-500 mt-1">
                   Prochain: {s.next_due_date ? new Date(s.next_due_date).toLocaleDateString("fr-FR") : "-"}
                 </p>
               </div>
 
-              {/* Navigation Links */}
-              {s.switchboard_id && (
+              {/* Navigation Links - All equipment types */}
+              {equipDisplay.link && (
                 <div className="flex gap-1">
                   <button
-                    onClick={() => navigate(`/app/switchboards?board=${s.switchboard_id}`)}
+                    onClick={() => navigate(equipDisplay.link)}
                     className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
-                    title="Voir le tableau"
+                    title="Voir l'équipement"
                   >
-                    ⚡
+                    {equipDisplay.icon}
                   </button>
-                  <button
-                    onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)}
-                    className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
-                    title="Voir sur la carte"
-                  >
-                    🗺️
-                  </button>
-                  <button
-                    onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
-                    className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200"
-                    title="Voir le schéma"
-                  >
-                    📊
-                  </button>
+                  {s.switchboard_id && (
+                    <>
+                      <button
+                        onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)}
+                        className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
+                        title="Voir sur la carte"
+                      >
+                        🗺️
+                      </button>
+                      <button
+                        onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
+                        className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200"
+                        title="Voir le schéma"
+                      >
+                        📊
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1044,47 +1119,55 @@ function OverdueTab({ overdueList, onStartControl, navigate }) {
         <p className="font-bold text-red-800 mt-2">{overdueList.length} contrôle(s) nécessite(nt) votre attention</p>
       </div>
 
-      {overdueList.map((s, idx) => (
-        <div
-          key={s.id}
-          className="bg-white border-2 border-red-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-all animate-slideUp"
-          style={{ animationDelay: `${idx * 100}ms` }}
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="flex items-center gap-3 flex-1 min-w-0">
-              <span className="text-3xl animate-bounce-slow">⚠️</span>
-              <div className="min-w-0">
-                <p className="font-bold text-red-800">{s.template_name}</p>
-                <button
-                  onClick={() => s.switchboard_id && navigate(`/app/switchboards?board=${s.switchboard_id}`)}
-                  className="text-sm text-gray-600 hover:text-blue-600 hover:underline"
-                >
-                  {s.switchboard_code || s.switchboard_name || `Disj. ${s.device_position}`}
-                </button>
-                <p className="text-xs text-red-600 mt-1">
-                  En retard de {Math.ceil((new Date() - new Date(s.next_due_date)) / (1000 * 60 * 60 * 24))} jours
-                </p>
+      {overdueList.map((s, idx) => {
+        const equipDisplay = getEquipmentDisplay(s);
+        return (
+          <div
+            key={s.id}
+            className="bg-white border-2 border-red-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-all animate-slideUp"
+            style={{ animationDelay: `${idx * 100}ms` }}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <span className="text-3xl animate-bounce-slow">⚠️</span>
+                <div className="min-w-0">
+                  <p className="font-bold text-red-800">{s.template_name}</p>
+                  <button
+                    onClick={() => equipDisplay.link && navigate(equipDisplay.link)}
+                    className="text-sm text-gray-600 hover:text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    <span>{equipDisplay.icon}</span>
+                    {equipDisplay.name}
+                  </button>
+                  <p className="text-xs text-red-600 mt-1">
+                    En retard de {Math.ceil((new Date() - new Date(s.next_due_date)) / (1000 * 60 * 60 * 24))} jours
+                  </p>
+                </div>
               </div>
+
+              {/* Navigation - All equipment types */}
+              {equipDisplay.link && (
+                <div className="flex gap-1">
+                  <button onClick={() => navigate(equipDisplay.link)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200" title="Voir l'équipement">{equipDisplay.icon}</button>
+                  {s.switchboard_id && (
+                    <>
+                      <button onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Carte">🗺️</button>
+                      <button onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <button
+                onClick={() => onStartControl(s)}
+                className="px-4 py-2.5 bg-red-600 text-white rounded-xl font-medium hover:bg-red-700 animate-pulse-slow whitespace-nowrap"
+              >
+                ⚡ Faire maintenant
+              </button>
             </div>
-
-            {/* Navigation */}
-            {s.switchboard_id && (
-              <div className="flex gap-1">
-                <button onClick={() => navigate(`/app/switchboards?board=${s.switchboard_id}`)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">⚡</button>
-                <button onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200">🗺️</button>
-                <button onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200">📊</button>
-              </div>
-            )}
-
-            <button
-              onClick={() => onStartControl(s)}
-              className="px-4 py-2.5 bg-red-600 text-white rounded-xl font-medium hover:bg-red-700 animate-pulse-slow whitespace-nowrap"
-            >
-              ⚡ Faire maintenant
-            </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1113,6 +1196,7 @@ function HistoryTab({ records, navigate }) {
     <div className="divide-y">
       {records.map((r, idx) => {
         const status = statusConfig[r.status] || statusConfig.partial;
+        const equipDisplay = getEquipmentDisplay(r);
         return (
           <div
             key={r.id}
@@ -1132,10 +1216,11 @@ function HistoryTab({ records, navigate }) {
                   </span>
                 </div>
                 <button
-                  onClick={() => r.switchboard_id && navigate(`/app/switchboards?board=${r.switchboard_id}`)}
-                  className="text-sm text-blue-600 hover:underline"
+                  onClick={() => equipDisplay.link && navigate(equipDisplay.link)}
+                  className="text-sm text-blue-600 hover:underline flex items-center gap-1"
                 >
-                  {r.switchboard_code || r.switchboard_name || `Disj. ${r.device_position}`}
+                  <span>{equipDisplay.icon}</span>
+                  {equipDisplay.name}
                 </button>
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 mt-1">
                   <span>📅 {new Date(r.performed_at).toLocaleDateString("fr-FR")}</span>
@@ -1143,12 +1228,16 @@ function HistoryTab({ records, navigate }) {
                 </div>
               </div>
 
-              {/* Navigation */}
-              {r.switchboard_id && (
+              {/* Navigation - All equipment types */}
+              {equipDisplay.link && (
                 <div className="flex gap-1">
-                  <button onClick={() => navigate(`/app/switchboards?board=${r.switchboard_id}`)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">⚡</button>
-                  <button onClick={() => navigate(`/app/switchboard-map?highlight=${r.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200">🗺️</button>
-                  <button onClick={() => navigate(`/app/switchboards/${r.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200">📊</button>
+                  <button onClick={() => navigate(equipDisplay.link)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200" title="Voir l'équipement">{equipDisplay.icon}</button>
+                  {r.switchboard_id && (
+                    <>
+                      <button onClick={() => navigate(`/app/switchboard-map?highlight=${r.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Carte">🗺️</button>
+                      <button onClick={() => navigate(`/app/switchboards/${r.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1775,6 +1864,10 @@ function ControlModal({ schedule, onClose, onComplete }) {
         template_id: schedule.template_id,
         switchboard_id: schedule.switchboard_id,
         device_id: schedule.device_id,
+        vsd_equipment_id: schedule.vsd_equipment_id,
+        meca_equipment_id: schedule.meca_equipment_id,
+        mobile_equipment_id: schedule.mobile_equipment_id,
+        equipment_type: schedule.equipment_type,
         checklist_results: results,
         global_notes: globalNotes,
         status,
@@ -1817,8 +1910,12 @@ function ControlModal({ schedule, onClose, onComplete }) {
                 <span className="text-2xl">📋</span>
                 {template.name}
               </h2>
-              <p className="text-white/80 text-sm mt-1">
-                {schedule.switchboard_code || schedule.switchboard_name || `Disj. ${schedule.device_position}`}
+              <p className="text-white/80 text-sm mt-1 flex items-center gap-2">
+                <span>{getEquipmentDisplay(schedule).icon}</span>
+                {getEquipmentDisplay(schedule).name}
+                {getEquipmentDisplay(schedule).category && (
+                  <span className="bg-white/20 px-2 py-0.5 rounded text-xs">{getEquipmentDisplay(schedule).category}</span>
+                )}
               </p>
             </div>
             <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-full">✕</button>

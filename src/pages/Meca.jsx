@@ -1088,6 +1088,11 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
 // ==================== EDIT FORM COMPONENT ====================
 
 const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) => {
+  // Debug: Log received categories
+  useEffect(() => {
+    console.log('[EditForm] Categories received:', categories.length, categories);
+  }, [categories]);
+
   const [form, setForm] = useState({
     name: '',
     tag: '',
@@ -1679,9 +1684,11 @@ export default function Meca() {
   const loadCategories = useCallback(async () => {
     try {
       const res = await api.meca.listCategories();
-      setCategories(res?.categories || []);
+      const cats = res?.categories || [];
+      console.log('[MECA] Categories loaded:', cats.length, cats);
+      setCategories(cats);
     } catch (err) {
-      console.error('Load categories error:', err);
+      console.error('[MECA] Load categories error:', err);
     }
   }, []);
 

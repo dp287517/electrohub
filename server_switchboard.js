@@ -3145,8 +3145,8 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'meca' || type === 'all') {
       try {
         const mecaRes = await quickQuery(`
-          SELECT id, name, building, floor, room, serial_number, brand
-          FROM meca_equipments WHERE site = $1 ORDER BY name
+          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand, category
+          FROM meca_equipments WHERE site_id = $1 ORDER BY name
         `, [site]);
         results.meca = mecaRes.rows;
       } catch (e) {
