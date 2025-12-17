@@ -572,7 +572,7 @@ export default function Comp() {
 
   // ---------- RENDER ----------
   return (
-    <section className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
+    <section className="max-w-[95vw] mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>

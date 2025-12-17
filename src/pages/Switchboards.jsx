@@ -2213,7 +2213,7 @@ export default function Switchboards() {
 
       {/* Header - Responsive */}
       <div className="sticky top-0 z-40 bg-white border-b shadow-sm">
-        <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-3 sm:px-4 py-3 sm:py-4">
+        <div className="max-w-[95vw] mx-auto px-3 sm:px-4 py-3 sm:py-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white flex-shrink-0">
@@ -2249,6 +2249,14 @@ export default function Switchboards() {
                     {upcomingControls.length}
                   </span>
                 )}
+              </button>
+              <button
+                onClick={() => navigate('/app/switchboards/map')}
+                className="px-3 py-2 bg-emerald-50 text-emerald-700 rounded-xl font-medium hover:bg-emerald-100 flex items-center gap-1.5"
+                title="Carte des plans"
+              >
+                <MapPin size={18} />
+                <span className="hidden sm:inline">Carte</span>
               </button>
               <button
                 onClick={() => navigate('/app/switchboard-controls')}
@@ -2405,7 +2413,7 @@ export default function Switchboards() {
         </div>
       )}
 
-      <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto flex">
+      <div className="max-w-[95vw] mx-auto flex">
         {/* Desktop: sidebar tree */}
         {!isMobile && (
           <div className="w-64 lg:w-80 border-r bg-white min-h-screen p-3 lg:p-4 sticky top-28 sm:top-32 self-start overflow-y-auto max-h-[calc(100vh-7rem)] sm:max-h-[calc(100vh-8rem)] flex-shrink-0">
