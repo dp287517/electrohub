@@ -685,10 +685,10 @@ const DetailPanel = ({
   onShare,
   onNavigateToMap,
   onPhotoUpload,
-  onStartCheck,
   isPlaced,
   showToast,
-  settings
+  controlStatuses,
+  navigate
 }) => {
   const [files, setFiles] = useState([]);
   const [history, setHistory] = useState([]);
@@ -838,14 +838,93 @@ const DetailPanel = ({
           </div>
         </div>
 
-        {/* Start Check Button */}
-        <button
-          onClick={() => onStartCheck(equipment)}
-          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-cyan-700 transition-all"
-        >
-          <ClipboardCheck size={18} />
-          Lancer un controle
-        </button>
+        {/* Control Status Section - Linked to switchboard-controls */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-xl ${
+                controlStatuses?.[equipment.id]?.status === 'overdue' ? 'bg-red-100' :
+                controlStatuses?.[equipment.id]?.status === 'pending' ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <ClipboardCheck size={20} className={
+                  controlStatuses?.[equipment.id]?.status === 'overdue' ? 'text-red-600' :
+                  controlStatuses?.[equipment.id]?.status === 'pending' ? 'text-blue-600' : 'text-gray-400'
+                } />
+              </div>
+              <div>
+                <h4 className="font-medium text-gray-900">
+                  Controles planifies
+                  {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full">
+                      {controlStatuses[equipment.id].controls.length}
+                    </span>
+                  )}
+                </h4>
+                <div className="flex items-center gap-2 mt-1">
+                  {controlStatuses?.[equipment.id]?.overdueCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                      <AlertTriangle size={10} />
+                      {controlStatuses[equipment.id].overdueCount} en retard
+                    </span>
+                  )}
+                  {controlStatuses?.[equipment.id]?.pendingCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full flex items-center gap-1">
+                      <CheckCircle size={10} />
+                      {controlStatuses[equipment.id].pendingCount} planifie(s)
+                    </span>
+                  )}
+                  {!controlStatuses?.[equipment.id]?.controls?.length && (
+                    <span className="text-sm text-gray-400">Aucun controle planifie</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* List scheduled controls */}
+          {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+            <div className="border-t border-gray-200 pt-3 space-y-2 mb-3">
+              {controlStatuses[equipment.id].controls.slice(0, 3).map((ctrl, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {ctrl.status === 'overdue' ? (
+                      <AlertTriangle size={14} className="text-red-500" />
+                    ) : (
+                      <Clock size={14} className="text-blue-500" />
+                    )}
+                    <span className="font-medium">{ctrl.template_name}</span>
+                  </div>
+                  <span className={ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}>
+                    {ctrl.next_due ? dayjs(ctrl.next_due).format('DD/MM/YY') : '-'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => navigate(`/app/switchboard-controls?tab=history&equipment_type=mobile_equipment&mobile_equipment_id=${equipment.id}`)}
+              className="flex-1 py-2 px-3 text-sm bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-1"
+            >
+              <History size={14} />
+              Historique
+            </button>
+            <button
+              onClick={() => navigate(`/app/switchboard-controls?tab=schedules&equipment_type=mobile_equipment&mobile_equipment_id=${equipment.id}`)}
+              className="flex-1 py-2 px-3 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center justify-center gap-1"
+            >
+              <ClipboardCheck size={14} />
+              Gerer
+            </button>
+          </div>
+        </div>
 
         {/* Equipment Info */}
         <div className="bg-gray-50 rounded-xl p-4">
@@ -1247,158 +1326,9 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
   );
 };
 
-// ==================== CHECK FORM COMPONENT ====================
-
-const CheckForm = ({ equipment, settings, onSave, onCancel, showToast }) => {
-  const [items, setItems] = useState([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isClosing, setIsClosing] = useState(false);
-
-  useEffect(() => {
-    if (equipment?.current_check?.items) {
-      setItems(equipment.current_check.items);
-    } else if (settings?.checklist_template) {
-      setItems(settings.checklist_template.map((label, index) => ({
-        index,
-        label,
-        value: null,
-        comment: ''
-      })));
-    }
-  }, [equipment, settings]);
-
-  const updateItem = (index, field, value) => {
-    setItems(prev => prev.map((item, i) =>
-      i === index ? { ...item, [field]: value } : item
-    ));
-  };
-
-  const handleSave = async (close = false) => {
-    if (close) {
-      const incomplete = items.some(item => !item.value);
-      if (incomplete) {
-        showToast('Veuillez remplir tous les points', 'error');
-        return;
-      }
-      setIsClosing(true);
-    } else {
-      setIsSaving(true);
-    }
-
-    try {
-      await onSave(items, close);
-      if (close) {
-        showToast('Controle termine', 'success');
-      } else {
-        showToast('Controle enregistre', 'success');
-      }
-    } catch (err) {
-      showToast('Erreur lors de la sauvegarde', 'error');
-    } finally {
-      setIsSaving(false);
-      setIsClosing(false);
-    }
-  };
-
-  const allFilled = items.every(item => item.value);
-
-  return (
-    <div className="h-full flex flex-col bg-white">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-white/20 rounded-xl">
-            <ClipboardCheck size={24} />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Controle</h2>
-            <p className="text-blue-100 text-sm">{equipment?.name}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Checklist */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {items.map((item, index) => (
-          <div key={index} className="bg-gray-50 rounded-xl p-4">
-            <p className="font-medium text-gray-900 mb-3">{item.label}</p>
-
-            <div className="flex gap-2 mb-3">
-              <button
-                onClick={() => updateItem(index, 'value', 'conforme')}
-                className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                  item.value === 'conforme'
-                    ? 'bg-emerald-500 text-white'
-                    : 'bg-white border border-gray-300 text-gray-700 hover:border-emerald-300'
-                }`}
-              >
-                <CheckCircle size={16} />
-                Conforme
-              </button>
-              <button
-                onClick={() => updateItem(index, 'value', 'non_conforme')}
-                className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                  item.value === 'non_conforme'
-                    ? 'bg-red-500 text-white'
-                    : 'bg-white border border-gray-300 text-gray-700 hover:border-red-300'
-                }`}
-              >
-                <XCircle size={16} />
-                Non conforme
-              </button>
-              <button
-                onClick={() => updateItem(index, 'value', 'na')}
-                className={`py-2.5 px-4 rounded-xl font-medium transition-all ${
-                  item.value === 'na'
-                    ? 'bg-gray-500 text-white'
-                    : 'bg-white border border-gray-300 text-gray-700 hover:border-gray-400'
-                }`}
-              >
-                N/A
-              </button>
-            </div>
-
-            <input
-              type="text"
-              value={item.comment || ''}
-              onChange={e => updateItem(index, 'comment', e.target.value)}
-              className={inputBaseClass}
-              placeholder="Commentaire (optionnel)"
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Actions */}
-      <div className="border-t p-4 space-y-3">
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
-          >
-            Annuler
-          </button>
-          <button
-            onClick={() => handleSave(false)}
-            disabled={isSaving}
-            className="flex-1 py-3 px-4 rounded-xl border border-blue-300 text-blue-600 font-medium hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
-            Sauvegarder
-          </button>
-        </div>
-        <button
-          onClick={() => handleSave(true)}
-          disabled={isClosing || !allFilled}
-          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {isClosing ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle size={18} />}
-          Terminer le controle
-        </button>
-      </div>
-    </div>
-  );
-};
+// ==================== NOTE: Contrôles gérés via switchboard-controls ====================
+// Les contrôles sont maintenant gérés depuis /app/switchboard-controls
+// avec le type d'équipement "mobile_equipment"
 
 // ==================== MAIN COMPONENT ====================
 
@@ -1418,10 +1348,13 @@ export default function MobileEquipments() {
   const [settings, setSettings] = useState(null);
 
   // View mode
-  const [viewMode, setViewMode] = useState('detail'); // 'detail' | 'edit' | 'check'
+  const [viewMode, setViewMode] = useState('detail'); // 'detail' | 'edit'
 
   // Placement state
   const [placedIds, setPlacedIds] = useState(new Set());
+
+  // Control statuses from switchboard-controls
+  const [controlStatuses, setControlStatuses] = useState({});
 
   // Toast state
   const [toast, setToast] = useState(null);
@@ -1460,6 +1393,56 @@ export default function MobileEquipments() {
       setCategories(res?.categories || []);
     } catch (err) {
       console.error('Load categories error:', err);
+    }
+  }, []);
+
+  // Load control statuses from switchboard-controls (like Switchboards.jsx)
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const res = await api.switchboardControls.listSchedules({ equipment_type: 'mobile_equipment' });
+      const schedules = res.schedules || [];
+      const statuses = {};
+      const now = new Date();
+
+      schedules.forEach(s => {
+        if (s.mobile_equipment_id) {
+          const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          const isOverdue = nextDue && nextDue < now;
+
+          // Initialize if not exists
+          if (!statuses[s.mobile_equipment_id]) {
+            statuses[s.mobile_equipment_id] = {
+              status: 'ok',
+              controls: [],
+              overdueCount: 0,
+              pendingCount: 0
+            };
+          }
+
+          const controlInfo = {
+            template_name: s.template_name || s.mobile_equipment_name || 'Contrôle',
+            next_due: s.next_due_date,
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
+          };
+
+          statuses[s.mobile_equipment_id].controls.push(controlInfo);
+
+          if (isOverdue) {
+            statuses[s.mobile_equipment_id].overdueCount++;
+            statuses[s.mobile_equipment_id].status = 'overdue';
+          } else {
+            statuses[s.mobile_equipment_id].pendingCount++;
+            if (statuses[s.mobile_equipment_id].status !== 'overdue') {
+              statuses[s.mobile_equipment_id].status = 'pending';
+            }
+          }
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.warn('Load control statuses error:', e);
     }
   }, []);
 
@@ -1505,7 +1488,8 @@ export default function MobileEquipments() {
     loadCategories();
     loadSettings();
     loadPlacements();
-  }, [loadEquipments, loadCategories, loadSettings, loadPlacements]);
+    loadControlStatuses();
+  }, [loadEquipments, loadCategories, loadSettings, loadPlacements, loadControlStatuses]);
 
   // Load calendar when modal opens
   useEffect(() => {
@@ -1555,17 +1539,6 @@ export default function MobileEquipments() {
     setViewMode('edit');
   };
 
-  const handleStartCheck = async (e) => {
-    try {
-      await api.mobileEquipment.startCheck(e.id);
-      const res = await api.mobileEquipment.get(e.id);
-      setSelectedEquipment(res?.equipment || res || e);
-      setViewMode('check');
-    } catch (err) {
-      showToast('Erreur lors du demarrage du controle', 'error');
-    }
-  };
-
   const handleSaveEquipment = async (formData) => {
     const isNew = !selectedEquipment?.id;
 
@@ -1589,29 +1562,6 @@ export default function MobileEquipments() {
       setViewMode('detail');
       setSearchParams({ equipment: newEquipment.id.toString() });
       showToast(isNew ? 'Equipement cree' : 'Equipement mis a jour', 'success');
-    } catch (err) {
-      throw err;
-    }
-  };
-
-  const handleSaveCheck = async (items, close) => {
-    if (!selectedEquipment?.current_check?.id) {
-      showToast('Aucun controle en cours', 'error');
-      return;
-    }
-
-    try {
-      await api.mobileEquipment.saveCheck(selectedEquipment.id, selectedEquipment.current_check.id, { items, close });
-
-      const res = await api.mobileEquipment.get(selectedEquipment.id);
-      const updatedEquipment = res?.equipment || res;
-      setSelectedEquipment(updatedEquipment);
-
-      setEquipments(prev => prev.map(e => e.id === updatedEquipment.id ? updatedEquipment : e));
-
-      if (close) {
-        setViewMode('detail');
-      }
     } catch (err) {
       throw err;
     }
@@ -1878,10 +1828,10 @@ export default function MobileEquipments() {
               onShare={(e) => setShowShareModal(true)}
               onNavigateToMap={handleNavigateToMap}
               onPhotoUpload={handlePhotoUpload}
-              onStartCheck={handleStartCheck}
               isPlaced={isPlaced(selectedEquipment?.id)}
               showToast={showToast}
-              settings={settings}
+              controlStatuses={controlStatuses}
+              navigate={navigate}
             />
           ) : viewMode === 'edit' ? (
             <EditForm
@@ -1896,14 +1846,6 @@ export default function MobileEquipments() {
                   setSearchParams({});
                 }
               }}
-              showToast={showToast}
-            />
-          ) : viewMode === 'check' && selectedEquipment?.id ? (
-            <CheckForm
-              equipment={selectedEquipment}
-              settings={settings}
-              onSave={handleSaveCheck}
-              onCancel={() => setViewMode('detail')}
               showToast={showToast}
             />
           ) : (
