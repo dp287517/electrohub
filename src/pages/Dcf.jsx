@@ -1029,7 +1029,7 @@ export default function DCFWizardV8() {
   };
 
   const renderStep3 = () => (
-    <div className="animate-fade-in max-w-7xl mx-auto">
+    <div className="animate-fade-in max-w-[1600px] 2xl:max-w-[1800px] mx-auto">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-6 border-b">
         <div>

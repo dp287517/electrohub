@@ -844,7 +844,7 @@ END:VCALENDAR`;
 
       {/* ===== HEADER ===== */}
       <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white">
-        <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-6 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div>
               <h1 className="text-3xl font-bold flex items-center gap-3">
@@ -912,7 +912,7 @@ END:VCALENDAR`;
 
       {/* Asset Type Filter Bar */}
       <div className="bg-white border-b shadow-sm sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-3 overflow-x-auto">
+        <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-6 py-3 flex items-center gap-3 overflow-x-auto">
           <span className="text-sm font-medium text-gray-500 whitespace-nowrap">Filter by type:</span>
           <AssetChip type="all" active={selectedAsset === 'all'} onClick={() => setSelectedAsset('all')} stats={assetStats?.all} />
           <AssetChip type="sb" active={selectedAsset === 'sb'} onClick={() => setSelectedAsset('sb')} stats={assetStats?.switchboards} />
@@ -933,7 +933,7 @@ END:VCALENDAR`;
       </div>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-6 py-8">
 
         {/* ===== OVERVIEW TAB ===== */}
         {tab === 'overview' && (
