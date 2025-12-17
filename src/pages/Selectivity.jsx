@@ -193,7 +193,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
             <p className="text-sm text-gray-500">
               {upstream.In}A → {downstream.In}A
-              {result.limitCurrent && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
+              {typeof result.limitCurrent === 'number' && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
             </p>
           </div>
         </div>
@@ -582,7 +582,7 @@ export default function Selectivity() {
         `${p.upstream.In}A`,
         p.downstream.name,
         `${p.downstream.In}A`,
-        p.result.limitCurrent ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
+        typeof p.result.limitCurrent === 'number' ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
         p.result.isSelective ? 'OK' : p.result.isPartiallySelective ? 'Partiel' : 'NON'
       ]);
 
