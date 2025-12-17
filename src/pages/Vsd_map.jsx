@@ -1076,7 +1076,7 @@ export default function VsdMap() {
       await refreshPlacedIds();
 
       // Open the equipment detail page
-      navigate(`/app/vsd?equipment=${id}`);
+      navigate(`/app/vsd?vsd=${id}`);
     } catch (err) {
       console.error("Erreur création équipement VSD:", err);
       alert("Erreur lors de la création de l'équipement VSD");

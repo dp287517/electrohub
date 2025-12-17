@@ -1076,7 +1076,7 @@ export default function MecaMap() {
       await refreshPlacedIds();
 
       // Open the equipment detail page
-      navigate(`/app/meca?equipment=${id}`);
+      navigate(`/app/meca?meca=${id}`);
     } catch (err) {
       console.error("Erreur création équipement MECA:", err);
       alert("Erreur lors de la création de l'équipement MECA");
