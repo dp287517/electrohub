@@ -7,6 +7,13 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import multer from 'multer';
 import { getSiteFilter } from './lib/tenant-filter.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import AdmZip from 'adm-zip';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 const { Pool } = pg;
@@ -40,6 +47,12 @@ app.use((req, res, next) => {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 5 }
+});
+
+// Multer (ZIP uploads for plans)
+const multerZip = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB max ZIP
 });
 
 // Utils
@@ -90,6 +103,41 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
+
+    -- Plans/Maps tables (like VSD)
+    CREATE TABLE IF NOT EXISTS hv_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      site TEXT NOT NULL,
+      logical_name TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      filename TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      page_count INTEGER DEFAULT 1,
+      content BYTEA NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hv_plans_logical ON hv_plans(logical_name);
+    CREATE INDEX IF NOT EXISTS idx_hv_plans_site ON hv_plans(site);
+
+    CREATE TABLE IF NOT EXISTS hv_plan_names (
+      logical_name TEXT PRIMARY KEY,
+      site TEXT NOT NULL,
+      display_name TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS hv_positions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      site TEXT NOT NULL,
+      equipment_id INTEGER NOT NULL REFERENCES hv_equipments(id) ON DELETE CASCADE,
+      logical_name TEXT NOT NULL,
+      plan_id UUID NULL,
+      page_index INTEGER NOT NULL DEFAULT 0,
+      x_frac NUMERIC NOT NULL,
+      y_frac NUMERIC NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (equipment_id, logical_name, page_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hv_positions_lookup ON hv_positions(logical_name, page_index);
   `);
 }
 ensureSchema().catch(e => console.error('[HV SCHEMA] Init error:', e.message));
@@ -614,6 +662,257 @@ Please read all photos, transcribe the nameplate and extract as per schema.` },
     if (status === 400) return res.status(400).json({ error: 'Invalid request to OpenAI', details: detail });
     if (status === 503) return res.status(503).json({ error: 'OpenAI service unavailable', details: detail });
     return res.status(500).json({ error: 'AI specs extraction failed', details: detail });
+  }
+});
+
+// ==================== MAPS / PLANS ENDPOINTS ====================
+
+// Helper: count PDF pages
+async function countPdfPages(buffer) {
+  try {
+    const pdfParse = (await import('pdf-parse')).default;
+    const data = await pdfParse(buffer);
+    return data.numpages || 1;
+  } catch {
+    return 1;
+  }
+}
+
+// Upload ZIP of PDFs
+app.post('/api/hv/maps/uploadZip', multerZip.single('zip'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    if (!req.file) return res.status(400).json({ error: 'No ZIP file uploaded' });
+
+    const zip = new AdmZip(req.file.buffer);
+    const entries = zip.getEntries().filter(e =>
+      !e.isDirectory &&
+      e.entryName.toLowerCase().endsWith('.pdf') &&
+      !e.entryName.startsWith('__MACOSX')
+    );
+
+    if (entries.length === 0) {
+      return res.status(400).json({ error: 'No PDF files found in ZIP' });
+    }
+
+    const results = [];
+    for (const entry of entries) {
+      const filename = path.basename(entry.entryName);
+      const logical_name = filename.replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const content = entry.getData();
+      const pageCount = await countPdfPages(content);
+
+      // Get next version
+      const versionRes = await pool.query(
+        `SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM hv_plans WHERE site = $1 AND logical_name = $2`,
+        [site, logical_name]
+      );
+      const version = versionRes.rows[0].next_version;
+
+      // Insert plan
+      const insertRes = await pool.query(
+        `INSERT INTO hv_plans (site, logical_name, version, filename, file_path, page_count, content)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, logical_name, version, filename, page_count`,
+        [site, logical_name, version, filename, `db://${logical_name}`, pageCount, content]
+      );
+
+      results.push(insertRes.rows[0]);
+    }
+
+    res.json({ uploaded: results.length, plans: results });
+  } catch (e) {
+    console.error('[HV MAPS] Upload ZIP error:', e.message);
+    res.status(500).json({ error: 'Upload ZIP failed', details: e.message });
+  }
+});
+
+// List plans
+app.get('/api/hv/maps/listPlans', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name)
+             p.id, p.logical_name, p.version, p.filename, p.page_count,
+             COALESCE(pn.display_name, p.logical_name) AS display_name
+        FROM hv_plans p
+        LEFT JOIN hv_plan_names pn ON pn.logical_name = p.logical_name AND pn.site = p.site
+       WHERE p.site = $1
+       ORDER BY p.logical_name, p.version DESC
+    `, [site]);
+
+    res.json(rows);
+  } catch (e) {
+    console.error('[HV MAPS] List plans error:', e.message);
+    res.status(500).json({ error: 'List plans failed', details: e.message });
+  }
+});
+
+// Get plan file (PDF)
+app.get('/api/hv/maps/planFile', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { id, logical_name } = req.query;
+    let rows;
+
+    if (id) {
+      const result = await pool.query(
+        `SELECT content, filename FROM hv_plans WHERE id = $1 AND site = $2`,
+        [id, site]
+      );
+      rows = result.rows;
+    } else if (logical_name) {
+      const result = await pool.query(
+        `SELECT content, filename FROM hv_plans WHERE site = $1 AND logical_name = $2 ORDER BY version DESC LIMIT 1`,
+        [site, logical_name]
+      );
+      rows = result.rows;
+    } else {
+      return res.status(400).json({ error: 'Missing id or logical_name' });
+    }
+
+    if (rows.length === 0) return res.status(404).json({ error: 'Plan not found' });
+
+    const { content, filename } = rows[0];
+    if (!content) return res.status(404).json({ error: 'Plan content not available' });
+
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `inline; filename="${filename}"`);
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(content);
+  } catch (e) {
+    console.error('[HV MAPS] Get plan file error:', e.message);
+    res.status(500).json({ error: 'Get plan file failed', details: e.message });
+  }
+});
+
+// Rename plan (display name)
+app.put('/api/hv/maps/renamePlan', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { logical_name, display_name } = req.body;
+    if (!logical_name || !display_name) {
+      return res.status(400).json({ error: 'Missing logical_name or display_name' });
+    }
+
+    await pool.query(
+      `INSERT INTO hv_plan_names (logical_name, site, display_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name, site = EXCLUDED.site`,
+      [logical_name, site, display_name]
+    );
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[HV MAPS] Rename plan error:', e.message);
+    res.status(500).json({ error: 'Rename plan failed', details: e.message });
+  }
+});
+
+// Get equipment positions on a plan
+app.get('/api/hv/maps/positions', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { logical_name, id, page_index = 0 } = req.query;
+    const planKey = logical_name || id;
+    if (!planKey) return res.status(400).json({ error: 'Missing logical_name or id' });
+
+    const { rows } = await pool.query(`
+      SELECT pos.id, pos.equipment_id, pos.x_frac, pos.y_frac,
+             e.name, e.code, e.building_code, e.floor, e.room, e.regime_neutral, e.is_principal
+        FROM hv_positions pos
+        JOIN hv_equipments e ON e.id = pos.equipment_id
+       WHERE pos.site = $1 AND pos.logical_name = $2 AND pos.page_index = $3
+       ORDER BY e.name
+    `, [site, planKey, Number(page_index)]);
+
+    res.json({ positions: rows });
+  } catch (e) {
+    console.error('[HV MAPS] Get positions error:', e.message);
+    res.status(500).json({ error: 'Get positions failed', details: e.message });
+  }
+});
+
+// Set/update equipment position on plan
+app.post('/api/hv/maps/setPosition', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { equipment_id, logical_name, plan_id, page_index = 0, x_frac, y_frac } = req.body;
+    if (!equipment_id || !logical_name || x_frac === undefined || y_frac === undefined) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO hv_positions (site, equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (equipment_id, logical_name, page_index)
+      DO UPDATE SET x_frac = EXCLUDED.x_frac, y_frac = EXCLUDED.y_frac, plan_id = EXCLUDED.plan_id
+      RETURNING *
+    `, [site, equipment_id, logical_name, plan_id || null, Number(page_index), x_frac, y_frac]);
+
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[HV MAPS] Set position error:', e.message);
+    res.status(500).json({ error: 'Set position failed', details: e.message });
+  }
+});
+
+// Delete position
+app.delete('/api/hv/maps/positions/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { rowCount } = await pool.query(
+      `DELETE FROM hv_positions WHERE id = $1 AND site = $2`,
+      [req.params.id, site]
+    );
+
+    if (rowCount === 0) return res.status(404).json({ error: 'Position not found' });
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[HV MAPS] Delete position error:', e.message);
+    res.status(500).json({ error: 'Delete position failed', details: e.message });
+  }
+});
+
+// Get all placed equipment IDs
+app.get('/api/hv/maps/placed-ids', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { rows } = await pool.query(`
+      SELECT DISTINCT equipment_id, logical_name
+        FROM hv_positions
+       WHERE site = $1
+    `, [site]);
+
+    const placed_ids = rows.map(r => r.equipment_id);
+    const placed_details = {};
+    rows.forEach(r => {
+      if (!placed_details[r.equipment_id]) {
+        placed_details[r.equipment_id] = { plans: [] };
+      }
+      if (!placed_details[r.equipment_id].plans.includes(r.logical_name)) {
+        placed_details[r.equipment_id].plans.push(r.logical_name);
+      }
+    });
+
+    res.json({ placed_ids, placed_details });
+  } catch (e) {
+    console.error('[HV MAPS] Get placed IDs error:', e.message);
+    res.status(500).json({ error: 'Get placed IDs failed', details: e.message });
   }
 });
 
