@@ -11,6 +11,42 @@ import AtexMap from "./Atex-map.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
 
+// 📊 Chart.js imports pour l'onglet Analyse
+import { Doughnut, Bar, Line, Radar } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  RadialLinearScale,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from "chart.js";
+import annotationPlugin from "chartjs-plugin-annotation";
+import zoomPlugin from "chartjs-plugin-zoom";
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  RadialLinearScale,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+  annotationPlugin,
+  zoomPlugin
+);
+
 // ============================================================
 // 🆕 Helper pour récupérer l'identité utilisateur (email)
 // ============================================================
@@ -812,6 +848,7 @@ export default function Atex() {
       <div className="flex gap-1 sm:gap-2 overflow-x-auto pb-2 scrollbar-hide">
         <TabButton id="dashboard" label="Tableau de bord" />
         <TabButton id="controls" label="Équipements" count={stats.total} color="bg-blue-100 text-blue-800" />
+        <TabButton id="analytics" label="📊 Analyse" color="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-800" />
         <TabButton id="plans" label="Plans" count={plans.length} color="bg-purple-100 text-purple-800" />
       </div>
 
@@ -840,6 +877,14 @@ export default function Atex() {
           />
         )}
 
+        {/* ANALYTICS */}
+        {activeTab === "analytics" && (
+          <AnalyticsTab
+            items={items}
+            stats={stats}
+            loading={loading}
+          />
+        )}
 
         {/* PLANS */}
         {activeTab === "plans" && (
@@ -948,20 +993,26 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
         <button
           onClick={runMassComplianceCheck}
           disabled={massComplianceRunning || items.length === 0}
-          className={`rounded-xl p-3 sm:p-4 border-2 border-dashed transition-all ${
-            massComplianceRunning
-              ? "bg-blue-50 border-blue-300 cursor-wait"
-              : "bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200 hover:border-blue-400 hover:shadow-md cursor-pointer"
+          className={`mass-ai-button rounded-xl p-3 sm:p-4 border-2 transition-all ${
+            massComplianceRunning ? "running" : ""
           } disabled:opacity-50`}
         >
-          <div className="flex items-center gap-3">
-            <span className="text-xl sm:text-2xl">{massComplianceRunning ? "⏳" : "🤖"}</span>
+          {/* Particules décoratives */}
+          <div className="mass-ai-particles">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          {/* Badge compteur */}
+          {!massComplianceRunning && items.length > 0 && (
+            <span className="mass-ai-badge">{items.length}</span>
+          )}
+          <div className="flex items-center gap-3 ai-text">
+            <span className="text-xl sm:text-2xl ai-icon">{massComplianceRunning ? "⚡" : "🤖"}</span>
             <div className="text-left">
-              <p className="text-xs sm:text-sm text-blue-700 font-medium">
-                {massComplianceRunning ? "Analyse en cours..." : "Vérification IA en masse"}
+              <p className="text-xs sm:text-sm font-medium text-white/90">
+                {massComplianceRunning ? "Analyse IA en cours..." : "Vérification IA en masse"}
               </p>
-              <p className="text-lg sm:text-xl font-bold text-blue-800">
-                {massComplianceRunning ? "Patientez" : `${items.length} équip.`}
+              <p className="text-lg sm:text-xl font-bold ai-text-title">
+                {massComplianceRunning ? "Veuillez patienter..." : "Lancer l'analyse"}
               </p>
             </div>
           </div>
@@ -1033,6 +1084,666 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
           <p className="font-medium">Tous les contrôles sont à jour !</p>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// 📊 ANALYTICS TAB - Onglet d'analyse FURIEUX avec graphiques dynamiques
+// ============================================================
+
+function AnalyticsTab({ items, stats, loading }) {
+  // États pour les filtres
+  const [timeFilter, setTimeFilter] = useState("all");
+  const [buildingFilter, setBuildingFilter] = useState("all");
+  const [complianceFilter, setComplianceFilter] = useState("all");
+  const [aiInsights, setAiInsights] = useState([]);
+  const [loadingInsights, setLoadingInsights] = useState(false);
+
+  // Données filtrées
+  const filteredItems = useMemo(() => {
+    let filtered = [...items];
+
+    if (buildingFilter !== "all") {
+      filtered = filtered.filter(it => it.building === buildingFilter);
+    }
+
+    if (complianceFilter !== "all") {
+      filtered = filtered.filter(it => it.compliance_state === complianceFilter);
+    }
+
+    if (timeFilter !== "all") {
+      const now = dayjs();
+      if (timeFilter === "30days") {
+        filtered = filtered.filter(it => it.next_check_date && dayjs(it.next_check_date).isBefore(now.add(30, 'day')));
+      } else if (timeFilter === "90days") {
+        filtered = filtered.filter(it => it.next_check_date && dayjs(it.next_check_date).isBefore(now.add(90, 'day')));
+      } else if (timeFilter === "overdue") {
+        filtered = filtered.filter(it => it.status === "en_retard");
+      }
+    }
+
+    return filtered;
+  }, [items, timeFilter, buildingFilter, complianceFilter]);
+
+  // Liste unique des bâtiments
+  const buildings = useMemo(() => {
+    const set = new Set(items.map(it => it.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [items]);
+
+  // Stats calculées pour les graphiques
+  const chartStats = useMemo(() => {
+    const total = filteredItems.length;
+    const conforme = filteredItems.filter(it => it.compliance_state === "conforme").length;
+    const nonConforme = filteredItems.filter(it => it.compliance_state === "non_conforme").length;
+    const na = filteredItems.filter(it => !it.compliance_state || it.compliance_state === "na").length;
+
+    const aFaire = filteredItems.filter(it => it.status === "a_faire").length;
+    const enCours = filteredItems.filter(it => it.status === "en_cours_30").length;
+    const enRetard = filteredItems.filter(it => it.status === "en_retard").length;
+
+    const zonesGaz = filteredItems.filter(it => it.zoning_gas != null).length;
+    const zonesDust = filteredItems.filter(it => it.zoning_dust != null).length;
+
+    // Par zone gaz
+    const zone0 = filteredItems.filter(it => it.zoning_gas === 0).length;
+    const zone1 = filteredItems.filter(it => it.zoning_gas === 1).length;
+    const zone2 = filteredItems.filter(it => it.zoning_gas === 2).length;
+
+    // Par zone poussière
+    const zone20 = filteredItems.filter(it => it.zoning_dust === 20).length;
+    const zone21 = filteredItems.filter(it => it.zoning_dust === 21).length;
+    const zone22 = filteredItems.filter(it => it.zoning_dust === 22).length;
+
+    // Par bâtiment
+    const byBuilding = {};
+    filteredItems.forEach(it => {
+      const b = it.building || "Non défini";
+      if (!byBuilding[b]) byBuilding[b] = { total: 0, conforme: 0, nonConforme: 0 };
+      byBuilding[b].total++;
+      if (it.compliance_state === "conforme") byBuilding[b].conforme++;
+      if (it.compliance_state === "non_conforme") byBuilding[b].nonConforme++;
+    });
+
+    // Timeline des contrôles à venir
+    const timeline = [];
+    const now = dayjs();
+    for (let i = 0; i < 12; i++) {
+      const month = now.add(i, 'month');
+      const count = filteredItems.filter(it => {
+        if (!it.next_check_date) return false;
+        const d = dayjs(it.next_check_date);
+        return d.month() === month.month() && d.year() === month.year();
+      }).length;
+      timeline.push({ month: month.format("MMM YYYY"), count });
+    }
+
+    return {
+      total, conforme, nonConforme, na, aFaire, enCours, enRetard,
+      zonesGaz, zonesDust, zone0, zone1, zone2, zone20, zone21, zone22,
+      byBuilding, timeline,
+      conformityRate: total > 0 ? Math.round((conforme / total) * 100) : 0
+    };
+  }, [filteredItems]);
+
+  // Génération des insights IA
+  useEffect(() => {
+    const generateInsights = () => {
+      const insights = [];
+
+      if (chartStats.nonConforme > 0) {
+        insights.push({
+          icon: "⚠️",
+          type: "warning",
+          text: `${chartStats.nonConforme} équipement${chartStats.nonConforme > 1 ? 's' : ''} non conforme${chartStats.nonConforme > 1 ? 's' : ''} détecté${chartStats.nonConforme > 1 ? 's' : ''}. Action corrective recommandée.`
+        });
+      }
+
+      if (chartStats.enRetard > 0) {
+        insights.push({
+          icon: "🕐",
+          type: "critical",
+          text: `${chartStats.enRetard} contrôle${chartStats.enRetard > 1 ? 's' : ''} en retard. Priorité haute recommandée.`
+        });
+      }
+
+      if (chartStats.conformityRate >= 90) {
+        insights.push({
+          icon: "🎉",
+          type: "success",
+          text: `Excellent! Taux de conformité de ${chartStats.conformityRate}%. Maintenez ce niveau.`
+        });
+      } else if (chartStats.conformityRate >= 70) {
+        insights.push({
+          icon: "📈",
+          type: "info",
+          text: `Taux de conformité à ${chartStats.conformityRate}%. Objectif: atteindre 90% ce trimestre.`
+        });
+      } else if (chartStats.conformityRate > 0) {
+        insights.push({
+          icon: "🔴",
+          type: "critical",
+          text: `Taux de conformité critique: ${chartStats.conformityRate}%. Plan d'action urgent requis.`
+        });
+      }
+
+      if (chartStats.zone0 > 0) {
+        insights.push({
+          icon: "💥",
+          type: "warning",
+          text: `${chartStats.zone0} équipement${chartStats.zone0 > 1 ? 's' : ''} en Zone 0 (risque maximum). Surveillance renforcée.`
+        });
+      }
+
+      const prochainMois = chartStats.timeline[0]?.count || 0;
+      if (prochainMois > 5) {
+        insights.push({
+          icon: "📅",
+          type: "info",
+          text: `${prochainMois} contrôles prévus ce mois. Planifiez les ressources.`
+        });
+      }
+
+      setAiInsights(insights.slice(0, 5));
+    };
+
+    generateInsights();
+  }, [chartStats]);
+
+  // Export Excel
+  const exportToExcel = () => {
+    const headers = [
+      "Nom", "Type", "Bâtiment", "Zone", "Marquage Gaz", "Marquage Poussière",
+      "Zone Gaz", "Zone Poussière", "Conformité", "Statut", "Dernier contrôle", "Prochain contrôle"
+    ];
+
+    const rows = filteredItems.map(it => [
+      it.name || "",
+      it.type || "",
+      it.building || "",
+      it.zone || "",
+      it.atex_mark_gas || "",
+      it.atex_mark_dust || "",
+      it.zoning_gas ?? "",
+      it.zoning_dust ?? "",
+      it.compliance_state || "N/A",
+      it.status || "",
+      it.last_check_date ? dayjs(it.last_check_date).format("DD/MM/YYYY") : "",
+      it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : ""
+    ]);
+
+    const csvContent = [
+      headers.join(";"),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(";"))
+    ].join("\n");
+
+    const BOM = "\uFEFF";
+    const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `atex_analyse_${dayjs().format("YYYY-MM-DD_HH-mm")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Configuration des graphiques
+  const complianceDonutData = {
+    labels: ["Conforme", "Non conforme", "Non évalué"],
+    datasets: [{
+      data: [chartStats.conforme, chartStats.nonConforme, chartStats.na],
+      backgroundColor: [
+        "rgba(16, 185, 129, 0.8)",
+        "rgba(239, 68, 68, 0.8)",
+        "rgba(156, 163, 175, 0.8)"
+      ],
+      borderColor: [
+        "rgba(16, 185, 129, 1)",
+        "rgba(239, 68, 68, 1)",
+        "rgba(156, 163, 175, 1)"
+      ],
+      borderWidth: 2,
+      hoverOffset: 8
+    }]
+  };
+
+  const statusDonutData = {
+    labels: ["À faire", "En cours (30j)", "En retard"],
+    datasets: [{
+      data: [chartStats.aFaire, chartStats.enCours, chartStats.enRetard],
+      backgroundColor: [
+        "rgba(34, 197, 94, 0.8)",
+        "rgba(245, 158, 11, 0.8)",
+        "rgba(239, 68, 68, 0.8)"
+      ],
+      borderColor: [
+        "rgba(34, 197, 94, 1)",
+        "rgba(245, 158, 11, 1)",
+        "rgba(239, 68, 68, 1)"
+      ],
+      borderWidth: 2,
+      hoverOffset: 8
+    }]
+  };
+
+  const zonesBarData = {
+    labels: ["Zone 0", "Zone 1", "Zone 2", "Zone 20", "Zone 21", "Zone 22"],
+    datasets: [{
+      label: "Équipements",
+      data: [chartStats.zone0, chartStats.zone1, chartStats.zone2, chartStats.zone20, chartStats.zone21, chartStats.zone22],
+      backgroundColor: [
+        "rgba(220, 38, 38, 0.8)",
+        "rgba(245, 158, 11, 0.8)",
+        "rgba(34, 197, 94, 0.8)",
+        "rgba(147, 51, 234, 0.8)",
+        "rgba(99, 102, 241, 0.8)",
+        "rgba(59, 130, 246, 0.8)"
+      ],
+      borderRadius: 8,
+      borderSkipped: false
+    }]
+  };
+
+  const timelineData = {
+    labels: chartStats.timeline.map(t => t.month),
+    datasets: [{
+      label: "Contrôles prévus",
+      data: chartStats.timeline.map(t => t.count),
+      fill: true,
+      borderColor: "rgba(99, 102, 241, 1)",
+      backgroundColor: "rgba(99, 102, 241, 0.1)",
+      tension: 0.4,
+      pointBackgroundColor: "rgba(99, 102, 241, 1)",
+      pointBorderColor: "#fff",
+      pointBorderWidth: 2,
+      pointRadius: 5,
+      pointHoverRadius: 8
+    }]
+  };
+
+  const buildingLabels = Object.keys(chartStats.byBuilding).slice(0, 8);
+  const buildingBarData = {
+    labels: buildingLabels,
+    datasets: [
+      {
+        label: "Conforme",
+        data: buildingLabels.map(b => chartStats.byBuilding[b]?.conforme || 0),
+        backgroundColor: "rgba(16, 185, 129, 0.8)",
+        borderRadius: 4
+      },
+      {
+        label: "Non conforme",
+        data: buildingLabels.map(b => chartStats.byBuilding[b]?.nonConforme || 0),
+        backgroundColor: "rgba(239, 68, 68, 0.8)",
+        borderRadius: 4
+      }
+    ]
+  };
+
+  const radarData = {
+    labels: ["Conformité", "Contrôles OK", "Zones Gaz", "Zones Poussière", "Documentation", "Maintenance"],
+    datasets: [{
+      label: "Score actuel",
+      data: [
+        chartStats.conformityRate,
+        chartStats.total > 0 ? Math.round(((chartStats.aFaire + chartStats.enCours) / chartStats.total) * 100) : 0,
+        chartStats.total > 0 ? Math.round((chartStats.zonesGaz / chartStats.total) * 100) : 0,
+        chartStats.total > 0 ? Math.round((chartStats.zonesDust / chartStats.total) * 100) : 0,
+        75,
+        80
+      ],
+      backgroundColor: "rgba(99, 102, 241, 0.2)",
+      borderColor: "rgba(99, 102, 241, 1)",
+      borderWidth: 2,
+      pointBackgroundColor: "rgba(99, 102, 241, 1)",
+      pointBorderColor: "#fff",
+      pointHoverBackgroundColor: "#fff",
+      pointHoverBorderColor: "rgba(99, 102, 241, 1)"
+    }]
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: "bottom",
+        labels: {
+          padding: 20,
+          usePointStyle: true,
+          font: { size: 12, weight: "500" }
+        }
+      },
+      tooltip: {
+        backgroundColor: "rgba(17, 24, 39, 0.9)",
+        padding: 12,
+        titleFont: { size: 14, weight: "600" },
+        bodyFont: { size: 13 },
+        cornerRadius: 8
+      }
+    }
+  };
+
+  const barOptions = {
+    ...chartOptions,
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { font: { size: 11 } }
+      },
+      y: {
+        grid: { color: "rgba(0,0,0,0.05)" },
+        beginAtZero: true,
+        ticks: { font: { size: 11 } }
+      }
+    }
+  };
+
+  const lineOptions = {
+    ...chartOptions,
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { font: { size: 10 }, maxRotation: 45 }
+      },
+      y: {
+        grid: { color: "rgba(0,0,0,0.05)" },
+        beginAtZero: true,
+        ticks: { font: { size: 11 } }
+      }
+    },
+    plugins: {
+      ...chartOptions.plugins,
+      zoom: {
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: "x"
+        },
+        pan: {
+          enabled: true,
+          mode: "x"
+        }
+      }
+    }
+  };
+
+  const radarOptions = {
+    ...chartOptions,
+    scales: {
+      r: {
+        beginAtZero: true,
+        max: 100,
+        ticks: { stepSize: 20, font: { size: 10 } },
+        pointLabels: { font: { size: 11, weight: "500" } }
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="kpi-grid">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="chart-skeleton h-24" />
+          ))}
+        </div>
+        <div className="charts-grid charts-grid-2">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="chart-skeleton" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="analytics-container">
+      {/* Header avec filtres et export */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+            <span className="text-2xl">📊</span> Analyse ATEX
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {filteredItems.length} équipement{filteredItems.length !== 1 ? "s" : ""} analysé{filteredItems.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <button onClick={exportToExcel} className="export-btn">
+          <span>📥</span> Exporter Excel
+        </button>
+      </div>
+
+      {/* Filtres dynamiques */}
+      <div className="analytics-filters">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-600">🕐 Période:</span>
+          {[
+            { id: "all", label: "Tout" },
+            { id: "30days", label: "30 jours" },
+            { id: "90days", label: "90 jours" },
+            { id: "overdue", label: "En retard" }
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setTimeFilter(f.id)}
+              className={`analytics-filter-btn ${timeFilter === f.id ? "active" : ""}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-600">🏢 Bâtiment:</span>
+          <select
+            value={buildingFilter}
+            onChange={(e) => setBuildingFilter(e.target.value)}
+            className="analytics-filter-btn"
+          >
+            <option value="all">Tous</option>
+            {buildings.map(b => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-600">✅ Conformité:</span>
+          {[
+            { id: "all", label: "Tout" },
+            { id: "conforme", label: "Conforme" },
+            { id: "non_conforme", label: "Non conforme" }
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setComplianceFilter(f.id)}
+              className={`analytics-filter-btn ${complianceFilter === f.id ? "active" : ""}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPIs animés */}
+      <div className="kpi-grid">
+        <div className="kpi-card kpi-blue">
+          <div className="kpi-value animate-count">{chartStats.total}</div>
+          <div className="kpi-label">Total Équipements</div>
+        </div>
+        <div className="kpi-card kpi-green">
+          <div className="kpi-value animate-count">{chartStats.conformityRate}%</div>
+          <div className="kpi-label">Taux de Conformité</div>
+          {chartStats.conformityRate >= 90 && <div className="kpi-trend up">↑ Excellent</div>}
+        </div>
+        <div className="kpi-card kpi-red">
+          <div className="kpi-value animate-count">{chartStats.nonConforme}</div>
+          <div className="kpi-label">Non Conformes</div>
+          {chartStats.nonConforme > 0 && <div className="kpi-trend down">Action requise</div>}
+        </div>
+        <div className="kpi-card kpi-orange">
+          <div className="kpi-value animate-count">{chartStats.enRetard}</div>
+          <div className="kpi-label">En Retard</div>
+          {chartStats.enRetard > 0 && <div className="kpi-trend down">Urgent</div>}
+        </div>
+      </div>
+
+      {/* Panel IA Insights */}
+      {aiInsights.length > 0 && (
+        <div className="ai-insights-panel">
+          <div className="ai-insights-header">
+            <span className="text-2xl">🤖</span>
+            <span className="ai-insights-title">Analyse IA</span>
+            <span className="ai-insights-badge">Live</span>
+          </div>
+          <div className="ai-insights-content">
+            {aiInsights.map((insight, idx) => (
+              <div key={idx} className="ai-insight-item">
+                <span className="ai-insight-icon">{insight.icon}</span>
+                <span className="ai-insight-text">{insight.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Graphiques - Ligne 1 */}
+      <div className="charts-grid charts-grid-2">
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">🎯</span>
+              État de Conformité
+            </span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Doughnut data={complianceDonutData} options={chartOptions} />
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">📋</span>
+              Statut des Contrôles
+            </span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Doughnut data={statusDonutData} options={chartOptions} />
+          </div>
+        </div>
+      </div>
+
+      {/* Graphiques - Ligne 2 */}
+      <div className="charts-grid charts-grid-2">
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">⚠️</span>
+              Répartition par Zone ATEX
+            </span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Bar data={zonesBarData} options={barOptions} />
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">🏢</span>
+              Conformité par Bâtiment
+            </span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Bar data={buildingBarData} options={{ ...barOptions, indexAxis: "y" }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Graphiques - Ligne 3 */}
+      <div className="charts-grid charts-grid-2">
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">📅</span>
+              Planning des Contrôles (12 mois)
+            </span>
+            <span className="text-xs text-gray-500">Zoom: molette souris</span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Line data={timelineData} options={lineOptions} />
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">
+              <span className="chart-title-icon">🎯</span>
+              Radar de Performance
+            </span>
+          </div>
+          <div className="chart-body" style={{ height: "280px" }}>
+            <Radar data={radarData} options={radarOptions} />
+          </div>
+        </div>
+      </div>
+
+      {/* Table récapitulative */}
+      <div className="chart-card">
+        <div className="chart-header">
+          <span className="chart-title">
+            <span className="chart-title-icon">📊</span>
+            Détail par Bâtiment
+          </span>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          <table className="analytics-table">
+            <thead>
+              <tr>
+                <th>Bâtiment</th>
+                <th>Total</th>
+                <th>Conformes</th>
+                <th>Non conformes</th>
+                <th>Taux</th>
+                <th>Progression</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(chartStats.byBuilding).slice(0, 10).map(([building, data]) => {
+                const rate = data.total > 0 ? Math.round((data.conforme / data.total) * 100) : 0;
+                return (
+                  <tr key={building}>
+                    <td className="font-medium">{building}</td>
+                    <td>{data.total}</td>
+                    <td className="text-green-600 font-medium">{data.conforme}</td>
+                    <td className="text-red-600 font-medium">{data.nonConforme}</td>
+                    <td>
+                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                        rate >= 90 ? "bg-green-100 text-green-700" :
+                        rate >= 70 ? "bg-yellow-100 text-yellow-700" :
+                        "bg-red-100 text-red-700"
+                      }`}>
+                        {rate}%
+                      </span>
+                    </td>
+                    <td style={{ width: "150px" }}>
+                      <div className="analytics-progress">
+                        <div
+                          className={`analytics-progress-bar ${rate >= 90 ? "green" : rate >= 70 ? "orange" : "red"}`}
+                          style={{ width: `${rate}%` }}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
