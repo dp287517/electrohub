@@ -1152,7 +1152,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
         zone: equipment.zone || '',
         location: equipment.location || '',
         panel: equipment.panel || '',
-        ui_status: equipment.ui_status || '',
+        ui_status: equipment.ui_status || equipment.status || '',
         criticality: equipment.criticality || '',
         comments: equipment.comments || ''
       });
@@ -1187,12 +1187,16 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
     try {
       const payload = {
         ...form,
+        // Map ui_status to status for backend compatibility
+        status: form.ui_status,
         power_kw: form.power_kw !== '' ? Number(form.power_kw) : null,
         current_a: form.current_a !== '' ? Number(form.current_a) : null,
         flow_m3h: form.flow_m3h !== '' ? Number(form.flow_m3h) : null,
         pressure_bar: form.pressure_bar !== '' ? Number(form.pressure_bar) : null,
         speed_rpm: form.speed_rpm !== '' ? Number(form.speed_rpm) : null,
       };
+      // Remove ui_status from payload since we've mapped it to status
+      delete payload.ui_status;
       await onSave(payload);
     } finally {
       setIsSaving(false);
