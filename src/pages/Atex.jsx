@@ -154,6 +154,14 @@ export default function Atex() {
   const [aiPhotosCount, setAiPhotosCount] = useState(0);
   const [massComplianceRunning, setMassComplianceRunning] = useState(false);
 
+  // Lightbox pour agrandir les photos
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [lightboxTitle, setLightboxTitle] = useState("");
+
+  // Historique des photos d'analyse IA
+  const [aiAnalysisPhotos, setAiAnalysisPhotos] = useState([]);
+
   // Plans
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
@@ -202,6 +210,20 @@ export default function Atex() {
     if (selectedEquipmentId) params.eq = selectedEquipmentId;
     setSearchParams(params, { replace: true });
   }, [activeTab, selectedEquipmentId, setSearchParams]);
+
+  // Fermer le lightbox avec Échap
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const handleEsc = (e) => {
+      if (e.key === "Escape") {
+        setLightboxOpen(false);
+        setLightboxSrc(null);
+        setLightboxTitle("");
+      }
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [lightboxOpen]);
 
   /* ----------------------------- Data Loading ----------------------------- */
   const debouncer = useRef(null);
@@ -450,11 +472,35 @@ export default function Atex() {
     }
   }
 
+  /* ----------------------------- Lightbox ----------------------------- */
+  function openLightbox(src, title = "") {
+    setLightboxSrc(src);
+    setLightboxTitle(title);
+    setLightboxOpen(true);
+  }
+
+  function closeLightbox() {
+    setLightboxOpen(false);
+    setLightboxSrc(null);
+    setLightboxTitle("");
+  }
+
   /* ----------------------------- AI Analysis ----------------------------- */
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
     setAiPhotosCount(list.length);
+
+    // Stocker les photos en mémoire pour consultation ultérieure
+    const newPhotos = list.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: file.name,
+      url: URL.createObjectURL(file),
+      date: new Date().toISOString(),
+      file: file, // Garder référence pour ré-analyse
+    }));
+    setAiAnalysisPhotos((prev) => [...newPhotos, ...prev].slice(0, 20)); // Garder les 20 dernières
+
     try {
       const res = await api.atex.analyzePhotoBatch(list);
       const s = res?.extracted || res || {};
@@ -477,6 +523,23 @@ export default function Atex() {
       setToast("Analyse photos indisponible");
     } finally {
       setAiPhotosCount(0);
+    }
+  }
+
+  // Envoyer la photo principale vers l'analyse IA
+  async function sendMainPhotoToAI() {
+    if (!editing?.id || !editing?.photo_url) {
+      setToast("Aucune photo à analyser");
+      return;
+    }
+    try {
+      // Récupérer l'image depuis l'URL
+      const response = await fetch(api.atex.photoUrl(editing.id, { bust: true }));
+      const blob = await response.blob();
+      const file = new File([blob], `photo-${editing.id}.jpg`, { type: blob.type || "image/jpeg" });
+      await analyzeFromPhotos([file]);
+    } catch {
+      setToast("Impossible de charger la photo pour l'analyse");
     }
   }
 
@@ -925,10 +988,51 @@ export default function Atex() {
           onUploadAttachments={uploadAttachments}
           onAnalyzePhotos={analyzeFromPhotos}
           onVerifyCompliance={verifyComplianceIA}
+          onSendMainPhotoToAI={sendMainPhotoToAI}
           asDateInput={asDateInput}
           next36MonthsISO={next36MonthsISO}
           aiPhotosCount={aiPhotosCount}
+          aiAnalysisPhotos={aiAnalysisPhotos}
+          onOpenLightbox={openLightbox}
         />
+      )}
+
+      {/* Lightbox pour agrandir les photos */}
+      {lightboxOpen && lightboxSrc && (
+        <div
+          className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-4"
+          onClick={closeLightbox}
+        >
+          <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
+            {/* Bouton fermer */}
+            <button
+              onClick={closeLightbox}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 transition-colors text-lg font-medium flex items-center gap-2"
+            >
+              <span>Fermer</span>
+              <span className="text-2xl">✕</span>
+            </button>
+
+            {/* Titre */}
+            {lightboxTitle && (
+              <div className="absolute -top-12 left-0 text-white text-lg font-medium truncate max-w-[70%]">
+                {lightboxTitle}
+              </div>
+            )}
+
+            {/* Image */}
+            <img
+              src={lightboxSrc}
+              alt={lightboxTitle || "Photo agrandie"}
+              className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+
+            {/* Instructions */}
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 text-gray-400 text-sm">
+              Cliquez en dehors de l'image ou appuyez sur Échap pour fermer
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2227,9 +2331,12 @@ function EquipmentDrawer({
   onUploadAttachments,
   onAnalyzePhotos,
   onVerifyCompliance,
+  onSendMainPhotoToAI,
   asDateInput,
   next36MonthsISO,
   aiPhotosCount = 0,
+  aiAnalysisPhotos = [],
+  onOpenLightbox,
 }) {
   const [activeSection, setActiveSection] = useState("info");
 
@@ -2370,7 +2477,11 @@ function EquipmentDrawer({
                 <div className="atex-section">
                   <div className="atex-section-title">📸 Photo de l'équipement</div>
                   <div className="flex flex-col sm:flex-row items-center gap-4">
-                    <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl border-2 border-dashed border-gray-300 overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+                    <div
+                      className={`w-24 h-24 sm:w-32 sm:h-32 rounded-xl border-2 border-dashed border-gray-300 overflow-hidden bg-gray-100 flex items-center justify-center shrink-0 ${editing.photo_url ? "cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition-all" : ""}`}
+                      onClick={() => editing.photo_url && onOpenLightbox(api.atex.photoUrl(editing.id, { bust: true }), editing.name || "Photo équipement")}
+                      title={editing.photo_url ? "Cliquer pour agrandir" : ""}
+                    >
                       {editing.photo_url ? (
                         <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="" className="w-full h-full object-cover" />
                       ) : (
@@ -2382,17 +2493,49 @@ function EquipmentDrawer({
                         <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUploadPhoto(e.target.files[0])} />
                         📤 Changer la photo
                       </label>
-                      <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <label className={`atex-btn w-full sm:w-auto cursor-pointer relative ${aiPhotosCount > 0 ? "atex-btn-secondary animate-pulse" : "atex-btn-ai"}`}>
                           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => e.target.files?.length && onAnalyzePhotos(e.target.files)} />
                           {aiPhotosCount > 0 ? `⏳ Analyse ${aiPhotosCount} photo(s)...` : "🤖 Analyse IA"}
                         </label>
+                        {editing.photo_url && (
+                          <button
+                            onClick={onSendMainPhotoToAI}
+                            className="atex-btn atex-btn-ai w-full sm:w-auto"
+                            title="Analyser la photo actuelle avec l'IA"
+                          >
+                            🔄 Analyser cette photo
+                          </button>
+                        )}
                         <button onClick={onVerifyCompliance} className="atex-btn atex-btn-secondary w-full sm:w-auto">
                           ✅ Conformité IA
                         </button>
                       </div>
                     </div>
                   </div>
+
+                  {/* Historique des photos analysées par IA */}
+                  {aiAnalysisPhotos.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <div className="text-xs font-medium text-gray-500 mb-2">📂 Photos analysées récemment ({aiAnalysisPhotos.length})</div>
+                      <div className="flex gap-2 overflow-x-auto pb-2">
+                        {aiAnalysisPhotos.map((photo) => (
+                          <div
+                            key={photo.id}
+                            className="w-16 h-16 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition-all relative group"
+                            onClick={() => onOpenLightbox(photo.url, photo.name)}
+                            title={`${photo.name} - Cliquer pour agrandir`}
+                          >
+                            <img src={photo.url} alt={photo.name} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+                              <span className="opacity-0 group-hover:opacity-100 text-white text-lg">🔍</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">Cliquez sur une miniature pour l'agrandir</div>
+                    </div>
+                  )}
                 </div>
               )}
 
