@@ -218,104 +218,242 @@ const ShareLinkModal = ({ isOpen, onClose, equipment }) => {
   );
 };
 
-// Settings Modal
-const SettingsModal = ({ isOpen, onClose, settings, onSave, showToast }) => {
-  const [localSettings, setLocalSettings] = useState({ checklist_template: [], default_frequency: '6_mois' });
-  const [isSaving, setIsSaving] = useState(false);
+// Category Manager Modal (remplace Settings Modal)
+const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange, showToast }) => {
+  const [localCategories, setLocalCategories] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', description: '' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newCategory, setNewCategory] = useState({ name: '', description: '' });
 
   useEffect(() => {
-    if (settings) {
-      setLocalSettings({
-        checklist_template: settings.checklist_template || ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5'],
-        default_frequency: settings.default_frequency || '6_mois'
-      });
+    if (categories) {
+      setLocalCategories([...categories]);
     }
-  }, [settings]);
+  }, [categories]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setEditingId(null);
+      setShowNewForm(false);
+      setNewCategory({ name: '', description: '' });
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = async () => {
-    setIsSaving(true);
+  const handleCreate = async () => {
+    if (!newCategory.name.trim()) {
+      showToast('Le nom est requis', 'error');
+      return;
+    }
+    setIsLoading(true);
     try {
-      await onSave(localSettings);
-      showToast('Parametres enregistres', 'success');
-      onClose();
+      await api.mobileEquipment.createCategory(newCategory);
+      showToast('Categorie creee', 'success');
+      setNewCategory({ name: '', description: '' });
+      setShowNewForm(false);
+      onCategoriesChange();
     } catch (err) {
-      showToast('Erreur lors de la sauvegarde', 'error');
+      showToast('Erreur lors de la creation', 'error');
     } finally {
-      setIsSaving(false);
+      setIsLoading(false);
     }
   };
 
-  const updateTemplateItem = (index, value) => {
-    setLocalSettings(prev => ({
-      ...prev,
-      checklist_template: prev.checklist_template.map((item, i) => i === index ? value : item)
-    }));
+  const handleUpdate = async (id) => {
+    if (!editForm.name.trim()) {
+      showToast('Le nom est requis', 'error');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await api.mobileEquipment.updateCategory(id, editForm);
+      showToast('Categorie mise a jour', 'success');
+      setEditingId(null);
+      onCategoriesChange();
+    } catch (err) {
+      showToast('Erreur lors de la mise a jour', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Supprimer la categorie "${name}" ?`)) return;
+    setIsLoading(true);
+    try {
+      await api.mobileEquipment.deleteCategory(id);
+      showToast('Categorie supprimee', 'success');
+      onCategoriesChange();
+    } catch (err) {
+      showToast('Erreur lors de la suppression', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startEdit = (cat) => {
+    setEditingId(cat.id);
+    setEditForm({ name: cat.name, description: cat.description || '' });
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
-        <div className="bg-gradient-to-r from-gray-700 to-gray-800 p-6 text-white">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/20 rounded-xl">
-              <Settings size={24} />
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-xl">
+                <Tag size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Categories</h2>
+                <p className="text-purple-200 text-sm">Gestion des categories d'equipements</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xl font-bold">Parametres</h2>
-              <p className="text-gray-300 text-sm">Configuration des controles</p>
-            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X size={20} />
+            </button>
           </div>
         </div>
 
-        <div className="p-6 space-y-6 overflow-y-auto flex-1">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Frequence par defaut</label>
-            <select
-              value={localSettings.default_frequency}
-              onChange={e => setLocalSettings(prev => ({ ...prev, default_frequency: e.target.value }))}
-              className={selectBaseClass}
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {/* Add new category button */}
+          {!showNewForm && (
+            <button
+              onClick={() => setShowNewForm(true)}
+              className="w-full py-3 px-4 rounded-xl border-2 border-dashed border-purple-300 text-purple-600 font-medium hover:bg-purple-50 flex items-center justify-center gap-2"
             >
-              <option value="1_mois">Tous les mois</option>
-              <option value="3_mois">Tous les 3 mois</option>
-              <option value="6_mois">Tous les 6 mois</option>
-              <option value="1_an">Tous les ans</option>
-              <option value="2_ans">Tous les 2 ans</option>
-            </select>
-          </div>
+              <Plus size={18} />
+              Ajouter une categorie
+            </button>
+          )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Points de controle (5 max)</label>
-            <div className="space-y-2">
-              {localSettings.checklist_template.map((item, index) => (
-                <input
-                  key={index}
-                  type="text"
-                  value={item}
-                  onChange={e => updateTemplateItem(index, e.target.value)}
-                  className={inputBaseClass}
-                  placeholder={`Point ${index + 1}`}
-                />
-              ))}
+          {/* New category form */}
+          {showNewForm && (
+            <div className="bg-purple-50 rounded-xl p-4 space-y-3 border border-purple-200">
+              <input
+                type="text"
+                value={newCategory.name}
+                onChange={e => setNewCategory(prev => ({ ...prev, name: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Nom de la categorie *"
+                autoFocus
+              />
+              <input
+                type="text"
+                value={newCategory.description}
+                onChange={e => setNewCategory(prev => ({ ...prev, description: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Description (optionnel)"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowNewForm(false); setNewCategory({ name: '', description: '' }); }}
+                  className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleCreate}
+                  disabled={isLoading}
+                  className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center justify-center gap-1"
+                >
+                  {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                  Creer
+                </button>
+              </div>
             </div>
+          )}
+
+          {/* Categories list */}
+          <div className="space-y-2">
+            {localCategories.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Tag size={32} className="mx-auto mb-2 opacity-30" />
+                <p>Aucune categorie</p>
+                <p className="text-sm">Creez des categories pour organiser vos equipements</p>
+              </div>
+            ) : (
+              localCategories.map(cat => (
+                <div
+                  key={cat.id}
+                  className="bg-gray-50 rounded-xl p-4 border border-gray-200 hover:border-purple-300 transition-colors"
+                >
+                  {editingId === cat.id ? (
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={editForm.name}
+                        onChange={e => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                        className={inputBaseClass}
+                        placeholder="Nom *"
+                        autoFocus
+                      />
+                      <input
+                        type="text"
+                        value={editForm.description}
+                        onChange={e => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+                        className={inputBaseClass}
+                        placeholder="Description"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50"
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          onClick={() => handleUpdate(cat.id)}
+                          disabled={isLoading}
+                          className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 flex items-center justify-center gap-1"
+                        >
+                          {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                          Sauvegarder
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <h4 className="font-medium text-gray-900">{cat.name}</h4>
+                        {cat.description && (
+                          <p className="text-sm text-gray-500">{cat.description}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(cat)}
+                          className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-purple-600"
+                          title="Modifier"
+                        >
+                          <Edit3 size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(cat.id, cat.name)}
+                          className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-red-600"
+                          title="Supprimer"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </div>
 
-        <div className="border-t p-4 flex gap-3">
+        <div className="border-t p-4">
           <button
             onClick={onClose}
-            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+            className="w-full py-3 px-4 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
           >
-            Annuler
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-gray-700 to-gray-800 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
-            Enregistrer
+            Fermer
           </button>
         </div>
       </div>
@@ -1621,10 +1759,10 @@ export default function MobileEquipments() {
             </button>
             <button
               onClick={() => setShowSettingsModal(true)}
-              className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
-              title="Parametres"
+              className="p-2 hover:bg-purple-100 rounded-lg text-purple-600"
+              title="Gerer les categories"
             >
-              <Settings size={20} />
+              <Tag size={20} />
             </button>
             <button
               onClick={() => navigate('/app/mobile-equipments/map')}
@@ -1816,11 +1954,11 @@ export default function MobileEquipments() {
         equipment={selectedEquipment}
       />
 
-      <SettingsModal
+      <CategoryManagerModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
-        settings={settings}
-        onSave={handleSaveSettings}
+        categories={categories}
+        onCategoriesChange={loadCategories}
         showToast={showToast}
       />
 

@@ -2691,11 +2691,17 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       SELECT cs.*,
              ct.name as template_name, ct.target_type, ct.frequency_months,
              sb.name as switchboard_name, sb.code as switchboard_code,
-             d.name as device_name, d.position_number as device_position
+             d.name as device_name, d.position_number as device_position,
+             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
       WHERE cs.site = $1
     `;
     const params = [site];
@@ -2828,17 +2834,23 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { switchboard_id, device_id, limit = 50 } = req.query;
+    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type, limit = 50 } = req.query;
 
     let sql = `
       SELECT cr.*,
              ct.name as template_name,
              sb.name as switchboard_name, sb.code as switchboard_code,
-             d.name as device_name, d.position_number as device_position
+             d.name as device_name, d.position_number as device_position,
+             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
       LEFT JOIN devices d ON cr.device_id = d.id
+      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
+      LEFT JOIN me_equipments me ON cr.mobile_equipment_id = me.id
       WHERE cr.site = $1
     `;
     const params = [site];
@@ -2851,6 +2863,22 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
     if (device_id) {
       sql += ` AND cr.device_id = $${idx++}`;
       params.push(device_id);
+    }
+    if (vsd_equipment_id) {
+      sql += ` AND cr.vsd_equipment_id = $${idx++}`;
+      params.push(vsd_equipment_id);
+    }
+    if (meca_equipment_id) {
+      sql += ` AND cr.meca_equipment_id = $${idx++}`;
+      params.push(meca_equipment_id);
+    }
+    if (mobile_equipment_id) {
+      sql += ` AND cr.mobile_equipment_id = $${idx++}`;
+      params.push(mobile_equipment_id);
+    }
+    if (equipment_type) {
+      sql += ` AND cr.equipment_type = $${idx++}`;
+      params.push(equipment_type);
     }
 
     sql += ` ORDER BY cr.performed_at DESC LIMIT $${idx}`;
@@ -2876,11 +2904,17 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
       SELECT cr.*,
              ct.name as template_name, ct.checklist_items as template_items,
              sb.name as switchboard_name, sb.code as switchboard_code,
-             d.name as device_name, d.position_number as device_position
+             d.name as device_name, d.position_number as device_position,
+             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
       LEFT JOIN devices d ON cr.device_id = d.id
+      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
+      LEFT JOIN me_equipments me ON cr.mobile_equipment_id = me.id
       WHERE cr.id = $1 AND cr.site = $2
     `, [id, site]);
 
@@ -3065,11 +3099,17 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const upcoming = await quickQuery(`
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
-             d.position_number, d.name as device_name
+             d.position_number, d.name as device_name,
+             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
       WHERE cs.site = $1
         AND cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
       ORDER BY cs.next_due_date ASC
@@ -3080,11 +3120,17 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const overdueList = await quickQuery(`
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
-             d.position_number, d.name as device_name
+             d.position_number, d.name as device_name,
+             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
       WHERE cs.site = $1 AND cs.next_due_date < CURRENT_DATE
       ORDER BY cs.next_due_date ASC
       LIMIT 20
