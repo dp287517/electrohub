@@ -440,9 +440,16 @@ export default function ArcFlash() {
 
   return (
     <section className="min-h-screen bg-gradient-to-br from-amber-50 via-white to-red-50">
+      <style>{`
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .animate-pulse-danger { animation: pulse 1s ease-in-out infinite; }
+      `}</style>
+
       {/* Header */}
       <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 text-white">
-        <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="max-w-[95vw] mx-auto px-4 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="p-4 bg-white/20 rounded-2xl">
@@ -467,9 +474,9 @@ export default function ArcFlash() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-[95vw] mx-auto px-4 py-6">
         {/* Stats - PPE Distribution */}
-        <div className="grid grid-cols-3 md:grid-cols-7 gap-3 mb-6">
+        <div className="grid grid-cols-3 md:grid-cols-7 gap-3 mb-6 animate-slideUp">
           {[0, 1, 2, 3, 4, 5].map(cat => {
             const colors = PPE_COLORS[cat];
             return (

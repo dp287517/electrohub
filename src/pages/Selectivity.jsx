@@ -207,7 +207,12 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
 
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50">
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Trip Curve Chart */}
+          <div className="mb-4">
+            <MiniSelectivityChart upstream={upstream} downstream={downstream} result={result} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
               <p className="text-xs font-semibold text-purple-800 mb-1">AMONT</p>
               <p className="font-bold">{upstream.name}</p>
@@ -228,7 +233,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
           </div>
 
-          <table className="w-full text-xs">
+          <table className="w-full text-xs overflow-x-auto">
             <thead>
               <tr className="bg-gray-200">
                 <th className="px-2 py-1 text-left">Icc (A)</th>

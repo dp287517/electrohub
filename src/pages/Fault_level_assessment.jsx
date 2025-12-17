@@ -407,9 +407,14 @@ export default function FaultLevelAssessment() {
 
   return (
     <section className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-cyan-50">
+      <style>{`
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+      `}</style>
+
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 text-white">
-        <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="max-w-[95vw] mx-auto px-4 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="p-4 bg-white/20 rounded-2xl">
@@ -441,9 +446,9 @@ export default function FaultLevelAssessment() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-[95vw] mx-auto px-4 py-6">
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 animate-slideUp">
           <div className="bg-white rounded-xl p-4 shadow-sm border">
             <div className="text-3xl font-bold text-gray-900">{stats.total}</div>
             <div className="text-sm text-gray-500">Tableaux analysés</div>
