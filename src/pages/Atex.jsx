@@ -1000,7 +1000,7 @@ export default function Atex() {
       {/* Lightbox pour agrandir les photos */}
       {lightboxOpen && lightboxSrc && (
         <div
-          className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[10001] bg-black/90 flex items-center justify-center p-4"
           onClick={closeLightbox}
         >
           <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
@@ -2504,7 +2504,7 @@ function EquipmentDrawer({
                             className="atex-btn atex-btn-ai w-full sm:w-auto"
                             title="Analyser la photo actuelle avec l'IA"
                           >
-                            🔄 Analyser cette photo
+                            🔄 Analyser photo de profil de l'équipement
                           </button>
                         )}
                         <button onClick={onVerifyCompliance} className="atex-btn atex-btn-secondary w-full sm:w-auto">
