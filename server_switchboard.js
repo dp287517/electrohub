@@ -649,7 +649,7 @@ async function ensureSchema() {
       END IF;
 
       -- =====================================================
-      -- CONTROL SCHEDULES: Colonnes pour VSD, MECA, Mobile Equipment
+      -- CONTROL SCHEDULES: Colonnes pour VSD, MECA, Mobile Equipment, HV
       -- =====================================================
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'vsd_equipment_id') THEN
         ALTER TABLE control_schedules ADD COLUMN vsd_equipment_id INTEGER;
@@ -666,12 +666,15 @@ async function ensureSchema() {
           ALTER TABLE control_schedules ADD COLUMN mobile_equipment_id UUID;
         END IF;
       END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'hv_equipment_id') THEN
+        ALTER TABLE control_schedules ADD COLUMN hv_equipment_id INTEGER;
+      END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_schedules ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
       END IF;
 
       -- =====================================================
-      -- CONTROL RECORDS: Colonnes pour VSD, MECA, Mobile Equipment
+      -- CONTROL RECORDS: Colonnes pour VSD, MECA, Mobile Equipment, HV
       -- =====================================================
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'vsd_equipment_id') THEN
         ALTER TABLE control_records ADD COLUMN vsd_equipment_id INTEGER;
@@ -687,6 +690,9 @@ async function ensureSchema() {
           ALTER TABLE control_records DROP COLUMN mobile_equipment_id;
           ALTER TABLE control_records ADD COLUMN mobile_equipment_id UUID;
         END IF;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'hv_equipment_id') THEN
+        ALTER TABLE control_records ADD COLUMN hv_equipment_id INTEGER;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_records ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
@@ -707,10 +713,12 @@ async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS idx_control_schedules_vsd ON control_schedules(vsd_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_schedules_meca ON control_schedules(meca_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_schedules_mobile ON control_schedules(mobile_equipment_id);
+      CREATE INDEX IF NOT EXISTS idx_control_schedules_hv ON control_schedules(hv_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_schedules_type ON control_schedules(equipment_type);
       CREATE INDEX IF NOT EXISTS idx_control_records_vsd ON control_records(vsd_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_records_meca ON control_records(meca_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_records_mobile ON control_records(mobile_equipment_id);
+      CREATE INDEX IF NOT EXISTS idx_control_records_hv ON control_records(hv_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_records_type ON control_records(equipment_type);
     END $$;
 
@@ -2691,13 +2699,13 @@ app.delete('/api/switchboard/controls/templates/:id', async (req, res) => {
 
 // --- SCHEDULES ---
 
-// List schedules (with filters) - EXTENDED for VSD, MECA, Mobile Equipment
+// List schedules (with filters) - EXTENDED for VSD, MECA, Mobile Equipment, HV
 app.get('/api/switchboard/controls/schedules', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type, status, overdue } = req.query;
+    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type, status, overdue } = req.query;
 
     let sql = `
       SELECT cs.*,
@@ -2706,7 +2714,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
              d.name as device_name, d.position_number as device_position,
              vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
-             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
+             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
@@ -2714,6 +2723,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
+      LEFT JOIN hv_equipments hv ON cs.hv_equipment_id = hv.id
       WHERE cs.site = $1
     `;
     const params = [site];
@@ -2738,6 +2748,10 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
     if (mobile_equipment_id) {
       sql += ` AND cs.mobile_equipment_id = $${idx++}`;
       params.push(mobile_equipment_id);
+    }
+    if (hv_equipment_id) {
+      sql += ` AND cs.hv_equipment_id = $${idx++}`;
+      params.push(hv_equipment_id);
     }
     if (equipment_type) {
       sql += ` AND cs.equipment_type = $${idx++}`;
@@ -2770,25 +2784,26 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
   }
 });
 
-// Create schedule (assign control to any equipment type) - EXTENDED
+// Create schedule (assign control to any equipment type) - EXTENDED with HV
 app.post('/api/switchboard/controls/schedules', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type, next_due_date } = req.body;
+    const { template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type, next_due_date } = req.body;
     if (!template_id) return res.status(400).json({ error: 'Template ID required' });
 
     // Determine equipment type based on which ID is provided
     let detectedType = equipment_type || 'switchboard';
-    if (vsd_equipment_id) detectedType = 'vsd';
+    if (hv_equipment_id) detectedType = 'hv';
+    else if (vsd_equipment_id) detectedType = 'vsd';
     else if (meca_equipment_id) detectedType = 'meca';
     else if (mobile_equipment_id) detectedType = 'mobile_equipment';
     else if (device_id) detectedType = 'device';
     else if (switchboard_id) detectedType = 'switchboard';
 
-    if (!switchboard_id && !device_id && !vsd_equipment_id && !meca_equipment_id && !mobile_equipment_id) {
-      return res.status(400).json({ error: 'Equipment ID required (switchboard, device, vsd, meca, or mobile_equipment)' });
+    if (!switchboard_id && !device_id && !vsd_equipment_id && !meca_equipment_id && !mobile_equipment_id && !hv_equipment_id) {
+      return res.status(400).json({ error: 'Equipment ID required (switchboard, device, vsd, meca, mobile_equipment, or hv)' });
     }
 
     // Check if schedule already exists for this template and equipment
@@ -2802,6 +2817,7 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     if (vsd_equipment_id) { conditions.push(`vsd_equipment_id = $${pIdx++}`); existingParams.push(vsd_equipment_id); }
     if (meca_equipment_id) { conditions.push(`meca_equipment_id = $${pIdx++}`); existingParams.push(meca_equipment_id); }
     if (mobile_equipment_id) { conditions.push(`mobile_equipment_id = $${pIdx++}`); existingParams.push(mobile_equipment_id); }
+    if (hv_equipment_id) { conditions.push(`hv_equipment_id = $${pIdx++}`); existingParams.push(hv_equipment_id); }
 
     existingCheck += conditions.join(' OR ') + ')';
 
@@ -2811,10 +2827,10 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     }
 
     const { rows } = await quickQuery(`
-      INSERT INTO control_schedules (site, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type, next_due_date, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+      INSERT INTO control_schedules (site, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type, next_due_date, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
       RETURNING *
-    `, [site, template_id, switchboard_id || null, device_id || null, vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, detectedType, next_due_date || new Date()]);
+    `, [site, template_id, switchboard_id || null, device_id || null, vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, detectedType, next_due_date || new Date()]);
 
     res.json({ schedule: rows[0] });
   } catch (e) {
@@ -2840,13 +2856,13 @@ app.delete('/api/switchboard/controls/schedules/:id', async (req, res) => {
 
 // --- CONTROL RECORDS ---
 
-// List control history
+// List control history - EXTENDED with HV
 app.get('/api/switchboard/controls/records', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type, limit = 50 } = req.query;
+    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type, limit = 50 } = req.query;
 
     let sql = `
       SELECT cr.*,
@@ -2855,7 +2871,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
              d.name as device_name, d.position_number as device_position,
              vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
-             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
+             me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
+             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
@@ -2863,6 +2880,7 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
       LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
+      LEFT JOIN hv_equipments hv ON cr.hv_equipment_id = hv.id
       WHERE cr.site = $1
     `;
     const params = [site];
@@ -2883,6 +2901,10 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
     if (meca_equipment_id) {
       sql += ` AND cr.meca_equipment_id = $${idx++}`;
       params.push(meca_equipment_id);
+    }
+    if (hv_equipment_id) {
+      sql += ` AND cr.hv_equipment_id = $${idx++}`;
+      params.push(hv_equipment_id);
     }
     if (mobile_equipment_id) {
       sql += ` AND cr.mobile_equipment_id = $${idx++}`;
@@ -2944,13 +2966,13 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
   }
 });
 
-// Create control record (complete a control) - EXTENDED for all equipment types
+// Create control record (complete a control) - EXTENDED for all equipment types including HV
 app.post('/api/switchboard/controls/records', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type,
+    const { schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type,
             checklist_results, global_notes, signature_base64, status } = req.body;
 
     const performedBy = req.headers['x-user-name'] || 'unknown';
@@ -2958,7 +2980,8 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
 
     // Determine equipment type
     let detectedType = equipment_type || 'switchboard';
-    if (vsd_equipment_id) detectedType = 'vsd';
+    if (hv_equipment_id) detectedType = 'hv';
+    else if (vsd_equipment_id) detectedType = 'vsd';
     else if (meca_equipment_id) detectedType = 'meca';
     else if (mobile_equipment_id) detectedType = 'mobile_equipment';
     else if (device_id) detectedType = 'device';
@@ -2966,12 +2989,12 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
     // Insert record
     const { rows } = await quickQuery(`
       INSERT INTO control_records
-        (site, schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, equipment_type,
+        (site, schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, equipment_type,
          performed_by, performed_by_email, checklist_results, global_notes, signature_base64, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `, [site, schedule_id || null, template_id || null, switchboard_id || null, device_id || null,
-        vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, detectedType,
+        vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, detectedType,
         performedBy, performedByEmail, JSON.stringify(checklist_results || []),
         global_notes || null, signature_base64 || null, status || 'conform']);
 
@@ -3172,7 +3195,7 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { type } = req.query; // switchboard, vsd, meca, mobile_equipment
+    const { type } = req.query; // switchboard, vsd, meca, mobile_equipment, hv
 
     const results = {};
 
@@ -3222,6 +3245,19 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
         results.mobile_equipment = mobileRes.rows;
       } catch (e) {
         results.mobile_equipment = [];
+      }
+    }
+
+    // HV Equipment
+    if (!type || type === 'hv' || type === 'all') {
+      try {
+        const hvRes = await quickQuery(`
+          SELECT id, name, code, building_code, floor, room, regime_neutral, is_principal
+          FROM hv_equipments WHERE site = $1 ORDER BY name
+        `, [site]);
+        results.hv = hvRes.rows;
+      } catch (e) {
+        results.hv = [];
       }
     }
 

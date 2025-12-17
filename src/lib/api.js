@@ -2035,6 +2035,59 @@ export const api = {
     // AI specs extraction
     analyzeSpecs: (payload) => post("/api/hv/ai/specs", payload),
   },
+
+  // ========== HV MAPS (Plans) ==========
+  hvMaps: {
+    // Upload ZIP of PDF plans
+    uploadZip: (file) => {
+      const fd = new FormData();
+      fd.append("zip", file);
+      return upload("/api/hv/maps/uploadZip", fd);
+    },
+
+    // List all plans
+    listPlans: () => get("/api/hv/maps/listPlans"),
+
+    // Rename plan display name
+    renamePlan: (logical_name, display_name) =>
+      put("/api/hv/maps/renamePlan", { logical_name, display_name }),
+
+    // Get PDF file URL
+    planFileUrl: (plan, { bust = true } = {}) => {
+      const site = currentSite();
+      const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+      const url = isUuid(key) || isNumericId(key)
+        ? `${API_BASE}/api/hv/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
+        : `${API_BASE}/api/hv/maps/planFile?logical_name=${encodeURIComponent(key)}&site=${site}`;
+      return withBust(url, bust);
+    },
+
+    // Get positions for plan/page
+    positions: (planOrKey, page_index = 0) => {
+      const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
+      return isUuid(key) || isNumericId(key)
+        ? get("/api/hv/maps/positions", { id: key, page_index })
+        : get("/api/hv/maps/positions", { logical_name: key, page_index });
+    },
+
+    // Set/update position
+    setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
+      post("/api/hv/maps/setPosition", {
+        equipment_id: equipmentId,
+        logical_name,
+        plan_id,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
+
+    // Delete position
+    deletePosition: (positionId) =>
+      del(`/api/hv/maps/positions/${encodeURIComponent(positionId)}`),
+
+    // Get all placed equipment IDs
+    placedIds: () => get("/api/hv/maps/placed-ids"),
+  },
 };
 
 // Default export for convenience
