@@ -1920,18 +1920,44 @@ function localAtexCompliance(atex_mark_gas, atex_mark_dust, target_gas, target_d
   const d = parseCategory(atex_mark_dust, "dust");
 
   let gasOk = null, dustOk = null;
+  let rationale_parts = [];
 
-  if (target_gas != null && g)
-    gasOk = g.zones.includes(Number(target_gas));
-  if (target_dust != null && d)
-    dustOk = d.zones.includes(Number(target_dust));
+  // Si une zone gaz est définie, un marquage gaz valide est OBLIGATOIRE
+  if (target_gas != null) {
+    if (g) {
+      gasOk = g.zones.includes(Number(target_gas));
+      if (!gasOk) {
+        rationale_parts.push(`Marquage gaz (Cat ${g.cat}G) insuffisant pour zone ${target_gas}`);
+      }
+    } else {
+      // Pas de marquage gaz valide pour une zone gaz → non conforme
+      gasOk = false;
+      rationale_parts.push(`Marquage gaz requis pour zone ${target_gas} mais absent ou invalide`);
+    }
+  }
+
+  // Si une zone poussière est définie, un marquage poussière valide est OBLIGATOIRE
+  if (target_dust != null) {
+    if (d) {
+      dustOk = d.zones.includes(Number(target_dust));
+      if (!dustOk) {
+        rationale_parts.push(`Marquage poussière (Cat ${d.cat}D) insuffisant pour zone ${target_dust}`);
+      }
+    } else {
+      // Pas de marquage poussière valide pour une zone poussière → non conforme
+      dustOk = false;
+      rationale_parts.push(`Marquage poussière requis pour zone ${target_dust} mais absent ou invalide`);
+    }
+  }
 
   if ((gasOk === true || gasOk === null) && (dustOk === true || dustOk === null)) {
     result.decision = "conforme";
     result.rationale = "Le marquage couvre les zones cibles (norme 2014/34/UE).";
   } else if (gasOk === false || dustOk === false) {
     result.decision = "non_conforme";
-    result.rationale = "Le marquage ne couvre pas les zones cibles.";
+    result.rationale = rationale_parts.length > 0
+      ? rationale_parts.join(". ") + "."
+      : "Le marquage ne couvre pas les zones cibles.";
   } else {
     result.decision = "indetermine";
     result.rationale = "Impossible de déterminer à partir du marquage fourni.";
