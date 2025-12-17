@@ -1533,7 +1533,7 @@ export default function SwitchboardMap() {
       await refreshPlacedIds();
 
       // Open the switchboard detail page
-      navigate(`/app/switchboard?board=${id}`);
+      navigate(`/app/switchboards?board=${id}`);
     } catch (err) {
       console.error("Erreur création tableau électrique:", err);
       alert("Erreur lors de la création du tableau électrique");
