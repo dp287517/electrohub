@@ -34,6 +34,7 @@ import Meca from './pages/Meca.jsx';
 import MecaMap from './pages/Meca_map.jsx';
 import MobileEquipments from './pages/MobileEquipments.jsx';
 import MobileEquipmentsMap from './pages/MobileEquipments_map.jsx';
+import HighVoltageMap from './pages/High_voltage_map.jsx';
 
 // Component to redirect authenticated users to dashboard
 function AuthRedirect({ children }) {
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="/app/arc-flash" element={<ProtectedRoute><ArcFlash /></ProtectedRoute>} />
           <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} />
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
+          <Route path="/app/hv/map" element={<ProtectedRoute><HighVoltageMap /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
           <Route path="/app/switchboard-controls" element={<ProtectedRoute><SwitchboardControls /></ProtectedRoute>} />
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />

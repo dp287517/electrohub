@@ -1154,6 +1154,11 @@ export default function HighVoltage() {
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={() => navigate('/app/hv/map')}
+                className="px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium flex items-center gap-2 transition-colors">
+                <MapPin size={18} />
+                Plans
+              </button>
               <button onClick={() => setShowFilters(!showFilters)}
                 className="px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium flex items-center gap-2 transition-colors">
                 <Search size={18} />
