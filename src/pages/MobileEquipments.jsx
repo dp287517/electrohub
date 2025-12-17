@@ -1,0 +1,1866 @@
+// src/pages/MobileEquipments.jsx - Mobile Equipment Electrical Control
+// Based on Doors.jsx pattern with VSD plans support
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import {
+  Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
+  MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
+  Camera, Upload, RefreshCw, Eye, AlertCircle, Menu, Share2, ExternalLink,
+  MapPin, Tag, Hash, Info, Calendar, Clock, FileText, Download, Check,
+  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu
+} from 'lucide-react';
+import { api } from '../lib/api';
+import dayjs from 'dayjs';
+import 'dayjs/locale/fr';
+dayjs.locale('fr');
+
+// ==================== INLINE STYLES ====================
+
+const InlineStyles = () => (
+  <style>{`
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideRight {
+      from { opacity: 0; transform: translateX(-20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
+    .animate-slideRight { animation: slideRight 0.3s ease-out forwards; }
+
+    @keyframes blinkOrange { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes blinkRed { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .blink-orange { animation: blinkOrange 1.5s ease-in-out infinite; }
+    .blink-red { animation: blinkRed 0.8s ease-in-out infinite; }
+  `}</style>
+);
+
+// Toast Notification Component
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bgColor = type === 'success' ? 'bg-emerald-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+  const Icon = type === 'success' ? CheckCircle : type === 'error' ? AlertCircle : Info;
+
+  return (
+    <div className={`fixed bottom-4 right-4 z-[200] ${bgColor} text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slideUp`}>
+      <Icon size={20} />
+      <span className="font-medium">{message}</span>
+      <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+        <X size={16} />
+      </button>
+    </div>
+  );
+};
+
+// Badge Component
+const Badge = ({ children, variant = 'default', className = '' }) => {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    warning: 'bg-amber-100 text-amber-700',
+    danger: 'bg-red-100 text-red-700',
+    info: 'bg-blue-100 text-blue-700',
+    purple: 'bg-purple-100 text-purple-700',
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>
+      {children}
+    </span>
+  );
+};
+
+// ==================== INPUT STYLES ====================
+
+const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
+const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900";
+
+// ==================== STATUS HELPERS ====================
+
+const STATUS = {
+  A_FAIRE: 'a_faire',
+  EN_COURS: 'en_cours_30',
+  EN_RETARD: 'en_retard',
+  FAIT: 'fait'
+};
+
+const statusConfig = {
+  [STATUS.A_FAIRE]: { label: 'A faire', variant: 'success', blink: '' },
+  [STATUS.EN_COURS]: { label: 'Sous 30j', variant: 'warning', blink: 'blink-orange' },
+  [STATUS.EN_RETARD]: { label: 'En retard', variant: 'danger', blink: 'blink-red' },
+  [STATUS.FAIT]: { label: 'Fait', variant: 'info', blink: '' }
+};
+
+const getStatusConfig = (status) => statusConfig[status] || statusConfig[STATUS.A_FAIRE];
+
+// ==================== MODAL COMPONENTS ====================
+
+// Delete Confirm Modal
+const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, itemName, isLoading }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-red-500 to-rose-600 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <AlertTriangle size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Confirmer la suppression</h2>
+              <p className="text-red-100 text-sm">Cette action est irreversible</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          <p className="text-gray-700">
+            Supprimer l'equipement <span className="font-semibold">"{itemName}"</span> ?
+          </p>
+        </div>
+
+        <div className="border-t p-4 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 text-white font-medium hover:from-red-600 hover:to-rose-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Trash2 size={18} />}
+            Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Share Link Modal
+const ShareLinkModal = ({ isOpen, onClose, equipment }) => {
+  const [copied, setCopied] = useState(false);
+
+  if (!isOpen || !equipment) return null;
+
+  const url = `${window.location.origin}${window.location.pathname}?equipment=${equipment.id}`;
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      const input = document.createElement('input');
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Share2 size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Partager le lien</h2>
+              <p className="text-blue-100 text-sm">{equipment.name}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={url}
+              readOnly
+              className={`${inputBaseClass} flex-1 text-sm font-mono`}
+            />
+            <button
+              onClick={handleCopy}
+              className={`px-4 py-2 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                copied ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+              }`}
+            >
+              {copied ? <CheckCircle size={18} /> : <Copy size={18} />}
+              {copied ? 'Copie!' : 'Copier'}
+            </button>
+          </div>
+        </div>
+
+        <div className="border-t p-4">
+          <button
+            onClick={onClose}
+            className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Settings Modal
+const SettingsModal = ({ isOpen, onClose, settings, onSave, showToast }) => {
+  const [localSettings, setLocalSettings] = useState({ checklist_template: [], default_frequency: '6_mois' });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setLocalSettings({
+        checklist_template: settings.checklist_template || ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5'],
+        default_frequency: settings.default_frequency || '6_mois'
+      });
+    }
+  }, [settings]);
+
+  if (!isOpen) return null;
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await onSave(localSettings);
+      showToast('Parametres enregistres', 'success');
+      onClose();
+    } catch (err) {
+      showToast('Erreur lors de la sauvegarde', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const updateTemplateItem = (index, value) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      checklist_template: prev.checklist_template.map((item, i) => i === index ? value : item)
+    }));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
+        <div className="bg-gradient-to-r from-gray-700 to-gray-800 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Settings size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Parametres</h2>
+              <p className="text-gray-300 text-sm">Configuration des controles</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6 overflow-y-auto flex-1">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Frequence par defaut</label>
+            <select
+              value={localSettings.default_frequency}
+              onChange={e => setLocalSettings(prev => ({ ...prev, default_frequency: e.target.value }))}
+              className={selectBaseClass}
+            >
+              <option value="1_mois">Tous les mois</option>
+              <option value="3_mois">Tous les 3 mois</option>
+              <option value="6_mois">Tous les 6 mois</option>
+              <option value="1_an">Tous les ans</option>
+              <option value="2_ans">Tous les 2 ans</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Points de controle (5 max)</label>
+            <div className="space-y-2">
+              {localSettings.checklist_template.map((item, index) => (
+                <input
+                  key={index}
+                  type="text"
+                  value={item}
+                  onChange={e => updateTemplateItem(index, e.target.value)}
+                  className={inputBaseClass}
+                  placeholder={`Point ${index + 1}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t p-4 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-gray-700 to-gray-800 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Calendar Modal
+const CalendarModal = ({ isOpen, onClose, events = [], onDayClick }) => {
+  const [cursor, setCursor] = useState(() => dayjs().startOf('month'));
+
+  if (!isOpen) return null;
+
+  const start = cursor.startOf('week');
+  const end = cursor.endOf('month').endOf('week');
+  const days = [];
+  let d = start;
+  while (d.isBefore(end) || d.isSame(end, 'day')) {
+    days.push(d);
+    d = d.add(1, 'day');
+  }
+
+  const eventMap = new Map();
+  for (const e of events) {
+    const k = dayjs(e.date).format('YYYY-MM-DD');
+    const arr = eventMap.get(k) || [];
+    arr.push(e);
+    eventMap.set(k, arr);
+  }
+
+  const getStatusColor = (status) => {
+    if (status === 'en_retard') return 'bg-red-100 text-red-700';
+    if (status === 'en_cours_30') return 'bg-amber-100 text-amber-700';
+    return 'bg-emerald-100 text-emerald-700';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
+        <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-xl">
+                <Calendar size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Calendrier des controles</h2>
+                <p className="text-blue-200 text-sm">Visualisez les prochains controles</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X size={24} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-lg text-gray-900">{cursor.format('MMMM YYYY')}</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCursor(cursor.subtract(1, 'month'))}
+                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
+              >
+                Precedent
+              </button>
+              <button
+                onClick={() => setCursor(dayjs().startOf('month'))}
+                className="px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-sm font-medium"
+              >
+                Aujourd'hui
+              </button>
+              <button
+                onClick={() => setCursor(cursor.add(1, 'month'))}
+                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
+              >
+                Suivant
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-2">
+            {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((l) => (
+              <div key={l} className="px-2 py-1 text-center font-medium">{l}</div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1">
+            {days.map((day) => {
+              const key = day.format('YYYY-MM-DD');
+              const dayEvents = eventMap.get(key) || [];
+              const isCurMonth = day.month() === cursor.month();
+              const isToday = day.isSame(dayjs(), 'day');
+
+              return (
+                <button
+                  key={key}
+                  onClick={() => dayEvents.length > 0 && onDayClick?.({ date: key, events: dayEvents })}
+                  disabled={dayEvents.length === 0}
+                  className={`
+                    border rounded-lg p-2 text-left min-h-[80px] transition-all
+                    ${isCurMonth ? 'bg-white' : 'bg-gray-50 text-gray-400'}
+                    ${isToday ? 'ring-2 ring-blue-500' : ''}
+                    ${dayEvents.length > 0 ? 'hover:border-blue-300 hover:shadow-sm cursor-pointer' : 'cursor-default'}
+                  `}
+                >
+                  <div className={`text-xs mb-1 font-medium ${isToday ? 'text-blue-600' : ''}`}>
+                    {day.format('D')}
+                  </div>
+                  <div className="flex flex-wrap gap-0.5">
+                    {dayEvents.slice(0, 3).map((ev, i) => (
+                      <span
+                        key={i}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium truncate max-w-full ${getStatusColor(ev.status)}`}
+                        title={ev.equipment_name}
+                      >
+                        {ev.equipment_name || ev.equipment_id}
+                      </span>
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <span className="text-[10px] text-gray-500 font-medium">+{dayEvents.length - 3}</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center gap-4 text-xs text-gray-500 border-t pt-4">
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-emerald-100"></span> A faire
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-amber-100"></span> Sous 30 jours
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-red-100"></span> En retard
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Mobile Tree Drawer
+const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, selectedEquipment, onSelectEquipment, placedIds }) => {
+  if (!isOpen) return null;
+
+  const isPlaced = (id) => placedIds.has(String(id));
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+
+      <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl animate-slideRight overflow-hidden flex flex-col">
+        <div className="p-4 border-b bg-gradient-to-r from-blue-500 to-cyan-600 text-white">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg">Appareils mobiles</h2>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="space-y-1">
+            {Object.entries(tree).map(([building, floors]) => (
+              <div key={building}>
+                <button
+                  onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                >
+                  {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  <Building2 size={16} className="text-blue-500" />
+                  <span className="font-medium truncate flex-1">{building}</span>
+                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                    {Object.values(floors).flat().length}
+                  </span>
+                </button>
+
+                {expandedBuildings[building] && (
+                  <div className="ml-4 space-y-1 mt-1">
+                    {Object.entries(floors).map(([floor, equipments]) => (
+                      <div key={floor}>
+                        <div className="px-3 py-1.5 text-xs font-medium text-gray-500 flex items-center gap-1">
+                          <Layers size={12} />
+                          {floor}
+                        </div>
+                        {equipments.map(eq => {
+                          const statusConf = getStatusConfig(eq.status);
+                          return (
+                            <button
+                              key={eq.id}
+                              onClick={() => { onSelectEquipment(eq); onClose(); }}
+                              className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
+                                ${selectedEquipment?.id === eq.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                            >
+                              <Cpu size={14} className={`text-blue-500 ${statusConf.blink}`} />
+                              <span className="text-sm truncate flex-1">{eq.name}</span>
+                              {!isPlaced(eq.id) && (
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
+                                  <MapPin size={8} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+// ==================== DETAIL PANEL COMPONENT ====================
+
+const DetailPanel = ({
+  equipment,
+  onClose,
+  onEdit,
+  onDelete,
+  onShare,
+  onNavigateToMap,
+  onPhotoUpload,
+  onStartCheck,
+  isPlaced,
+  showToast,
+  settings
+}) => {
+  const [files, setFiles] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const photoInputRef = useRef(null);
+
+  useEffect(() => {
+    if (equipment?.id) {
+      loadFiles();
+      loadHistory();
+    }
+  }, [equipment?.id]);
+
+  const loadFiles = async () => {
+    if (!equipment?.id) return;
+    setLoadingFiles(true);
+    try {
+      const res = await api.mobileEquipment.listFiles(equipment.id).catch(() => ({}));
+      setFiles(res?.files || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingFiles(false);
+    }
+  };
+
+  const loadHistory = async () => {
+    if (!equipment?.id) return;
+    setLoadingHistory(true);
+    try {
+      const res = await api.mobileEquipment.listHistory(equipment.id).catch(() => ({}));
+      const checks = Array.isArray(res?.checks) ? res.checks : [];
+      setHistory(checks);
+    } catch (e) {
+      console.error(e);
+      setHistory([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  if (!equipment) return null;
+
+  const statusConf = getStatusConfig(equipment.status);
+  const stateVariant = equipment.equipment_state === 'conforme' ? 'success' : equipment.equipment_state === 'non_conforme' ? 'danger' : 'default';
+
+  return (
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+        <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-white/20 rounded-lg transition-colors md:hidden"
+          >
+            <X size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onShare(equipment)}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Partager"
+            >
+              <Share2 size={18} />
+            </button>
+            <button
+              onClick={() => onEdit(equipment)}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              title="Modifier"
+            >
+              <Edit3 size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-4">
+          <div
+            onClick={() => photoInputRef.current?.click()}
+            className="w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center cursor-pointer hover:bg-white/30 transition-colors overflow-hidden"
+          >
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
+            />
+            {equipment.photo_url ? (
+              <img src={api.mobileEquipment.photoUrl(equipment.id)} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <Camera size={24} />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl font-bold truncate">{equipment.name}</h2>
+            <p className="text-blue-100 text-sm">
+              {equipment.building} - {equipment.floor}
+            </p>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <Badge variant={statusConf.variant} className={statusConf.blink}>
+                <Clock size={10} className="inline mr-1" />
+                {statusConf.label}
+              </Badge>
+              {equipment.equipment_state && (
+                <Badge variant={stateVariant}>
+                  {equipment.equipment_state === 'conforme' ? 'Conforme' : 'Non conforme'}
+                </Badge>
+              )}
+              {isPlaced ? (
+                <Badge variant="success">
+                  <MapPin size={10} className="inline mr-1" />
+                  Localise
+                </Badge>
+              ) : (
+                <Badge variant="warning">
+                  <MapPin size={10} className="inline mr-1" />
+                  Non localise
+                </Badge>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <Calendar size={20} className="mx-auto text-blue-500 mb-1" />
+            <p className="text-sm font-bold text-gray-900">
+              {equipment.next_check_date ? dayjs(equipment.next_check_date).format('DD/MM/YY') : '-'}
+            </p>
+            <p className="text-xs text-gray-500">Prochain</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <History size={20} className="mx-auto text-blue-500 mb-1" />
+            <p className="text-sm font-bold text-gray-900">{history.length}</p>
+            <p className="text-xs text-gray-500">Controles</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-3 text-center">
+            <FileText size={20} className="mx-auto text-amber-500 mb-1" />
+            <p className="text-sm font-bold text-gray-900">{files.length}</p>
+            <p className="text-xs text-gray-500">Fichiers</p>
+          </div>
+        </div>
+
+        {/* Start Check Button */}
+        <button
+          onClick={() => onStartCheck(equipment)}
+          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-cyan-700 transition-all"
+        >
+          <ClipboardCheck size={18} />
+          Lancer un controle
+        </button>
+
+        {/* Equipment Info */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
+            <Cpu size={16} className="text-blue-500" />
+            Informations
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Code</span>
+              <p className="font-medium text-gray-900">{equipment.code || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Categorie</span>
+              <p className="font-medium text-gray-900">{equipment.category_name || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Marque</span>
+              <p className="font-medium text-gray-900">{equipment.brand || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Modele</span>
+              <p className="font-medium text-gray-900">{equipment.model || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">N Serie</span>
+              <p className="font-medium text-gray-900">{equipment.serial_number || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Puissance</span>
+              <p className="font-medium text-gray-900">{equipment.power_rating || '-'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Location */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
+            <Building2 size={16} className="text-blue-500" />
+            Localisation
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Batiment</span>
+              <p className="font-medium text-gray-900">{equipment.building || '-'}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Etage</span>
+              <p className="font-medium text-gray-900">{equipment.floor || '-'}</p>
+            </div>
+            <div className="col-span-2">
+              <span className="text-gray-500">Emplacement</span>
+              <p className="font-medium text-gray-900">{equipment.location || '-'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Current Check Items Preview */}
+        {equipment.current_check?.items?.length > 0 && (
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
+              <ClipboardCheck size={16} className="text-blue-500" />
+              Controle en cours
+            </h3>
+            <div className="space-y-2">
+              {equipment.current_check.items.slice(0, 5).map((item, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-sm">
+                  {item.value === 'conforme' ? (
+                    <CheckCircle size={14} className="text-emerald-500" />
+                  ) : item.value === 'non_conforme' ? (
+                    <XCircle size={14} className="text-red-500" />
+                  ) : item.value === 'na' ? (
+                    <HelpCircle size={14} className="text-gray-400" />
+                  ) : (
+                    <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />
+                  )}
+                  <span className="text-gray-700 truncate flex-1">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* History Toggle */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="w-full flex items-center justify-between"
+          >
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <History size={16} className="text-blue-500" />
+              Historique des controles
+            </h3>
+            <ChevronDown size={18} className={`text-gray-500 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showHistory && (
+            <div className="mt-4 space-y-3">
+              {loadingHistory ? (
+                <div className="text-center py-4">
+                  <RefreshCw size={20} className="animate-spin mx-auto text-gray-400" />
+                </div>
+              ) : history.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-2">Aucun controle</p>
+              ) : (
+                history.slice(0, 5).map((check) => (
+                  <div key={check.id} className="bg-white rounded-lg p-3 border border-gray-200">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-gray-900">
+                        {dayjs(check.date || check.closed_at).format('DD/MM/YYYY')}
+                      </span>
+                      <Badge variant={check.result === 'conforme' ? 'success' : 'danger'}>
+                        {check.result === 'conforme' ? 'Conforme' : 'Non conforme'}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Par {check.user || 'Inconnu'}
+                    </p>
+                    {(check.counts || check.result_counts) && (
+                      <div className="flex gap-2 mt-2 text-xs">
+                        <span className="text-emerald-600">{(check.counts || check.result_counts)?.conforme || 0} OK</span>
+                        <span className="text-red-600">{(check.counts || check.result_counts)?.nc || 0} NC</span>
+                        <span className="text-gray-400">{(check.counts || check.result_counts)?.na || 0} N/A</span>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Files */}
+        {files.length > 0 && (
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
+              <FileText size={16} className="text-blue-500" />
+              Fichiers ({files.length})
+            </h3>
+            <div className="space-y-2">
+              {files.map(file => (
+                <a
+                  key={file.id}
+                  href={file.download_url || file.inline_url || file.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 p-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 transition-colors"
+                >
+                  <FileText size={14} className="text-gray-400" />
+                  <span className="text-sm text-gray-700 truncate flex-1">{file.filename}</span>
+                  <Download size={14} className="text-gray-400" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="border-t p-4 flex gap-3">
+        <button
+          onClick={() => onNavigateToMap(equipment)}
+          className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 flex items-center justify-center gap-2"
+        >
+          <MapPin size={18} />
+          Voir sur plan
+        </button>
+        <button
+          onClick={() => onDelete(equipment)}
+          className="py-3 px-4 rounded-xl border border-red-200 text-red-600 font-medium hover:bg-red-50 flex items-center justify-center gap-2"
+        >
+          <Trash2 size={18} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==================== EDIT FORM COMPONENT ====================
+
+const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
+  const isNew = !equipment?.id;
+  const [form, setForm] = useState({
+    name: '',
+    code: '',
+    building: '',
+    floor: '',
+    location: '',
+    category_id: '',
+    serial_number: '',
+    brand: '',
+    model: '',
+    power_rating: '',
+    frequency: ''
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (equipment) {
+      setForm({
+        name: equipment.name || '',
+        code: equipment.code || '',
+        building: equipment.building || '',
+        floor: equipment.floor || '',
+        location: equipment.location || '',
+        category_id: equipment.category_id || '',
+        serial_number: equipment.serial_number || '',
+        brand: equipment.brand || '',
+        model: equipment.model || '',
+        power_rating: equipment.power_rating || '',
+        frequency: equipment.frequency || ''
+      });
+    }
+  }, [equipment]);
+
+  const handleSave = async () => {
+    if (!form.name.trim()) {
+      showToast('Le nom est requis', 'error');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await onSave(form);
+    } catch (err) {
+      showToast('Erreur lors de la sauvegarde', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-white/20 rounded-xl">
+            <Cpu size={24} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">{isNew ? 'Nouvel equipement' : 'Modifier l\'equipement'}</h2>
+            <p className="text-blue-100 text-sm">Appareil mobile electrique</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Form Content */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Identification */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Tag size={16} className="text-blue-500" />
+            Identification
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nom *</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Perceuse electrique A1"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Code</label>
+              <input
+                type="text"
+                value={form.code}
+                onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="EQ-001"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Categorie</label>
+              <select
+                value={form.category_id}
+                onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="">-- Aucune --</option>
+                {(categories || []).map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Technical Details */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Zap size={16} className="text-blue-500" />
+            Details techniques
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Marque</label>
+              <input
+                type="text"
+                value={form.brand}
+                onChange={e => setForm(f => ({ ...f, brand: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Bosch"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Modele</label>
+              <input
+                type="text"
+                value={form.model}
+                onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="GSB 18V-55"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">N Serie</label>
+              <input
+                type="text"
+                value={form.serial_number}
+                onChange={e => setForm(f => ({ ...f, serial_number: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="SN123456"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Puissance</label>
+              <input
+                type="text"
+                value={form.power_rating}
+                onChange={e => setForm(f => ({ ...f, power_rating: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="750W"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Frequence de controle</label>
+              <select
+                value={form.frequency}
+                onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="">-- Par defaut --</option>
+                <option value="1_mois">Tous les mois</option>
+                <option value="3_mois">Tous les 3 mois</option>
+                <option value="6_mois">Tous les 6 mois</option>
+                <option value="1_an">Tous les ans</option>
+                <option value="2_ans">Tous les 2 ans</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Location */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Building2 size={16} className="text-blue-500" />
+            Localisation
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Batiment</label>
+              <input
+                type="text"
+                value={form.building}
+                onChange={e => setForm(f => ({ ...f, building: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Batiment A"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Etage</label>
+              <input
+                type="text"
+                value={form.floor}
+                onChange={e => setForm(f => ({ ...f, floor: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="RDC"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Emplacement</label>
+              <input
+                type="text"
+                value={form.location}
+                onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
+                className={inputBaseClass}
+                placeholder="Atelier maintenance"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="border-t p-4 flex gap-3">
+        <button
+          onClick={onCancel}
+          className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+        >
+          Annuler
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={isSaving}
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+          Enregistrer
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==================== CHECK FORM COMPONENT ====================
+
+const CheckForm = ({ equipment, settings, onSave, onCancel, showToast }) => {
+  const [items, setItems] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (equipment?.current_check?.items) {
+      setItems(equipment.current_check.items);
+    } else if (settings?.checklist_template) {
+      setItems(settings.checklist_template.map((label, index) => ({
+        index,
+        label,
+        value: null,
+        comment: ''
+      })));
+    }
+  }, [equipment, settings]);
+
+  const updateItem = (index, field, value) => {
+    setItems(prev => prev.map((item, i) =>
+      i === index ? { ...item, [field]: value } : item
+    ));
+  };
+
+  const handleSave = async (close = false) => {
+    if (close) {
+      const incomplete = items.some(item => !item.value);
+      if (incomplete) {
+        showToast('Veuillez remplir tous les points', 'error');
+        return;
+      }
+      setIsClosing(true);
+    } else {
+      setIsSaving(true);
+    }
+
+    try {
+      await onSave(items, close);
+      if (close) {
+        showToast('Controle termine', 'success');
+      } else {
+        showToast('Controle enregistre', 'success');
+      }
+    } catch (err) {
+      showToast('Erreur lors de la sauvegarde', 'error');
+    } finally {
+      setIsSaving(false);
+      setIsClosing(false);
+    }
+  };
+
+  const allFilled = items.every(item => item.value);
+
+  return (
+    <div className="h-full flex flex-col bg-white">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-white/20 rounded-xl">
+            <ClipboardCheck size={24} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Controle</h2>
+            <p className="text-blue-100 text-sm">{equipment?.name}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Checklist */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        {items.map((item, index) => (
+          <div key={index} className="bg-gray-50 rounded-xl p-4">
+            <p className="font-medium text-gray-900 mb-3">{item.label}</p>
+
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => updateItem(index, 'value', 'conforme')}
+                className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                  item.value === 'conforme'
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-white border border-gray-300 text-gray-700 hover:border-emerald-300'
+                }`}
+              >
+                <CheckCircle size={16} />
+                Conforme
+              </button>
+              <button
+                onClick={() => updateItem(index, 'value', 'non_conforme')}
+                className={`flex-1 py-2.5 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                  item.value === 'non_conforme'
+                    ? 'bg-red-500 text-white'
+                    : 'bg-white border border-gray-300 text-gray-700 hover:border-red-300'
+                }`}
+              >
+                <XCircle size={16} />
+                Non conforme
+              </button>
+              <button
+                onClick={() => updateItem(index, 'value', 'na')}
+                className={`py-2.5 px-4 rounded-xl font-medium transition-all ${
+                  item.value === 'na'
+                    ? 'bg-gray-500 text-white'
+                    : 'bg-white border border-gray-300 text-gray-700 hover:border-gray-400'
+                }`}
+              >
+                N/A
+              </button>
+            </div>
+
+            <input
+              type="text"
+              value={item.comment || ''}
+              onChange={e => updateItem(index, 'comment', e.target.value)}
+              className={inputBaseClass}
+              placeholder="Commentaire (optionnel)"
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="border-t p-4 space-y-3">
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={() => handleSave(false)}
+            disabled={isSaving}
+            className="flex-1 py-3 px-4 rounded-xl border border-blue-300 text-blue-600 font-medium hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+            Sauvegarder
+          </button>
+        </div>
+        <button
+          onClick={() => handleSave(true)}
+          disabled={isClosing || !allFilled}
+          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {isClosing ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle size={18} />}
+          Terminer le controle
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==================== MAIN COMPONENT ====================
+
+export default function MobileEquipments() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // State
+  const [equipments, setEquipments] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [selectedEquipment, setSelectedEquipment] = useState(null);
+  const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+  const [settings, setSettings] = useState(null);
+
+  // View mode
+  const [viewMode, setViewMode] = useState('detail'); // 'detail' | 'edit' | 'check'
+
+  // Placement state
+  const [placedIds, setPlacedIds] = useState(new Set());
+
+  // Toast state
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+  }, []);
+
+  // Modal state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Load equipments
+  const loadEquipments = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.mobileEquipment.list({});
+      const list = res?.items || res?.equipments || res || [];
+      setEquipments(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.error('Load equipments error:', err);
+      showToast('Erreur lors du chargement', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [showToast]);
+
+  // Load categories
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await api.mobileEquipment.listCategories();
+      setCategories(res?.categories || []);
+    } catch (err) {
+      console.error('Load categories error:', err);
+    }
+  }, []);
+
+  // Load settings
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await api.mobileEquipment.settingsGet();
+      setSettings({
+        checklist_template: res?.checklist_template || [],
+        default_frequency: res?.default_frequency || '6_mois'
+      });
+    } catch (err) {
+      console.error('Load settings error:', err);
+    }
+  }, []);
+
+  // Load placements
+  const loadPlacements = useCallback(async () => {
+    setPlacedIds(new Set());
+  }, []);
+
+  // Load calendar events
+  const loadCalendar = useCallback(async () => {
+    try {
+      const res = await api.mobileEquipment.calendar?.() || {};
+      const events = Array.isArray(res?.events) ? res.events : [];
+      setCalendarEvents(events);
+    } catch (err) {
+      console.error('Load calendar error:', err);
+      setCalendarEvents([]);
+    }
+  }, []);
+
+  // Effects
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    loadEquipments();
+    loadCategories();
+    loadSettings();
+    loadPlacements();
+  }, [loadEquipments, loadCategories, loadSettings, loadPlacements]);
+
+  // Load calendar when modal opens
+  useEffect(() => {
+    if (showCalendarModal) {
+      loadCalendar();
+    }
+  }, [showCalendarModal, loadCalendar]);
+
+  // URL params handling
+  useEffect(() => {
+    const equipmentId = searchParams.get('equipment');
+    if (equipmentId && (!selectedEquipment || selectedEquipment.id !== equipmentId)) {
+      api.mobileEquipment.get(equipmentId)
+        .then(res => {
+          const e = res?.equipment || res;
+          if (e) {
+            setSelectedEquipment(e);
+            const building = e.building || 'Sans batiment';
+            setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+          }
+        })
+        .catch(() => showToast('Equipement non trouve', 'error'));
+    }
+  }, [searchParams, showToast]);
+
+  // Handlers
+  const handleSelectEquipment = async (e) => {
+    setSearchParams({ equipment: e.id.toString() });
+    setViewMode('detail');
+
+    try {
+      const res = await api.mobileEquipment.get(e.id);
+      setSelectedEquipment(res?.equipment || res || e);
+    } catch (err) {
+      setSelectedEquipment(e);
+    }
+  };
+
+  const handleNewEquipment = () => {
+    setSelectedEquipment({});
+    setViewMode('edit');
+    setSearchParams({});
+  };
+
+  const handleEditEquipment = (e) => {
+    setSelectedEquipment(e);
+    setViewMode('edit');
+  };
+
+  const handleStartCheck = async (e) => {
+    try {
+      await api.mobileEquipment.startCheck(e.id);
+      const res = await api.mobileEquipment.get(e.id);
+      setSelectedEquipment(res?.equipment || res || e);
+      setViewMode('check');
+    } catch (err) {
+      showToast('Erreur lors du demarrage du controle', 'error');
+    }
+  };
+
+  const handleSaveEquipment = async (formData) => {
+    const isNew = !selectedEquipment?.id;
+
+    try {
+      let saved;
+      if (isNew) {
+        saved = await api.mobileEquipment.create(formData);
+      } else {
+        saved = await api.mobileEquipment.update(selectedEquipment.id, formData);
+      }
+
+      const newEquipment = saved?.equipment || saved;
+
+      if (isNew) {
+        setEquipments(prev => [...prev, newEquipment]);
+      } else {
+        setEquipments(prev => prev.map(e => e.id === newEquipment.id ? newEquipment : e));
+      }
+
+      setSelectedEquipment(newEquipment);
+      setViewMode('detail');
+      setSearchParams({ equipment: newEquipment.id.toString() });
+      showToast(isNew ? 'Equipement cree' : 'Equipement mis a jour', 'success');
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  const handleSaveCheck = async (items, close) => {
+    if (!selectedEquipment?.current_check?.id) {
+      showToast('Aucun controle en cours', 'error');
+      return;
+    }
+
+    try {
+      await api.mobileEquipment.saveCheck(selectedEquipment.id, selectedEquipment.current_check.id, { items, close });
+
+      const res = await api.mobileEquipment.get(selectedEquipment.id);
+      const updatedEquipment = res?.equipment || res;
+      setSelectedEquipment(updatedEquipment);
+
+      setEquipments(prev => prev.map(e => e.id === updatedEquipment.id ? updatedEquipment : e));
+
+      if (close) {
+        setViewMode('detail');
+      }
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  const handleDeleteEquipment = async () => {
+    if (!deleteTarget) return;
+
+    setIsDeleting(true);
+    try {
+      await api.mobileEquipment.remove(deleteTarget.id);
+      setEquipments(prev => prev.filter(e => e.id !== deleteTarget.id));
+
+      if (selectedEquipment?.id === deleteTarget.id) {
+        setSelectedEquipment(null);
+        setSearchParams({});
+      }
+
+      showToast('Equipement supprime', 'success');
+      setShowDeleteModal(false);
+      setDeleteTarget(null);
+    } catch (err) {
+      showToast('Erreur lors de la suppression', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handlePhotoUpload = async (equipmentId, file) => {
+    try {
+      await api.mobileEquipment.uploadPhoto(equipmentId, file);
+      showToast('Photo enregistree', 'success');
+
+      const res = await api.mobileEquipment.get(equipmentId);
+      const updated = res?.equipment || res;
+      setSelectedEquipment(updated);
+      setEquipments(prev => prev.map(e => e.id === equipmentId ? updated : e));
+    } catch (err) {
+      showToast('Erreur lors de l\'upload', 'error');
+    }
+  };
+
+  const handleSaveSettings = async (newSettings) => {
+    await api.mobileEquipment.settingsSet(newSettings);
+    setSettings(newSettings);
+  };
+
+  const handleNavigateToMap = (e) => {
+    navigate('/app/vsd/map?equipment=' + e.id);
+  };
+
+  // Build tree structure: Building > Floor > Equipments
+  const tree = useMemo(() => {
+    const result = {};
+    const query = searchQuery.toLowerCase();
+    const equipmentsList = Array.isArray(equipments) ? equipments : [];
+
+    const filtered = equipmentsList.filter(e => {
+      if (!query) return true;
+      return (
+        e.name?.toLowerCase().includes(query) ||
+        e.code?.toLowerCase().includes(query) ||
+        e.building?.toLowerCase().includes(query) ||
+        e.floor?.toLowerCase().includes(query) ||
+        e.location?.toLowerCase().includes(query)
+      );
+    });
+
+    filtered.forEach(e => {
+      const building = e.building || 'Sans batiment';
+      const floor = e.floor || 'Sans etage';
+
+      if (!result[building]) result[building] = {};
+      if (!result[building][floor]) result[building][floor] = [];
+      result[building][floor].push(e);
+    });
+
+    // Sort equipments within each floor
+    Object.values(result).forEach(floors => {
+      Object.values(floors).forEach(equipmentList => {
+        equipmentList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      });
+    });
+
+    return result;
+  }, [equipments, searchQuery]);
+
+  // Stats
+  const stats = useMemo(() => {
+    const equipmentsList = Array.isArray(equipments) ? equipments : [];
+    const total = equipmentsList.length;
+    const aFaire = equipmentsList.filter(e => e.status === STATUS.A_FAIRE).length;
+    const enCours = equipmentsList.filter(e => e.status === STATUS.EN_COURS).length;
+    const enRetard = equipmentsList.filter(e => e.status === STATUS.EN_RETARD).length;
+    const placed = equipmentsList.filter(e => placedIds.has(String(e.id))).length;
+    return { total, aFaire, enCours, enRetard, placed };
+  }, [equipments, placedIds]);
+
+  const isPlaced = (id) => placedIds.has(String(id));
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50">
+      <InlineStyles />
+
+      {/* Header */}
+      <div className="bg-white border-b shadow-sm z-20">
+        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          {/* Left */}
+          <div className="flex items-center gap-3">
+            {isMobile && (
+              <button
+                onClick={() => setShowMobileDrawer(true)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <Menu size={20} />
+              </button>
+            )}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white">
+                <Cpu size={20} />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-gray-900">Appareils Mobiles</h1>
+                <p className="text-xs text-gray-500">Controles electriques</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div className="hidden md:flex items-center gap-2">
+            <Badge variant="default">{stats.total} total</Badge>
+            <Badge variant="success">{stats.aFaire} a faire</Badge>
+            <Badge variant="warning" className="blink-orange">{stats.enCours} sous 30j</Badge>
+            <Badge variant="danger" className="blink-red">{stats.enRetard} en retard</Badge>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowCalendarModal(true)}
+              className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
+              title="Calendrier des controles"
+            >
+              <Calendar size={20} />
+            </button>
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
+              title="Parametres"
+            >
+              <Settings size={20} />
+            </button>
+            <button
+              onClick={() => navigate('/app/vsd/map')}
+              className="px-4 py-2 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 flex items-center gap-2"
+            >
+              <MapPin size={18} />
+              <span className="hidden sm:inline">Plans</span>
+            </button>
+            <button
+              onClick={handleNewEquipment}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 flex items-center gap-2"
+            >
+              <Plus size={18} />
+              <span className="hidden sm:inline">Nouveau</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar - Desktop */}
+        {!isMobile && (
+          <div className="w-80 border-r bg-white flex flex-col overflow-hidden">
+            {/* Search */}
+            <div className="p-4 border-b">
+              <div className="relative">
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Rechercher..."
+                  className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Tree */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="space-y-1 p-4">
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw size={24} className="animate-spin text-gray-400" />
+                  </div>
+                ) : Object.keys(tree).length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Cpu size={32} className="mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">Aucun equipement</p>
+                  </div>
+                ) : (
+                  Object.entries(tree).map(([building, floors]) => (
+                    <div key={building}>
+                      <button
+                        onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-gray-700 hover:bg-gray-100 rounded-lg"
+                      >
+                        {expandedBuildings[building] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        <Building2 size={16} className="text-blue-500" />
+                        <span className="font-medium truncate flex-1">{building}</span>
+                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                          {Object.values(floors).flat().length}
+                        </span>
+                      </button>
+
+                      {expandedBuildings[building] && (
+                        <div className="ml-4 space-y-1 mt-1">
+                          {Object.entries(floors).map(([floor, equipmentList]) => (
+                            <div key={floor}>
+                              <div className="px-3 py-1.5 text-xs font-medium text-gray-500 flex items-center gap-1">
+                                <Layers size={12} />
+                                {floor}
+                              </div>
+                              {equipmentList.map(eq => {
+                                const statusConf = getStatusConfig(eq.status);
+                                return (
+                                  <button
+                                    key={eq.id}
+                                    onClick={() => handleSelectEquipment(eq)}
+                                    className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
+                                      ${selectedEquipment?.id === eq.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                                  >
+                                    <Cpu size={14} className={`text-blue-500 ${statusConf.blink}`} />
+                                    <span className="text-sm truncate flex-1">{eq.name}</span>
+                                    {!isPlaced(eq.id) && (
+                                      <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
+                                        <MapPin size={8} />
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Main Panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {viewMode === 'detail' && selectedEquipment?.id ? (
+            <DetailPanel
+              equipment={selectedEquipment}
+              onClose={() => { setSelectedEquipment(null); setSearchParams({}); }}
+              onEdit={handleEditEquipment}
+              onDelete={(e) => { setDeleteTarget(e); setShowDeleteModal(true); }}
+              onShare={(e) => setShowShareModal(true)}
+              onNavigateToMap={handleNavigateToMap}
+              onPhotoUpload={handlePhotoUpload}
+              onStartCheck={handleStartCheck}
+              isPlaced={isPlaced(selectedEquipment?.id)}
+              showToast={showToast}
+              settings={settings}
+            />
+          ) : viewMode === 'edit' ? (
+            <EditForm
+              equipment={selectedEquipment}
+              categories={categories}
+              onSave={handleSaveEquipment}
+              onCancel={() => {
+                if (selectedEquipment?.id) {
+                  setViewMode('detail');
+                } else {
+                  setSelectedEquipment(null);
+                  setSearchParams({});
+                }
+              }}
+              showToast={showToast}
+            />
+          ) : viewMode === 'check' && selectedEquipment?.id ? (
+            <CheckForm
+              equipment={selectedEquipment}
+              settings={settings}
+              onSave={handleSaveCheck}
+              onCancel={() => setViewMode('detail')}
+              showToast={showToast}
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center bg-gray-50">
+              <div className="text-center">
+                <Cpu size={48} className="mx-auto mb-4 text-gray-300" />
+                <h3 className="text-lg font-medium text-gray-600 mb-2">Appareils Mobiles</h3>
+                <p className="text-gray-500 text-sm max-w-xs mx-auto">
+                  Selectionnez un equipement dans la liste ou creez-en un nouveau
+                </p>
+                <button
+                  onClick={handleNewEquipment}
+                  className="mt-4 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 flex items-center gap-2 mx-auto"
+                >
+                  <Plus size={18} />
+                  Nouvel equipement
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Mobile Drawer */}
+      <MobileTreeDrawer
+        isOpen={showMobileDrawer}
+        onClose={() => setShowMobileDrawer(false)}
+        tree={tree}
+        expandedBuildings={expandedBuildings}
+        setExpandedBuildings={setExpandedBuildings}
+        selectedEquipment={selectedEquipment}
+        onSelectEquipment={handleSelectEquipment}
+        placedIds={placedIds}
+      />
+
+      {/* Modals */}
+      <DeleteConfirmModal
+        isOpen={showDeleteModal}
+        onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }}
+        onConfirm={handleDeleteEquipment}
+        itemName={deleteTarget?.name}
+        isLoading={isDeleting}
+      />
+
+      <ShareLinkModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        equipment={selectedEquipment}
+      />
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        settings={settings}
+        onSave={handleSaveSettings}
+        showToast={showToast}
+      />
+
+      <CalendarModal
+        isOpen={showCalendarModal}
+        onClose={() => setShowCalendarModal(false)}
+        events={calendarEvents}
+        onDayClick={(day) => {
+          setShowCalendarModal(false);
+          if (day.events?.[0]?.equipment_id) {
+            handleSelectEquipment({ id: day.events[0].equipment_id });
+          }
+        }}
+      />
+
+      {/* Toast */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+    </div>
+  );
+}

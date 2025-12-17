@@ -1886,6 +1886,98 @@ export const api = {
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
   },
+
+  /** --- MOBILE EQUIPMENT (Controle Electrique Appareils Mobiles) --- */
+  mobileEquipment: {
+    list: (params) => get("/api/mobile-equipment/equipments", params),
+    get: (id) => get(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}`),
+    create: (payload) => post("/api/mobile-equipment/equipments", payload),
+    update: (id, payload) => put(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}`, payload),
+    remove: (id) => del(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}`),
+
+    // Photo
+    uploadPhoto: (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}/photo`, fd);
+    },
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/photo?site=${currentSite()}`, bust),
+
+    // Files
+    listFiles: (id) => get(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}/files`),
+    uploadFile: (id, file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/mobile-equipment/equipments/${encodeURIComponent(id)}/files`, fd);
+    },
+    deleteFile: (fileId) => del(`/api/mobile-equipment/files/${encodeURIComponent(fileId)}`),
+
+    // Checks
+    startCheck: (equipmentId) => post(`/api/mobile-equipment/equipments/${encodeURIComponent(equipmentId)}/checks`, { _user: getIdentity() }),
+    saveCheck: (equipmentId, checkId, payload = {}) => {
+      if (payload?.files?.length) {
+        const { email, name } = getIdentity();
+        const fd = new FormData();
+        if (payload.items) fd.append("items", JSON.stringify(payload.items));
+        if (payload.close) fd.append("close", "true");
+        if (email) fd.append("user_email", email);
+        if (name) fd.append("user_name", name);
+        (payload.files || []).forEach((f) => fd.append("files", f));
+        return put(`/api/mobile-equipment/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, fd);
+      }
+      return put(`/api/mobile-equipment/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, { ...payload, _user: getIdentity() });
+    },
+    listHistory: (equipmentId) => get(`/api/mobile-equipment/equipments/${encodeURIComponent(equipmentId)}/history`),
+
+    // QR Codes
+    qrUrl: (id, size = 256, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
+    qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`, bust),
+
+    // NC PDF
+    nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/nonconformities.pdf?site=${currentSite()}`, bust),
+
+    // Calendar & Settings
+    calendar: () => get("/api/mobile-equipment/calendar"),
+    alerts: () => get("/api/mobile-equipment/alerts"),
+    settingsGet: () => get("/api/mobile-equipment/settings"),
+    settingsSet: (payload) => put("/api/mobile-equipment/settings", payload),
+
+    // Categories
+    listCategories: () => get("/api/mobile-equipment/categories"),
+    createCategory: (payload) => post("/api/mobile-equipment/categories", payload),
+    updateCategory: (id, payload) => put(`/api/mobile-equipment/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) => del(`/api/mobile-equipment/categories/${encodeURIComponent(id)}`),
+
+    // Maps (uses VSD plans)
+    maps: {
+      uploadZip: (file) => {
+        const fd = new FormData();
+        fd.append("zip", file);
+        return upload("/api/mobile-equipment/maps/uploadZip", fd);
+      },
+      listPlans: () => get("/api/mobile-equipment/maps/plans"),
+      planFileUrlAuto: (plan, { bust = true } = {}) => {
+        const site = currentSite();
+        const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+        const url = isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/mobile-equipment/maps/plan/${encodeURIComponent(key)}/file?site=${site}`
+          : `${API_BASE}/api/mobile-equipment/maps/plan/${encodeURIComponent(key)}/file?site=${site}`;
+        return withBust(url, bust);
+      },
+      positionsAuto: (planOrKey, page_index = 0) => {
+        const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
+        if (isUuid(key) || isNumericId(key))
+          return get("/api/mobile-equipment/maps/positions", { id: key, page_index });
+        return get("/api/mobile-equipment/maps/positions", { logical_name: key, page_index });
+      },
+      setPosition: (equipmentId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+        put(`/api/mobile-equipment/maps/positions/${encodeURIComponent(equipmentId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
+    },
+  },
 };
 
 // Default export for convenience
