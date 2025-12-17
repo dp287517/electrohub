@@ -1399,7 +1399,7 @@ export default function VsdMap() {
               />
 
               {/* Floating toolbar inside Leaflet */}
-              <div className="absolute top-3 left-3 z-[5000] flex flex-col gap-2">
+              <div className="absolute top-2 left-2 sm:top-3 sm:left-3 z-[5000] flex flex-col gap-2">
                 <button
                   onClick={() => {
                     setCreateMode(true);
@@ -1408,7 +1408,8 @@ export default function VsdMap() {
                     setSelectedEquipment(null);
                   }}
                   disabled={createMode}
-                  className="w-10 h-10 rounded-xl border-none bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg cursor-pointer text-lg flex items-center justify-center transition-all hover:from-green-400 hover:to-emerald-500 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-11 h-11 sm:w-10 sm:h-10 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 rounded-xl border-none bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg cursor-pointer text-lg flex items-center justify-center transition-all hover:from-green-400 hover:to-emerald-500 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ touchAction: 'manipulation' }}
                   title="Créer un nouvel équipement VSD"
                 >
                   <Plus size={20} />
