@@ -2,12 +2,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Flame, AlertTriangle, CheckCircle, XCircle, Building2, ChevronDown, ChevronRight,
-  Settings, Download, RefreshCw, Shield, Info, Search, Eye, Zap
+  Settings, Download, RefreshCw, Shield, Info, Search, Eye, Zap, BarChart3
 } from 'lucide-react';
 import { get } from '../lib/api.js';
 import { calculateArcFlash, calculateFaultLevel, STANDARD_PARAMS, getCableSection, getTripTime } from '../lib/electrical-calculations.js';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement,
+  Title, Tooltip, Legend, Filler
+} from 'chart.js';
+import { Bar, Line } from 'react-chartjs-2';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -29,6 +36,151 @@ const PPE_REQUIREMENTS = {
   3: { clothing: 'Combinaison FR 25 cal/cm²', gloves: 'Gants isolants classe 0', face: 'Cagoule FR + écran' },
   4: { clothing: 'Combinaison FR 40 cal/cm²', gloves: 'Gants isolants classe 00', face: 'Cagoule FR + écran' },
   5: { clothing: 'TRAVAIL INTERDIT', gloves: 'TRAVAIL INTERDIT', face: 'TRAVAIL INTERDIT' },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Incident Energy vs Distance Chart - shows how energy decreases with distance
+const IncidentEnergyDistanceChart = ({ arcFlash, voltage }) => {
+  const chartData = useMemo(() => {
+    if (!arcFlash) return null;
+
+    // Calculate incident energy at different distances (IEEE 1584-2018)
+    const baseEnergy = parseFloat(arcFlash.incident_energy_cal);
+    const baseDistance = arcFlash.working_distance_mm;
+    const distances = [150, 200, 300, 455, 600, 900, 1200, 1500];
+
+    // E ∝ 1/D² (simplified - actual IEEE formula is more complex)
+    const energies = distances.map(d => {
+      const ratio = Math.pow(baseDistance / d, 2);
+      return Math.max(0.1, baseEnergy * ratio);
+    });
+
+    // PPE thresholds
+    const ppeThresholds = [1.2, 4, 8, 25, 40];
+
+    return {
+      labels: distances.map(d => `${d}mm`),
+      datasets: [
+        {
+          label: 'Énergie incidente (cal/cm²)',
+          data: energies,
+          borderColor: 'rgb(249, 115, 22)',
+          backgroundColor: 'rgba(249, 115, 22, 0.2)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 4,
+          pointBackgroundColor: energies.map(e =>
+            e >= 40 ? '#7f1d1d' : e >= 25 ? '#dc2626' : e >= 8 ? '#f97316' : e >= 4 ? '#eab308' : '#22c55e'
+          )
+        },
+        {
+          label: 'PPE Cat. 2 (8 cal/cm²)',
+          data: distances.map(() => 8),
+          borderColor: 'rgba(234, 179, 8, 0.5)',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          pointRadius: 0,
+          fill: false
+        },
+        {
+          label: 'PPE Cat. 4 (40 cal/cm²)',
+          data: distances.map(() => 40),
+          borderColor: 'rgba(220, 38, 38, 0.5)',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          pointRadius: 0,
+          fill: false
+        }
+      ]
+    };
+  }, [arcFlash]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10 } } },
+      title: { display: true, text: 'Énergie incidente vs Distance de travail', font: { size: 12, weight: 'bold' } },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} cal/cm²`
+        }
+      }
+    },
+    scales: {
+      x: { title: { display: true, text: 'Distance (mm)' } },
+      y: {
+        title: { display: true, text: 'cal/cm²' },
+        min: 0,
+        max: Math.max(50, parseFloat(arcFlash?.incident_energy_cal || 0) * 2)
+      }
+    }
+  };
+
+  return (
+    <div className="h-64 bg-white rounded-xl border p-3">
+      <Line data={chartData} options={options} />
+    </div>
+  );
+};
+
+// Comparison Bar Chart - compares incident energy across all boards
+const ArcFlashComparisonChart = ({ switchboards, arcFlashResults }) => {
+  const chartData = useMemo(() => {
+    const boardsWithData = switchboards
+      .filter(b => arcFlashResults[b.id])
+      .sort((a, b) => parseFloat(arcFlashResults[b.id]?.incident_energy_cal || 0) - parseFloat(arcFlashResults[a.id]?.incident_energy_cal || 0))
+      .slice(0, 15); // Top 15
+
+    if (boardsWithData.length === 0) return null;
+
+    return {
+      labels: boardsWithData.map(b => b.code || b.name.slice(0, 15)),
+      datasets: [{
+        label: 'Énergie incidente (cal/cm²)',
+        data: boardsWithData.map(b => parseFloat(arcFlashResults[b.id]?.incident_energy_cal || 0)),
+        backgroundColor: boardsWithData.map(b => {
+          const cat = arcFlashResults[b.id]?.ppe_category || 0;
+          return cat >= 4 ? '#dc2626' : cat >= 3 ? '#f97316' : cat >= 2 ? '#eab308' : cat >= 1 ? '#3b82f6' : '#22c55e';
+        }),
+        borderRadius: 6
+      }]
+    };
+  }, [switchboards, arcFlashResults]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: { display: false },
+      title: { display: true, text: 'Comparaison des énergies incidentes par tableau', font: { size: 14, weight: 'bold' } }
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'cal/cm²' },
+        grid: { display: true }
+      },
+      y: {
+        ticks: { font: { size: 10 } }
+      }
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border p-4 shadow-lg">
+      <div style={{ height: Math.max(200, chartData.labels.length * 28) }}>
+        <Bar data={chartData} options={options} />
+      </div>
+    </div>
+  );
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -147,14 +299,18 @@ const SwitchboardCard = ({ board, devices, faultLevel, arcFlash, expanded, onTog
               <p>Aucun disjoncteur dans ce tableau</p>
             </div>
           ) : arcFlash ? (
-            <div className="grid lg:grid-cols-2 gap-6">
-              {/* Arc Flash Label */}
-              <ArcFlashLabel analysis={arcFlash} boardName={`${board.name} (${board.code})`} />
+            <div className="space-y-4">
+              {/* Energy vs Distance Chart */}
+              <IncidentEnergyDistanceChart arcFlash={arcFlash} voltage={board.voltage_v || 400} />
 
-              {/* Details */}
-              <div className="space-y-4">
-                {/* Calculation Inputs */}
-                <div className="p-4 bg-gray-50 rounded-xl">
+              <div className="grid lg:grid-cols-2 gap-6">
+                {/* Arc Flash Label */}
+                <ArcFlashLabel analysis={arcFlash} boardName={`${board.name} (${board.code})`} />
+
+                {/* Details */}
+                <div className="space-y-4">
+                  {/* Calculation Inputs */}
+                  <div className="p-4 bg-gray-50 rounded-xl">
                   <h4 className="font-semibold text-gray-700 mb-3">Paramètres de calcul</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
@@ -210,6 +366,7 @@ const SwitchboardCard = ({ board, devices, faultLevel, arcFlash, expanded, onTog
                     </div>
                   </div>
                 )}
+                </div>
               </div>
             </div>
           ) : (
@@ -547,7 +704,13 @@ export default function ArcFlash() {
             <p className="text-gray-500">Chargement et analyse de tous les tableaux...</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {/* Global Comparison Chart */}
+            {Object.keys(arcFlashResults).length > 0 && (
+              <ArcFlashComparisonChart switchboards={switchboards} arcFlashResults={arcFlashResults} />
+            )}
+
+            {/* Switchboard Cards */}
             {filteredBoards.map(board => (
               <SwitchboardCard
                 key={board.id}

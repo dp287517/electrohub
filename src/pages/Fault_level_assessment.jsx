@@ -3,12 +3,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Zap, AlertTriangle, CheckCircle, XCircle, Building2, ChevronDown, ChevronRight,
   Settings, Download, RefreshCw, AlertCircle, Activity, TrendingUp, Shield,
-  Info, Book, Cpu, Filter, Search
+  Info, Book, Cpu, Filter, Search, BarChart3
 } from 'lucide-react';
 import { get } from '../lib/api.js';
 import { calculateFaultLevel, STANDARD_PARAMS, getCableSection } from '../lib/electrical-calculations.js';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement,
+  Title, Tooltip, Legend
+} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -16,6 +23,158 @@ import 'jspdf-autotable';
 
 const cardClass = "bg-white rounded-xl border shadow-sm overflow-hidden";
 const badgeClass = "px-2 py-1 rounded-full text-xs font-semibold";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Fault Current Comparison Chart - Ik" vs Icu for all boards
+const FaultCurrentComparisonChart = ({ switchboards, devicesByBoard, analyses }) => {
+  const chartData = useMemo(() => {
+    const boardsWithData = switchboards
+      .filter(b => analyses[b.id] && (devicesByBoard[b.id]?.length || 0) > 0)
+      .sort((a, b) => (analyses[b.id]?.Ik_kA || 0) - (analyses[a.id]?.Ik_kA || 0))
+      .slice(0, 15);
+
+    if (boardsWithData.length === 0) return null;
+
+    return {
+      labels: boardsWithData.map(b => b.code || b.name.slice(0, 12)),
+      datasets: [
+        {
+          label: 'Ik" (kA)',
+          data: boardsWithData.map(b => analyses[b.id]?.Ik_kA || 0),
+          backgroundColor: boardsWithData.map(b => {
+            const analysis = analyses[b.id];
+            const devices = devicesByBoard[b.id] || [];
+            const mainDevice = devices.find(d => d.is_main_incoming) || devices[0];
+            const icuOk = !mainDevice?.icu_ka || analysis.Ik_kA <= mainDevice.icu_ka;
+            return icuOk ? 'rgba(34, 197, 94, 0.8)' : 'rgba(239, 68, 68, 0.8)';
+          }),
+          borderRadius: 6
+        },
+        {
+          label: 'Icu (kA)',
+          data: boardsWithData.map(b => {
+            const devices = devicesByBoard[b.id] || [];
+            const mainDevice = devices.find(d => d.is_main_incoming) || devices[0];
+            return mainDevice?.icu_ka || 0;
+          }),
+          backgroundColor: 'rgba(59, 130, 246, 0.5)',
+          borderColor: 'rgb(59, 130, 246)',
+          borderWidth: 2,
+          borderRadius: 6
+        }
+      ]
+    };
+  }, [switchboards, devicesByBoard, analyses]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'top' },
+      title: { display: true, text: 'Comparaison Ik" vs Icu par tableau', font: { size: 14, weight: 'bold' } },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} kA`
+        }
+      }
+    },
+    scales: {
+      x: { ticks: { font: { size: 10 } } },
+      y: { title: { display: true, text: 'kA' }, beginAtZero: true }
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border p-4 shadow-lg mb-6">
+      <div className="h-72">
+        <Bar data={chartData} options={options} />
+      </div>
+      <div className="flex justify-center gap-6 mt-3 text-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-green-500"></div>
+          <span>Ik" ≤ Icu (OK)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-red-500"></div>
+          <span>Ik" &gt; Icu (Danger)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-blue-400"></div>
+          <span>Icu nominal</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Device-level chart within a switchboard
+const DeviceFaultChart = ({ board, devices, boardAnalysis }) => {
+  const chartData = useMemo(() => {
+    if (!boardAnalysis || devices.length < 2) return null;
+
+    const deviceData = devices.map(dev => {
+      const devFla = calculateFaultLevel({
+        voltage_v: board.voltage_v || 400,
+        source_fault_ka: boardAnalysis.Ik_kA,
+        cable_length_m: dev.cable_length_m || 15,
+        cable_section_mm2: dev.cable_section_mm2 || getCableSection(dev.in_amps || 100),
+      });
+      return {
+        name: dev.name || dev.reference || 'Device',
+        ik: devFla.Ik_kA,
+        icu: dev.icu_ka || 0,
+        ok: !dev.icu_ka || devFla.Ik_kA <= dev.icu_ka
+      };
+    });
+
+    return {
+      labels: deviceData.map(d => d.name.slice(0, 10)),
+      datasets: [
+        {
+          label: 'Ik"',
+          data: deviceData.map(d => d.ik),
+          backgroundColor: deviceData.map(d => d.ok ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)'),
+          borderRadius: 4
+        },
+        {
+          label: 'Icu',
+          data: deviceData.map(d => d.icu),
+          backgroundColor: 'rgba(59, 130, 246, 0.4)',
+          borderColor: 'rgb(59, 130, 246)',
+          borderWidth: 1,
+          borderRadius: 4
+        }
+      ]
+    };
+  }, [board, devices, boardAnalysis]);
+
+  if (!chartData) return null;
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10 } } },
+      title: { display: false }
+    },
+    scales: {
+      x: { title: { display: true, text: 'kA' }, beginAtZero: true },
+      y: { ticks: { font: { size: 9 } } }
+    }
+  };
+
+  return (
+    <div className="h-48 mt-4">
+      <Bar data={chartData} options={options} />
+    </div>
+  );
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COMPONENTS
@@ -135,12 +294,17 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
                 </div>
               )}
 
+              {/* Device Fault Chart */}
+              {devices.length > 1 && (
+                <DeviceFaultChart board={board} devices={devices} boardAnalysis={analysis} />
+              )}
+
               {/* Per-Device Analysis */}
               {devices.length > 1 && (
                 <details className="group">
                   <summary className="cursor-pointer text-sm font-medium text-gray-700 flex items-center gap-2">
                     <ChevronRight size={16} className="group-open:rotate-90 transition-transform" />
-                    Analyse par départ ({devices.length} devices)
+                    Tableau détaillé ({devices.length} devices)
                   </summary>
                   <div className="mt-3 overflow-x-auto">
                     <table className="w-full text-sm">
@@ -531,8 +695,17 @@ export default function FaultLevelAssessment() {
             <p className="text-gray-500">Chargement et analyse de tous les tableaux...</p>
           </div>
         ) : (
-          /* Switchboards List */
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {/* Global Comparison Chart */}
+            {Object.keys(analyses).length > 0 && (
+              <FaultCurrentComparisonChart
+                switchboards={switchboards}
+                devicesByBoard={devicesByBoard}
+                analyses={analyses}
+              />
+            )}
+
+            {/* Switchboards List */}
             {filteredBoards.map(board => (
               <SwitchboardCard
                 key={board.id}
