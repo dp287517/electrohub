@@ -193,7 +193,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
             <p className="text-sm text-gray-500">
               {upstream.In}A → {downstream.In}A
-              {result.limitCurrent && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
+              {typeof result.limitCurrent === 'number' && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
             </p>
           </div>
         </div>
@@ -207,7 +207,12 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
 
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50">
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Trip Curve Chart */}
+          <div className="mb-4">
+            <MiniSelectivityChart upstream={upstream} downstream={downstream} result={result} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
               <p className="text-xs font-semibold text-purple-800 mb-1">AMONT</p>
               <p className="font-bold">{upstream.name}</p>
@@ -228,7 +233,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
           </div>
 
-          <table className="w-full text-xs">
+          <table className="w-full text-xs overflow-x-auto">
             <thead>
               <tr className="bg-gray-200">
                 <th className="px-2 py-1 text-left">Icc (A)</th>
@@ -582,7 +587,7 @@ export default function Selectivity() {
         `${p.upstream.In}A`,
         p.downstream.name,
         `${p.downstream.In}A`,
-        p.result.limitCurrent ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
+        typeof p.result.limitCurrent === 'number' ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
         p.result.isSelective ? 'OK' : p.result.isPartiallySelective ? 'Partiel' : 'NON'
       ]);
 
