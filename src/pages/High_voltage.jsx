@@ -8,7 +8,7 @@ import {
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
   MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock, Power,
-  Activity, Target, Gauge, Bolt, CircleDot, Network, Box, Cable, Factory,
+  Activity, Target, Gauge, CircleDot, Network, Box, Cable, Factory,
   Thermometer, Wind, PlugZap, Radio, Cpu, PieChart, BarChart3, TrendingUp
 } from 'lucide-react';
 import { api, get, post, del } from '../lib/api';
@@ -459,7 +459,7 @@ const HVEquipmentFormModal = ({ isOpen, onClose, equipment, onSave, showToast, s
         {/* Electrical Characteristics */}
         <div className="p-4 bg-amber-50 rounded-2xl">
           <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Bolt size={18} className="text-amber-600" />
+            <Zap size={18} className="text-amber-600" />
             Caractéristiques électriques
           </h4>
           <div className="grid grid-cols-3 gap-4">
@@ -635,7 +635,7 @@ const HVDeviceFormModal = ({ isOpen, onClose, device, equipmentId, onSave, showT
           {/* Electrical Specs */}
           <div className="p-4 bg-orange-50 rounded-2xl">
             <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <Bolt size={18} className="text-orange-600" />
+              <Zap size={18} className="text-orange-600" />
               Caractéristiques électriques
             </h4>
             <div className="grid grid-cols-4 gap-4">
@@ -742,7 +742,7 @@ const DeviceTree = React.memo(({ devices, level = 0, onEdit, onDelete, downstrea
     const icons = {
       'HV Circuit Breaker': Power, 'HV Disconnect Switch': PlugZap, 'HV Fuse Switch': Shield,
       'Transformer': Factory, 'HV Cable': Cable, 'Busbar': Box, 'Current Transformer': Gauge,
-      'Voltage Transformer': Activity, 'Surge Arrester': Bolt, 'Capacitor Bank': Database,
+      'Voltage Transformer': Activity, 'Surge Arrester': Zap, 'Capacitor Bank': Database,
       'Reactor': Wind, 'Earth Switch': Radio, 'Relay': Cpu, 'Meter': PieChart, 'HV Cell': Box
     };
     return icons[type] || CircleDot;
@@ -772,7 +772,7 @@ const DeviceTree = React.memo(({ devices, level = 0, onEdit, onDelete, downstrea
                   <div className="flex items-center gap-4 text-sm text-gray-500 flex-wrap">
                     {device.manufacturer && <span className="flex items-center gap-1"><Factory size={12} />{device.manufacturer}</span>}
                     {device.reference && <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">{device.reference}</span>}
-                    <span className="flex items-center gap-1"><Bolt size={12} />{device.voltage_class_kv || '?'} kV</span>
+                    <span className="flex items-center gap-1"><Zap size={12} />{device.voltage_class_kv || '?'} kV</span>
                     <span className="flex items-center gap-1"><Activity size={12} />{device.short_circuit_current_ka || '?'} kA</span>
                     {device.insulation_type && <span className="flex items-center gap-1"><Shield size={12} />{device.insulation_type}</span>}
                   </div>
@@ -841,7 +841,7 @@ const EquipmentCard = React.memo(({ equipment, isExpanded, onToggle, onEdit, onD
               <div className="flex items-center gap-4 text-sm text-gray-500 mt-1 flex-wrap">
                 <span className="flex items-center gap-1"><MapPin size={14} />{equipment.building_code || '—'} / {equipment.floor || '—'} / {equipment.room || '—'}</span>
                 <span className="flex items-center gap-1"><Shield size={14} />{equipment.regime_neutral}</span>
-                <span className="flex items-center gap-1"><Bolt size={14} />{equipment.voltage_kv || 20} kV</span>
+                <span className="flex items-center gap-1"><Zap size={14} />{equipment.voltage_kv || 20} kV</span>
                 <span className="flex items-center gap-1"><Activity size={14} />{equipment.short_circuit_ka || '?'} kA</span>
               </div>
             </div>
