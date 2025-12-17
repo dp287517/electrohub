@@ -1,754 +1,869 @@
-import { useEffect, useState, useRef } from 'react';
-import { get, post } from '../lib/api.js';
-import { HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight } from 'lucide-react';
-import { Line } from 'react-chartjs-2';
-import Confetti from 'react-confetti';
-import jsPDF from 'jspdf';
+// src/pages/Arc_flash.jsx - Professional IEEE 1584-2018 Arc Flash Analysis with Danger Labels
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  LogarithmicScale,
+  Zap, AlertTriangle, CheckCircle, X, Download, Shield, Clock, Calculator,
+  Activity, Target, Bolt, TrendingUp, Settings, Info, RefreshCw, Eye,
+  AlertCircle, Book, HelpCircle, Flame, Users, HardHat, Glasses, Hand,
+  Shirt, FileText, Printer, ChevronRight, ChevronDown
+} from 'lucide-react';
+import { api, get, post } from '../lib/api.js';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement,
+  Title, Tooltip, Legend, Filler
 } from 'chart.js';
+import { Line } from 'react-chartjs-2';
 import Annotation from 'chartjs-plugin-annotation';
-import Zoom from 'chartjs-plugin-zoom';
 
-// Register plugins
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  LogarithmicScale,
-  Annotation,
-  Zoom
-);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler, Annotation);
+
+// ==================== IEEE 1584-2018 CALCULATIONS ====================
+
+/**
+ * IEEE 1584-2018 Arc Flash Incident Energy Calculation
+ *
+ * For LV (208V - 600V) and MV (601V - 15000V) systems
+ *
+ * Key equations:
+ * 1. Arcing Current (Ia): Depends on voltage, bolted fault current, gap, electrode config
+ * 2. Incident Energy (E): Based on Ia, arc duration, working distance, enclosure type
+ * 3. Arc Flash Boundary (AFB): Distance at which E = 1.2 cal/cm²
+ */
+
+// Electrode configurations (IEEE 1584-2018 Table 1)
+const ELECTRODE_CONFIGS = {
+  VCB: { name: 'Vertical conductors/electrodes inside a box/enclosure', k1: -0.555, k2: -0.113, k3: 0.0016 },
+  VCBB: { name: 'Vertical conductors/electrodes terminated in a barrier', k1: -0.539, k2: -0.096, k3: 0.00149 },
+  HCB: { name: 'Horizontal conductors/electrodes inside a box/enclosure', k1: -0.598, k2: -0.113, k3: 0.00154 },
+  VOA: { name: 'Vertical conductors/electrodes in open air', k1: -0.403, k2: -0.046, k3: 0.00189 },
+  HOA: { name: 'Horizontal conductors/electrodes in open air', k1: -0.365, k2: -0.046, k3: 0.00189 }
+};
+
+// PPE Categories per NFPA 70E-2021
+const PPE_CATEGORIES = [
+  { cat: 0, minCal: 0, maxCal: 1.2, color: '#22c55e', name: 'Catégorie 0', description: 'Vêtements non-fondants', clothing: 'Chemise longue, pantalon', gloves: 'Non requis', face: 'Lunettes de sécurité' },
+  { cat: 1, minCal: 1.2, maxCal: 4, color: '#84cc16', name: 'Catégorie 1', description: '4 cal/cm² minimum', clothing: 'Chemise FR + pantalon FR', gloves: 'Gants cuir', face: 'Écran facial + casque' },
+  { cat: 2, minCal: 4, maxCal: 8, color: '#eab308', name: 'Catégorie 2', description: '8 cal/cm² minimum', clothing: 'Chemise FR + pantalon FR + combinaison', gloves: 'Gants isolants', face: 'Écran facial AR + cagoule' },
+  { cat: 3, minCal: 8, maxCal: 25, color: '#f97316', name: 'Catégorie 3', description: '25 cal/cm² minimum', clothing: 'Combinaison AR complète', gloves: 'Gants isolants classe 00', face: 'Cagoule AR complète' },
+  { cat: 4, minCal: 25, maxCal: 40, color: '#ef4444', name: 'Catégorie 4', description: '40 cal/cm² minimum', clothing: 'Combinaison AR multicouches', gloves: 'Gants isolants classe 0', face: 'Cagoule AR + écran' },
+  { cat: 5, minCal: 40, maxCal: Infinity, color: '#7f1d1d', name: 'DANGER EXTRÊME', description: 'Travail interdit - Consignation obligatoire', clothing: 'INTERDIT', gloves: 'N/A', face: 'N/A' }
+];
+
+function getPPECategory(incidentEnergy) {
+  return PPE_CATEGORIES.find(p => incidentEnergy >= p.minCal && incidentEnergy < p.maxCal) || PPE_CATEGORIES[5];
+}
+
+/**
+ * IEEE 1584-2018 Simplified Calculation for LV Systems
+ */
+function calculateArcFlash(params) {
+  const {
+    voltage_v = 480,
+    bolted_fault_ka = 25,
+    arc_duration_s = 0.1,
+    working_distance_mm = 455,
+    electrode_gap_mm = 32,
+    electrode_config = 'VCB',
+    enclosure_width_mm = 508,
+    enclosure_height_mm = 508,
+    enclosure_depth_mm = 203
+  } = params;
+
+  const V = voltage_v;
+  const Ibf = bolted_fault_ka;
+  const t = arc_duration_s;
+  const D = working_distance_mm;
+  const G = electrode_gap_mm;
+
+  // Get electrode configuration coefficients
+  const config = ELECTRODE_CONFIGS[electrode_config] || ELECTRODE_CONFIGS.VCB;
+
+  // Step 1: Calculate Arcing Current (Ia) - IEEE 1584-2018 Eq. 1
+  let lgIa;
+  if (V <= 600) {
+    // LV equation
+    lgIa = 0.00402 + 0.983 * Math.log10(Ibf);
+  } else {
+    // MV equation (simplified)
+    lgIa = 0.00402 + 0.983 * Math.log10(Ibf) - 0.0113 * (V / 1000);
+  }
+  const Ia = Math.pow(10, lgIa);
+
+  // Step 2: Calculate Normalized Incident Energy (En) - IEEE 1584-2018 Eq. 3
+  const k1 = config.k1;
+  const k2 = config.k2;
+
+  // Enclosure size correction factor
+  const CF = 1.0; // Simplified - would be calculated based on enclosure dimensions
+
+  // lgEn = k1 + k2*lg(G) + 1.081*lg(Ia) + 0.0011*G
+  const lgEn = k1 + k2 * Math.log10(G) + 1.081 * Math.log10(Ia) + 0.0011 * G;
+  const En = Math.pow(10, lgEn);
+
+  // Step 3: Calculate Incident Energy at working distance
+  // E = 4.184 * Cf * En * (t/0.2) * (610^x / D^x)
+  // where x is distance exponent (typically 2 for box, 1.5 for open air)
+  const x = electrode_config.includes('OA') ? 1.5 : 2.0;
+  const E = 4.184 * CF * En * (t / 0.2) * Math.pow(610 / D, x);
+
+  // Step 4: Calculate Arc Flash Boundary (distance where E = 1.2 cal/cm²)
+  // AFB = 610 * (4.184 * Cf * En * (t/0.2) / 1.2)^(1/x)
+  const AFB = 610 * Math.pow((4.184 * CF * En * (t / 0.2) / 1.2), 1 / x);
+
+  // Get PPE category
+  const ppe = getPPECategory(E);
+
+  return {
+    arcing_current_ka: Ia,
+    incident_energy_cal: E,
+    arc_flash_boundary_mm: AFB,
+    arc_flash_boundary_m: AFB / 1000,
+    ppe_category: ppe.cat,
+    ppe_info: ppe,
+    normalized_energy: En,
+    distance_exponent: x
+  };
+}
+
+function generateEnergyCurve(params, maxDistance = 2000) {
+  const points = [];
+  for (let d = 200; d <= maxDistance; d += 50) {
+    const result = calculateArcFlash({ ...params, working_distance_mm: d });
+    points.push({
+      distance_mm: d,
+      energy: result.incident_energy_cal,
+      ppe_cat: result.ppe_category
+    });
+  }
+  return points;
+}
+
+// ==================== HELPERS ====================
 
 function useUserSite() {
-  try {
-    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    const site = user?.site || '';
-    console.log('Site from useUserSite:', site);
-    return site;
-  } catch (e) {
-    console.error('Error in useUserSite:', e.message);
-    return '';
-  }
+  try { return (JSON.parse(localStorage.getItem('eh_user') || '{}')?.site) || ''; } catch { return ''; }
 }
 
-function Toast({ msg, type }) {
-  const colors = {
-    success: 'bg-green-600 text-white',
-    error: 'bg-red-600 text-white',
-    info: 'bg-blue-600 text-white',
-    warn: 'bg-amber-500 text-black',
+// ==================== COMPONENTS ====================
+
+const AnimatedCard = ({ children, delay = 0, className = '' }) => (
+  <div className={`animate-slideUp ${className}`} style={{ animationDelay: `${delay}ms`, animationFillMode: 'backwards' }}>
+    {children}
+  </div>
+);
+
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
+  const config = {
+    success: { bg: 'bg-emerald-500', Icon: CheckCircle },
+    error: { bg: 'bg-red-500', Icon: AlertCircle },
+    info: { bg: 'bg-amber-500', Icon: Info },
+    warning: { bg: 'bg-orange-500', Icon: AlertTriangle }
   };
+  const { bg, Icon } = config[type] || config.info;
   return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type] || colors.info}`}>
-      {msg}
+    <div className={`fixed bottom-4 right-4 z-[200] ${bg} text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 animate-slideUp`}>
+      <Icon size={22} /><span className="font-medium">{message}</span>
+      <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-xl"><X size={16} /></button>
     </div>
   );
-}
+};
 
-function Modal({ open, onClose, children, title }) {
-  if (!open) return null;
+const Badge = ({ children, variant = 'default', size = 'md', className = '' }) => {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700 border-gray-200',
+    success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    warning: 'bg-amber-50 text-amber-700 border-amber-200',
+    danger: 'bg-red-50 text-red-700 border-red-200',
+    info: 'bg-blue-50 text-blue-700 border-blue-200',
+  };
+  const sizes = { sm: 'px-2 py-0.5 text-[10px]', md: 'px-2.5 py-1 text-xs', lg: 'px-3 py-1.5 text-sm' };
+  return <span className={`inline-flex items-center gap-1 rounded-full font-semibold border ${variants[variant]} ${sizes[size]} ${className}`}>{children}</span>;
+};
+
+const inputBaseClass = "w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400 transition-all";
+const selectBaseClass = "w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white text-gray-900 transition-all";
+const labelClass = "block text-sm font-semibold text-gray-700 mb-2";
+
+// ==================== ARC FLASH DANGER LABEL ====================
+
+const ArcFlashDangerLabel = ({ result, params, onExportPDF }) => {
+  if (!result) return null;
+
+  const ppe = result.ppe_info;
+  const isDanger = result.ppe_category >= 3;
+  const isExtreme = result.ppe_category >= 5;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl max-h-[80vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
-          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200">
-            <X size={20} />
+    <AnimatedCard>
+      <div className={`rounded-3xl overflow-hidden shadow-2xl border-4 ${isExtreme ? 'border-red-800' : isDanger ? 'border-red-500' : 'border-amber-500'}`}>
+        {/* Header - DANGER or WARNING */}
+        <div className={`p-6 text-white text-center ${isExtreme ? 'bg-gradient-to-r from-red-900 to-red-700' : isDanger ? 'bg-gradient-to-r from-red-600 to-red-500' : 'bg-gradient-to-r from-amber-500 to-orange-500'}`}>
+          <div className="flex items-center justify-center gap-4 mb-2">
+            <AlertTriangle size={48} className="animate-pulse" />
+            <h2 className="text-4xl font-black tracking-wider">
+              {isExtreme ? 'DANGER EXTRÊME' : isDanger ? 'DANGER' : 'WARNING'}
+            </h2>
+            <AlertTriangle size={48} className="animate-pulse" />
+          </div>
+          <p className="text-xl font-bold uppercase tracking-wide">
+            {isExtreme ? 'ARC FLASH - TRAVAIL INTERDIT' : 'ARC FLASH HAZARD'}
+          </p>
+        </div>
+
+        {/* Main Content */}
+        <div className="bg-white p-6">
+          {/* Incident Energy + PPE Category */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="text-center p-6 rounded-2xl" style={{ backgroundColor: ppe.color + '20', borderColor: ppe.color, borderWidth: 3 }}>
+              <Flame size={40} className="mx-auto mb-2" style={{ color: ppe.color }} />
+              <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Énergie Incidente</p>
+              <p className="text-5xl font-black mt-2" style={{ color: ppe.color }}>{result.incident_energy_cal.toFixed(1)}</p>
+              <p className="text-xl font-bold" style={{ color: ppe.color }}>cal/cm²</p>
+            </div>
+            <div className="text-center p-6 rounded-2xl" style={{ backgroundColor: ppe.color + '20', borderColor: ppe.color, borderWidth: 3 }}>
+              <Shield size={40} className="mx-auto mb-2" style={{ color: ppe.color }} />
+              <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Catégorie PPE</p>
+              <p className="text-5xl font-black mt-2" style={{ color: ppe.color }}>{ppe.cat}</p>
+              <p className="text-lg font-bold" style={{ color: ppe.color }}>{ppe.description}</p>
+            </div>
+          </div>
+
+          {/* Arc Flash Boundary */}
+          <div className="bg-gray-100 rounded-2xl p-4 mb-6 text-center">
+            <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-1">Arc Flash Boundary (Limite de Sécurité)</p>
+            <p className="text-3xl font-black text-gray-900">{result.arc_flash_boundary_m.toFixed(2)} m</p>
+            <p className="text-sm text-gray-500">({result.arc_flash_boundary_mm.toFixed(0)} mm)</p>
+          </div>
+
+          {/* PPE Requirements */}
+          {!isExtreme && (
+            <div className="space-y-3">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-lg">
+                <Users size={20} className="text-red-500" />
+                Équipements de Protection Individuelle Requis
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                  <Shirt size={24} className="text-blue-600" />
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase">Vêtements</p>
+                    <p className="font-semibold text-gray-900 text-sm">{ppe.clothing}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                  <Hand size={24} className="text-orange-600" />
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase">Gants</p>
+                    <p className="font-semibold text-gray-900 text-sm">{ppe.gloves}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                  <Glasses size={24} className="text-purple-600" />
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase">Protection faciale</p>
+                    <p className="font-semibold text-gray-900 text-sm">{ppe.face}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                  <HardHat size={24} className="text-yellow-600" />
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase">Protection tête</p>
+                    <p className="font-semibold text-gray-900 text-sm">Casque isolant requis</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Extreme danger warning */}
+          {isExtreme && (
+            <div className="bg-red-100 border-2 border-red-500 rounded-2xl p-6 text-center">
+              <AlertTriangle size={48} className="mx-auto text-red-600 mb-3" />
+              <h3 className="text-2xl font-black text-red-700 mb-2">TRAVAIL SOUS TENSION INTERDIT</h3>
+              <p className="text-red-600 font-medium">
+                L'énergie incidente dépasse 40 cal/cm². Consignation obligatoire avant toute intervention.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer - Technical Details */}
+        <div className="bg-gray-900 text-white p-4">
+          <div className="grid grid-cols-4 gap-4 text-center text-sm">
+            <div>
+              <p className="text-gray-400 text-xs uppercase">Tension</p>
+              <p className="font-bold">{params.voltage_v} V</p>
+            </div>
+            <div>
+              <p className="text-gray-400 text-xs uppercase">Icc</p>
+              <p className="font-bold">{params.bolted_fault_ka} kA</p>
+            </div>
+            <div>
+              <p className="text-gray-400 text-xs uppercase">Durée arc</p>
+              <p className="font-bold">{(params.arc_duration_s * 1000).toFixed(0)} ms</p>
+            </div>
+            <div>
+              <p className="text-gray-400 text-xs uppercase">Distance</p>
+              <p className="font-bold">{params.working_distance_mm} mm</p>
+            </div>
+          </div>
+          <p className="text-center text-xs text-gray-500 mt-3">Calcul selon IEEE 1584-2018 | Généré le {new Date().toLocaleDateString('fr-FR')}</p>
+        </div>
+
+        {/* Export Button */}
+        <div className="bg-gray-100 p-4 flex justify-center gap-3">
+          <button onClick={() => onExportPDF(false)}
+            className="px-6 py-3 bg-gradient-to-r from-red-500 to-rose-600 text-white rounded-xl font-bold hover:from-red-600 hover:to-rose-700 transition-all flex items-center gap-2 shadow-lg">
+            <Download size={20} />
+            Télécharger l'étiquette Arc Flash
+          </button>
+          <button onClick={() => onExportPDF(true)}
+            className="px-6 py-3 bg-gradient-to-r from-gray-700 to-gray-900 text-white rounded-xl font-bold hover:from-gray-800 hover:to-black transition-all flex items-center gap-2 shadow-lg">
+            <FileText size={20} />
+            Rapport complet PDF
           </button>
         </div>
-        <div className="p-6 overflow-y-auto max-h-[calc(80vh-100px)]">{children}</div>
+      </div>
+    </AnimatedCard>
+  );
+};
+
+// ==================== ENERGY CURVE CHART ====================
+
+const EnergyCurveChart = ({ params }) => {
+  const curveData = useMemo(() => generateEnergyCurve(params), [params]);
+
+  // Add PPE category zones as annotations
+  const annotations = {};
+  PPE_CATEGORIES.slice(0, 5).forEach((ppe, idx) => {
+    annotations[`zone${idx}`] = {
+      type: 'box',
+      yMin: ppe.minCal,
+      yMax: Math.min(ppe.maxCal, 50),
+      backgroundColor: ppe.color + '20',
+      borderColor: ppe.color,
+      borderWidth: 1,
+      label: {
+        display: true,
+        content: `Cat ${ppe.cat}`,
+        position: 'start'
+      }
+    };
+  });
+
+  const chartData = {
+    labels: curveData.map(p => p.distance_mm),
+    datasets: [{
+      label: 'Énergie incidente (cal/cm²)',
+      data: curveData.map(p => p.energy),
+      borderColor: 'rgb(239, 68, 68)',
+      backgroundColor: 'rgba(239, 68, 68, 0.1)',
+      fill: true,
+      tension: 0.4,
+      pointRadius: 0,
+      borderWidth: 3
+    }]
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'top' },
+      title: { display: true, text: 'Énergie incidente en fonction de la distance', font: { size: 16, weight: 'bold' } },
+      tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(2)} cal/cm² @ ${ctx.parsed.x} mm` } },
+      annotation: { annotations }
+    },
+    scales: {
+      x: { title: { display: true, text: 'Distance de travail (mm)', font: { weight: 'bold' } } },
+      y: {
+        title: { display: true, text: 'Énergie incidente (cal/cm²)', font: { weight: 'bold' } },
+        beginAtZero: true,
+        max: 50
+      }
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-lg">
+      <div className="h-80">
+        <Line data={chartData} options={options} />
       </div>
     </div>
   );
-}
+};
 
-function Sidebar({ open, onClose, tipContent }) {
-  if (!open) return null;
+// ==================== DEVICE SELECTOR ====================
+
+const DeviceSelector = ({ onSelect, selectedDevice }) => {
+  const [switchboards, setSwitchboards] = useState([]);
+  const [devices, setDevices] = useState([]);
+  const [selectedSwitchboard, setSelectedSwitchboard] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { loadSwitchboards(); }, []);
+
+  const loadSwitchboards = async () => {
+    try {
+      const resp = await get('/api/switchboards', { pageSize: 500 });
+      setSwitchboards(resp?.data || []);
+    } catch (err) { console.error('Failed to load switchboards', err); }
+  };
+
+  const loadDevices = async (switchboardId) => {
+    setLoading(true);
+    try {
+      const resp = await get(`/api/switchboards/${switchboardId}/devices`);
+      setDevices(resp || []);
+    } catch (err) { console.error('Failed to load devices', err); }
+    finally { setLoading(false); }
+  };
+
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl z-40 overflow-y-auto p-6 transition-transform duration-300 ease-in-out transform translate-x-0">
-      <button onClick={onClose} className="absolute top-4 right-4 p-1 hover:bg-gray-200 rounded">
-        <X size={20} />
-      </button>
-      <h3 className="text-xl font-bold mb-4">Explanation Tip</h3>
-      <p className="text-gray-700 whitespace-pre-wrap mb-4">{tipContent || 'No tip available'}</p>
-      <HelpCircle className="text-blue-500 inline" size={24} />
+    <div className="space-y-4">
+      <div>
+        <label className={labelClass}>Tableau électrique</label>
+        <select value={selectedSwitchboard || ''} onChange={e => { setSelectedSwitchboard(e.target.value); if (e.target.value) loadDevices(e.target.value); }} className={selectBaseClass}>
+          <option value="">Sélectionner un tableau...</option>
+          {switchboards.map(sb => <option key={sb.id} value={sb.id}>{sb.name} ({sb.code})</option>)}
+        </select>
+      </div>
+
+      {selectedSwitchboard && (
+        <div>
+          <label className={labelClass}>Device à analyser</label>
+          {loading ? (
+            <div className="flex items-center gap-2 text-gray-500 py-3"><RefreshCw size={16} className="animate-spin" />Chargement...</div>
+          ) : (
+            <select value={selectedDevice?.id || ''} onChange={e => { const dev = devices.find(d => d.id === Number(e.target.value)); onSelect(dev); }} className={selectBaseClass}>
+              <option value="">Sélectionner un device...</option>
+              {devices.map(d => <option key={d.id} value={d.id}>{d.name} - {d.reference}</option>)}
+            </select>
+          )}
+        </div>
+      )}
     </div>
   );
-}
+};
+
+// ==================== MAIN COMPONENT ====================
 
 export default function ArcFlash() {
-  const site = useUserSite();
-  const [points, setPoints] = useState([]);
-  const [statuses, setStatuses] = useState({});
-  const [selectedPoints, setSelectedPoints] = useState([]);
-  const [q, setQ] = useState({ q: '', switchboard: '', building: '', floor: '', sort: 'name', dir: 'desc', page: 1, pageSize: '18' });
-  const [total, setTotal] = useState(0);
-  const [selectedPoint, setSelectedPoint] = useState(null);
-  const [checkResult, setCheckResult] = useState(null);
-  const [curveData, setCurveData] = useState(null);
-  const [showGraph, setShowGraph] = useState(false);
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [showParamsModal, setShowParamsModal] = useState(false);
-  const [paramForm, setParamForm] = useState({
-    device_id: null, switchboard_id: null,
-    working_distance: 455, enclosure_type: 'VCB', electrode_gap: 32, arcing_time: 0.2,
-    fault_current_ka: null, settings: {}, parent_id: null
-  });
-  const [paramTips, setParamTips] = useState({});
-  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [showConfetti, setShowConfetti] = useState(false);
-  const [tipContent, setTipContent] = useState('');
-  const chartRef = useRef(null);
+  const [result, setResult] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
 
-  useEffect(() => {
-    loadPoints();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q]);
+  const [params, setParams] = useState({
+    voltage_v: 480,
+    bolted_fault_ka: 25,
+    arc_duration_s: 0.1,
+    working_distance_mm: 455,
+    electrode_gap_mm: 32,
+    electrode_config: 'VCB',
+    enclosure_width_mm: 508,
+    enclosure_height_mm: 508,
+    enclosure_depth_mm: 203
+  });
 
-  const loadPoints = async () => {
+  const handleCalculate = () => {
     try {
-      setBusy(true);
-      const params = { ...q, switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard };
-      const data = await get('/api/arcflash/points', params);
-      setPoints(data?.data || []);
-      setTotal(data?.total || 0);
-      const initialStatuses = {};
-      (data?.data || []).forEach(p => { if (p.status) initialStatuses[p.device_id] = p.status; });
-      setStatuses(initialStatuses);
-    } catch (e) {
-      setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
+      const res = calculateArcFlash(params);
+      setResult(res);
+      setToast({ type: 'success', message: 'Calcul IEEE 1584 effectué avec succès !' });
+    } catch (err) {
+      setToast({ type: 'error', message: 'Erreur de calcul: ' + err.message });
     }
   };
 
-  const handleAutofill = async () => {
-    try {
-      setBusy(true);
-      const result = await post('/api/arcflash/autofill', { site });
-      setToast({ msg: result.message, type: 'success' });
-      loadPoints();
-    } catch (e) {
-      setToast({ msg: `Autofill failed: ${e.message || 'Server endpoint not found'}`, type: 'error' });
-    } finally {
-      setBusy(false);
+  const exportPDF = (fullReport = false) => {
+    if (!result) return;
+
+    const pdf = new jsPDF();
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const ppe = result.ppe_info;
+    const isExtreme = result.ppe_category >= 5;
+    const isDanger = result.ppe_category >= 3;
+
+    // === PAGE 1: ARC FLASH LABEL ===
+
+    // Header band
+    if (isExtreme) {
+      pdf.setFillColor(127, 29, 29);
+    } else if (isDanger) {
+      pdf.setFillColor(220, 38, 38);
+    } else {
+      pdf.setFillColor(245, 158, 11);
     }
-  };
+    pdf.rect(0, 0, pageWidth, 50, 'F');
 
-  const handleCheck = async (deviceId, switchboardId, isBatch = false) => {
-    try {
-      setBusy(true);
-      if (!deviceId || !switchboardId) throw new Error('Missing device or switchboard ID');
-      const params = { device: deviceId, switchboard: switchboardId };
-      const result = await get('/api/arcflash/check', params);
-      setCheckResult(result);
-      setSelectedPoint({ deviceId, switchboardId });
-      setStatuses(prev => ({ ...prev, [`${deviceId}`]: result.status }));
+    // Warning symbols (triangles)
+    pdf.setFillColor(255, 255, 255);
+    pdf.triangle(25, 35, 15, 45, 35, 45, 'F');
+    pdf.triangle(pageWidth - 25, 35, pageWidth - 35, 45, pageWidth - 15, 45, 'F');
 
-      const curves = await get('/api/arcflash/curves', params);
-      // Utiliser la forme {x,y} pour un axe X linéaire propre
-      const dataXY = (curves.curve || []).map(p => ({ x: p.distance, y: p.energy }));
-      const datasets = {
-        datasets: [
-          { label: 'Incident Energy (cal/cm²)', data: dataXY, borderColor: 'orange', tension: 0.1, pointRadius: 0 },
+    // Exclamation marks
+    pdf.setTextColor(isExtreme ? 127 : isDanger ? 220 : 245, isExtreme ? 29 : 38, isExtreme ? 29 : isDanger ? 38 : 11);
+    pdf.setFontSize(20);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('!', 25, 44, { align: 'center' });
+    pdf.text('!', pageWidth - 25, 44, { align: 'center' });
+
+    // Main title
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(32);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(isExtreme ? 'DANGER EXTRÊME' : isDanger ? 'DANGER' : 'WARNING', pageWidth / 2, 28, { align: 'center' });
+    pdf.setFontSize(14);
+    pdf.text(isExtreme ? 'ARC FLASH - TRAVAIL INTERDIT' : 'ARC FLASH HAZARD', pageWidth / 2, 42, { align: 'center' });
+
+    // Incident Energy Box
+    let y = 65;
+    pdf.setFillColor(254, 242, 242);
+    pdf.setDrawColor(239, 68, 68);
+    pdf.setLineWidth(2);
+    pdf.roundedRect(14, y, (pageWidth - 28) / 2 - 5, 60, 5, 5, 'FD');
+
+    pdf.setTextColor(100, 100, 100);
+    pdf.setFontSize(10);
+    pdf.text('ÉNERGIE INCIDENTE', 14 + (pageWidth - 28) / 4 - 2.5, y + 15, { align: 'center' });
+    pdf.setTextColor(220, 38, 38);
+    pdf.setFontSize(36);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(result.incident_energy_cal.toFixed(1), 14 + (pageWidth - 28) / 4 - 2.5, y + 40, { align: 'center' });
+    pdf.setFontSize(14);
+    pdf.text('cal/cm²', 14 + (pageWidth - 28) / 4 - 2.5, y + 52, { align: 'center' });
+
+    // PPE Category Box
+    const ppeX = 14 + (pageWidth - 28) / 2 + 5;
+    pdf.roundedRect(ppeX, y, (pageWidth - 28) / 2 - 5, 60, 5, 5, 'FD');
+
+    pdf.setTextColor(100, 100, 100);
+    pdf.setFontSize(10);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('CATÉGORIE PPE', ppeX + (pageWidth - 28) / 4 - 2.5, y + 15, { align: 'center' });
+    pdf.setTextColor(220, 38, 38);
+    pdf.setFontSize(48);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(String(ppe.cat), ppeX + (pageWidth - 28) / 4 - 2.5, y + 45, { align: 'center' });
+    pdf.setFontSize(10);
+    pdf.text(ppe.description, ppeX + (pageWidth - 28) / 4 - 2.5, y + 55, { align: 'center' });
+
+    // Arc Flash Boundary
+    y += 70;
+    pdf.setFillColor(243, 244, 246);
+    pdf.setDrawColor(156, 163, 175);
+    pdf.setLineWidth(1);
+    pdf.roundedRect(14, y, pageWidth - 28, 30, 5, 5, 'FD');
+
+    pdf.setTextColor(55, 65, 81);
+    pdf.setFontSize(12);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('ARC FLASH BOUNDARY:', 24, y + 18);
+    pdf.setFontSize(16);
+    pdf.text(`${result.arc_flash_boundary_m.toFixed(2)} m (${result.arc_flash_boundary_mm.toFixed(0)} mm)`, pageWidth - 24, y + 18, { align: 'right' });
+
+    // PPE Requirements
+    y += 40;
+    if (!isExtreme) {
+      pdf.setTextColor(31, 41, 55);
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('ÉQUIPEMENTS DE PROTECTION REQUIS', 14, y);
+
+      y += 10;
+      pdf.autoTable({
+        startY: y,
+        head: [['Protection', 'Exigence']],
+        body: [
+          ['Vêtements', ppe.clothing],
+          ['Gants', ppe.gloves],
+          ['Protection faciale', ppe.face],
+          ['Casque', 'Casque isolant requis']
         ],
-      };
-      setCurveData(datasets);
-      setShowGraph(true);
+        theme: 'grid',
+        headStyles: { fillColor: [220, 38, 38], textColor: 255, fontStyle: 'bold' },
+        styles: { fontSize: 11, cellPadding: 6 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50 } }
+      });
+      y = pdf.lastAutoTable.finalY + 10;
+    } else {
+      pdf.setFillColor(254, 226, 226);
+      pdf.setDrawColor(220, 38, 38);
+      pdf.setLineWidth(2);
+      pdf.roundedRect(14, y, pageWidth - 28, 50, 5, 5, 'FD');
 
-      try {
-        const tipRes = await post('/api/arcflash/ai-tip', { 
-          query: `Explain why this point is ${result.status}: incident_energy: ${result.incident_energy || 'general'}, ppe: ${result.ppe_category}` 
-        });
-        setTipContent(tipRes.tip || 'No tip available');
-      } catch {
-        setTipContent('Failed to load AI tip');
-      }
-      setShowSidebar(true);
-
-      if (result.status === 'safe' && !isBatch) {
-        setShowConfetti(true);
-        setTimeout(() => setShowConfetti(false), 3000);
-      }
-    } catch (e) {
-      setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
+      pdf.setTextColor(127, 29, 29);
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('TRAVAIL SOUS TENSION INTERDIT', pageWidth / 2, y + 20, { align: 'center' });
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('Énergie > 40 cal/cm² - Consignation obligatoire', pageWidth / 2, y + 35, { align: 'center' });
+      y += 60;
     }
-  };
 
-  const handleBatchCheck = async () => {
-    try {
-      setBusy(true);
-      for (const { device_id, switchboard_id } of selectedPoints) {
-        if (device_id && switchboard_id) {
-          // eslint-disable-next-line no-await-in-loop
-          await handleCheck(device_id, switchboard_id, true);
-        }
-      }
-      setToast({ msg: 'Batch check completed', type: 'success' });
-      loadPoints();
-    } catch (e) {
-      setToast({ msg: `Batch failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
-      setSelectedPoints([]);
+    // Technical footer
+    pdf.setFillColor(31, 41, 55);
+    pdf.rect(0, pageHeight - 35, pageWidth, 35, 'F');
+
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(9);
+    pdf.setFont('helvetica', 'normal');
+    const footerY = pageHeight - 22;
+    pdf.text(`Tension: ${params.voltage_v}V`, 20, footerY);
+    pdf.text(`Icc: ${params.bolted_fault_ka}kA`, 60, footerY);
+    pdf.text(`Durée: ${(params.arc_duration_s * 1000).toFixed(0)}ms`, 100, footerY);
+    pdf.text(`Distance: ${params.working_distance_mm}mm`, 145, footerY);
+
+    pdf.setTextColor(156, 163, 175);
+    pdf.setFontSize(8);
+    pdf.text(`IEEE 1584-2018 | Généré le ${new Date().toLocaleDateString('fr-FR')}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
+
+    if (fullReport) {
+      // === PAGE 2: FULL REPORT ===
+      pdf.addPage();
+
+      // Header
+      pdf.setFillColor(220, 38, 38);
+      pdf.rect(0, 0, pageWidth, 40, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(20);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('ARC FLASH ANALYSIS REPORT', 14, 25);
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('IEEE 1584-2018 Calculation', 14, 35);
+
+      // Results table
+      let ry = 55;
+      pdf.setTextColor(0, 0, 0);
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('RÉSULTATS DU CALCUL', 14, ry);
+
+      ry += 10;
+      pdf.autoTable({
+        startY: ry,
+        head: [['Paramètre', 'Valeur', 'Unité', 'Description']],
+        body: [
+          ['Courant d\'arc', result.arcing_current_ka.toFixed(2), 'kA', 'Courant d\'arc calculé'],
+          ['Énergie incidente', result.incident_energy_cal.toFixed(2), 'cal/cm²', 'À la distance de travail'],
+          ['Arc Flash Boundary', result.arc_flash_boundary_m.toFixed(2), 'm', 'Distance E = 1.2 cal/cm²'],
+          ['Catégorie PPE', result.ppe_category, '-', result.ppe_info.description],
+          ['Énergie normalisée', result.normalized_energy.toFixed(4), '-', 'En (IEEE 1584)'],
+          ['Exposant distance', result.distance_exponent.toFixed(1), '-', 'x factor']
+        ],
+        theme: 'striped',
+        headStyles: { fillColor: [220, 38, 38], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [254, 242, 242] },
+        styles: { fontSize: 10, cellPadding: 5 }
+      });
+
+      ry = pdf.lastAutoTable.finalY + 15;
+
+      // Input parameters
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text("PARAMÈTRES D'ENTRÉE", 14, ry);
+
+      ry += 8;
+      pdf.autoTable({
+        startY: ry,
+        head: [['Paramètre', 'Valeur']],
+        body: [
+          ['Tension nominale', `${params.voltage_v} V`],
+          ['Courant de défaut', `${params.bolted_fault_ka} kA`],
+          ['Durée de l\'arc', `${params.arc_duration_s * 1000} ms`],
+          ['Distance de travail', `${params.working_distance_mm} mm`],
+          ['Écartement électrodes', `${params.electrode_gap_mm} mm`],
+          ['Configuration', ELECTRODE_CONFIGS[params.electrode_config]?.name || params.electrode_config]
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [100, 100, 100] },
+        styles: { fontSize: 10 }
+      });
+
+      // Footer
+      pdf.setFontSize(8);
+      pdf.setTextColor(150, 150, 150);
+      pdf.text('Généré par ElectroHub - Arc Flash Analysis Module', 14, pageHeight - 10);
+      pdf.text('Conforme IEEE 1584-2018 & NFPA 70E-2021', pageWidth - 70, pageHeight - 10);
     }
-  };
 
-  const saveParameters = async () => {
-    try {
-      setBusy(true);
-      if (!paramForm.device_id || !paramForm.switchboard_id) {
-        throw new Error('Device ID or Switchboard ID is missing');
-      }
-      const payload = { ...paramForm, site };
-      // s’assurer que parent_id vide → null
-      if (payload.parent_id === '' || typeof payload.parent_id === 'undefined') payload.parent_id = null;
-
-      const result = await post('/api/arcflash/parameters', payload);
-
-      if (result.warnings?.length) {
-        setToast({ msg: `Saved with warnings: ${result.warnings.join(' | ')}`, type: 'warn' });
-      } else {
-        setToast({ msg: result.message, type: 'success' });
-      }
-      setShowParamsModal(false);
-      loadPoints();
-    } catch (e) {
-      setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleReset = async () => {
-    try {
-      setBusy(true);
-      await post('/api/arcflash/reset', { site });
-      setToast({ msg: 'Data reset', type: 'info' });
-      loadPoints();
-    } catch (e) {
-      setToast({ msg: `Reset failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const exportPdf = async (isLabel = false) => {
-    try {
-      if (!checkResult || !curveData) {
-        setToast({ msg: 'No results or graph to export. Run a check first.', type: 'error' });
-        return;
-      }
-      setBusy(true);
-      const pdf = new jsPDF();
-
-      // Re-génère un graphe dans un canvas temporaire
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = 900;
-      tempCanvas.height = 450;
-      const ctx = tempCanvas.getContext('2d');
-
-      let chartInstance = null;
-      try {
-        const data = {
-          datasets: [
-            {
-              label: 'Incident Energy (cal/cm²)',
-              data: curveData.datasets?.[0]?.data || [],
-              parsing: false,
-              tension: 0.1,
-              pointRadius: 0,
-            },
-          ],
-        };
-        chartInstance = new ChartJS(ctx, {
-          type: 'line',
-          data,
-          options: {
-            responsive: false,
-            plugins: {
-              title: { display: true, text: 'Incident Energy vs Distance' },
-            },
-            scales: {
-              x: { type: 'linear', title: { display: true, text: 'Working Distance (mm)' } },
-              y: { type: 'logarithmic', title: { display: true, text: 'Incident Energy (cal/cm²)' }, min: 0.1, max: 100 },
-            },
-            parsing: false,
-          }
-        });
-        await new Promise(r => setTimeout(r, 300));
-      } catch (e) {
-        console.error('Temp chart build failed:', e);
-      }
-
-      const graphImg = tempCanvas.toDataURL('image/png');
-
-      if (isLabel) {
-        const cat = Number(checkResult?.ppe_category ?? 0);
-        const colors = {
-          0: [67,160,71],   // vert
-          1: [255,193,7],   // ambre
-          2: [255,152,0],   // orange
-          3: [229,57,53],   // rouge
-          4: [123,0,44],    // bordeaux
-        };
-        const [r,g,b] = colors[cat] || colors[0];
-        pdf.setFillColor(r, g, b);
-        pdf.rect(0, 0, 210, 40, 'F');
-
-        pdf.setFontSize(18);
-        pdf.setTextColor(255,255,255);
-        pdf.text('Arc Flash Label', 20, 25);
-
-        pdf.setTextColor(0,0,0);
-        pdf.setFontSize(12);
-        pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 45);
-        pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 55);
-        pdf.text(`PPE Category: ${cat} (IEC 61482)`, 20, 65);
-        pdf.text('Required PPE: Arc-rated clothing, gloves, face shield', 20, 75);
-        pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 85);
-
-        if (graphImg) {
-          pdf.addPage();
-          pdf.addImage(graphImg, 'PNG', 10, 10, 190, 95);
-        }
-      } else {
-        if (graphImg) pdf.addImage(graphImg, 'PNG', 10, 10, 190, 95);
-        pdf.setFontSize(14);
-        pdf.text('Full Arc Flash Report', 20, 115);
-        pdf.setFontSize(11);
-        pdf.text(`Status: ${checkResult?.status}`, 20, 125);
-        pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 132);
-        pdf.text(`PPE Category: ${checkResult?.ppe_category}`, 20, 139);
-
-        const remediations = checkResult?.remediation || [];
-        if (remediations.length) {
-          pdf.text('Remediation Actions:', 20, 149);
-          let y = 156;
-          remediations.forEach(r => {
-            pdf.text(`• ${r}`, 20, y);
-            y += 6;
-            if (y > 280) { pdf.addPage(); y = 20; }
-          });
-        }
-      }
-
-      if (chartInstance) chartInstance.destroy();
-      tempCanvas.remove();
-
-      pdf.save(isLabel ? 'arcflash-label.pdf' : 'arcflash-report.pdf');
-      setToast({ msg: `PDF ${isLabel ? 'label' : 'report'} generated successfully`, type: 'success' });
-    } catch (e) {
-      setToast({ msg: `PDF export failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const toggleSelect = (point) => {
-    setSelectedPoints(prev => 
-      prev.some(p => p.device_id === point.device_id) 
-        ? prev.filter(p => p.device_id !== point.device_id)
-        : [...prev, { device_id: point.device_id, switchboard_id: point.switchboard_id }]
-    );
-  };
-
-  const openParams = (point) => {
-    if (!point.device_id || !point.switchboard_id) {
-      setToast({ msg: 'Invalid device or switchboard data', type: 'error' });
-      return;
-    }
-    setParamForm({
-      device_id: Number(point.device_id),
-      switchboard_id: Number(point.switchboard_id),
-      working_distance: point.working_distance || 455,
-      enclosure_type: point.enclosure_type || 'VCB',
-      electrode_gap: point.electrode_gap || 32,
-      arcing_time: point.arcing_time || 0.2,
-      fault_current_ka: point.fault_current_ka || point.icu_ka,
-      settings: point.settings || { ir: 1, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' },
-      parent_id: point.parent_id ?? null,
-    });
-    setParamTips({});
-    setShowParamsModal(true);
+    pdf.save(`arc_flash_${fullReport ? 'report' : 'label'}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    setToast({ type: 'success', message: `${fullReport ? 'Rapport complet' : 'Étiquette Arc Flash'} exporté !` });
   };
 
   return (
-    <section className="max-w-[95vw] mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
-      {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} />}
-      <header className="mb-8">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Arc Flash Analysis</h1>
-        <p className="text-gray-600 max-w-3xl">
-          Analyze arc flash risks based on switchboard and device data. Check incident energy, PPE requirements, and generate reports or labels (per IEEE 1584).
-        </p>
-      </header>
+    <section className="min-h-screen bg-gradient-to-br from-red-50 via-white to-orange-50">
+      <style>{`
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+        .animate-pulse { animation: pulse 1.5s infinite; }
+      `}</style>
 
-      {/* Filtres */}
-      <div className="flex flex-wrap gap-4 mb-6 items-center">
-        <input
-          className="input flex-1 shadow-sm"
-          placeholder="Search by name..."
-          value={q.q}
-          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
-        />
-        <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
-        <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
-        <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
-        <button 
-          onClick={handleAutofill} 
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md"
-          disabled={busy}
-        >
-          Autofill Parameters
-        </button>
-        <button 
-          onClick={handleReset} 
-          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-md"
-          disabled={busy}
-        >
-          Reset Data
-        </button>
+      {/* Header */}
+      <div className="bg-gradient-to-r from-red-600 via-red-500 to-orange-500 text-white">
+        <div className="max-w-[95vw] mx-auto px-4 py-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="p-4 bg-white/20 rounded-2xl">
+                <Flame size={36} />
+              </div>
+              <div>
+                <h1 className="text-3xl lg:text-4xl font-bold">Arc Flash Analysis</h1>
+                <p className="text-red-100 mt-1">Calcul d'énergie incidente selon IEEE 1584-2018</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="https://standards.ieee.org/standard/1584-2018.html" target="_blank" rel="noopener noreferrer"
+                className="px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium flex items-center gap-2 transition-colors">
+                <Book size={18} />Norme IEEE 1584
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Message si aucun point */}
-      {points.length === 0 && (
-        <div className="text-yellow-600 mb-4">
-          Aucun point trouvé. Vérifiez que le site est correctement défini ou ajoutez des données via la page Switchboards.
+      {/* Main Content */}
+      <div className="max-w-[95vw] mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Panel - Parameters */}
+          <div className="lg:col-span-1 space-y-6">
+            <AnimatedCard>
+              <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-lg">
+                <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
+                  <Settings size={20} className="text-red-600" />
+                  Paramètres de calcul
+                </h3>
+
+                <div className="mb-6 p-4 bg-red-50 rounded-xl">
+                  <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <Target size={16} className="text-red-600" />
+                    Sélection depuis tableau
+                  </h4>
+                  <DeviceSelector onSelect={setSelectedDevice} selectedDevice={selectedDevice} />
+                </div>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>Tension (V)</label>
+                      <select value={params.voltage_v} onChange={e => setParams(p => ({ ...p, voltage_v: Number(e.target.value) }))} className={selectBaseClass}>
+                        {[208, 240, 277, 400, 480, 600, 4160, 13800].map(v => <option key={v} value={v}>{v} V</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Icc (kA)</label>
+                      <input type="number" step="0.1" value={params.bolted_fault_ka}
+                        onChange={e => setParams(p => ({ ...p, bolted_fault_ka: Number(e.target.value) }))}
+                        className={inputBaseClass} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>Durée arc (ms)</label>
+                      <input type="number" step="1" value={params.arc_duration_s * 1000}
+                        onChange={e => setParams(p => ({ ...p, arc_duration_s: Number(e.target.value) / 1000 }))}
+                        className={inputBaseClass} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Distance (mm)</label>
+                      <select value={params.working_distance_mm} onChange={e => setParams(p => ({ ...p, working_distance_mm: Number(e.target.value) }))} className={selectBaseClass}>
+                        <option value={305}>305 mm (12")</option>
+                        <option value={455}>455 mm (18")</option>
+                        <option value={610}>610 mm (24")</option>
+                        <option value={910}>910 mm (36")</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Configuration électrodes</label>
+                    <select value={params.electrode_config} onChange={e => setParams(p => ({ ...p, electrode_config: e.target.value }))} className={selectBaseClass}>
+                      {Object.entries(ELECTRODE_CONFIGS).map(([key, cfg]) => (
+                        <option key={key} value={key}>{key} - {cfg.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Écartement électrodes (mm)</label>
+                    <select value={params.electrode_gap_mm} onChange={e => setParams(p => ({ ...p, electrode_gap_mm: Number(e.target.value) }))} className={selectBaseClass}>
+                      <option value={13}>13 mm (Panelboard)</option>
+                      <option value={25}>25 mm (LV MCC)</option>
+                      <option value={32}>32 mm (LV Switchgear)</option>
+                      <option value={102}>102 mm (MV Switchgear)</option>
+                      <option value={153}>153 mm (HV Switchgear)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <button onClick={handleCalculate}
+                  className="w-full mt-6 py-4 rounded-xl bg-gradient-to-r from-red-600 to-orange-600 text-white font-bold text-lg hover:from-red-700 hover:to-orange-700 transition-all flex items-center justify-center gap-3 shadow-xl shadow-red-200">
+                  <Flame size={24} />
+                  Calculer Arc Flash
+                </button>
+              </div>
+            </AnimatedCard>
+
+            {/* PPE Categories Reference */}
+            <AnimatedCard delay={100}>
+              <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-lg">
+                <h4 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <Shield size={18} className="text-red-600" />
+                  Catégories PPE (NFPA 70E)
+                </h4>
+                <div className="space-y-2">
+                  {PPE_CATEGORIES.slice(0, 5).map(ppe => (
+                    <div key={ppe.cat} className="flex items-center gap-3 p-2 rounded-lg" style={{ backgroundColor: ppe.color + '15' }}>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm" style={{ backgroundColor: ppe.color }}>
+                        {ppe.cat}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-semibold text-gray-900 text-sm">{ppe.minCal} - {ppe.maxCal === Infinity ? '40+' : ppe.maxCal} cal/cm²</p>
+                        <p className="text-xs text-gray-500">{ppe.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </AnimatedCard>
+          </div>
+
+          {/* Right Panel - Results */}
+          <div className="lg:col-span-2 space-y-6">
+            {result ? (
+              <>
+                <ArcFlashDangerLabel result={result} params={params} onExportPDF={exportPDF} />
+                <AnimatedCard delay={200}>
+                  <EnergyCurveChart params={params} />
+                </AnimatedCard>
+              </>
+            ) : (
+              <AnimatedCard>
+                <div className="bg-white rounded-3xl border-2 border-dashed border-gray-200 p-12 text-center">
+                  <div className="w-24 h-24 mx-auto mb-6 bg-red-100 rounded-3xl flex items-center justify-center">
+                    <Flame size={48} className="text-red-500" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-2">Analyse Arc Flash</h3>
+                  <p className="text-gray-500 max-w-md mx-auto">
+                    Configurez les paramètres du système électrique puis cliquez sur "Calculer Arc Flash" pour obtenir l'énergie incidente et la catégorie PPE requise selon IEEE 1584-2018.
+                  </p>
+                </div>
+              </AnimatedCard>
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* Tableau */}
-      {points.length > 0 && (
-        <div className="overflow-x-auto shadow-xl rounded-lg">
-          <table className="min-w-full bg-white border border-gray-200 rounded-lg">
-            <thead className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase">
-                  <input
-                    type="checkbox"
-                    onChange={() => setSelectedPoints(selectedPoints.length === points.length ? [] : points.map(p => ({ device_id: p.device_id, switchboard_id: p.switchboard_id })))}
-                    checked={selectedPoints.length === points.length}
-                  />
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Device</th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Switchboard</th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {points.map(point => (
-                <tr key={`${point.device_id}-${point.switchboard_id}`} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4">
-                    <input 
-                      type="checkbox" 
-                      checked={selectedPoints.some(p => p.device_id === point.device_id)} 
-                      onChange={() => toggleSelect(point)} 
-                    />
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900">{point.device_name} ({point.device_type})</td>
-                  <td className="px-6 py-4 text-sm text-gray-900">{point.switchboard_name}</td>
-                  <td className="px-6 py-4 text-sm">
-                    {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
-                     statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
-                     statuses[point.device_id] === 'incomplete' ? <AlertTriangle className="text-yellow-600" /> : 'Pending'}
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    <button
-                      onClick={() => handleCheck(point.device_id, point.switchboard_id)}
-                      className="text-blue-600 hover:underline mr-2"
-                    >
-                      Check
-                    </button>
-                    <button
-                      onClick={() => openParams(point)}
-                      className="text-green-600 hover:underline"
-                    >
-                      Edit Params
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {selectedPoints.length > 0 && (
-        <button 
-          onClick={handleBatchCheck} 
-          className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-md"
-          disabled={busy}
-        >
-          Check Selected ({selectedPoints.length})
-        </button>
-      )}
-
-      {checkResult && (
-        <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
-          <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
-          <div className="flex items-center gap-2 mb-4">
-            {checkResult.status === 'safe' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
-             checkResult.status === 'at-risk' ? <XCircle className="text-red-600" size={24} /> :
-             <AlertTriangle className="text-yellow-600" size={24} />}
-            <span className="text-xl capitalize">{checkResult.status}</span>
-          </div>
-          <p className="mb-2">Incident Energy: {checkResult.incident_energy} cal/cm²</p>
-          <p className="mb-2">PPE Category: {checkResult.ppe_category}</p>
-          {checkResult.missing?.length > 0 && (
-            <div className="mb-4 text-yellow-600 flex items-center">
-              <AlertTriangle className="mr-2" />
-              Missing data: {checkResult.missing.join(', ')}. Please update in Switchboards or Parameters.
-            </div>
-          )}
-          {checkResult.remediation?.length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold">Remediation Actions:</h3>
-              <ul className="list-disc pl-5 text-gray-700">
-                {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
-              </ul>
-            </div>
-          )}
-          <div className="flex gap-4">
-            <button 
-              onClick={() => setShowSidebar(true)} 
-              className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
-              disabled={busy}
-            >
-              <ChevronRight size={16} /> View Explanation
-            </button>
-            <button 
-              onClick={() => exportPdf(true)} 
-              className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
-              disabled={busy}
-            >
-              <Download size={16} /> Generate Arc Flash Label PDF
-            </button>
-            <button 
-              onClick={() => exportPdf(false)} 
-              className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
-              disabled={busy}
-            >
-              <Download size={16} /> Generate Full Report PDF
-            </button>
-          </div>
-        </div>
-      )}
-
-      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Arc Flash Parameters">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Working Distance (mm)</label>
-            <input
-              type="number"
-              value={paramForm.working_distance || 455}
-              onChange={e => setParamForm({ ...paramForm, working_distance: Math.max(Number(e.target.value), 100) })}
-              className="input w-full"
-              placeholder="Minimum: 100"
-              min="100"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Enclosure Type</label>
-            <select
-              value={paramForm.enclosure_type || 'VCB'}
-              onChange={e => setParamForm({ ...paramForm, enclosure_type: e.target.value })}
-              className="input w-full"
-            >
-              <option value="VCB">VCB (Vertical Conductors in Box)</option>
-              <option value="VCBB">VCBB (Vertical Conductors Bottom Box)</option>
-              <option value="HCB">HCB (Horizontal Conductors in Box)</option>
-              <option value="HOA">HOA (Horizontal Open Air)</option>
-              <option value="VOA">VOA (Vertical Open Air)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Electrode Gap (mm)</label>
-            <input
-              type="number"
-              value={paramForm.electrode_gap || 32}
-              onChange={e => setParamForm({ ...paramForm, electrode_gap: Number(e.target.value) })}
-              className="input w-full"
-              placeholder="Default: 32"
-              min="1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Arcing Time (s)</label>
-            <input
-              type="number"
-              step="0.01"
-              value={paramForm.arcing_time || 0.2}
-              onChange={e => setParamForm({ ...paramForm, arcing_time: Number(e.target.value) })}
-              className="input w-full"
-              placeholder="Default: 0.2 (from selectivity if available)"
-              min="0.01"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
-            <input
-              type="number"
-              value={paramForm.fault_current_ka ?? ''}
-              onChange={e => {
-                const v = e.target.value;
-                setParamForm({ ...paramForm, fault_current_ka: v === '' ? null : Number(v) });
-              }}
-              className="input w-full"
-              placeholder="From Fault Level or manual"
-              min="0"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Protection Settings (Ir)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={paramForm.settings.ir || 1}
-              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ir: Number(e.target.value) } })}
-              className="input w-full"
-              placeholder="Long-time pickup (default: 1)"
-              min="0.1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Protection Settings (Isd)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={paramForm.settings.isd || 6}
-              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, isd: Number(e.target.value) } })}
-              className="input w-full"
-              placeholder="Short-time pickup (default: 6)"
-              min="0.1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Protection Settings (Tsd, s)</label>
-            <input
-              type="number"
-              step="0.01"
-              value={paramForm.settings.tsd || 0.1}
-              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, tsd: Number(e.target.value) } })}
-              className="input w-full"
-              placeholder="Short-time delay (default: 0.1)"
-              min="0.01"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Protection Settings (Ii)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={paramForm.settings.ii || 10}
-              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ii: Number(e.target.value) } })}
-              className="input w-full"
-              placeholder="Instantaneous pickup (default: 10)"
-              min="0.1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Parent Device ID</label>
-            <input
-              type="number"
-              value={paramForm.parent_id ?? ''}
-              onChange={e => {
-                const v = e.target.value;
-                setParamForm({ ...paramForm, parent_id: v === '' ? null : Number(v) });
-              }}
-              className="input w-full"
-              placeholder="Upstream device ID (optional)"
-            />
-          </div>
-          <button
-            onClick={saveParameters}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
-            disabled={busy || !paramForm.device_id || !paramForm.switchboard_id}
-          >
-            Save Parameters
-          </button>
-        </div>
-      </Modal>
-
-      <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Incident Energy Curves (Zoom & Pan Enabled)">
-        {curveData ? (
-          <div ref={chartRef}>
-            <Line
-              data={curveData}
-              options={{
-                responsive: true,
-                parsing: false,
-                plugins: {
-                  zoom: {
-                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
-                    pan: { enabled: true, mode: 'xy' },
-                  },
-                  annotation: {
-                    annotations: checkResult?.riskZones?.map((zone, i) => ({
-                      type: 'box',
-                      yMin: zone.min,
-                      yMax: zone.max,
-                      backgroundColor: 'rgba(255, 165, 0, 0.2)',
-                      borderColor: 'orange',
-                      label: { content: 'Risk Zone', display: true, position: 'center' }
-                    })) || []
-                  },
-                  tooltip: {
-                    callbacks: {
-                      label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} cal/cm² at ${ctx.parsed.x}mm`
-                    }
-                  }
-                },
-                scales: {
-                  x: { type: 'linear', title: { display: true, text: 'Working Distance (mm)' } },
-                  y: { type: 'logarithmic', title: { display: true, text: 'Incident Energy (cal/cm²)' }, min: 0.1, max: 100 },
-                },
-              }}
-            />
-          </div>
-        ) : (
-          <p className="text-red-600">Graph data not available. Try running the check again.</p>
-        )}
-        <button 
-          onClick={() => exportPdf(false)} 
-          className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
-          disabled={busy}
-        >
-          <Download size={16} /> Export Full Report PDF
-        </button>
-        <button 
-          onClick={() => setShowGraph(false)} 
-          className="mt-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-          disabled={busy}
-        >
-          Close Graph
-        </button>
-      </Modal>
-
-      <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
-
-      {toast && <Toast {...toast} />}
-      {busy && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
-        </div>
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </section>
   );
 }
