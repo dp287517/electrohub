@@ -129,31 +129,45 @@ const IncidentEnergyDistanceChart = ({ arcFlash, voltage }) => {
   );
 };
 
-// Comparison Bar Chart - compares incident energy across all boards
+// Comparison Bar Chart - IMPROVED VERSION - compares incident energy across all boards
 const ArcFlashComparisonChart = ({ switchboards, arcFlashResults }) => {
   const chartData = useMemo(() => {
     const boardsWithData = switchboards
       .filter(b => arcFlashResults[b.id])
       .sort((a, b) => parseFloat(arcFlashResults[b.id]?.incident_energy_cal || 0) - parseFloat(arcFlashResults[a.id]?.incident_energy_cal || 0))
-      .slice(0, 15); // Top 15
+      .slice(0, 15);
 
     if (boardsWithData.length === 0) return null;
 
+    const getPPEColor = (cat) => {
+      const colors = {
+        0: { bg: 'rgba(34, 197, 94, 0.8)', border: 'rgb(22, 163, 74)' },
+        1: { bg: 'rgba(59, 130, 246, 0.8)', border: 'rgb(37, 99, 235)' },
+        2: { bg: 'rgba(234, 179, 8, 0.8)', border: 'rgb(202, 138, 4)' },
+        3: { bg: 'rgba(249, 115, 22, 0.8)', border: 'rgb(234, 88, 12)' },
+        4: { bg: 'rgba(239, 68, 68, 0.8)', border: 'rgb(220, 38, 38)' },
+        5: { bg: 'rgba(127, 29, 29, 0.9)', border: 'rgb(69, 10, 10)' }
+      };
+      return colors[cat] || colors[0];
+    };
+
     return {
-      labels: boardsWithData.map(b => b.code || b.name.slice(0, 15)),
+      labels: boardsWithData.map(b => b.code || b.name),
       datasets: [{
-        label: 'Énergie incidente (cal/cm²)',
+        label: 'Énergie incidente',
         data: boardsWithData.map(b => parseFloat(arcFlashResults[b.id]?.incident_energy_cal || 0)),
-        backgroundColor: boardsWithData.map(b => {
-          const cat = arcFlashResults[b.id]?.ppe_category || 0;
-          return cat >= 4 ? '#dc2626' : cat >= 3 ? '#f97316' : cat >= 2 ? '#eab308' : cat >= 1 ? '#3b82f6' : '#22c55e';
-        }),
-        borderRadius: 6
+        backgroundColor: boardsWithData.map(b => getPPEColor(arcFlashResults[b.id]?.ppe_category || 0).bg),
+        borderColor: boardsWithData.map(b => getPPEColor(arcFlashResults[b.id]?.ppe_category || 0).border),
+        borderWidth: 2,
+        borderRadius: 8,
+        barPercentage: 0.7
       }]
     };
   }, [switchboards, arcFlashResults]);
 
   if (!chartData) return null;
+
+  const chartHeight = Math.max(280, chartData.labels.length * 40);
 
   const options = {
     responsive: true,
@@ -161,23 +175,63 @@ const ArcFlashComparisonChart = ({ switchboards, arcFlashResults }) => {
     indexAxis: 'y',
     plugins: {
       legend: { display: false },
-      title: { display: true, text: 'Comparaison des énergies incidentes par tableau', font: { size: 14, weight: 'bold' } }
+      title: {
+        display: true,
+        text: '⚡ Comparaison des énergies incidentes par tableau',
+        font: { size: 16, weight: 'bold' },
+        padding: { bottom: 20 }
+      },
+      tooltip: {
+        backgroundColor: 'rgba(0,0,0,0.85)',
+        padding: 14,
+        titleFont: { size: 14, weight: 'bold' },
+        bodyFont: { size: 13 },
+        callbacks: {
+          title: (items) => items[0]?.label || '',
+          label: (ctx) => {
+            const board = switchboards.find(b => (b.code || b.name) === ctx.label);
+            const af = board ? arcFlashResults[board.id] : null;
+            return [
+              `Énergie: ${ctx.parsed.x.toFixed(2)} cal/cm²`,
+              `PPE Cat. ${af?.ppe_category || 0} - ${af?.ppe_name || ''}`,
+              `Limite arc flash: ${af?.arc_flash_boundary_mm || 0} mm`
+            ];
+          }
+        }
+      }
     },
     scales: {
       x: {
-        title: { display: true, text: 'cal/cm²' },
-        grid: { display: true }
+        title: { display: true, text: 'Énergie incidente (cal/cm²)', font: { size: 13, weight: '500' } },
+        grid: { color: 'rgba(0,0,0,0.06)' },
+        ticks: { font: { size: 11 } }
       },
       y: {
-        ticks: { font: { size: 10 } }
+        ticks: { font: { size: 12 }, padding: 10 },
+        grid: { display: false }
       }
     }
   };
 
   return (
-    <div className="bg-white rounded-xl border p-4 shadow-lg">
-      <div style={{ height: Math.max(200, chartData.labels.length * 28) }}>
+    <div className="bg-white rounded-2xl border-2 border-orange-100 p-5 shadow-lg">
+      <div style={{ height: chartHeight }}>
         <Bar data={chartData} options={options} />
+      </div>
+      {/* Legend */}
+      <div className="flex flex-wrap justify-center gap-4 mt-5 pt-4 border-t">
+        {[
+          { cat: 0, label: 'PPE 0', color: 'bg-green-500' },
+          { cat: 1, label: 'PPE 1', color: 'bg-blue-500' },
+          { cat: 2, label: 'PPE 2', color: 'bg-yellow-500' },
+          { cat: 3, label: 'PPE 3', color: 'bg-orange-500' },
+          { cat: 4, label: 'PPE 4', color: 'bg-red-500' },
+        ].map(item => (
+          <div key={item.cat} className="flex items-center gap-2 text-sm">
+            <div className={`w-4 h-4 rounded ${item.color}`}></div>
+            <span className="text-gray-600">{item.label}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -649,51 +703,107 @@ export default function ArcFlash() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="bg-white rounded-xl p-4 shadow-sm border mb-6">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        {/* Filters - IMPROVED */}
+        <div className="bg-white rounded-2xl p-5 shadow-lg border mb-6">
+          <div className="flex flex-col gap-4">
+            {/* Search Bar */}
+            <div className="relative">
+              <Search size={22} className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-500" />
               <input
                 type="text"
-                placeholder="Rechercher un tableau..."
+                placeholder="🔍 Rechercher par nom ou code du tableau..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border rounded-lg"
+                className="w-full pl-12 pr-4 py-3.5 text-lg border-2 border-gray-200 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-200 transition-all placeholder-gray-400"
               />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <XCircle size={20} />
+                </button>
+              )}
             </div>
-            <select value={filterPPE} onChange={e => setFilterPPE(e.target.value)} className="px-4 py-2 border rounded-lg">
-              <option value="all">Toutes catégories</option>
-              <option value="high">PPE ≥ 3 (Danger)</option>
-              <option value="low">PPE &lt; 3</option>
-              <option value="empty">Sans devices</option>
-            </select>
-            <details className="relative">
-              <summary className="px-4 py-2 border rounded-lg cursor-pointer flex items-center gap-2 hover:bg-gray-50">
-                <Settings size={18} />
-                Paramètres
-              </summary>
-              <div className="absolute right-0 mt-2 p-4 bg-white rounded-xl shadow-xl border z-10 w-72">
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Pcc réseau (kA)</label>
-                    <input type="number" value={settings.upstreamFaultKa} onChange={e => setSettings(s => ({ ...s, upstreamFaultKa: Number(e.target.value) }))} className="w-full px-3 py-2 border rounded-lg" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Distance de travail (mm)</label>
-                    <input type="number" value={settings.workingDistance} onChange={e => setSettings(s => ({ ...s, workingDistance: Number(e.target.value) }))} className="w-full px-3 py-2 border rounded-lg" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Transformateur (kVA)</label>
-                    <select value={settings.transformerKva} onChange={e => setSettings(s => ({ ...s, transformerKva: Number(e.target.value) }))} className="w-full px-3 py-2 border rounded-lg">
-                      {Object.keys(STANDARD_PARAMS.transformers).map(kva => (
-                        <option key={kva} value={kva}>{kva} kVA</option>
-                      ))}
-                    </select>
+
+            {/* Filter Buttons & Settings */}
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              {/* PPE Filter Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-500 mr-2">Filtrer par risque:</span>
+                {[
+                  { key: 'all', label: 'Tous', color: 'gray', count: stats.total },
+                  { key: 'high', label: 'PPE ≥ 3 (Danger)', color: 'red', count: stats.byPPE[3] + stats.byPPE[4] + stats.byPPE[5] },
+                  { key: 'low', label: 'PPE < 3', color: 'green', count: stats.byPPE[0] + stats.byPPE[1] + stats.byPPE[2] },
+                  { key: 'empty', label: 'Sans devices', color: 'gray', count: stats.empty }
+                ].map(f => {
+                  const isActive = filterPPE === f.key;
+                  const colors = {
+                    gray: isActive ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                    green: isActive ? 'bg-green-600 text-white' : 'bg-green-50 text-green-700 hover:bg-green-100',
+                    red: isActive ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+                  };
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => setFilterPPE(f.key)}
+                      className={`px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-all ${colors[f.color]}`}
+                    >
+                      {f.key === 'high' && <AlertTriangle size={16} />}
+                      {f.key === 'low' && <CheckCircle size={16} />}
+                      {f.label}
+                      <span className={`px-1.5 py-0.5 rounded-full text-xs ${isActive ? 'bg-white/20' : 'bg-black/10'}`}>
+                        {f.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Settings Button */}
+              <details className="relative">
+                <summary className="px-5 py-2.5 bg-orange-50 text-orange-700 border-2 border-orange-200 rounded-xl cursor-pointer flex items-center gap-2 hover:bg-orange-100 font-medium transition-all">
+                  <Settings size={18} />
+                  Paramètres IEEE 1584
+                </summary>
+                <div className="absolute right-0 mt-2 p-5 bg-white rounded-2xl shadow-2xl border z-10 w-80">
+                  <h4 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
+                    <Flame size={18} className="text-orange-600" />
+                    Configuration Arc Flash
+                  </h4>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Pcc réseau amont (kA)</label>
+                      <input
+                        type="number"
+                        value={settings.upstreamFaultKa}
+                        onChange={e => setSettings(s => ({ ...s, upstreamFaultKa: Number(e.target.value) }))}
+                        className="w-full px-4 py-2.5 border-2 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Distance de travail (mm)</label>
+                      <input
+                        type="number"
+                        value={settings.workingDistance}
+                        onChange={e => setSettings(s => ({ ...s, workingDistance: Number(e.target.value) }))}
+                        className="w-full px-4 py-2.5 border-2 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Typique: 455mm (tableaux BT), 910mm (cellules HTA)</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Transformateur HTA/BT</label>
+                      <select
+                        value={settings.transformerKva}
+                        onChange={e => setSettings(s => ({ ...s, transformerKva: Number(e.target.value) }))}
+                        className="w-full px-4 py-2.5 border-2 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                      >
+                        {Object.keys(STANDARD_PARAMS.transformers).map(kva => (
+                          <option key={kva} value={kva}>{kva} kVA (Ukr: {STANDARD_PARAMS.transformers[kva]}%)</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </details>
+              </details>
+            </div>
           </div>
         </div>
 
