@@ -11,6 +11,7 @@ import {
 import { api } from '../lib/api';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
+import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -2722,8 +2723,20 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
+            {/* Auto Analysis Panel - Shows FLA, Arc Flash, Selectivity automatically */}
+            {devices.length > 0 && (
+              <AnimatedCard delay={100}>
+                <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+                  <AutoAnalysisPanel
+                    switchboard={selectedBoard}
+                    devices={devices}
+                  />
+                </div>
+              </AnimatedCard>
+            )}
+
             {/* Audit History Section - Collapsible */}
-            <AnimatedCard delay={100}>
+            <AnimatedCard delay={150}>
               <details className="bg-white rounded-2xl shadow-sm mb-4 group">
                 <summary className="flex items-center justify-between p-4 cursor-pointer list-none">
                   <div className="flex items-center gap-3">
