@@ -937,7 +937,8 @@ export default function MecaMap() {
 
       if (urlPlanKey && !urlParamsHandledRef.current) {
         planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlMecaId) targetEquipmentIdRef.current = Number(urlMecaId);
+        // Keep as string - UUIDs should not be converted to numbers
+        if (urlMecaId) targetEquipmentIdRef.current = urlMecaId;
         urlParamsHandledRef.current = true;
         setSearchParams({}, { replace: true });
       }

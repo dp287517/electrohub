@@ -1483,7 +1483,8 @@ export const api = {
               const posRes = await get("/api/meca/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
               for (const pos of (posRes?.positions || [])) {
                 if (pos.equipment_id) {
-                  const eqId = Number(pos.equipment_id);
+                  // Keep equipment_id as string (UUIDs)
+                  const eqId = String(pos.equipment_id);
                   if (!placed_ids.includes(eqId)) {
                     placed_ids.push(eqId);
                     placed_details[eqId] = { plans: [plan.logical_name] };
