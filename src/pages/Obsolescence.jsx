@@ -162,9 +162,9 @@ const TabButton = ({ active, onClick, icon: Icon, label, color, count }) => (
 
 // Asset Type Filter Chips
 const AssetChip = ({ type, active, onClick, stats }) => {
-  const Icon = ASSET_ICONS[type];
-  const color = ASSET_COLORS[type];
-  const label = ASSET_LABELS[type];
+  const Icon = ASSET_ICONS[type] || Layers;
+  const color = ASSET_COLORS[type] || '#6b7280';
+  const label = type === 'all' ? 'All Types' : (ASSET_LABELS[type] || type);
 
   return (
     <button
