@@ -2000,6 +2000,41 @@ export const api = {
         put(`/api/mobile-equipment/maps/positions/${encodeURIComponent(equipmentId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
     },
   },
+
+  // ========== HIGH VOLTAGE (HV) ==========
+  hv: {
+    // Health check
+    health: () => get("/api/hv/health"),
+
+    // Equipments CRUD
+    list: (params = {}) => get("/api/hv/equipments", params),
+    getEquipment: (id) => get(`/api/hv/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post("/api/hv/equipments", payload),
+    updateEquipment: (id, payload) => put(`/api/hv/equipments/${encodeURIComponent(id)}`, payload),
+    deleteEquipment: (id) => del(`/api/hv/equipments/${encodeURIComponent(id)}`),
+
+    // Devices CRUD (under equipment)
+    listDevices: (equipmentId) => get(`/api/hv/equipments/${encodeURIComponent(equipmentId)}/devices`),
+    create: (equipmentId, payload) => post(`/api/hv/equipments/${encodeURIComponent(equipmentId)}/devices`, payload),
+    update: (id, payload) => put(`/api/hv/devices/${encodeURIComponent(id)}`, payload),
+    delete: (id) => del(`/api/hv/devices/${encodeURIComponent(id)}`),
+
+    // LV devices (for downstream connection)
+    listLvDevices: (params = {}) => get("/api/hv/lv-devices", params),
+
+    // Photos
+    uploadPhotos: (deviceId, files) => {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("photos", f));
+      return upload(`/api/hv/devices/${encodeURIComponent(deviceId)}/photos`, fd);
+    },
+    photoUrl: (deviceId, idx, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/hv/devices/${encodeURIComponent(deviceId)}/photo/${idx}`, bust),
+    deletePhoto: (deviceId, idx) => del(`/api/hv/devices/${encodeURIComponent(deviceId)}/photo/${idx}`),
+
+    // AI specs extraction
+    analyzeSpecs: (payload) => post("/api/hv/ai/specs", payload),
+  },
 };
 
 // Default export for convenience

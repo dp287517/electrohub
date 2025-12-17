@@ -127,7 +127,7 @@ const selectivityTarget  = process.env.SELECTIVITY_BASE_URL   || "http://127.0.0
 const flaTarget          = process.env.FLA_BASE_URL           || "http://127.0.0.1:3005";
 const arcflashTarget     = process.env.ARCFLASH_BASE_URL      || "http://127.0.0.1:3006";
 const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL  || "http://127.0.0.1:3007";
-const hvTarget           = process.env.HV_BASE_URL            || "http://127.0.0.1:3008";
+const hvTarget           = process.env.HV_BASE_URL            || "http://127.0.0.1:3010";
 const diagramTarget      = process.env.DIAGRAM_BASE_URL       || "http://127.0.0.1:3009";
 // Controls ancien système supprimé - remplacé par switchboard-controls intégré à server_switchboard.js
 // const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3011";

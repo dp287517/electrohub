@@ -617,5 +617,5 @@ Please read all photos, transcribe the nameplate and extract as per schema.` },
   }
 });
 
-const port = process.env.HV_PORT || 3009;
+const port = process.env.HV_PORT || 3010;
 app.listen(port, () => console.log(`HV service running on :${port}`));
