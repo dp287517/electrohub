@@ -1000,6 +1000,29 @@ app.put("/api/meca/maps/renamePlan", async (req, res) => {
   }
 });
 
+// GET /api/meca/maps/placed-ids - Get all equipment IDs that have placements
+app.get("/api/meca/maps/placed-ids", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT pos.equipment_id,
+             array_agg(DISTINCT pos.logical_name) as plans
+        FROM meca_positions pos
+        JOIN meca_equipments e ON e.id = pos.equipment_id
+       GROUP BY pos.equipment_id
+    `);
+
+    const placed_ids = rows.map(r => r.equipment_id);
+    const placed_details = {};
+    rows.forEach(r => {
+      placed_details[r.equipment_id] = { plans: r.plans || [] };
+    });
+
+    res.json({ ok: true, placed_ids, placed_details });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // GET /api/meca/maps/positions
 app.get("/api/meca/maps/positions", async (req, res) => {
   try {
