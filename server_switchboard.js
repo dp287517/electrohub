@@ -658,7 +658,13 @@ async function ensureSchema() {
         ALTER TABLE control_schedules ADD COLUMN meca_equipment_id INTEGER;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'mobile_equipment_id') THEN
-        ALTER TABLE control_schedules ADD COLUMN mobile_equipment_id INTEGER;
+        ALTER TABLE control_schedules ADD COLUMN mobile_equipment_id UUID;
+      ELSE
+        -- Migrate from INTEGER to UUID if needed (me_equipments uses UUID)
+        IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'mobile_equipment_id' AND data_type = 'integer') THEN
+          ALTER TABLE control_schedules DROP COLUMN mobile_equipment_id;
+          ALTER TABLE control_schedules ADD COLUMN mobile_equipment_id UUID;
+        END IF;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_schedules ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
@@ -674,7 +680,13 @@ async function ensureSchema() {
         ALTER TABLE control_records ADD COLUMN meca_equipment_id INTEGER;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'mobile_equipment_id') THEN
-        ALTER TABLE control_records ADD COLUMN mobile_equipment_id INTEGER;
+        ALTER TABLE control_records ADD COLUMN mobile_equipment_id UUID;
+      ELSE
+        -- Migrate from INTEGER to UUID if needed (me_equipments uses UUID)
+        IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'mobile_equipment_id' AND data_type = 'integer') THEN
+          ALTER TABLE control_records DROP COLUMN mobile_equipment_id;
+          ALTER TABLE control_records ADD COLUMN mobile_equipment_id UUID;
+        END IF;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_records ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
