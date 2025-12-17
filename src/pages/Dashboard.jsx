@@ -32,6 +32,7 @@ const electricalApps = [
   { label: 'Project', to: '/app/projects', description: 'Financial project management: business case, PIP, WBS, offers', icon: '💳', color: 'from-green-400 to-emerald-500' },
   { label: 'Variable Speed Drives', to: '/app/vsd', description: 'VSD maintenance: frequency inverters, power ratings, checks', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
   { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
+  { label: 'Mobile Equipments', to: '/app/mobile-equipments', description: 'Electrical controls for mobile equipment: drills, angle grinders...', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
 ];
 
 // Other apps

@@ -32,6 +32,7 @@ import Vsd from './pages/Vsd.jsx';
 import VsdMap from './pages/Vsd_map.jsx';
 import Meca from './pages/Meca.jsx';
 import MecaMap from './pages/Meca_map.jsx';
+import MobileEquipments from './pages/MobileEquipments.jsx';
 
 // Component to redirect authenticated users to dashboard
 function AuthRedirect({ children }) {
@@ -99,6 +100,7 @@ export default function App() {
           <Route path="/app/vsd/map" element={<ProtectedRoute><VsdMap /></ProtectedRoute>} />
           <Route path="/app/meca/map" element={<ProtectedRoute><MecaMap /></ProtectedRoute>} />
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
+          <Route path="/app/mobile-equipments" element={<ProtectedRoute><MobileEquipments /></ProtectedRoute>} />
 
           {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />

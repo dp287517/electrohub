@@ -142,6 +142,8 @@ const doorsTarget        = process.env.DOORS_BASE_URL         || "http://127.0.0
 // 🔵 VSD (Variateurs de fréquence) — microservice sur 3020  ✅ AJOUT
 const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0.1:3020";
 const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
+// 🔵 Mobile Equipment (Controle Electrique Appareils Mobiles) — microservice sur 3022
+const mobileEquipTarget = process.env.MOBILE_EQUIP_BASE_URL || "http://127.0.0.1:3022";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 
@@ -235,6 +237,9 @@ app.use("/api/meca", mkProxy(mecaTarget, { withRestream: true }));
 
 // >>> Learn-Ex (formation ATEX) : timeout étendu pour génération de certificats
 app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true, timeoutMs: 60000 }));
+
+// >>> Mobile Equipment (Controle Electrique Appareils Mobiles) : re-stream pour uploads
+app.use("/api/mobile-equipment", mkProxy(mobileEquipTarget, { withRestream: true }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
