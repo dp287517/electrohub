@@ -1084,19 +1084,24 @@ const DetailPanel = ({
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      <div className="border-t p-4 space-y-2">
         <button
           onClick={() => onNavigateToMap(equipment)}
-          className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 flex items-center justify-center gap-2"
+          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
+            isPlaced
+              ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700'
+              : 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white hover:from-blue-600 hover:to-cyan-700'
+          }`}
         >
           <MapPin size={18} />
-          Voir sur plan
+          {isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
         </button>
         <button
           onClick={() => onDelete(equipment)}
-          className="py-3 px-4 rounded-xl border border-red-200 text-red-600 font-medium hover:bg-red-50 flex items-center justify-center gap-2"
+          className="w-full py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100 flex items-center justify-center gap-2 transition-all"
         >
           <Trash2 size={18} />
+          Supprimer
         </button>
       </div>
     </div>
@@ -1690,12 +1695,23 @@ export default function MobileEquipments() {
             </div>
           </div>
 
-          {/* Stats */}
+          {/* Stats - Desktop */}
           <div className="hidden md:flex items-center gap-2">
             <Badge variant="default">{stats.total} total</Badge>
             <Badge variant="success">{stats.aFaire} a faire</Badge>
             <Badge variant="warning" className="blink-orange">{stats.enCours} sous 30j</Badge>
             <Badge variant="danger" className="blink-red">{stats.enRetard} en retard</Badge>
+          </div>
+
+          {/* Stats - Mobile (condensed) */}
+          <div className="flex md:hidden items-center gap-1.5">
+            <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium">{stats.total}</span>
+            {stats.enRetard > 0 && (
+              <span className="px-2 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium blink-red">{stats.enRetard} !</span>
+            )}
+            {stats.enCours > 0 && (
+              <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-medium blink-orange">{stats.enCours}</span>
+            )}
           </div>
 
           {/* Actions */}
@@ -1848,7 +1864,95 @@ export default function MobileEquipments() {
               }}
               showToast={showToast}
             />
+          ) : isMobile ? (
+            /* Mobile: show tree directly when no equipment selected */
+            <div className="flex-1 bg-white p-3 overflow-y-auto">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw size={32} className="animate-spin text-blue-500" />
+                </div>
+              ) : Object.keys(tree).length === 0 ? (
+                <div className="text-center py-12">
+                  <Cpu size={48} className="mx-auto mb-4 text-gray-300" />
+                  <h3 className="text-lg font-medium text-gray-600 mb-2">Aucun equipement</h3>
+                  <p className="text-gray-500 text-sm max-w-xs mx-auto mb-4">
+                    Commencez par creer votre premier appareil mobile
+                  </p>
+                  <button
+                    onClick={handleNewEquipment}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 flex items-center gap-2 mx-auto"
+                  >
+                    <Plus size={18} />
+                    Nouvel equipement
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {Object.entries(tree).map(([building, floors]) => (
+                    <div key={building} className="bg-gray-50 rounded-xl overflow-hidden">
+                      <button
+                        onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-100"
+                      >
+                        {expandedBuildings[building] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                        <Building2 size={18} className="text-blue-500" />
+                        <span className="font-semibold truncate flex-1">{building}</span>
+                        <span className="text-xs text-gray-400 bg-white px-2 py-1 rounded-full shadow-sm">
+                          {Object.values(floors).flat().length}
+                        </span>
+                      </button>
+
+                      {expandedBuildings[building] && (
+                        <div className="bg-white border-t divide-y">
+                          {Object.entries(floors).map(([floor, equipmentList]) => (
+                            <div key={floor}>
+                              <div className="px-4 py-2 text-xs font-medium text-gray-500 flex items-center gap-2 bg-gray-50/50">
+                                <Layers size={14} className="text-amber-500" />
+                                {floor}
+                                <span className="text-gray-400">({equipmentList.length})</span>
+                              </div>
+                              <div className="divide-y divide-gray-100">
+                                {equipmentList.map(eq => {
+                                  const statusConf = getStatusConfig(eq.status);
+                                  return (
+                                    <button
+                                      key={eq.id}
+                                      onClick={() => handleSelectEquipment(eq)}
+                                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-blue-50 transition-colors"
+                                    >
+                                      <Cpu size={16} className={`text-blue-500 ${statusConf.blink}`} />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="text-sm font-medium text-gray-900 block truncate">{eq.name}</span>
+                                        <span className="text-xs text-gray-500 truncate block">
+                                          {eq.code} {eq.brand && `• ${eq.brand}`}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        {!placedIds.has(String(eq.id)) && (
+                                          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] rounded-full flex items-center gap-0.5">
+                                            <MapPin size={10} />
+                                          </span>
+                                        )}
+                                        <Badge variant={statusConf.variant} className={statusConf.blink}>
+                                          {statusConf.label}
+                                        </Badge>
+                                      </div>
+                                      <ChevronRight size={16} className="text-gray-300" />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ) : (
+            /* Desktop: empty state */
             <div className="flex-1 flex items-center justify-center bg-gray-50">
               <div className="text-center">
                 <Cpu size={48} className="mx-auto mb-4 text-gray-300" />

@@ -416,7 +416,7 @@ export default function Project() {
 
   /* --------------------------------- Render --------------------------------- */
   return (
-    <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
+    <section className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">

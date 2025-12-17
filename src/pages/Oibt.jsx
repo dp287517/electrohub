@@ -735,7 +735,7 @@ export default function Oibt() {
   }, []);
 
   return (
-    <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
+    <section className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       <header className="mb-4">
         <h1 className="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">
           <BarChart3 /> OIBT – Installation &amp; Contrôles

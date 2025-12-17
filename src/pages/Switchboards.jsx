@@ -2213,7 +2213,7 @@ export default function Switchboards() {
 
       {/* Header - Responsive */}
       <div className="sticky top-0 z-40 bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
+        <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-3 sm:px-4 py-3 sm:py-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white flex-shrink-0">
@@ -2405,7 +2405,7 @@ export default function Switchboards() {
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto flex">
+      <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto flex">
         {/* Desktop: sidebar tree */}
         {!isMobile && (
           <div className="w-64 lg:w-80 border-r bg-white min-h-screen p-3 lg:p-4 sticky top-28 sm:top-32 self-start overflow-y-auto max-h-[calc(100vh-7rem)] sm:max-h-[calc(100vh-8rem)] flex-shrink-0">
@@ -2697,8 +2697,25 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
-            {/* Audit History Section - Collapsible */}
+            {/* View on Plan Action */}
             <AnimatedCard delay={75}>
+              <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+                <button
+                  onClick={() => handleNavigateToMap(selectedBoard)}
+                  className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
+                    isBoardPlacedOnMap(selectedBoard)
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700'
+                      : 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700'
+                  }`}
+                >
+                  <MapPin size={18} />
+                  {isBoardPlacedOnMap(selectedBoard) ? 'Voir sur le plan' : 'Localiser sur le plan'}
+                </button>
+              </div>
+            </AnimatedCard>
+
+            {/* Audit History Section - Collapsible */}
+            <AnimatedCard delay={100}>
               <details className="bg-white rounded-2xl shadow-sm mb-4 group">
                 <summary className="flex items-center justify-between p-4 cursor-pointer list-none">
                   <div className="flex items-center gap-3">

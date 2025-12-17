@@ -59,7 +59,7 @@ export default function Navbar() {
             : 'bg-white/80 backdrop-blur-md'
         } border-b border-gray-100/80`}
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             {/* Logo */}
             <Link

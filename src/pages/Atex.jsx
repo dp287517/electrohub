@@ -768,7 +768,7 @@ export default function Atex() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
+    <div className="max-w-[1600px] 2xl:max-w-[1800px] mx-auto px-4 sm:px-6 py-4 space-y-4">
       {/* Toast */}
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10010] bg-gray-900 text-white px-4 py-3 rounded-2xl shadow-lg text-sm animate-fadeIn">
