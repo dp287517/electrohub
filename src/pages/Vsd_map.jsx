@@ -1054,8 +1054,9 @@ export default function VsdMap() {
 
     creatingRef.current = true;
     try {
-      // Create equipment with minimal data
-      const created = await api.vsd.createEquipment({ name: "", status: "a_faire" });
+      // Create equipment with auto-generated name
+      const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const created = await api.vsd.createEquipment({ name: `Nouveau VSD ${timestamp}`, status: "a_faire" });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Échec création équipement VSD");
 

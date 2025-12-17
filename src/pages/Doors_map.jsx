@@ -1136,8 +1136,9 @@ export default function DoorsMap() {
 
     creatingRef.current = true;
     try {
-      // Create door with minimal data
-      const created = await api.doors.create({ name: "", status: "a_faire" });
+      // Create door with auto-generated name
+      const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const created = await api.doors.create({ name: `Nouvelle porte ${timestamp}`, status: "a_faire" });
       const id = created?.id || created?.door?.id;
       if (!id) throw new Error("Échec création porte");
 
