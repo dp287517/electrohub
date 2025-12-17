@@ -1741,45 +1741,38 @@ app.post("/api/mobile-equipment/maps/uploadZip", uploadZip.single("zip"), async 
   }
 });
 
-/** List plans (latest by logical_name) + action counts */
+/** List plans - USES VSD PLANS for symbiosis (shared plans across modules) */
 app.get("/api/mobile-equipment/maps/plans", async (_req, res) => {
   try {
+    // Use VSD plans (vsd_plans, vsd_plan_names) for symbiosis with VSD module
     const q = `
       WITH latest AS (
         SELECT DISTINCT ON (logical_name) id, logical_name, version, page_count, created_at
-        FROM me_plans
+        FROM vsd_plans
         ORDER BY logical_name, created_at DESC
       ),
       names AS (
         SELECT logical_name, COALESCE(display_name, logical_name) AS display_name
-        FROM me_plan_names
-      ),
-      pending AS (
-        SELECT c.equipment_id, c.due_date
-          FROM me_checks c
-         WHERE c.closed_at IS NULL
+        FROM vsd_plan_names
       ),
       pos AS (
         SELECT p.plan_logical_name AS logical_name, p.equipment_id
           FROM me_equipment_positions p
           GROUP BY p.plan_logical_name, p.equipment_id
       ),
-      counts AS (
-        SELECT pos.logical_name,
-               SUM(CASE WHEN pending.due_date < CURRENT_DATE THEN 1 ELSE 0 END) AS overdue,
-               SUM(CASE WHEN pending.due_date >= CURRENT_DATE
-                           AND pending.due_date <= CURRENT_DATE + INTERVAL '30 day'
-                        THEN 1 ELSE 0 END) AS actions_next_30
-          FROM pos
-          JOIN pending ON pending.equipment_id = pos.equipment_id
-         GROUP BY pos.logical_name
+      -- Count mobile equipments placed on each plan
+      equip_counts AS (
+        SELECT pos.logical_name, COUNT(DISTINCT pos.equipment_id) AS equipment_count
+        FROM pos
+        GROUP BY pos.logical_name
       )
       SELECT l.id, l.logical_name, n.display_name, l.version, l.page_count,
-             COALESCE(c.actions_next_30,0)::int AS actions_next_30,
-             COALESCE(c.overdue,0)::int AS overdue
+             COALESCE(ec.equipment_count, 0)::int AS equipment_count,
+             0 AS actions_next_30,
+             0 AS overdue
         FROM latest l
    LEFT JOIN names n USING (logical_name)
-   LEFT JOIN counts c ON c.logical_name = l.logical_name
+   LEFT JOIN equip_counts ec ON ec.logical_name = l.logical_name
     ORDER BY n.display_name ASC;
     `;
     const { rows } = await pool.query(q);
@@ -1789,13 +1782,14 @@ app.get("/api/mobile-equipment/maps/plans", async (_req, res) => {
   }
 });
 
-/** Stream plan PDF by ID (UUID) */
+/** Stream plan PDF by ID (UUID) - USES VSD PLANS */
 app.get(
   "/api/mobile-equipment/maps/plan/:id([0-9a-fA-F\\-]{36})/file",
   async (req, res) => {
     try {
+      // Use VSD plans for symbiosis
       const { rows } = await pool.query(
-        `SELECT file_path, content FROM me_plans WHERE id=$1`,
+        `SELECT file_path, content FROM vsd_plans WHERE id=$1`,
         [req.params.id]
       );
       const row = rows[0];
@@ -1816,13 +1810,14 @@ app.get(
   }
 );
 
-/** Stream plan PDF by logical_name */
+/** Stream plan PDF by logical_name - USES VSD PLANS */
 app.get("/api/mobile-equipment/maps/plan/:logical/file", async (req, res) => {
   try {
     const logical = String(req.params.logical || "");
     if (!logical) return res.status(400).send("logical");
+    // Use VSD plans for symbiosis
     const { rows } = await pool.query(
-      `SELECT file_path, content FROM me_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT file_path, content FROM vsd_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
       [logical]
     );
     const row = rows[0];
@@ -1872,8 +1867,9 @@ app.get("/api/mobile-equipment/maps/positions", async (req, res) => {
 
     let logical = logicalParam;
     if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      // Use VSD plans for symbiosis
       const { rows } = await pool.query(
-        `SELECT logical_name FROM me_plans WHERE id=$1 LIMIT 1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
         [id]
       );
       logical = rows?.[0]?.logical_name || "";
