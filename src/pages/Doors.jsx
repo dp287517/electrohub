@@ -1287,10 +1287,33 @@ export default function Doors() {
     }
   }, []);
 
-  // Load placements - doorsMaps.placedIds doesn't exist for doors, skip
+  // Load placements by iterating through all plans and their positions
   const loadPlacements = useCallback(async () => {
-    // No placedIds API for doors - keep empty set
-    setPlacedIds(new Set());
+    try {
+      const plansRes = await api.doorsMaps.listPlans();
+      const plans = plansRes?.plans || plansRes?.items || [];
+      const placed = new Set();
+
+      for (const plan of plans) {
+        try {
+          // Get positions for all pages (assume max 20 pages)
+          for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
+            const positions = await api.doorsMaps.positionsAuto(plan.logical_name || plan.id, pageIdx).catch(() => ({}));
+            const list = positions?.items || positions?.points || [];
+            if (list.length === 0 && pageIdx > 0) break; // No more pages
+            list.forEach(p => {
+              if (p.door_id) {
+                placed.add(String(p.door_id));
+              }
+            });
+          }
+        } catch {}
+      }
+      setPlacedIds(placed);
+    } catch (err) {
+      console.error('Load placements error:', err);
+      setPlacedIds(new Set());
+    }
   }, []);
 
   // Load calendar events
