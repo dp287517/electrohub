@@ -1219,22 +1219,7 @@ export default function VsdMap() {
               <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
             </div>
 
-            <button
-              onClick={() => {
-                setCreateMode(true);
-                setPlacementMode(null);
-                setSelectedPosition(null);
-                setSelectedEquipment(null);
-              }}
-              disabled={!selectedPlan || createMode}
-              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              title="Créer un nouvel équipement VSD sur le plan"
-            >
-              <Plus size={16} />
-              Nouvel équipement
-            </button>
-
-            <button
+<button
               onClick={() => zipInputRef.current?.click()}
               className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
             >
@@ -1412,6 +1397,23 @@ export default function VsdMap() {
                 onContextMenu={(meta, pos) => setContextMenu({ position: meta, x: pos.x, y: pos.y })}
                 placementActive={!!placementMode || createMode}
               />
+
+              {/* Floating toolbar inside Leaflet */}
+              <div className="absolute top-3 left-3 z-[5000] flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    setCreateMode(true);
+                    setPlacementMode(null);
+                    setSelectedPosition(null);
+                    setSelectedEquipment(null);
+                  }}
+                  disabled={createMode}
+                  className="w-10 h-10 rounded-xl border-none bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg cursor-pointer text-lg flex items-center justify-center transition-all hover:from-green-400 hover:to-emerald-500 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Créer un nouvel équipement VSD"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
             </>
           )}
 
