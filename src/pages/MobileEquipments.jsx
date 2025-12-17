@@ -901,7 +901,6 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
     brand: '',
     model: '',
     power_rating: '',
-    frequency: ''
   });
   const [isSaving, setIsSaving] = useState(false);
 
@@ -917,8 +916,7 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
         serial_number: equipment.serial_number || '',
         brand: equipment.brand || '',
         model: equipment.model || '',
-        power_rating: equipment.power_rating || '',
-        frequency: equipment.frequency || ''
+        power_rating: equipment.power_rating || ''
       });
     }
   }, [equipment]);
@@ -1045,21 +1043,6 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
                 className={inputBaseClass}
                 placeholder="750W"
               />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Frequence de controle</label>
-              <select
-                value={form.frequency}
-                onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))}
-                className={selectBaseClass}
-              >
-                <option value="">-- Par defaut --</option>
-                <option value="1_mois">Tous les mois</option>
-                <option value="3_mois">Tous les 3 mois</option>
-                <option value="6_mois">Tous les 6 mois</option>
-                <option value="1_an">Tous les ans</option>
-                <option value="2_ans">Tous les 2 ans</option>
-              </select>
             </div>
           </div>
         </div>
@@ -1539,7 +1522,7 @@ export default function MobileEquipments() {
   };
 
   const handleNavigateToMap = (e) => {
-    navigate('/app/vsd/map?equipment=' + e.id);
+    navigate('/app/mobile-equipments/map?equipment=' + e.id);
   };
 
   // Build tree structure: Building > Floor > Equipments
@@ -1644,7 +1627,7 @@ export default function MobileEquipments() {
               <Settings size={20} />
             </button>
             <button
-              onClick={() => navigate('/app/vsd/map')}
+              onClick={() => navigate('/app/mobile-equipments/map')}
               className="px-4 py-2 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200 flex items-center gap-2"
             >
               <MapPin size={18} />

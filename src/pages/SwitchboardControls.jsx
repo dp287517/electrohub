@@ -1194,11 +1194,27 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
           <div className="flex items-start justify-between mb-3">
             <div>
               <h4 className="font-bold text-gray-900">{t.name}</h4>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${t.target_type === 'switchboard' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                {t.target_type === 'switchboard' ? '⚡ Tableau' : '🔌 Disjoncteur'}
+              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                t.target_type === 'switchboard' ? 'bg-blue-100 text-blue-700' :
+                t.target_type === 'vsd' ? 'bg-slate-100 text-slate-700' :
+                t.target_type === 'meca' ? 'bg-orange-100 text-orange-700' :
+                t.target_type === 'mobile_equipment' ? 'bg-cyan-100 text-cyan-700' :
+                'bg-purple-100 text-purple-700'
+              }`}>
+                {t.target_type === 'switchboard' ? '⚡ Tableau' :
+                 t.target_type === 'vsd' ? '⚙️ VSD' :
+                 t.target_type === 'meca' ? '🔧 Mécanique' :
+                 t.target_type === 'mobile_equipment' ? '🔌 Mobile' :
+                 '🔌 Disjoncteur'}
               </span>
             </div>
-            <span className="text-2xl">{t.target_type === 'switchboard' ? '⚡' : '🔌'}</span>
+            <span className="text-2xl">{
+              t.target_type === 'switchboard' ? '⚡' :
+              t.target_type === 'vsd' ? '⚙️' :
+              t.target_type === 'meca' ? '🔧' :
+              t.target_type === 'mobile_equipment' ? '🔌' :
+              '🔌'
+            }</span>
           </div>
           <p className="text-sm text-gray-500 mb-3">
             📋 {(t.checklist_items || []).length} points de contrôle • 🔄 Tous les {t.frequency_months || 12} mois
@@ -1306,8 +1322,11 @@ function TemplateModal({ template, onClose, onSave }) {
                 onChange={(e) => setTargetType(e.target.value)}
                 className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
               >
-                <option value="switchboard">⚡ Tableau</option>
+                <option value="switchboard">⚡ Tableau électrique</option>
                 <option value="device">🔌 Disjoncteur</option>
+                <option value="vsd">⚙️ Variateur (VSD)</option>
+                <option value="meca">🔧 Équip. Mécanique</option>
+                <option value="mobile_equipment">🔌 Équip. Mobile</option>
               </select>
             </div>
             <div>
@@ -1398,7 +1417,7 @@ function TemplateModal({ template, onClose, onSave }) {
 }
 
 // ============================================================
-// SCHEDULE MODAL - Responsive
+// SCHEDULE MODAL - Multi-equipment support
 // ============================================================
 function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, onSave }) {
   const [templateId, setTemplateId] = useState("");
@@ -1415,13 +1434,45 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [searchQuery, setSearchQuery] = useState("");
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
+  // Equipment lists from different sources
+  const [vsdEquipments, setVsdEquipments] = useState([]);
+  const [mecaEquipments, setMecaEquipments] = useState([]);
+  const [mobileEquipments, setMobileEquipments] = useState([]);
+  const [loadingEquipments, setLoadingEquipments] = useState(false);
+
+  // Load equipment when target type changes
+  useEffect(() => {
+    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment') {
+      setLoadingEquipments(true);
+      api.switchboardControls.listEquipment(targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType)
+        .then(res => {
+          if (targetType === 'vsd') setVsdEquipments(res.vsd || []);
+          else if (targetType === 'meca') setMecaEquipments(res.meca || []);
+          else if (targetType === 'mobile_equipment') setMobileEquipments(res.mobile_equipment || []);
+        })
+        .catch(e => console.warn('Load equipment error:', e))
+        .finally(() => setLoadingEquipments(false));
+    }
+  }, [targetType]);
+
   const filteredTemplates = (templates || []).filter((t) => t.target_type === targetType);
 
-  // Filter switchboards by search
-  const filteredSwitchboards = (switchboards || []).filter(sb => {
+  // Get current equipment list based on type
+  const getCurrentEquipmentList = () => {
+    if (targetType === 'switchboard') return switchboards || [];
+    if (targetType === 'vsd') return vsdEquipments;
+    if (targetType === 'meca') return mecaEquipments;
+    if (targetType === 'mobile_equipment') return mobileEquipments;
+    return [];
+  };
+
+  // Filter equipment by search
+  const filteredEquipment = getCurrentEquipmentList().filter(eq => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (sb.code?.toLowerCase().includes(q) || sb.name?.toLowerCase().includes(q) || sb.meta?.building_code?.toLowerCase().includes(q));
+    const name = eq.name || eq.code || '';
+    const building = eq.building || eq.building_code || eq.meta?.building_code || '';
+    return name.toLowerCase().includes(q) || building.toLowerCase().includes(q);
   });
 
   const toggleSelection = (id) => {
@@ -1435,16 +1486,27 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   };
 
   const selectAll = () => {
-    if (selectedIds.size === filteredSwitchboards.length) {
+    if (selectedIds.size === filteredEquipment.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredSwitchboards.map(sb => sb.id)));
+      setSelectedIds(new Set(filteredEquipment.map(eq => eq.id)));
+    }
+  };
+
+  // Get equipment type label
+  const getTypeLabel = () => {
+    switch(targetType) {
+      case 'switchboard': return 'tableaux';
+      case 'vsd': return 'variateurs';
+      case 'meca': return 'équipements mécaniques';
+      case 'mobile_equipment': return 'équipements mobiles';
+      default: return 'équipements';
     }
   };
 
   const handleSave = async () => {
     if (!templateId) return alert("Sélectionnez un modèle");
-    if (targetType === "switchboard" && selectedIds.size === 0) return alert("Sélectionnez au moins un tableau");
+    if (selectedIds.size === 0) return alert(`Sélectionnez au moins un ${getTypeLabel()}`);
 
     setSaving(true);
     setProgress({ current: 0, total: selectedIds.size });
@@ -1456,12 +1518,19 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       // Create schedules for all selected items
       for (let i = 0; i < ids.length; i++) {
         try {
-          await onSave({
+          const payload = {
             template_id: Number(templateId),
-            switchboard_id: targetType === "switchboard" ? Number(ids[i]) : null,
-            device_id: null,
             next_due_date: nextDueDate,
-          }, i === ids.length - 1); // Only reload on last item
+            equipment_type: targetType,
+          };
+
+          // Set the appropriate equipment ID
+          if (targetType === 'switchboard') payload.switchboard_id = Number(ids[i]);
+          else if (targetType === 'vsd') payload.vsd_equipment_id = Number(ids[i]);
+          else if (targetType === 'meca') payload.meca_equipment_id = Number(ids[i]);
+          else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = Number(ids[i]);
+
+          await onSave(payload, i === ids.length - 1); // Only reload on last item
           successCount++;
         } catch (e) {
           console.warn(`Failed to create schedule for ${ids[i]}:`, e);
@@ -1497,7 +1566,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
 
         <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
           <div>
-            <label className="block text-sm font-medium mb-1">Type de cible</label>
+            <label className="block text-sm font-medium mb-1">Type d'équipement</label>
             <select
               value={targetType}
               onChange={(e) => { setTargetType(e.target.value); setTemplateId(""); setSelectedIds(new Set()); }}
@@ -1505,6 +1574,9 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
             >
               <option value="switchboard">⚡ Tableau électrique</option>
               <option value="device">🔌 Disjoncteur</option>
+              <option value="vsd">⚙️ Variateur (VSD)</option>
+              <option value="meca">🔧 Équip. Mécanique</option>
+              <option value="mobile_equipment">🔌 Équip. Mobile</option>
             </select>
           </div>
 
@@ -1525,9 +1597,9 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
             )}
           </div>
 
-          {targetType === "switchboard" && (
+          {targetType !== "device" && (
             <div>
-              <label className="block text-sm font-medium mb-1">Tableaux à contrôler</label>
+              <label className="block text-sm font-medium mb-1 capitalize">{getTypeLabel()} à contrôler</label>
               {/* Search and Select All */}
               <div className="flex gap-2 mb-2">
                 <input
@@ -1541,41 +1613,50 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
                   onClick={selectAll}
                   className="px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 whitespace-nowrap"
                 >
-                  {selectedIds.size === filteredSwitchboards.length ? '✓ Désélectionner' : '☐ Tout sélectionner'}
+                  {selectedIds.size === filteredEquipment.length ? '✓ Désélectionner' : '☐ Tout'}
                 </button>
               </div>
+              {/* Loading state */}
+              {loadingEquipments && (
+                <div className="border rounded-xl p-4 text-center text-gray-500">
+                  <div className="w-6 h-6 border-2 border-blue-200 rounded-full animate-spin border-t-blue-600 mx-auto mb-2" />
+                  Chargement...
+                </div>
+              )}
               {/* Scrollable list with checkboxes */}
-              <div className="border rounded-xl max-h-48 overflow-y-auto divide-y">
-                {filteredSwitchboards.map((sb) => (
-                  <label
-                    key={sb.id}
-                    className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 transition-colors ${
-                      selectedIds.has(sb.id) ? 'bg-green-50' : ''
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(sb.id)}
-                      onChange={() => toggleSelection(sb.id)}
-                      className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{sb.code || sb.name}</p>
-                      <p className="text-xs text-gray-500 truncate">
-                        {sb.name} {sb.meta?.building_code ? `• ${sb.meta.building_code}` : ''}
-                      </p>
-                    </div>
-                    {selectedIds.has(sb.id) && (
-                      <span className="text-green-600">✓</span>
-                    )}
-                  </label>
-                ))}
-                {filteredSwitchboards.length === 0 && (
-                  <p className="p-4 text-center text-gray-500 text-sm">Aucun tableau trouvé</p>
-                )}
-              </div>
+              {!loadingEquipments && (
+                <div className="border rounded-xl max-h-48 overflow-y-auto divide-y">
+                  {filteredEquipment.map((eq) => (
+                    <label
+                      key={eq.id}
+                      className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                        selectedIds.has(eq.id) ? 'bg-green-50' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(eq.id)}
+                        onChange={() => toggleSelection(eq.id)}
+                        className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate">{eq.code || eq.name}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {eq.name !== eq.code && eq.name} {eq.building || eq.building_code || eq.meta?.building_code ? `• ${eq.building || eq.building_code || eq.meta?.building_code}` : ''}
+                        </p>
+                      </div>
+                      {selectedIds.has(eq.id) && (
+                        <span className="text-green-600">✓</span>
+                      )}
+                    </label>
+                  ))}
+                  {filteredEquipment.length === 0 && (
+                    <p className="p-4 text-center text-gray-500 text-sm">Aucun équipement trouvé</p>
+                  )}
+                </div>
+              )}
               <p className="text-xs text-gray-500 mt-1">
-                💡 Sélectionnez plusieurs tableaux pour leur attribuer le même contrôle
+                💡 Sélectionnez plusieurs équipements pour leur attribuer le même contrôle
               </p>
             </div>
           )}
