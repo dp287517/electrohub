@@ -415,24 +415,27 @@ export const api = {
     health: () => get(`/api/projects/health`),
   },
 
-  /** --- SWITCHBOARD CONTROLS v1.0 --- */
+  /** --- SWITCHBOARD CONTROLS v2.0 (Multi-equipment support) --- */
   switchboardControls: {
     // Dashboard
     dashboard: () => get("/api/switchboard/controls/dashboard"),
     status: (params) => get("/api/switchboard/controls/status", params),
 
-    // Templates
+    // Equipment lists (for scheduling) - types: switchboard, vsd, meca, mobile_equipment, all
+    listEquipment: (type = 'all') => get("/api/switchboard/controls/equipment", { type }),
+
+    // Templates (target_type: switchboard, device, vsd, meca, mobile_equipment)
     listTemplates: (params) => get("/api/switchboard/controls/templates", params),
     createTemplate: (data) => post("/api/switchboard/controls/templates", data),
     updateTemplate: (id, data) => put(`/api/switchboard/controls/templates/${id}`, data),
     deleteTemplate: (id) => del(`/api/switchboard/controls/templates/${id}`),
 
-    // Schedules
+    // Schedules - supports all equipment types (switchboard_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id)
     listSchedules: (params) => get("/api/switchboard/controls/schedules", params),
     createSchedule: (data) => post("/api/switchboard/controls/schedules", data),
     deleteSchedule: (id) => del(`/api/switchboard/controls/schedules/${id}`),
 
-    // Records
+    // Records - supports all equipment types
     listRecords: (params) => get("/api/switchboard/controls/records", params),
     getRecord: (id) => get(`/api/switchboard/controls/records/${id}`),
     createRecord: (data) => post("/api/switchboard/controls/records", data),
