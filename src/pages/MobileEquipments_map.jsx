@@ -37,6 +37,8 @@ import {
   Target,
   ArrowLeft,
   Zap,
+  Upload,
+  Plus,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -576,6 +578,7 @@ export default function MobileEquipmentsMap() {
   const [selectedPosition, setSelectedPosition] = useState(null);
 
   const [placementMode, setPlacementMode] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
@@ -585,6 +588,7 @@ export default function MobileEquipmentsMap() {
   const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
 
   const viewerRef = useRef(null);
+  const creatingRef = useRef(false);
 
   // Derived
   const placedIds = useMemo(() => new Set(allPositions.map(p => p.equipment_id)), [allPositions]);
@@ -726,6 +730,44 @@ export default function MobileEquipmentsMap() {
     }
   }, [placementMode, selectedPlan, pageIndex]);
 
+  // Create a new mobile equipment directly from the plan
+  const createEquipmentAtFrac = useCallback(async (x, y) => {
+    if (creatingRef.current) return;
+    if (!selectedPlan) return;
+
+    creatingRef.current = true;
+    try {
+      // Create equipment with minimal data
+      const created = await api.mobileEquipment.create({ name: "", status: "a_faire" });
+      const id = created?.id || created?.equipment?.id;
+      if (!id) throw new Error("Échec création équipement mobile");
+
+      // Set position on the plan
+      await api.mobileEquipment.maps.setPosition(id, {
+        plan_id: selectedPlan.id,
+        logical_name: selectedPlan.logical_name,
+        page_index: pageIndex,
+        x_frac: x,
+        y_frac: y,
+      });
+
+      // Reload data
+      await loadEquipments();
+      const res = await api.mobileEquipment.maps.positionsAuto(selectedPlan, pageIndex);
+      setPositions(res.positions || []);
+      await loadAllPositions();
+
+      // Open the equipment detail page
+      navigate(`/app/mobile-equipments?equipment=${id}`);
+    } catch (err) {
+      console.error("[MobileEquipmentsMap] Create equipment error:", err);
+      alert("Erreur lors de la création de l'équipement mobile");
+    } finally {
+      creatingRef.current = false;
+      setCreateMode(false);
+    }
+  }, [selectedPlan, pageIndex, navigate]);
+
   const handleMovePosition = useCallback(async (equipmentId, x, y) => {
     if (!selectedPlan) return;
 
@@ -844,6 +886,21 @@ export default function MobileEquipmentsMap() {
           )}
 
           <button
+            onClick={() => {
+              setCreateMode(true);
+              setPlacementMode(null);
+              setSelectedPosition(null);
+              setSelectedEquipment(null);
+            }}
+            disabled={!selectedPlan || createMode}
+            className="px-3 py-2 bg-cyan-600 text-white rounded-lg text-sm font-medium hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            title="Créer un nouvel équipement mobile sur le plan"
+          >
+            <Plus size={16} />
+            Nouvel équipement
+          </button>
+
+          <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className={`p-2 rounded-lg transition-colors ${sidebarOpen ? "bg-cyan-100 text-cyan-700" : "hover:bg-gray-100"}`}
           >
@@ -863,10 +920,16 @@ export default function MobileEquipmentsMap() {
               pageIndex={pageIndex}
               initialPoints={positions}
               selectedId={selectedEquipment?.id}
-              placementActive={!!placementMode}
+              placementActive={!!placementMode || createMode}
               onClickPoint={handleSelectPosition}
               onMovePoint={handleMovePosition}
-              onCreatePoint={handleCreatePosition}
+              onCreatePoint={(x, y) => {
+                if (createMode) {
+                  createEquipmentAtFrac(x, y);
+                } else {
+                  handleCreatePosition(x, y);
+                }
+              }}
               onContextMenu={(pt, point) => setContextMenu({ position: pt, x: point.x, y: point.y })}
             />
           ) : (
@@ -885,8 +948,24 @@ export default function MobileEquipmentsMap() {
             />
           )}
 
+          {/* Create mode indicator */}
+          {createMode && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
+              <div className="flex items-center gap-3 px-4 py-3 bg-cyan-600 text-white rounded-2xl shadow-xl">
+                <Crosshair size={20} className="animate-pulse" />
+                <div>
+                  <p className="font-semibold">Mode création actif</p>
+                  <p className="text-xs text-cyan-200">Cliquez sur le plan pour créer un nouvel équipement mobile</p>
+                </div>
+                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Detail panel */}
-          {selectedPosition && !placementMode && (
+          {selectedPosition && !placementMode && !createMode && (
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}

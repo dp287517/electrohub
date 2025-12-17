@@ -888,10 +888,14 @@ export default function VsdMap() {
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Ref to prevent double creation
+  const creatingRef = useRef(false);
 
   // Context menu
   const [contextMenu, setContextMenu] = useState(null);
@@ -1043,6 +1047,44 @@ export default function VsdMap() {
     }
   };
 
+  // Create a new VSD equipment directly from the plan
+  const createEquipmentAtFrac = async (xFrac, yFrac) => {
+    if (creatingRef.current) return;
+    if (!stableSelectedPlan) return;
+
+    creatingRef.current = true;
+    try {
+      // Create equipment with minimal data
+      const created = await api.vsd.createEquipment({ name: "", status: "a_faire" });
+      const id = created?.id || created?.equipment?.id;
+      if (!id) throw new Error("Échec création équipement VSD");
+
+      // Set position on the plan
+      await api.vsdMaps.setPosition(id, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id || null,
+        page_index: pageIndex,
+        x_frac: xFrac,
+        y_frac: yFrac,
+      });
+
+      // Reload data
+      await loadEquipments();
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
+      await refreshPlacedIds();
+
+      // Open the equipment detail page
+      navigate(`/app/vsd?equipment=${id}`);
+    } catch (err) {
+      console.error("Erreur création équipement VSD:", err);
+      alert("Erreur lors de la création de l'équipement VSD");
+    } finally {
+      creatingRef.current = false;
+      setCreateMode(false);
+    }
+  };
+
   const askDeletePosition = (position) => {
     setContextMenu(null);
     setConfirmState({ open: true, position });
@@ -1176,6 +1218,21 @@ export default function VsdMap() {
               <Badge variant="success">Localisés: {stats.placed}</Badge>
               <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
             </div>
+
+            <button
+              onClick={() => {
+                setCreateMode(true);
+                setPlacementMode(null);
+                setSelectedPosition(null);
+                setSelectedEquipment(null);
+              }}
+              disabled={!selectedPlan || createMode}
+              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Créer un nouvel équipement VSD sur le plan"
+            >
+              <Plus size={16} />
+              Nouvel équipement
+            </button>
 
             <button
               onClick={() => zipInputRef.current?.click()}
@@ -1346,12 +1403,14 @@ export default function VsdMap() {
                   setSelectedEquipment(eq || null);
                 }}
                 onCreatePoint={(xFrac, yFrac) => {
-                  if (placementMode) {
+                  if (createMode) {
+                    createEquipmentAtFrac(xFrac, yFrac);
+                  } else if (placementMode) {
                     handleSetPosition(placementMode, xFrac, yFrac);
                   }
                 }}
                 onContextMenu={(meta, pos) => setContextMenu({ position: meta, x: pos.x, y: pos.y })}
-                placementActive={!!placementMode}
+                placementActive={!!placementMode || createMode}
               />
             </>
           )}
@@ -1361,8 +1420,24 @@ export default function VsdMap() {
             <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />
           )}
 
+          {/* Create mode indicator */}
+          {createMode && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
+              <div className="flex items-center gap-3 px-4 py-3 bg-blue-600 text-white rounded-2xl shadow-xl">
+                <Crosshair size={20} className="animate-pulse" />
+                <div>
+                  <p className="font-semibold">Mode création actif</p>
+                  <p className="text-xs text-blue-200">Cliquez sur le plan pour créer un nouvel équipement VSD</p>
+                </div>
+                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Detail panel */}
-          {selectedPosition && !placementMode && (
+          {selectedPosition && !placementMode && !createMode && (
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}
