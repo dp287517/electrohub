@@ -7,7 +7,7 @@ import {
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
   Tag, Hash, Factory, Gauge, Thermometer, Network, Info, Droplet, Wind,
-  FolderPlus, Folder, ChevronUp, GripVertical
+  FolderPlus, Folder, ChevronUp, GripVertical, ClipboardCheck, Clock, Calendar
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -438,13 +438,19 @@ const DetailPanel = ({
   isPlaced,
   showToast
 }) => {
+  const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [schedules, setSchedules] = useState([]);
+  const [recentRecords, setRecentRecords] = useState([]);
+  const [loadingControls, setLoadingControls] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
   const photoInputRef = useRef(null);
 
   useEffect(() => {
     if (equipment?.id) {
       loadFiles();
+      loadControls();
     }
   }, [equipment?.id]);
 
@@ -461,7 +467,28 @@ const DetailPanel = ({
     }
   };
 
+  const loadControls = async () => {
+    if (!equipment?.id) return;
+    setLoadingControls(true);
+    try {
+      // Load schedules for this equipment
+      const schedulesRes = await api.switchboardControls.listSchedules({ meca_equipment_id: equipment.id }).catch(() => ({}));
+      setSchedules(schedulesRes?.schedules || []);
+
+      // Load recent records for this equipment
+      const recordsRes = await api.switchboardControls.listRecords({ meca_equipment_id: equipment.id, limit: 5 }).catch(() => ({}));
+      setRecentRecords(recordsRes?.records || []);
+    } catch (e) {
+      console.error('Load controls error:', e);
+    } finally {
+      setLoadingControls(false);
+    }
+  };
+
   if (!equipment) return null;
+
+  // Support both ui_status and status fields
+  const equipmentStatus = equipment.ui_status || equipment.status;
 
   const statusColors = {
     en_service: 'success',
@@ -469,11 +496,22 @@ const DetailPanel = ({
     spare: 'warning'
   };
 
+  const statusLabels = {
+    en_service: 'En service',
+    hors_service: 'Hors service',
+    spare: 'Spare'
+  };
+
   const criticalityColors = {
     critique: 'danger',
     important: 'warning',
     standard: 'default'
   };
+
+  // Check if any technical specs exist
+  const hasTechnicalSpecs = equipment.power_kw || equipment.voltage || equipment.current_a ||
+    equipment.ip_rating || equipment.drive_type || equipment.coupling || equipment.mounting ||
+    equipment.speed_rpm || equipment.fluid || equipment.flow_m3h || equipment.pressure_bar;
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -528,19 +566,15 @@ const DetailPanel = ({
               <p className="text-orange-100 text-sm font-mono">{equipment.tag}</p>
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
-              {equipment.ui_status && (
-                <Badge variant={statusColors[equipment.ui_status] || 'default'}>
-                  {equipment.ui_status === 'en_service' ? 'En service' :
-                   equipment.ui_status === 'hors_service' ? 'Hors service' : 'Spare'}
+              {equipmentStatus && (
+                <Badge variant={statusColors[equipmentStatus] || 'default'}>
+                  {statusLabels[equipmentStatus] || equipmentStatus}
                 </Badge>
               )}
               {equipment.criticality && (
                 <Badge variant={criticalityColors[equipment.criticality] || 'default'}>
                   {equipment.criticality}
                 </Badge>
-              )}
-              {equipment.category && (
-                <Badge variant="info">{equipment.category}</Badge>
               )}
               {isPlaced ? (
                 <Badge variant="success">
@@ -560,50 +594,146 @@ const DetailPanel = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <Gauge size={20} className="mx-auto text-orange-500 mb-1" />
-            <p className="text-lg font-bold text-gray-900">{equipment.power_kw || '-'}</p>
-            <p className="text-xs text-gray-500">kW</p>
+
+        {/* Equipment Structure */}
+        <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-4">
+          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Folder size={16} className="text-orange-500" />
+            Structure de l'équipement
+          </h3>
+
+          {/* Main Equipment (Category) */}
+          <div className="bg-white rounded-lg p-3 border border-orange-200 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center">
+                <Cog size={16} className="text-orange-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-gray-500">Équipement principal</p>
+                <p className="font-semibold text-gray-900">{equipment.category || 'Non défini'}</p>
+              </div>
+            </div>
           </div>
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <Droplet size={20} className="mx-auto text-blue-500 mb-1" />
-            <p className="text-lg font-bold text-gray-900">{equipment.flow_m3h || '-'}</p>
-            <p className="text-xs text-gray-500">m³/h</p>
-          </div>
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <Wind size={20} className="mx-auto text-teal-500 mb-1" />
-            <p className="text-lg font-bold text-gray-900">{equipment.pressure_bar || '-'}</p>
-            <p className="text-xs text-gray-500">bar</p>
-          </div>
+
+          {/* Sub-Equipment (Type) */}
+          {equipment.equipment_type && (
+            <div className="ml-6 bg-white rounded-lg p-3 border border-gray-200">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center">
+                  <Cog size={12} className="text-gray-500" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-gray-500">Sous-équipement</p>
+                  <p className="font-medium text-gray-900">{equipment.equipment_type}</p>
+                </div>
+              </div>
+
+              {/* Manufacturer & Model under sub-equipment */}
+              {(equipment.manufacturer || equipment.model) && (
+                <div className="mt-2 pt-2 border-t border-gray-100 grid grid-cols-2 gap-2 text-sm">
+                  {equipment.manufacturer && (
+                    <div>
+                      <span className="text-gray-500 text-xs">Fabricant</span>
+                      <p className="font-medium text-gray-800">{equipment.manufacturer}</p>
+                    </div>
+                  )}
+                  {equipment.model && (
+                    <div>
+                      <span className="text-gray-500 text-xs">Modèle</span>
+                      <p className="font-medium text-gray-800">{equipment.model}</p>
+                    </div>
+                  )}
+                  {equipment.serial_number && (
+                    <div className="col-span-2">
+                      <span className="text-gray-500 text-xs">N° série</span>
+                      <p className="font-medium font-mono text-gray-800">{equipment.serial_number}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Identification */}
-        <div className="bg-gray-50 rounded-xl p-4">
-          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <Tag size={16} className="text-orange-500" />
-            Identification
-          </h3>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <span className="text-gray-500">Catégorie</span>
-              <p className="font-medium text-gray-900">{equipment.category || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Type</span>
-              <p className="font-medium text-gray-900">{equipment.equipment_type || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Fabricant</span>
-              <p className="font-medium text-gray-900">{equipment.manufacturer || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Modèle</span>
-              <p className="font-medium text-gray-900">{equipment.model || '-'}</p>
-            </div>
+        {/* Technical Specs (Collapsible) */}
+        {hasTechnicalSpecs && (
+          <div className="bg-gray-50 rounded-xl overflow-hidden">
+            <button
+              onClick={() => setShowTechnical(!showTechnical)}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-100 transition-colors"
+            >
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Gauge size={16} className="text-orange-500" />
+                Caractéristiques techniques
+              </h3>
+              {showTechnical ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+            </button>
+
+            {showTechnical && (
+              <div className="px-4 pb-4 space-y-4">
+                {/* Quick Stats */}
+                {(equipment.power_kw || equipment.flow_m3h || equipment.pressure_bar) && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-white rounded-lg p-2 text-center">
+                      <Gauge size={16} className="mx-auto text-orange-500 mb-1" />
+                      <p className="text-lg font-bold text-gray-900">{equipment.power_kw || '-'}</p>
+                      <p className="text-xs text-gray-500">kW</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2 text-center">
+                      <Droplet size={16} className="mx-auto text-blue-500 mb-1" />
+                      <p className="text-lg font-bold text-gray-900">{equipment.flow_m3h || '-'}</p>
+                      <p className="text-xs text-gray-500">m³/h</p>
+                    </div>
+                    <div className="bg-white rounded-lg p-2 text-center">
+                      <Wind size={16} className="mx-auto text-teal-500 mb-1" />
+                      <p className="text-lg font-bold text-gray-900">{equipment.pressure_bar || '-'}</p>
+                      <p className="text-xs text-gray-500">bar</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Electrical */}
+                {(equipment.voltage || equipment.current_a || equipment.ip_rating) && (
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+                      <Zap size={12} /> Électrique
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div>
+                        <span className="text-gray-400 text-xs">Tension</span>
+                        <p className="font-medium">{equipment.voltage || '-'}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 text-xs">Courant</span>
+                        <p className="font-medium">{equipment.current_a ? `${equipment.current_a} A` : '-'}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 text-xs">IP</span>
+                        <p className="font-medium">{equipment.ip_rating || '-'}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mechanical */}
+                {(equipment.drive_type || equipment.coupling || equipment.mounting || equipment.speed_rpm || equipment.fluid) && (
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+                      <Cog size={12} /> Mécanique
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      {equipment.drive_type && <div><span className="text-gray-400 text-xs">Entraînement</span><p className="font-medium">{equipment.drive_type}</p></div>}
+                      {equipment.coupling && <div><span className="text-gray-400 text-xs">Accouplement</span><p className="font-medium">{equipment.coupling}</p></div>}
+                      {equipment.mounting && <div><span className="text-gray-400 text-xs">Montage</span><p className="font-medium">{equipment.mounting}</p></div>}
+                      {equipment.speed_rpm && <div><span className="text-gray-400 text-xs">Vitesse</span><p className="font-medium">{equipment.speed_rpm} rpm</p></div>}
+                      {equipment.fluid && <div><span className="text-gray-400 text-xs">Fluide</span><p className="font-medium">{equipment.fluid}</p></div>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
         {/* Location */}
         <div className="bg-gray-50 rounded-xl p-4">
@@ -628,63 +758,82 @@ const DetailPanel = ({
               <span className="text-gray-500">Local</span>
               <p className="font-medium text-gray-900">{equipment.location || '-'}</p>
             </div>
-            <div className="col-span-2">
-              <span className="text-gray-500">Tableau</span>
-              <p className="font-medium text-gray-900">{equipment.panel || '-'}</p>
-            </div>
+            {equipment.panel && (
+              <div className="col-span-2">
+                <span className="text-gray-500">Tableau</span>
+                <p className="font-medium text-gray-900">{equipment.panel}</p>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Technical - Electrical */}
-        <div className="bg-gray-50 rounded-xl p-4">
+        {/* Controls Section */}
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
           <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <Zap size={16} className="text-orange-500" />
-            Électrique
+            <ClipboardCheck size={16} className="text-blue-500" />
+            Contrôles
           </h3>
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <span className="text-gray-500">Tension</span>
-              <p className="font-medium text-gray-900">{equipment.voltage || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Courant</span>
-              <p className="font-medium text-gray-900">{equipment.current_a ? `${equipment.current_a} A` : '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Indice IP</span>
-              <p className="font-medium text-gray-900">{equipment.ip_rating || '-'}</p>
-            </div>
-          </div>
-        </div>
 
-        {/* Technical - Mechanical */}
-        <div className="bg-gray-50 rounded-xl p-4">
-          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <Cog size={16} className="text-orange-500" />
-            Mécanique / Process
-          </h3>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <span className="text-gray-500">Entraînement</span>
-              <p className="font-medium text-gray-900">{equipment.drive_type || '-'}</p>
+          {loadingControls ? (
+            <div className="flex items-center justify-center py-4">
+              <RefreshCw size={20} className="animate-spin text-blue-500" />
             </div>
-            <div>
-              <span className="text-gray-500">Accouplement</span>
-              <p className="font-medium text-gray-900">{equipment.coupling || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Montage</span>
-              <p className="font-medium text-gray-900">{equipment.mounting || '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Vitesse</span>
-              <p className="font-medium text-gray-900">{equipment.speed_rpm ? `${equipment.speed_rpm} rpm` : '-'}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Fluide</span>
-              <p className="font-medium text-gray-900">{equipment.fluid || '-'}</p>
-            </div>
-          </div>
+          ) : (
+            <>
+              {/* Scheduled Controls */}
+              {schedules.length > 0 ? (
+                <div className="space-y-2 mb-3">
+                  <p className="text-xs text-gray-500 font-medium">Contrôles programmés</p>
+                  {schedules.slice(0, 3).map(schedule => (
+                    <div key={schedule.id} className="bg-white rounded-lg p-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Calendar size={14} className="text-blue-500" />
+                        <span className="text-sm font-medium">{schedule.template_name || 'Contrôle'}</span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {schedule.frequency === 'daily' ? 'Quotidien' :
+                         schedule.frequency === 'weekly' ? 'Hebdo' :
+                         schedule.frequency === 'monthly' ? 'Mensuel' :
+                         schedule.frequency === 'quarterly' ? 'Trim.' :
+                         schedule.frequency === 'yearly' ? 'Annuel' : schedule.frequency}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-white rounded-lg p-3 text-center mb-3">
+                  <p className="text-sm text-gray-500">Aucun contrôle programmé</p>
+                </div>
+              )}
+
+              {/* Recent Records */}
+              {recentRecords.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  <p className="text-xs text-gray-500 font-medium">Derniers contrôles</p>
+                  {recentRecords.slice(0, 3).map(record => (
+                    <div key={record.id} className="bg-white rounded-lg p-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle size={14} className={record.status === 'conforme' ? 'text-emerald-500' : 'text-amber-500'} />
+                        <span className="text-sm">{record.template_name || 'Contrôle'}</span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {new Date(record.created_at).toLocaleDateString('fr-FR')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Action Button */}
+              <button
+                onClick={() => navigate('/app/switchboard-controls?tab=schedules&equipment_type=meca')}
+                className="w-full py-2 px-3 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition-colors flex items-center justify-center gap-2"
+              >
+                <ClipboardCheck size={16} />
+                {schedules.length > 0 ? 'Gérer les contrôles' : 'Créer un contrôle'}
+              </button>
+            </>
+          )}
         </div>
 
         {/* Comments */}
@@ -1677,7 +1826,8 @@ export default function Meca() {
   const loadPlacements = useCallback(async () => {
     try {
       const response = await api.mecaMaps.placedIds();
-      const ids = (response?.placed_ids || []).map(Number);
+      // UUIDs are strings, don't convert to numbers
+      const ids = response?.placed_ids || [];
       setPlacedIds(new Set(ids));
       setPlacedDetails(response?.placed_details || {});
     } catch (e) {
