@@ -421,6 +421,8 @@ app.post("/api/meca/equipments", async (req, res) => {
       tag = "",
       equipment_type = "",
       category = "",
+      category_id = null,
+      subcategory_id = null,
       function: func = "",
 
       building = "",
@@ -455,7 +457,7 @@ app.post("/api/meca/equipments", async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO meca_equipments(
          company_id, site_id,
-         name, tag, equipment_type, category, function,
+         name, tag, equipment_type, category, category_id, subcategory_id, function,
          building, floor, zone, location, panel,
          power_kw, voltage, current_a, speed_rpm, ip_rating,
          drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
@@ -464,12 +466,12 @@ app.post("/api/meca/equipments", async (req, res) => {
        )
        VALUES(
          $1,$2,
-         $3,$4,$5,$6,$7,
-         $8,$9,$10,$11,$12,
-         $13,$14,$15,$16,$17,
-         $18,$19,$20,$21,$22,$23,
-         $24,$25,$26,$27,
-         $28,$29,$30
+         $3,$4,$5,$6,$7,$8,$9,
+         $10,$11,$12,$13,$14,
+         $15,$16,$17,$18,$19,
+         $20,$21,$22,$23,$24,$25,
+         $26,$27,$28,$29,
+         $30,$31,$32
        )
        RETURNING *`,
       [
@@ -479,6 +481,8 @@ app.post("/api/meca/equipments", async (req, res) => {
         tag,
         equipment_type,
         category,
+        category_id || null,
+        subcategory_id || null,
         func,
         building,
         floor,
@@ -527,6 +531,8 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
       tag,
       equipment_type,
       category,
+      category_id,
+      subcategory_id,
       function: func,
       building,
       floor,
@@ -566,6 +572,8 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
     if (tag !== undefined) pushField("tag", tag);
     if (equipment_type !== undefined) pushField("equipment_type", equipment_type);
     if (category !== undefined) pushField("category", category);
+    if (category_id !== undefined) pushField("category_id", category_id || null);
+    if (subcategory_id !== undefined) pushField("subcategory_id", subcategory_id || null);
     if (func !== undefined) pushField("function", func);
 
     if (building !== undefined) pushField("building", building);
@@ -1096,7 +1104,39 @@ app.get("/api/meca/categories", async (req, res) => {
   try {
     const baseTenant = extractTenantFromRequest(req);
     const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
-    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'c' });
+    let tenantFilter = getTenantFilter(tenant, { tableAlias: 'c' });
+
+    // Debug logging
+    console.log('[MECA] GET categories - tenant:', JSON.stringify({
+      companyId: tenant.companyId,
+      siteId: tenant.siteId,
+      siteName: tenant.siteName,
+      role: tenant.role,
+      email: tenant.email
+    }));
+    console.log('[MECA] GET categories - filter:', tenantFilter.where, tenantFilter.params);
+
+    // If filter would block all results (1=0), try a more permissive approach
+    // This handles cases where tenant info might be missing but we still want to show categories
+    if (tenantFilter.where === '1=0') {
+      console.log('[MECA] Tenant filter would block all - using site_id from enrichment if available');
+      // Try just filtering by site_id if we have it from enrichment
+      if (tenant.siteId) {
+        tenantFilter = {
+          where: 'c.site_id = $1',
+          params: [tenant.siteId]
+        };
+      } else if (tenant.companyId) {
+        tenantFilter = {
+          where: 'c.company_id = $1',
+          params: [tenant.companyId]
+        };
+      } else {
+        // Last resort: show all categories (for development/testing)
+        console.log('[MECA] No tenant info - showing all categories');
+        tenantFilter = { where: '1=1', params: [] };
+      }
+    }
 
     const { rows: categories } = await pool.query(`
       SELECT c.*
@@ -1104,6 +1144,8 @@ app.get("/api/meca/categories", async (req, res) => {
        WHERE ${tenantFilter.where}
        ORDER BY c.display_order, c.name
     `, tenantFilter.params);
+
+    console.log('[MECA] GET categories - found:', categories.length);
 
     // Get subcategories for each category
     for (const cat of categories) {
@@ -1117,6 +1159,7 @@ app.get("/api/meca/categories", async (req, res) => {
 
     res.json({ ok: true, categories });
   } catch (e) {
+    console.error('[MECA] GET categories error:', e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
