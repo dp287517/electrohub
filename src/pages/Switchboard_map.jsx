@@ -1505,9 +1505,14 @@ export default function SwitchboardMap() {
 
     creatingRef.current = true;
     try {
-      // Create switchboard with auto-generated name
-      const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const created = await api.switchboard.createBoard({ name: `Nouveau tableau ${timestamp}` });
+      // Create switchboard with auto-generated name and code
+      const now = new Date();
+      const timestamp = now.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const code = `NEW-${now.getTime().toString(36).toUpperCase()}`;
+      const created = await api.switchboard.createBoard({
+        name: `Nouveau tableau ${timestamp}`,
+        code: code
+      });
       const id = created?.id || created?.switchboard?.id || created?.board?.id;
       if (!id) throw new Error("Échec création tableau électrique");
 
