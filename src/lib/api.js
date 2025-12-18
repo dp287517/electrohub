@@ -989,6 +989,12 @@ export const api = {
     },
     listPlans: () => get(`/api/atex/maps/listPlans`),
     listPlansCompat: () => get(`/api/atex/maps/plans`),
+    listPlansWithoutThumbnails: () => get(`/api/atex/maps/plans-without-thumbnails`),
+    updatePlanThumbnail: (logicalName, thumbnail) => {
+      const fd = new FormData();
+      fd.append("thumbnail", thumbnail, "thumbnail.png");
+      return put(`/api/atex/maps/plans/${encodeURIComponent(logicalName)}/thumbnail`, fd);
+    },
     renamePlan: (logical_name, display_name) =>
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
     deletePlan: (planId) => del(`/api/atex/maps/plans/${encodeURIComponent(planId)}`),

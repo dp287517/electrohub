@@ -2583,6 +2583,58 @@ function CalendarTab({ items, onOpenEquipment }) {
 // ============================================================
 
 function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId, onUploadClick }) {
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenProgress, setRegenProgress] = useState({ current: 0, total: 0 });
+
+  // Function to regenerate thumbnails for plans that don't have them
+  const regenerateThumbnails = useCallback(async () => {
+    setRegenerating(true);
+    setRegenProgress({ current: 0, total: 0 });
+    try {
+      // 1. Get list of plans without thumbnails
+      const { plans: plansToUpdate } = await api.atexMaps.listPlansWithoutThumbnails();
+      if (!plansToUpdate || plansToUpdate.length === 0) {
+        setToast("Tous les plans ont deja des vignettes");
+        return;
+      }
+
+      setRegenProgress({ current: 0, total: plansToUpdate.length });
+      let successCount = 0;
+
+      // 2. For each plan, download PDF, generate thumbnail, upload it
+      for (let i = 0; i < plansToUpdate.length; i++) {
+        const plan = plansToUpdate[i];
+        setRegenProgress({ current: i + 1, total: plansToUpdate.length });
+
+        try {
+          // Download PDF
+          const pdfUrl = api.atexMaps.planFileUrl(plan.logical_name, { bust: true });
+          const response = await fetch(pdfUrl, { credentials: 'include' });
+          if (!response.ok) throw new Error('Failed to download PDF');
+          const pdfBlob = await response.blob();
+
+          // Generate thumbnail in browser
+          const thumbnail = await generatePdfThumbnail(pdfBlob, 400);
+          if (!thumbnail) continue;
+
+          // Upload thumbnail
+          await api.atexMaps.updatePlanThumbnail(plan.logical_name, thumbnail);
+          successCount++;
+        } catch (err) {
+          console.warn(`[PlansTab] Failed to regenerate thumbnail for ${plan.logical_name}:`, err.message);
+        }
+      }
+
+      setToast(`Vignettes regenerees: ${successCount}/${plansToUpdate.length}`);
+      await loadPlans();
+    } catch (err) {
+      setToast("Erreur: " + (err.message || "Regeneration echouee"));
+    } finally {
+      setRegenerating(false);
+      setRegenProgress({ current: 0, total: 0 });
+    }
+  }, [loadPlans, setToast]);
+
   const grouped = useMemo(() => {
     const byKey = new Map();
     for (const p of plans) {
@@ -2651,6 +2703,15 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 font-medium text-center shadow-md transition-all"
           >
             📄 Import PDF
+          </button>
+          <button
+            onClick={regenerateThumbnails}
+            disabled={regenerating}
+            className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-xl hover:from-green-600 hover:to-teal-600 disabled:from-gray-400 disabled:to-gray-500 font-medium text-center shadow-md transition-all"
+          >
+            {regenerating
+              ? `🔄 ${regenProgress.current}/${regenProgress.total}...`
+              : '🖼️ Regenerer vignettes'}
           </button>
         </div>
       </div>
