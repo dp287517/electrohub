@@ -288,17 +288,18 @@ export default function Atex() {
     }
   }, [loadPlans]);
 
-  // Load infrastructure data for equipment placement
+  // Load infrastructure data for equipment placement (now uses unified atex_plans with is_multi_zone)
   const loadInfraData = useCallback(async () => {
     setInfraLoading(true);
     try {
-      const [plansRes, posRes] = await Promise.all([
-        api.infra.listPlans().catch(() => ({ plans: [] })),
-        api.infra.listPositions().catch(() => ({ positions: [] })),
-      ]);
-      console.log("[ATEX] loadInfraData:", { plans: plansRes?.plans?.length, positions: posRes?.positions?.length });
-      setInfraPlans(plansRes?.plans || []);
-      setInfraPositions(posRes?.positions || []);
+      // Get all plans and filter multi-zone ones for infrastructure section
+      const plansRes = await api.atexMaps.listPlans().catch(() => ({ plans: [] }));
+      const allPlans = plansRes?.plans || [];
+      const multiZonePlans = allPlans.filter(p => p.is_multi_zone === true);
+      console.log("[ATEX] loadInfraData:", { total: allPlans.length, multiZone: multiZonePlans.length });
+      setInfraPlans(multiZonePlans);
+      // Positions are in atex_positions - we'll check them when needed
+      setInfraPositions([]);
     } catch (e) {
       console.error("[ATEX] Error loading infra data:", e);
     } finally {
@@ -306,43 +307,46 @@ export default function Atex() {
     }
   }, []);
 
-  // Place equipment on infrastructure plan
+  // Place equipment on infrastructure plan (now uses unified atex_positions)
   const placeOnInfraPlan = useCallback(async (equipmentId, planId, x_frac = 0.5, y_frac = 0.5) => {
     try {
-      console.log("[ATEX] placeOnInfraPlan called:", { equipmentId, planId, x_frac, y_frac });
-      const result = await api.infra.createPosition({
-        equipment_id: equipmentId,
+      // Find the plan to get its logical_name
+      const plan = infraPlans.find(p => p.id === planId);
+      if (!plan) {
+        throw new Error("Plan not found");
+      }
+      console.log("[ATEX] placeOnInfraPlan called:", { equipmentId, planId, logical_name: plan.logical_name, x_frac, y_frac });
+
+      // Use unified atexMaps.setPosition (same as ATEX plans)
+      const result = await api.atexMaps.setPosition(equipmentId, {
+        logical_name: plan.logical_name,
         plan_id: planId,
+        page_index: 0,
         x_frac,
         y_frac,
-        page_index: 0,
       });
-      console.log("[ATEX] createPosition result:", result);
-      setToast("Équipement placé sur le plan d'infrastructure");
-      // Reload infra positions
-      const posRes = await api.infra.listPositions().catch(() => ({ positions: [] }));
-      console.log("[ATEX] listPositions after placement:", posRes?.positions?.length, "positions");
-      setInfraPositions(posRes?.positions || []);
+      console.log("[ATEX] setPosition result:", result);
+      setToast("Équipement placé sur le plan");
       setPlacingOnInfra(null);
+      // Trigger reload
+      await reload();
     } catch (e) {
-      console.error("[ATEX] Error placing on infra:", e);
+      console.error("[ATEX] Error placing on plan:", e);
       setToast("Erreur: " + (e.message || "Placement échoué"));
     }
-  }, []);
+  }, [infraPlans, reload]);
 
-  // Remove equipment from infrastructure plan
-  const removeFromInfraPlan = useCallback(async (positionId) => {
+  // Remove equipment from plan (unified system - removes from atex_positions)
+  const removeFromInfraPlan = useCallback(async (equipmentId) => {
     try {
-      await api.infra.deletePosition(positionId);
-      setToast("Équipement retiré du plan d'infrastructure");
-      // Reload infra positions
-      const posRes = await api.infra.listPositions().catch(() => ({ positions: [] }));
-      setInfraPositions(posRes?.positions || []);
+      await api.atexMaps.removePosition(equipmentId);
+      setToast("Équipement retiré du plan");
+      await reload();
     } catch (e) {
-      console.error("[ATEX] Error removing from infra:", e);
+      console.error("[ATEX] Error removing from plan:", e);
       setToast("Erreur: " + (e.message || "Suppression échouée"));
     }
-  }, []);
+  }, [reload]);
 
   useEffect(() => {
     reload();
@@ -2725,7 +2729,7 @@ function EquipmentDrawer({
         <div className="flex gap-2 p-3 bg-gray-50 border-b overflow-x-auto">
           <SectionTab id="info" label="Informations" icon="📋" />
           <SectionTab id="location" label="Localisation" icon="📍" />
-          {editing.id && <SectionTab id="infrastructure" label="Infrastructure" icon="🏗️" />}
+          {editing.id && <SectionTab id="infrastructure" label="Repositionner" icon="🔄" />}
           <SectionTab id="atex" label="ATEX" icon="⚠️" />
           <SectionTab id="dates" label="Contrôles" icon="📅" />
           {editing.id && <SectionTab id="files" label="Fichiers" icon="📎" />}
@@ -2963,11 +2967,11 @@ function EquipmentDrawer({
             </div>
           )}
 
-          {/* SECTION: Infrastructure */}
+          {/* SECTION: Repositionner sur un autre plan */}
           {activeSection === "infrastructure" && editing.id && (
             <div className="space-y-4 animate-fadeIn">
               <div className="atex-section">
-                <div className="atex-section-title">🏗️ Plans d'infrastructure</div>
+                <div className="atex-section-title">🔄 Repositionner sur un autre plan</div>
 
                 {infraLoading ? (
                   <div className="flex items-center justify-center py-8">
@@ -2975,79 +2979,68 @@ function EquipmentDrawer({
                   </div>
                 ) : (
                   <>
-                    {/* Current placements */}
-                    {(() => {
-                      const placements = infraPositions.filter(p => p.equipment_id === editing.id);
-                      if (placements.length > 0) {
-                        return (
-                          <div className="mb-4">
-                            <p className="text-sm text-gray-600 mb-2">Cet équipement est placé sur :</p>
-                            <div className="space-y-2">
-                              {placements.map(pos => {
-                                const plan = infraPlans.find(p => p.id === pos.plan_id);
-                                return (
-                                  <div key={pos.id} className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
-                                    <div className="flex items-center gap-3">
-                                      <span className="text-green-600 text-lg">✓</span>
-                                      <div>
-                                        <p className="font-medium text-gray-900">{plan?.display_name || plan?.logical_name || "Plan inconnu"}</p>
-                                        {plan?.building_name && <p className="text-xs text-gray-500">{plan.building_name}</p>}
-                                      </div>
-                                    </div>
-                                    <button
-                                      onClick={() => {
-                                        if (confirm("Retirer cet équipement de ce plan ?")) {
-                                          removeFromInfraPlan(pos.id);
-                                        }
-                                      }}
-                                      className="text-sm text-red-600 hover:text-red-700 hover:bg-red-50 px-3 py-1 rounded"
-                                    >
-                                      Retirer
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <p className="text-sm text-gray-500 mb-4 italic">
-                          Cet équipement n'est pas encore placé sur un plan d'infrastructure.
+                    {/* Current position info */}
+                    {editing.logical_name ? (
+                      <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <p className="text-sm text-gray-600 mb-1">Position actuelle :</p>
+                        <p className="font-medium text-gray-900">{editing.logical_name}</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Pour repositionner, retirez d'abord l'équipement du plan actuel (section Localisation), puis placez-le sur un nouveau plan.
                         </p>
-                      );
-                    })()}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 mb-4 italic">
+                        Cet équipement n'est pas encore positionné sur un plan.
+                      </p>
+                    )}
 
-                    {/* Available plans to place on */}
+                    {/* Available multi-zone plans */}
                     {infraPlans.length > 0 ? (
                       <div>
-                        <p className="text-sm font-medium text-gray-700 mb-2">Placer sur un plan :</p>
+                        <p className="text-sm font-medium text-gray-700 mb-2">Plans multi-zones disponibles :</p>
                         <div className="grid gap-2 max-h-[300px] overflow-y-auto">
-                          {infraPlans
-                            .filter(plan => !infraPositions.some(pos => pos.equipment_id === editing.id && pos.plan_id === plan.id))
-                            .map(plan => (
+                          {infraPlans.map(plan => {
+                            const isCurrentPlan = editing.logical_name === plan.logical_name;
+                            return (
                               <button
                                 key={plan.id}
-                                onClick={() => placeOnInfraPlan(editing.id, plan.id)}
-                                className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg hover:bg-amber-50 hover:border-amber-300 transition-colors text-left"
+                                onClick={() => {
+                                  if (isCurrentPlan) return;
+                                  if (editing.logical_name) {
+                                    if (confirm(`Déplacer l'équipement du plan actuel vers "${plan.display_name || plan.logical_name}" ?`)) {
+                                      placeOnInfraPlan(editing.id, plan.id);
+                                    }
+                                  } else {
+                                    placeOnInfraPlan(editing.id, plan.id);
+                                  }
+                                }}
+                                disabled={isCurrentPlan}
+                                className={`flex items-center gap-3 p-3 border rounded-lg transition-colors text-left ${
+                                  isCurrentPlan
+                                    ? "bg-green-50 border-green-300 cursor-default"
+                                    : "bg-white border-gray-200 hover:bg-amber-50 hover:border-amber-300"
+                                }`}
                               >
-                                <span className="text-amber-500 text-lg">📄</span>
+                                <span className={isCurrentPlan ? "text-green-500 text-lg" : "text-amber-500 text-lg"}>
+                                  {isCurrentPlan ? "✓" : "📄"}
+                                </span>
                                 <div className="flex-1 min-w-0">
                                   <p className="font-medium text-gray-900 truncate">{plan.display_name || plan.logical_name}</p>
                                   {plan.building_name && <p className="text-xs text-gray-500 truncate">{plan.building_name}</p>}
                                 </div>
-                                <span className="text-xs text-amber-600 font-medium shrink-0">+ Placer</span>
+                                {isCurrentPlan ? (
+                                  <span className="text-xs text-green-600 font-medium shrink-0">Actuel</span>
+                                ) : (
+                                  <span className="text-xs text-amber-600 font-medium shrink-0">Placer ici</span>
+                                )}
                               </button>
-                            ))
-                          }
-                          {infraPlans.filter(plan => !infraPositions.some(pos => pos.equipment_id === editing.id && pos.plan_id === plan.id)).length === 0 && (
-                            <p className="text-sm text-gray-500 italic py-2">L'équipement est déjà placé sur tous les plans disponibles.</p>
-                          )}
+                            );
+                          })}
                         </div>
                       </div>
                     ) : (
                       <div className="text-center py-4 text-gray-500">
-                        <p className="text-sm">Aucun plan d'infrastructure disponible.</p>
+                        <p className="text-sm">Aucun plan multi-zones disponible.</p>
                         <button
                           onClick={onGoToPlans}
                           className="text-sm text-amber-600 hover:text-amber-700 underline mt-1 inline-block"
@@ -3061,10 +3054,9 @@ function EquipmentDrawer({
               </div>
 
               <div className="atex-section bg-blue-50 border-blue-200">
-                <div className="atex-section-title text-blue-800">💡 Astuce</div>
+                <div className="atex-section-title text-blue-800">💡 Info</div>
                 <p className="text-sm text-blue-700">
-                  Après avoir placé l'équipement, vous pouvez le déplacer précisément sur le plan depuis l'onglet{" "}
-                  <button onClick={onGoToPlans} className="font-medium underline">Plans</button>.
+                  Les plans multi-zones permettent de positionner les équipements sur des plans d'infrastructure avec plusieurs zones définies.
                 </p>
               </div>
             </div>
