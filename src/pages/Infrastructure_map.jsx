@@ -78,7 +78,10 @@ export default function InfrastructureMap({
   const [selectedZoneColor, setSelectedZoneColor] = useState(ZONE_COLORS[0]);
 
   // Zone editor modal
-  const [zoneEditor, setZoneEditor] = useState(null); // { tempLayer, kind, geometry }
+  const [zoneEditor, setZoneEditor] = useState(null); // { tempLayer, kind, geometry } - for NEW zones
+
+  // Editing existing zone
+  const [editingZone, setEditingZone] = useState(null); // { id, name, zoning_gas, zoning_dust, color } - for EXISTING zones
 
   // Selected position for highlight
   const [selectedPositionId, setSelectedPositionId] = useState(null);
@@ -514,7 +517,32 @@ export default function InfrastructureMap({
       }
 
       if (shape) {
-        shape.bindTooltip(zone.name || "Zone", { permanent: false, direction: "center" });
+        // Tooltip with zone info
+        const gasLabel = zone.zoning_gas !== null && zone.zoning_gas !== undefined ? `Gaz: Zone ${zone.zoning_gas}` : "";
+        const dustLabel = zone.zoning_dust !== null && zone.zoning_dust !== undefined ? `Poussière: Zone ${zone.zoning_dust}` : "";
+        const tooltipText = [zone.name || "Zone", gasLabel, dustLabel].filter(Boolean).join(" | ");
+        shape.bindTooltip(tooltipText, { permanent: false, direction: "center" });
+
+        // Click handler to edit zone
+        shape.on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          setEditingZone({
+            id: zone.id,
+            name: zone.name || "",
+            zoning_gas: zone.zoning_gas ?? null,
+            zoning_dust: zone.zoning_dust ?? null,
+            color: zone.color || "#6B7280",
+          });
+        });
+
+        // Cursor style on hover
+        shape.on("mouseover", () => {
+          shape.setStyle({ fillOpacity: 0.4, weight: 3 });
+        });
+        shape.on("mouseout", () => {
+          shape.setStyle({ fillOpacity: 0.2, weight: 2 });
+        });
+
         zonesLayerRef.current.addLayer(shape);
       }
     });
@@ -826,6 +854,133 @@ export default function InfrastructureMap({
                 >
                   Créer la zone
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit existing zone modal */}
+      {editingZone && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Modifier la zone
+            </h3>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const zoningGasVal = formData.get("zoning_gas");
+                const zoningDustVal = formData.get("zoning_dust");
+                onZoneUpdate?.(editingZone.id, {
+                  name: formData.get("zoneName"),
+                  zoning_gas: zoningGasVal === "" ? null : Number(zoningGasVal),
+                  zoning_dust: zoningDustVal === "" ? null : Number(zoningDustVal),
+                  color: editingZone.color,
+                });
+                setEditingZone(null);
+              }}
+            >
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nom de la zone
+                </label>
+                <input
+                  type="text"
+                  name="zoneName"
+                  autoFocus
+                  required
+                  defaultValue={editingZone.name}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                  placeholder="Ex: Zone de stockage, Bureau, Atelier..."
+                />
+              </div>
+
+              {/* Zonage ATEX */}
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="text-sm font-medium text-amber-800 mb-3 flex items-center gap-2">
+                  <span>⚠️</span> Zonage ATEX
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Zone Gaz
+                    </label>
+                    <select
+                      name="zoning_gas"
+                      defaultValue={editingZone.zoning_gas ?? ""}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">Non classée</option>
+                      <option value="0">Zone 0 (Gaz permanent)</option>
+                      <option value="1">Zone 1 (Gaz occasionnel)</option>
+                      <option value="2">Zone 2 (Gaz rare)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Zone Poussière
+                    </label>
+                    <select
+                      name="zoning_dust"
+                      defaultValue={editingZone.zoning_dust ?? ""}
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">Non classée</option>
+                      <option value="20">Zone 20 (Poussière permanente)</option>
+                      <option value="21">Zone 21 (Poussière occasionnelle)</option>
+                      <option value="22">Zone 22 (Poussière rare)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Couleur
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  {ZONE_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setEditingZone({ ...editingZone, color: c })}
+                      className={`w-8 h-8 rounded ${editingZone.color === c ? "ring-2 ring-offset-2 ring-gray-400" : ""}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-3 justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("Supprimer cette zone ?")) {
+                      onZoneDelete?.(editingZone.id);
+                      setEditingZone(null);
+                    }
+                  }}
+                  className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium"
+                >
+                  🗑️ Supprimer
+                </button>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingZone(null)}
+                    className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
+                  >
+                    💾 Enregistrer
+                  </button>
+                </div>
               </div>
             </form>
           </div>
