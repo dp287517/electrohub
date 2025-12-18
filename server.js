@@ -794,8 +794,33 @@ app.use("/api/admin", adminRouter);
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
-app.use(express.static(__dist));
-app.get("*", (_req, res) => res.sendFile(path.join(__dist, "index.html")));
+
+// Serve hashed assets with long cache (immutable)
+app.use("/assets", express.static(path.join(__dist, "assets"), {
+  maxAge: "1y",
+  immutable: true
+}));
+
+// Serve other static files with short cache
+app.use(express.static(__dist, {
+  maxAge: "1h",
+  setHeaders: (res, filePath) => {
+    // Never cache index.html - always fetch fresh
+    if (filePath.endsWith("index.html")) {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+  }
+}));
+
+// SPA fallback - serve index.html with no-cache headers
+app.get("*", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.sendFile(path.join(__dist, "index.html"));
+});
 
 // -------- Auto-init essential tables -----------
 async function addColumnIfNotExists(table, column, definition) {

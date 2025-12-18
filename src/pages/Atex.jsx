@@ -1,5 +1,6 @@
 // src/pages/Atex.jsx
 // ✅ VERSION REFONDÉE - Design style SwitchboardControls
+// Build: 2025-12-18T15:30:00 - Force cache invalidation
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
