@@ -2732,8 +2732,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
-      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
-      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cs.hv_equipment_id::text = hv.id::text
       WHERE cs.site = $1
@@ -2750,12 +2750,12 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       params.push(device_id);
     }
     if (vsd_equipment_id) {
-      sql += ` AND cs.vsd_equipment_id = $${idx++}`;
-      params.push(vsd_equipment_id);
+      sql += ` AND cs.vsd_equipment_id::text = $${idx++}`;
+      params.push(String(vsd_equipment_id));
     }
     if (meca_equipment_id) {
-      sql += ` AND cs.meca_equipment_id = $${idx++}`;
-      params.push(meca_equipment_id);
+      sql += ` AND cs.meca_equipment_id::text = $${idx++}`;
+      params.push(String(meca_equipment_id));
     }
     if (mobile_equipment_id) {
       sql += ` AND cs.mobile_equipment_id::text = $${idx++}`;
@@ -2826,8 +2826,8 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
 
     if (switchboard_id) { conditions.push(`switchboard_id = $${pIdx++}`); existingParams.push(switchboard_id); }
     if (device_id) { conditions.push(`device_id = $${pIdx++}`); existingParams.push(device_id); }
-    if (vsd_equipment_id) { conditions.push(`vsd_equipment_id = $${pIdx++}`); existingParams.push(vsd_equipment_id); }
-    if (meca_equipment_id) { conditions.push(`meca_equipment_id = $${pIdx++}`); existingParams.push(meca_equipment_id); }
+    if (vsd_equipment_id) { conditions.push(`vsd_equipment_id::text = $${pIdx++}`); existingParams.push(String(vsd_equipment_id)); }
+    if (meca_equipment_id) { conditions.push(`meca_equipment_id::text = $${pIdx++}`); existingParams.push(String(meca_equipment_id)); }
     if (mobile_equipment_id) { conditions.push(`mobile_equipment_id::text = $${pIdx++}`); existingParams.push(String(mobile_equipment_id)); }
     if (hv_equipment_id) { conditions.push(`hv_equipment_id::text = $${pIdx++}`); existingParams.push(String(hv_equipment_id)); }
 
@@ -2889,8 +2889,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
       LEFT JOIN devices d ON cr.device_id = d.id
-      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
-      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
+      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id::text = vsd.id::text
+      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cr.hv_equipment_id::text = hv.id::text
       WHERE cr.site = $1
@@ -2907,12 +2907,12 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       params.push(device_id);
     }
     if (vsd_equipment_id) {
-      sql += ` AND cr.vsd_equipment_id = $${idx++}`;
-      params.push(vsd_equipment_id);
+      sql += ` AND cr.vsd_equipment_id::text = $${idx++}`;
+      params.push(String(vsd_equipment_id));
     }
     if (meca_equipment_id) {
-      sql += ` AND cr.meca_equipment_id = $${idx++}`;
-      params.push(meca_equipment_id);
+      sql += ` AND cr.meca_equipment_id::text = $${idx++}`;
+      params.push(String(meca_equipment_id));
     }
     if (hv_equipment_id) {
       sql += ` AND cr.hv_equipment_id::text = $${idx++}`;
@@ -2958,8 +2958,8 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
       LEFT JOIN devices d ON cr.device_id = d.id
-      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
-      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
+      LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id::text = vsd.id::text
+      LEFT JOIN meca_equipments meca ON cr.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
       WHERE cr.id = $1 AND cr.site = $2
     `, [id, site]);
@@ -3154,8 +3154,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
-      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
-      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       WHERE cs.site = $1
         AND cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
@@ -3175,8 +3175,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
-      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
-      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
+      LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
+      LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       WHERE cs.site = $1 AND cs.next_due_date < CURRENT_DATE
       ORDER BY cs.next_due_date ASC
