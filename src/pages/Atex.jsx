@@ -1122,6 +1122,11 @@ export default function Atex() {
           aiPhotosCount={aiPhotosCount}
           aiAnalysisPhotos={aiAnalysisPhotos}
           onOpenLightbox={openLightbox}
+          infraLoading={infraLoading}
+          infraPlans={infraPlans}
+          infraPositions={infraPositions}
+          placeOnInfraPlan={placeOnInfraPlan}
+          removeFromInfraPlan={removeFromInfraPlan}
         />
       )}
 
@@ -2467,6 +2472,11 @@ function EquipmentDrawer({
   aiPhotosCount = 0,
   aiAnalysisPhotos = [],
   onOpenLightbox,
+  infraLoading = false,
+  infraPlans = [],
+  infraPositions = [],
+  placeOnInfraPlan,
+  removeFromInfraPlan,
 }) {
   const [activeSection, setActiveSection] = useState("info");
 
