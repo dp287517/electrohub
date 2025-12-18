@@ -1337,7 +1337,7 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
       </div>
 
       {/* Zones Stats + Mass Compliance Check */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 sm:p-4">
           <div className="flex items-center gap-3">
             <span className="text-xl sm:text-2xl">💨</span>
@@ -1356,6 +1356,21 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
             </div>
           </div>
         </div>
+        {/* Bouton DRPCE */}
+        <a
+          href={api.atex.drpceUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-gradient-to-br from-amber-500 to-orange-600 border border-amber-300 rounded-xl p-3 sm:p-4 hover:from-amber-600 hover:to-orange-700 transition-all shadow-md hover:shadow-lg group"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-xl sm:text-2xl group-hover:scale-110 transition-transform">📄</span>
+            <div>
+              <p className="text-xs sm:text-sm text-white/80">Générer le</p>
+              <p className="text-lg sm:text-xl font-bold text-white">DRPCE</p>
+            </div>
+          </div>
+        </a>
         <button
           onClick={runMassComplianceCheck}
           disabled={massComplianceRunning || items.length === 0}

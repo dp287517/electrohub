@@ -909,6 +909,8 @@ export const api = {
       ),
 
     calendar: () => get(`/api/atex/calendar`),
+    // Générer le DRPCE (Document Relatif à la Protection Contre les Explosions)
+    drpceUrl: () => `${API_BASE}/api/atex/drpce?site=${currentSite()}`,
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 

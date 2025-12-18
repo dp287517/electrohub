@@ -16,6 +16,7 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
 import sharp from "sharp";
+import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
@@ -3127,6 +3128,535 @@ app.get("/api/infra/element-types", async (req, res) => {
 // Dummy elements endpoint - positions are now used instead
 app.get("/api/infra/elements", async (req, res) => {
   res.json({ elements: [], message: "Use /api/infra/positions instead" });
+});
+
+// ============================================================
+// 📄 GÉNÉRATION DU DRPCE (Document Relatif à la Protection Contre les Explosions)
+// ============================================================
+app.get("/api/atex/drpce", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
+
+    // 1. Récupérer les informations du site
+    let siteInfo = { company_name: "Entreprise", site_name: "Site" };
+    try {
+      const siteRes = await pool.query(
+        `SELECT company_name, site_name, logo, logo_mime FROM site_settings WHERE site = $1`,
+        [tenant.siteId || 'default']
+      );
+      if (siteRes.rows[0]) siteInfo = { ...siteInfo, ...siteRes.rows[0] };
+    } catch (e) { console.warn('[DRPCE] No site settings:', e.message); }
+
+    // 2. Récupérer tous les équipements ATEX
+    const { rows: equipments } = await pool.query(`
+      SELECT e.*,
+             (SELECT result FROM atex_checks c
+              WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+              ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result,
+             (SELECT date FROM atex_checks c
+              WHERE c.equipment_id=e.id AND c.status='fait'
+              ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_check_date
+      FROM atex_equipments e
+      WHERE ${tenantFilter.where}
+      ORDER BY e.building, e.zone, e.name
+    `, tenantFilter.params);
+
+    // 3. Récupérer les plans
+    const { rows: plans } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name)
+             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name,
+             COALESCE(pn.display_name, p.logical_name) AS display_name
+      FROM atex_plans p
+      LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
+      ORDER BY p.logical_name, p.version DESC
+    `);
+
+    // 4. Récupérer les sous-zones ATEX
+    const { rows: subareas } = await pool.query(`
+      SELECT * FROM atex_subareas ORDER BY logical_name, name
+    `);
+
+    // 5. Statistiques
+    const totalEquipments = equipments.length;
+    const conformeCount = equipments.filter(e => e.last_result === 'conforme').length;
+    const nonConformeCount = equipments.filter(e => e.last_result === 'non_conforme').length;
+    const naCount = totalEquipments - conformeCount - nonConformeCount;
+    const retardCount = equipments.filter(e => {
+      if (!e.next_check_date) return false;
+      return new Date(e.next_check_date) < new Date();
+    }).length;
+
+    // Grouper par bâtiment/zone
+    const byBuilding = {};
+    for (const eq of equipments) {
+      const bat = eq.building || 'Non renseigné';
+      const z = eq.zone || 'Non renseignée';
+      if (!byBuilding[bat]) byBuilding[bat] = {};
+      if (!byBuilding[bat][z]) byBuilding[bat][z] = [];
+      byBuilding[bat][z].push(eq);
+    }
+
+    // 6. Créer le PDF
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 50,
+      bufferPages: true,
+      info: {
+        Title: 'DRPCE - Document Relatif à la Protection Contre les Explosions',
+        Author: siteInfo.company_name,
+        Subject: 'DRPCE Installation ATEX',
+        Keywords: 'ATEX, DRPCE, explosions, sécurité'
+      }
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="DRPCE_${(siteInfo.site_name || 'site').replace(/[^a-zA-Z0-9-_]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf"`);
+    doc.pipe(res);
+
+    const colors = {
+      primary: '#b45309',    // Amber-700
+      secondary: '#1e40af',  // Blue-800
+      success: '#059669',    // Emerald-600
+      danger: '#dc2626',     // Red-600
+      warning: '#d97706',    // Amber-600
+      text: '#111827',       // Gray-900
+      muted: '#6b7280',      // Gray-500
+      light: '#f3f4f6',      // Gray-100
+    };
+
+    // ========== PAGE DE GARDE ==========
+    doc.rect(0, 0, 595, 842).fill('#fef3c7'); // Fond ambre clair
+
+    // Logo si disponible
+    let logoY = 80;
+    if (siteInfo.logo) {
+      try {
+        doc.image(siteInfo.logo, 230, logoY, { width: 135, align: 'center' });
+        logoY = 200;
+      } catch (e) { logoY = 100; }
+    }
+
+    // Icône ATEX stylisée
+    doc.fontSize(80).fillColor(colors.primary).text('⚠️', 0, logoY, { align: 'center' });
+
+    // Titre principal
+    doc.fontSize(32).font('Helvetica-Bold').fillColor(colors.primary)
+       .text('DRPCE', 0, logoY + 100, { align: 'center' });
+    doc.fontSize(14).font('Helvetica').fillColor(colors.text)
+       .text('Document Relatif à la Protection', 0, logoY + 145, { align: 'center' })
+       .text('Contre les Explosions', 0, logoY + 162, { align: 'center' });
+
+    // Cadre infos
+    doc.rect(100, logoY + 210, 395, 120).fillAndStroke('#fff', colors.primary);
+    doc.fontSize(16).font('Helvetica-Bold').fillColor(colors.text)
+       .text(siteInfo.company_name || 'Entreprise', 120, logoY + 225, { width: 355, align: 'center' });
+    doc.fontSize(12).font('Helvetica').fillColor(colors.muted)
+       .text(siteInfo.site_name || 'Site', 120, logoY + 250, { width: 355, align: 'center' });
+    doc.fontSize(10).fillColor(colors.muted)
+       .text(`Document généré le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 120, logoY + 290, { width: 355, align: 'center' });
+
+    // Stats en bas de page
+    doc.fontSize(9).fillColor(colors.muted)
+       .text(`${totalEquipments} équipements ATEX | ${plans.length} plans | ${subareas.length} zones classées`, 0, 750, { align: 'center', width: 595 });
+
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.rect(0, 0, 595, 842).fill('#fff');
+
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Cadre réglementaire', page: 3 },
+      { num: '2', title: 'Présentation de l\'établissement', page: 4 },
+      { num: '3', title: 'Zonage ATEX', page: 5 },
+      { num: '4', title: 'Inventaire des équipements', page: 6 },
+      { num: '5', title: 'État de conformité', page: 7 },
+      { num: '6', title: 'Planification des vérifications', page: 8 },
+      { num: '7', title: 'Mesures de prévention et protection', page: 9 },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
+      doc.font('Helvetica').text(item.title, 80, somY);
+      // Ligne pointillée
+      const titleWidth = doc.widthOfString(item.title);
+      doc.moveTo(85 + titleWidth, somY + 8).lineTo(500, somY + 8).dash(2, { space: 3 }).strokeColor(colors.muted).stroke();
+      doc.undash();
+      somY += 30;
+    });
+
+    // ========== 1. CADRE RÉGLEMENTAIRE ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Cadre réglementaire', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text);
+    let regY = 100;
+
+    doc.font('Helvetica-Bold').text('Directive européenne ATEX 1999/92/CE', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text(
+      'Cette directive fixe les prescriptions minimales visant à améliorer la protection en matière de sécurité et de santé des travailleurs susceptibles d\'être exposés aux risques résultant d\'atmosphères explosives.',
+      50, regY, { width: 495, align: 'justify' }
+    );
+    regY += 60;
+
+    doc.font('Helvetica-Bold').text('Code du travail - Articles R. 4227-42 à R. 4227-54', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text(
+      'L\'employeur établit et met à jour un document, dénommé "document relatif à la protection contre les explosions", qui doit être rédigé préalablement au commencement du travail et être révisé lors de modifications substantielles.',
+      50, regY, { width: 495, align: 'justify' }
+    );
+    regY += 65;
+
+    // Encadré important
+    doc.rect(50, regY, 495, 80).fillAndStroke('#fef3c7', colors.warning);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.warning).text('⚠️ IMPORTANT', 70, regY + 15);
+    doc.font('Helvetica').fillColor(colors.text).text(
+      'Ce document doit être tenu à jour et à disposition de l\'inspection du travail. Les équipements utilisés dans les zones ATEX doivent être conformes aux exigences de la directive 2014/34/UE (matériels ATEX).',
+      70, regY + 35, { width: 455 }
+    );
+    regY += 100;
+
+    doc.font('Helvetica-Bold').text('Classification des zones', 50, regY);
+    regY += 25;
+
+    // Tableau zones
+    const zoneData = [
+      ['Zone', 'GAZ (G)', 'POUSSIÈRES (D)', 'Présence ATEX'],
+      ['0 / 20', 'Zone 0', 'Zone 20', 'Permanente ou fréquente'],
+      ['1 / 21', 'Zone 1', 'Zone 21', 'Occasionnelle (fonct. normal)'],
+      ['2 / 22', 'Zone 2', 'Zone 22', 'Rare et de courte durée'],
+    ];
+
+    const colW = [60, 120, 120, 195];
+    zoneData.forEach((row, idx) => {
+      let x = 50;
+      const bgColor = idx === 0 ? colors.primary : (idx % 2 === 0 ? colors.light : '#fff');
+      const txtColor = idx === 0 ? '#fff' : colors.text;
+      doc.rect(x, regY, 495, 22).fillAndStroke(bgColor, '#d1d5db');
+      row.forEach((cell, ci) => {
+        doc.fontSize(9).font(idx === 0 ? 'Helvetica-Bold' : 'Helvetica').fillColor(txtColor)
+           .text(cell, x + 5, regY + 6, { width: colW[ci] - 10 });
+        x += colW[ci];
+      });
+      regY += 22;
+    });
+
+    // ========== 2. PRÉSENTATION ÉTABLISSEMENT ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Présentation de l\'établissement', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let presY = 100;
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.secondary).text(siteInfo.company_name || 'Entreprise', 50, presY);
+    presY += 25;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text(`Site: ${siteInfo.site_name || 'Non renseigné'}`, 50, presY);
+    presY += 40;
+
+    // Stats globales
+    doc.fontSize(12).font('Helvetica-Bold').text('Synthèse de l\'installation', 50, presY);
+    presY += 25;
+
+    const statsData = [
+      ['📊 Équipements ATEX', totalEquipments],
+      ['🗺️ Plans', plans.length],
+      ['📍 Zones classées', subareas.length],
+      ['🏢 Bâtiments', Object.keys(byBuilding).length],
+    ];
+
+    statsData.forEach(([label, value]) => {
+      doc.rect(50, presY, 240, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(10).font('Helvetica').fillColor(colors.muted).text(label, 60, presY + 10);
+      doc.fontSize(16).font('Helvetica-Bold').fillColor(colors.primary).text(String(value), 220, presY + 8, { align: 'right', width: 50 });
+      presY += 40;
+    });
+
+    // ========== 3. ZONAGE ATEX ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('3. Zonage ATEX', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let zoneY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text('Le zonage ATEX de l\'établissement est représenté sur les plans ci-après. Les zones dangereuses ont été définies selon la méthodologie de l\'INRS et les normes NF EN 60079-10-1 (gaz) et NF EN 60079-10-2 (poussières).', 50, zoneY, { width: 495, align: 'justify' });
+    zoneY += 50;
+
+    doc.fontSize(12).font('Helvetica-Bold').text('Liste des plans ATEX', 50, zoneY);
+    zoneY += 20;
+
+    // Liste des plans
+    plans.slice(0, 15).forEach((p, idx) => {
+      if (zoneY > 750) { doc.addPage(); zoneY = 50; }
+      doc.rect(50, zoneY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+      doc.fontSize(9).font('Helvetica').fillColor(colors.text)
+         .text(`📄 ${p.display_name || p.logical_name}`, 60, zoneY + 7);
+      if (p.building || p.zone) {
+        doc.fillColor(colors.muted).text(`${p.building || ''} ${p.zone ? '• ' + p.zone : ''}`, 350, zoneY + 7, { width: 180, align: 'right' });
+      }
+      zoneY += 25;
+    });
+
+    if (plans.length > 15) {
+      doc.fontSize(9).fillColor(colors.muted).text(`... et ${plans.length - 15} autres plans`, 50, zoneY + 10);
+    }
+
+    zoneY += 40;
+    doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text('Zones classées', 50, zoneY);
+    zoneY += 20;
+
+    // Grouper subareas par type de zone
+    const zonesByType = { gas: {}, dust: {} };
+    subareas.forEach(sa => {
+      if (sa.zoning_gas != null) {
+        const key = `Zone ${sa.zoning_gas}`;
+        if (!zonesByType.gas[key]) zonesByType.gas[key] = [];
+        zonesByType.gas[key].push(sa);
+      }
+      if (sa.zoning_dust != null) {
+        const key = `Zone ${sa.zoning_dust}`;
+        if (!zonesByType.dust[key]) zonesByType.dust[key] = [];
+        zonesByType.dust[key].push(sa);
+      }
+    });
+
+    [['Gaz', zonesByType.gas, '#3b82f6'], ['Poussières', zonesByType.dust, '#8b5cf6']].forEach(([label, zones, color]) => {
+      if (Object.keys(zones).length === 0) return;
+      if (zoneY > 700) { doc.addPage(); zoneY = 50; }
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(color).text(`${label}:`, 50, zoneY);
+      zoneY += 18;
+      Object.entries(zones).forEach(([zoneName, items]) => {
+        doc.fontSize(9).font('Helvetica').fillColor(colors.text)
+           .text(`• ${zoneName}: ${items.length} zone(s)`, 70, zoneY);
+        zoneY += 15;
+      });
+      zoneY += 10;
+    });
+
+    // ========== 4. INVENTAIRE DES ÉQUIPEMENTS ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('4. Inventaire des équipements', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text(`L\'établissement compte ${totalEquipments} équipements ATEX inventoriés, répartis comme suit:`, 50, invY, { width: 495 });
+    invY += 35;
+
+    // Tableau par bâtiment
+    const batHeaders = ['Bâtiment', 'Zone', 'Équipements', 'Conformes', 'Non conformes'];
+    const batColW = [130, 130, 80, 80, 80];
+    let x = 50;
+    batHeaders.forEach((h, i) => {
+      doc.rect(x, invY, batColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#fff').text(h, x + 5, invY + 6, { width: batColW[i] - 10 });
+      x += batColW[i];
+    });
+    invY += 22;
+
+    Object.entries(byBuilding).forEach(([bat, zones]) => {
+      Object.entries(zones).forEach(([zone, eqs]) => {
+        if (invY > 750) {
+          doc.addPage();
+          invY = 50;
+          // Redraw header
+          x = 50;
+          batHeaders.forEach((h, i) => {
+            doc.rect(x, invY, batColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(9).font('Helvetica-Bold').fillColor('#fff').text(h, x + 5, invY + 6, { width: batColW[i] - 10 });
+            x += batColW[i];
+          });
+          invY += 22;
+        }
+        const conf = eqs.filter(e => e.last_result === 'conforme').length;
+        const nonConf = eqs.filter(e => e.last_result === 'non_conforme').length;
+        const row = [bat.substring(0, 25), zone.substring(0, 25), eqs.length, conf, nonConf];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, batColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          let txtCol = colors.text;
+          if (i === 4 && cell > 0) txtCol = colors.danger;
+          if (i === 3 && cell > 0) txtCol = colors.success;
+          doc.fontSize(8).font('Helvetica').fillColor(txtCol).text(String(cell), x + 5, invY + 5, { width: batColW[i] - 10 });
+          x += batColW[i];
+        });
+        invY += 20;
+      });
+    });
+
+    // ========== 5. ÉTAT DE CONFORMITÉ ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('5. État de conformité', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let confY = 100;
+
+    // Stats visuelles
+    const confStats = [
+      { label: 'Conformes', count: conformeCount, color: colors.success, pct: totalEquipments ? Math.round(conformeCount / totalEquipments * 100) : 0 },
+      { label: 'Non conformes', count: nonConformeCount, color: colors.danger, pct: totalEquipments ? Math.round(nonConformeCount / totalEquipments * 100) : 0 },
+      { label: 'Non vérifiés', count: naCount, color: colors.muted, pct: totalEquipments ? Math.round(naCount / totalEquipments * 100) : 0 },
+      { label: 'Vérification en retard', count: retardCount, color: colors.warning, pct: totalEquipments ? Math.round(retardCount / totalEquipments * 100) : 0 },
+    ];
+
+    confStats.forEach(stat => {
+      doc.rect(50, confY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(stat.color).text(stat.label, 60, confY + 8);
+      doc.fontSize(9).font('Helvetica').fillColor(colors.muted).text(`${stat.count} équipement(s)`, 60, confY + 23);
+      // Barre de progression
+      doc.rect(300, confY + 15, 180, 12).fillAndStroke(colors.light, '#d1d5db');
+      if (stat.pct > 0) {
+        doc.rect(300, confY + 15, Math.max(5, 180 * stat.pct / 100), 12).fill(stat.color);
+      }
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(stat.color).text(`${stat.pct}%`, 490, confY + 13, { align: 'right', width: 40 });
+      confY += 45;
+    });
+
+    confY += 20;
+
+    // Liste des non conformes
+    if (nonConformeCount > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('⚠️ Équipements non conformes', 50, confY);
+      confY += 25;
+
+      const nonConformes = equipments.filter(e => e.last_result === 'non_conforme').slice(0, 10);
+      nonConformes.forEach(eq => {
+        if (confY > 750) { doc.addPage(); confY = 50; }
+        doc.rect(50, confY, 495, 30).fillAndStroke('#fef2f2', '#fca5a5');
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.danger).text(eq.name || 'Équipement sans nom', 60, confY + 6);
+        doc.fontSize(8).font('Helvetica').fillColor(colors.muted)
+           .text(`${eq.building || '-'} • ${eq.zone || '-'} • ${eq.type || '-'}`, 60, confY + 17);
+        confY += 35;
+      });
+
+      if (nonConformeCount > 10) {
+        doc.fontSize(9).fillColor(colors.muted).text(`... et ${nonConformeCount - 10} autres équipements non conformes`, 50, confY);
+      }
+    }
+
+    // ========== 6. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Planification des vérifications', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let planY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text('Conformément à l\'article R. 4227-48 du Code du travail, les équipements ATEX font l\'objet de vérifications périodiques par un organisme ou une personne compétente.', 50, planY, { width: 495, align: 'justify' });
+    planY += 50;
+
+    // Équipements à vérifier prochainement
+    const upcoming = equipments
+      .filter(e => e.next_check_date)
+      .sort((a, b) => new Date(a.next_check_date) - new Date(b.next_check_date))
+      .slice(0, 12);
+
+    if (upcoming.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').text('Prochaines vérifications', 50, planY);
+      planY += 25;
+
+      const planHeaders = ['Équipement', 'Bâtiment', 'Zone', 'Prochaine vérif.', 'Statut'];
+      const planColW = [180, 100, 80, 85, 50];
+      x = 50;
+      planHeaders.forEach((h, i) => {
+        doc.rect(x, planY, planColW[i], 20).fillAndStroke(colors.secondary, colors.secondary);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, x + 4, planY + 5, { width: planColW[i] - 8 });
+        x += planColW[i];
+      });
+      planY += 20;
+
+      upcoming.forEach(eq => {
+        if (planY > 750) { doc.addPage(); planY = 50; }
+        const nextDate = new Date(eq.next_check_date);
+        const now = new Date();
+        const isLate = nextDate < now;
+        const isClose = !isLate && (nextDate - now) / (1000 * 60 * 60 * 24) < 90;
+        const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
+        const statusText = isLate ? '⚠️' : (isClose ? '⏰' : '✓');
+
+        const row = [
+          (eq.name || '-').substring(0, 35),
+          (eq.building || '-').substring(0, 18),
+          (eq.zone || '-').substring(0, 14),
+          nextDate.toLocaleDateString('fr-FR'),
+          statusText
+        ];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, planY, planColW[i], 18).fillAndStroke('#fff', '#e5e7eb');
+          const col = i === 4 ? statusColor : colors.text;
+          doc.fontSize(7).font('Helvetica').fillColor(col).text(String(cell), x + 4, planY + 5, { width: planColW[i] - 8 });
+          x += planColW[i];
+        });
+        planY += 18;
+      });
+    }
+
+    // ========== 7. MESURES DE PRÉVENTION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Mesures de prévention et protection', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let mesY = 100;
+    const mesures = [
+      { title: 'Mesures techniques', items: [
+        'Utilisation d\'équipements ATEX conformes aux exigences de la directive 2014/34/UE',
+        'Ventilation et extraction des atmosphères explosives',
+        'Mise à la terre des équipements et mise en équipotentialité',
+        'Contrôle des sources d\'inflammation (surfaces chaudes, étincelles, etc.)',
+      ]},
+      { title: 'Mesures organisationnelles', items: [
+        'Formation du personnel aux risques ATEX',
+        'Procédures de travail et permis de feu',
+        'Signalisation des zones à risque d\'explosion',
+        'Maintenance préventive des équipements',
+      ]},
+      { title: 'Mesures de protection', items: [
+        'Détection de gaz/poussières avec alarme',
+        'Dispositifs d\'arrêt d\'urgence',
+        'Équipements de protection individuelle adaptés',
+        'Plan d\'intervention en cas d\'incident',
+      ]},
+    ];
+
+    mesures.forEach(section => {
+      if (mesY > 650) { doc.addPage(); mesY = 50; }
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.secondary).text(section.title, 50, mesY);
+      mesY += 22;
+      section.items.forEach(item => {
+        doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(`• ${item}`, 70, mesY, { width: 475 });
+        mesY += 20;
+      });
+      mesY += 15;
+    });
+
+    // Note finale
+    mesY += 20;
+    doc.rect(50, mesY, 495, 60).fillAndStroke('#f0fdf4', colors.success);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.success).text('✓ Document conforme', 70, mesY + 15);
+    doc.font('Helvetica').fillColor(colors.text).text(
+      'Ce document doit être mis à jour lors de toute modification des installations ou des conditions d\'exploitation, et au minimum lors de chaque vérification périodique.',
+      70, mesY + 32, { width: 455 }
+    );
+
+    // ========== NUMÉROTATION DES PAGES ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`DRPCE - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495 });
+    }
+
+    doc.end();
+    console.log(`[DRPCE] Generated PDF with ${totalEquipments} equipments, ${plans.length} plans`);
+
+  } catch (e) {
+    console.error('[DRPCE] Error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // -------------------------------------------------
