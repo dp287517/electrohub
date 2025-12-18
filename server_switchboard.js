@@ -2746,8 +2746,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       params.push(meca_equipment_id);
     }
     if (mobile_equipment_id) {
-      sql += ` AND cs.mobile_equipment_id = $${idx++}`;
-      params.push(mobile_equipment_id);
+      sql += ` AND cs.mobile_equipment_id::text = $${idx++}`;
+      params.push(String(mobile_equipment_id));
     }
     if (hv_equipment_id) {
       sql += ` AND cs.hv_equipment_id = $${idx++}`;
@@ -2816,7 +2816,7 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     if (device_id) { conditions.push(`device_id = $${pIdx++}`); existingParams.push(device_id); }
     if (vsd_equipment_id) { conditions.push(`vsd_equipment_id = $${pIdx++}`); existingParams.push(vsd_equipment_id); }
     if (meca_equipment_id) { conditions.push(`meca_equipment_id = $${pIdx++}`); existingParams.push(meca_equipment_id); }
-    if (mobile_equipment_id) { conditions.push(`mobile_equipment_id = $${pIdx++}`); existingParams.push(mobile_equipment_id); }
+    if (mobile_equipment_id) { conditions.push(`mobile_equipment_id::text = $${pIdx++}`); existingParams.push(String(mobile_equipment_id)); }
     if (hv_equipment_id) { conditions.push(`hv_equipment_id = $${pIdx++}`); existingParams.push(hv_equipment_id); }
 
     existingCheck += conditions.join(' OR ') + ')';
@@ -2907,8 +2907,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       params.push(hv_equipment_id);
     }
     if (mobile_equipment_id) {
-      sql += ` AND cr.mobile_equipment_id = $${idx++}`;
-      params.push(mobile_equipment_id);
+      sql += ` AND cr.mobile_equipment_id::text = $${idx++}`;
+      params.push(String(mobile_equipment_id));
     }
     if (equipment_type) {
       sql += ` AND cr.equipment_type = $${idx++}`;
