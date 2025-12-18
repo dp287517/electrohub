@@ -1645,16 +1645,17 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
 
-    // 1. Enregistrer la position immédiatement
+    // 1. SUPPRIMER toutes les anciennes positions de cet équipement (permet le déplacement entre plans)
+    await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+
+    // 2. Créer la nouvelle position
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (equipment_id, logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
+       VALUES ($1,$2,$3,$4,$5,$6)`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
 
-    // 2. Répondre IMMÉDIATEMENT au frontend (UX rapide)
+    // 3. Répondre IMMÉDIATEMENT au frontend (UX rapide)
     res.json({ ok: true, position_saved: true });
 
     // 3. Mettre à jour le contexte de zone EN ARRIÈRE-PLAN (fire and forget)
@@ -1690,16 +1691,17 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
 
-    // 1. Enregistrer la position immédiatement
+    // 1. SUPPRIMER toutes les anciennes positions de cet équipement (permet le déplacement entre plans)
+    await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+
+    // 2. Créer la nouvelle position
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (equipment_id, logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
+       VALUES ($1,$2,$3,$4,$5,$6)`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
 
-    // 2. Répondre IMMÉDIATEMENT
+    // 3. Répondre IMMÉDIATEMENT
     res.json({ ok: true, position_saved: true });
 
     // 3. Mise à jour des zones en arrière-plan
