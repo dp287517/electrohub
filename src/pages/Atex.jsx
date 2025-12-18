@@ -8,6 +8,7 @@ import "dayjs/locale/fr";
 dayjs.locale("fr");
 import "../styles/atex-map.css";
 import { api, API_BASE } from "../lib/api.js";
+import { generatePdfThumbnail } from "../lib/pdf-utils.js";
 import AtexMap from "./Atex-map.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
@@ -293,10 +294,22 @@ export default function Atex() {
     }
   }, []);
 
-  // Upload a new plan
+  // Upload a new plan with client-side thumbnail generation
   const handleUploadPlan = useCallback(async (file, buildingName, isMultiZone) => {
     try {
-      await api.atexMaps.uploadPlan(file, { building_name: buildingName, is_multi_zone: isMultiZone });
+      // Generate thumbnail on client side (browser has full PDF rendering)
+      let thumbnail = null;
+      try {
+        thumbnail = await generatePdfThumbnail(file, 400);
+      } catch (thumbErr) {
+        console.warn("[ATEX] Thumbnail generation failed:", thumbErr.message);
+      }
+
+      await api.atexMaps.uploadPlan(file, {
+        building_name: buildingName,
+        is_multi_zone: isMultiZone,
+        thumbnail
+      });
       setToast("Plan importé avec succès");
       setUploadModalOpen(false);
       loadPlans();

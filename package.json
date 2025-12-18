@@ -54,6 +54,7 @@
     "openai": "^4.25.0",
     "pdf-parse": "^1.1.1",
     "pdf-poppler": "^0.2.3",
+    "pdf2pic": "^3.2.0",
     "pdfjs-dist": "^4.7.21",
     "pdfkit": "^0.15.0",
     "pg": "^8.16.3",
