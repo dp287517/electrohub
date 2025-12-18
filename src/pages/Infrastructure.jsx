@@ -157,8 +157,10 @@ export default function Infrastructure() {
 
   const handleSaveZone = async (data) => {
     try {
-      if (editingZone?.id) {
-        await api.infra.updateZone(editingZone.id, data);
+      // Check data.id (from map click) OR editingZone?.id (from Infrastructure UI)
+      const zoneId = data.id || editingZone?.id;
+      if (zoneId) {
+        await api.infra.updateZone(zoneId, data);
         showToast("Zone mise à jour");
       } else {
         await api.infra.createZone(data);
