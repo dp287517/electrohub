@@ -12,7 +12,13 @@ import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  connectionTimeoutMillis: 5000,  // Timeout pour obtenir une connexion du pool
+  idleTimeoutMillis: 30000,       // Libère les connexions inactives après 30s
+  max: 10,                        // Limite le nombre de connexions
+  statement_timeout: 10000        // Timeout pour les requêtes (10s)
+});
 
 // ========== VSD COST ESTIMATION ==========
 function estimateVsdCostGBP(vsd) {
@@ -1100,10 +1106,15 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
 
 // ---------- UPDATE SERVICE YEAR (all asset types) ----------
 app.put('/api/obsolescence/service-year', async (req, res) => {
+  const startTime = Date.now();
+  console.log('[OBS SERVICE-YEAR] Request received:', req.body);
+
   try {
     const { siteName, role } = getSiteFilter(req);
     const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
     const { kind, id, service_year } = req.body || {};
+
+    console.log(`[OBS SERVICE-YEAR] Parsed: kind=${kind}, id=${id}, year=${service_year}, site=${site}`);
 
     if (!kind || !id || service_year === undefined) {
       return res.status(400).json({ error: 'Missing required fields: kind, id, service_year' });
@@ -1120,55 +1131,53 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
     }
 
     let result;
+    let rowsAffected = 0;
 
     switch (kind) {
       case 'sb': {
         // For switchboards, update manufacture_date in obsolescence_parameters
         const date = `${year}-01-01`;
         try {
-          // Try to update existing rows first (with 5s timeout)
-          result = await Promise.race([
-            pool.query(`
-              UPDATE obsolescence_parameters
-              SET manufacture_date = $1
-              WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
-            `, site ? [date, equipmentId, site] : [date, equipmentId]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
-          ]);
+          // Try to update existing rows first
+          result = await pool.query(`
+            UPDATE obsolescence_parameters
+            SET manufacture_date = $1
+            WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+          rowsAffected = result.rowCount;
+          console.log(`[OBS SERVICE-YEAR] SB update: ${rowsAffected} rows affected`);
 
           // If no rows updated, try to insert for devices
-          if (result.rowCount === 0) {
-            await Promise.race([
-              pool.query(`
-                INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
-                SELECT d.id, d.switchboard_id, d.site, $1::date
-                FROM devices d
-                WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
-                ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
-              `, site ? [date, equipmentId, site] : [date, equipmentId]),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
-            ]);
+          if (rowsAffected === 0) {
+            result = await pool.query(`
+              INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
+              SELECT d.id, d.switchboard_id, d.site, $1::date
+              FROM devices d
+              WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
+              ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
+            `, site ? [date, equipmentId, site] : [date, equipmentId]);
+            rowsAffected = result.rowCount;
+            console.log(`[OBS SERVICE-YEAR] SB insert: ${rowsAffected} rows affected`);
           }
         } catch (e) {
-          console.log('[OBS] SB update failed:', e.message);
-          return res.status(500).json({ error: 'La mise à jour a échoué ou pris trop de temps. Réessayez.' });
+          console.error('[OBS SERVICE-YEAR] SB update failed:', e.message, `(${Date.now() - startTime}ms)`);
+          return res.status(500).json({ error: 'La mise à jour a échoué. Réessayez.' });
         }
         break;
       }
 
       case 'hv': {
-        // For HV equipment, try to update service_year
+        // For HV equipment, update service_year
         try {
-          result = await Promise.race([
-            pool.query(`
-              UPDATE hv_equipments
-              SET service_year = $1
-              WHERE id = $2 ${site ? 'AND site = $3' : ''}
-            `, site ? [year, equipmentId, site] : [year, equipmentId]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
-          ]);
+          result = await pool.query(`
+            UPDATE hv_equipments
+            SET service_year = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [year, equipmentId, site] : [year, equipmentId]);
+          rowsAffected = result.rowCount;
+          console.log(`[OBS SERVICE-YEAR] HV update: ${rowsAffected} rows affected`);
         } catch (e) {
-          console.log('[OBS] HV update failed:', e.message);
+          console.error('[OBS SERVICE-YEAR] HV update failed:', e.message, `(${Date.now() - startTime}ms)`);
           return res.status(400).json({
             error: 'La colonne service_year n\'existe pas pour les équipements HV. Contactez l\'administrateur.'
           });
@@ -1177,18 +1186,17 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
       }
 
       case 'vsd': {
-        // For VSD equipment, try to update service_year
+        // For VSD equipment, update service_year
         try {
-          result = await Promise.race([
-            pool.query(`
-              UPDATE vsd_equipments
-              SET service_year = $1
-              WHERE id = $2 ${site ? 'AND site = $3' : ''}
-            `, site ? [year, equipmentId, site] : [year, equipmentId]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
-          ]);
+          result = await pool.query(`
+            UPDATE vsd_equipments
+            SET service_year = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [year, equipmentId, site] : [year, equipmentId]);
+          rowsAffected = result.rowCount;
+          console.log(`[OBS SERVICE-YEAR] VSD update: ${rowsAffected} rows affected`);
         } catch (e) {
-          console.log('[OBS] VSD update failed:', e.message);
+          console.error('[OBS SERVICE-YEAR] VSD update failed:', e.message, `(${Date.now() - startTime}ms)`);
           return res.status(400).json({
             error: 'La colonne service_year n\'existe pas pour les équipements VSD. Contactez l\'administrateur.'
           });
@@ -1200,16 +1208,15 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
         // For MECA equipment, update installation_date
         const date = `${year}-01-01`;
         try {
-          result = await Promise.race([
-            pool.query(`
-              UPDATE meca_equipments
-              SET installation_date = $1
-              WHERE id = $2 ${site ? 'AND site = $3' : ''}
-            `, site ? [date, equipmentId, site] : [date, equipmentId]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
-          ]);
+          result = await pool.query(`
+            UPDATE meca_equipments
+            SET installation_date = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+          rowsAffected = result.rowCount;
+          console.log(`[OBS SERVICE-YEAR] MECA update: ${rowsAffected} rows affected`);
         } catch (e) {
-          console.log('[OBS] MECA update failed:', e.message);
+          console.error('[OBS SERVICE-YEAR] MECA update failed:', e.message, `(${Date.now() - startTime}ms)`);
           return res.status(400).json({
             error: 'Impossible de mettre à jour la date d\'installation. Contactez l\'administrateur.'
           });
@@ -1221,16 +1228,17 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
         return res.status(400).json({ error: `Unknown equipment kind: ${kind}` });
     }
 
-    console.log(`[OBS SERVICE-YEAR] Updated ${kind}-${equipmentId} to ${year}`);
+    console.log(`[OBS SERVICE-YEAR] Success: ${kind}-${equipmentId} -> ${year} (${rowsAffected} rows, ${Date.now() - startTime}ms)`);
     res.json({
       success: true,
       message: `Service year updated to ${year}`,
       kind,
       id: equipmentId,
-      service_year: year
+      service_year: year,
+      rows_affected: rowsAffected
     });
   } catch (e) {
-    console.error('[OBS SERVICE-YEAR]', e.message);
+    console.error('[OBS SERVICE-YEAR] Unexpected error:', e.message, `(${Date.now() - startTime}ms)`);
     res.status(500).json({ error: `Update failed: ${e.message}` });
   }
 });
