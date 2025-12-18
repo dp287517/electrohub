@@ -99,10 +99,10 @@ const STATUS = {
 };
 
 const statusConfig = {
-  [STATUS.A_FAIRE]: { label: 'À faire', variant: 'success', blink: '' },
-  [STATUS.EN_COURS]: { label: 'Sous 30j', variant: 'warning', blink: 'blink-orange' },
-  [STATUS.EN_RETARD]: { label: 'En retard', variant: 'danger', blink: 'blink-red' },
-  [STATUS.FAIT]: { label: 'Fait', variant: 'info', blink: '' }
+  [STATUS.A_FAIRE]: { label: 'À faire', variant: 'success', blink: '', iconColor: 'text-emerald-500' },
+  [STATUS.EN_COURS]: { label: 'Sous 30j', variant: 'warning', blink: 'blink-orange', iconColor: 'text-amber-500' },
+  [STATUS.EN_RETARD]: { label: 'En retard', variant: 'danger', blink: 'blink-red', iconColor: 'text-red-500' },
+  [STATUS.FAIT]: { label: 'Fait', variant: 'info', blink: '', iconColor: 'text-emerald-500' }
 };
 
 const getStatusConfig = (status) => statusConfig[status] || statusConfig[STATUS.A_FAIRE];
@@ -524,7 +524,7 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                               className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
                                 ${selectedDoor?.id === door.id ? 'bg-rose-100 text-rose-700' : 'text-gray-600 hover:bg-gray-100'}`}
                             >
-                              <DoorOpen size={14} className={`text-rose-500 ${statusConf.blink}`} />
+                              <DoorOpen size={14} className={`${statusConf.iconColor} ${statusConf.blink}`} />
                               <span className="text-sm truncate flex-1">{door.name}</span>
                               {!isPlaced(door.id) && (
                                 <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
@@ -1683,7 +1683,7 @@ export default function Doors() {
                                     className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
                                       ${selectedDoor?.id === d.id ? 'bg-rose-100 text-rose-700' : 'text-gray-600 hover:bg-gray-100'}`}
                                   >
-                                    <DoorOpen size={14} className={`text-rose-500 ${statusConf.blink}`} />
+                                    <DoorOpen size={14} className={`${statusConf.iconColor} ${statusConf.blink}`} />
                                     <span className="text-sm truncate flex-1">{d.name}</span>
                                     {!isPlaced(d.id) && (
                                       <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
