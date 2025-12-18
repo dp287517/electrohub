@@ -635,6 +635,187 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ============================================================
+// 🔄 DUPLICATION D'ÉQUIPEMENT
+// ============================================================
+app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
+  try {
+    const sourceId = String(req.params.id);
+    const { copy_position = false, target_plan = null } = req.body || {};
+
+    // 1. Récupérer l'équipement source
+    const { rows: srcRows } = await pool.query(
+      `SELECT * FROM atex_equipments WHERE id=$1`,
+      [sourceId]
+    );
+    const source = srcRows[0];
+    if (!source) return res.status(404).json({ ok: false, error: "Équipement non trouvé" });
+
+    // 2. Créer la copie (nouveau UUID, nom avec suffixe)
+    const { rows: newRows } = await pool.query(
+      `INSERT INTO atex_equipments (
+        name, building, zone, equipment, sub_equipment, type,
+        manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
+        comment, installed_at, next_check_date, status,
+        zoning_gas, zoning_dust, company_id, site_id, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, 'a_faire', $14, $15, $16, $17, now(), now()
+      ) RETURNING *`,
+      [
+        source.name + " (copie)",
+        source.building,
+        source.zone,
+        source.equipment,
+        source.sub_equipment,
+        source.type,
+        source.manufacturer,
+        source.manufacturer_ref,
+        source.atex_mark_gas,
+        source.atex_mark_dust,
+        source.comment,
+        source.installed_at,
+        null, // next_check_date reset
+        source.zoning_gas,
+        source.zoning_dust,
+        source.company_id,
+        source.site_id,
+      ]
+    );
+    const newEquipment = newRows[0];
+
+    // 3. Copier la photo si elle existe
+    if (source.photo_content && source.photo_content.length) {
+      await pool.query(
+        `UPDATE atex_equipments SET photo_content=$1, photo_path=$2 WHERE id=$3`,
+        [source.photo_content, source.photo_path, newEquipment.id]
+      );
+      newEquipment.photo_url = `/api/atex/equipments/${newEquipment.id}/photo`;
+    }
+
+    // 4. Optionnel: copier la position vers le plan cible ou le même plan
+    if (copy_position) {
+      const { rows: posRows } = await pool.query(
+        `SELECT * FROM atex_positions WHERE equipment_id=$1`,
+        [sourceId]
+      );
+      for (const pos of posRows) {
+        const targetLogical = target_plan || pos.logical_name;
+        await pool.query(
+          `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (equipment_id, logical_name, page_index) DO NOTHING`,
+          [newEquipment.id, targetLogical, pos.plan_id, pos.page_index, pos.x_frac, pos.y_frac]
+        );
+      }
+    }
+
+    res.json({ ok: true, equipment: newEquipment });
+  } catch (e) {
+    console.error('[duplicate] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 📍 DÉPLACER ÉQUIPEMENT VERS UN AUTRE PLAN
+// ============================================================
+app.put("/api/atex/maps/positions/:equipmentId/move", async (req, res) => {
+  try {
+    const equipment_id = String(req.params.equipmentId);
+    const {
+      from_logical_name,
+      to_logical_name,
+      to_plan_id = null,
+      to_page_index = 0,
+      x_frac = 0.5,
+      y_frac = 0.5
+    } = req.body || {};
+
+    if (!equipment_id || !to_logical_name) {
+      return res.status(400).json({ ok: false, error: "missing to_logical_name" });
+    }
+
+    // 1. Supprimer l'ancienne position si spécifiée
+    if (from_logical_name) {
+      await pool.query(
+        `DELETE FROM atex_positions
+         WHERE equipment_id=$1 AND logical_name=$2`,
+        [equipment_id, from_logical_name]
+      );
+    }
+
+    // 2. Créer la nouvelle position sur le plan cible
+    await pool.query(
+      `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (equipment_id, logical_name, page_index)
+       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, plan_id=EXCLUDED.plan_id`,
+      [equipment_id, to_logical_name, isUuid(to_plan_id) ? to_plan_id : null, to_page_index, x_frac, y_frac]
+    );
+
+    res.json({ ok: true, moved: true });
+
+    // 3. Mettre à jour le contexte de zone en arrière-plan
+    setImmediate(async () => {
+      try {
+        const zones = await detectZonesForPoint(to_logical_name, to_page_index, Number(x_frac), Number(y_frac));
+        await updateEquipmentContext({
+          equipment_id,
+          logical_name: to_logical_name,
+          zoning_gas: zones.zoning_gas,
+          zoning_dust: zones.zoning_dust,
+          subarea_id: zones.subarea_id,
+          subarea_name_hint: zones.subarea_name || null,
+        });
+      } catch (bgErr) {
+        console.error('[move position background] Error:', bgErr.message);
+      }
+    });
+  } catch (e) {
+    console.error('[move position] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 🗑️ SUPPRIMER POSITION D'UN PLAN (sans supprimer l'équipement)
+// ============================================================
+app.delete("/api/atex/maps/positions/:equipmentId", async (req, res) => {
+  try {
+    const equipment_id = String(req.params.equipmentId);
+    const { logical_name, page_index } = req.query || {};
+
+    if (!logical_name) {
+      // Supprimer toutes les positions de cet équipement
+      await pool.query(
+        `DELETE FROM atex_positions WHERE equipment_id=$1`,
+        [equipment_id]
+      );
+    } else if (page_index != null) {
+      // Supprimer une position spécifique
+      await pool.query(
+        `DELETE FROM atex_positions
+         WHERE equipment_id=$1 AND logical_name=$2 AND page_index=$3`,
+        [equipment_id, logical_name, page_index]
+      );
+    } else {
+      // Supprimer toutes les positions sur ce plan
+      await pool.query(
+        `DELETE FROM atex_positions
+         WHERE equipment_id=$1 AND logical_name=$2`,
+        [equipment_id, logical_name]
+      );
+    }
+
+    res.json({ ok: true, removed: true });
+  } catch (e) {
+    console.error('[delete position] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Photos / Files
 app.post("/api/atex/equipments/:id/photo", multerFiles.single("photo"), async (req, res) => {
   try {

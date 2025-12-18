@@ -951,6 +951,13 @@ export const api = {
 
     bulkRename: ({ field, from, to }) =>
       post("/api/atex/bulk/rename", { field, from, to }),
+
+    // 🔄 Dupliquer un équipement
+    duplicateEquipment: (id, { copy_position = false, target_plan = null } = {}) =>
+      post(`/api/atex/equipments/${encodeURIComponent(id)}/duplicate`, {
+        copy_position,
+        target_plan,
+      }),
   },
 
   /** --- ATEX MAPS --- */
@@ -1021,6 +1028,29 @@ export const api = {
         x_frac,
         y_frac,
       }),
+
+    // 📍 Déplacer un équipement vers un autre plan
+    movePosition: (
+      equipmentId,
+      { from_logical_name, to_logical_name, to_plan_id = null, to_page_index = 0, x_frac = 0.5, y_frac = 0.5 }
+    ) =>
+      put(`/api/atex/maps/positions/${encodeURIComponent(equipmentId)}/move`, {
+        from_logical_name,
+        to_logical_name,
+        to_plan_id,
+        to_page_index,
+        x_frac,
+        y_frac,
+      }),
+
+    // 🗑️ Supprimer la position d'un équipement (sans supprimer l'équipement)
+    removePosition: (equipmentId, { logical_name, page_index } = {}) => {
+      const params = new URLSearchParams();
+      if (logical_name) params.set("logical_name", logical_name);
+      if (page_index != null) params.set("page_index", String(page_index));
+      return del(`/api/atex/maps/positions/${encodeURIComponent(equipmentId)}?${params}`);
+    },
+
     // 🆕 Obtenir la position d'un équipement spécifique (pour navigation depuis liste)
     getEquipmentPosition: (equipmentId) =>
       get(`/api/atex/maps/position/${encodeURIComponent(equipmentId)}`),
