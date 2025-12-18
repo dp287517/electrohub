@@ -43,8 +43,34 @@ for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
 // -------------------------------------------------
 async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumbnailWidth = 150) {
   try {
-    // Load PDF document
-    const loadingTask = pdfjsLib.getDocument({ data: pdfBuffer });
+    if (!pdfBuffer || pdfBuffer.length === 0) {
+      console.warn('[pdfToImageWithMarker] Empty buffer');
+      return null;
+    }
+
+    // Convertir en Uint8Array si nécessaire (pdfjs-dist en a besoin)
+    let data;
+    if (Buffer.isBuffer(pdfBuffer)) {
+      data = new Uint8Array(pdfBuffer);
+    } else if (pdfBuffer instanceof Uint8Array) {
+      data = pdfBuffer;
+    } else {
+      data = new Uint8Array(pdfBuffer);
+    }
+
+    // Vérifier que c'est un PDF (magic bytes: %PDF)
+    if (data[0] !== 0x25 || data[1] !== 0x50 || data[2] !== 0x44 || data[3] !== 0x46) {
+      console.warn('[pdfToImageWithMarker] Not a valid PDF (wrong magic bytes)');
+      return null;
+    }
+
+    // Load PDF document avec options pour Node.js
+    const loadingTask = pdfjsLib.getDocument({
+      data: data,
+      useSystemFonts: true,
+      disableFontFace: true,
+      verbosity: 0
+    });
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
 
@@ -54,8 +80,14 @@ async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumb
     const scaledViewport = page.getViewport({ scale });
 
     // Create canvas
-    const canvas = createCanvas(Math.floor(scaledViewport.width), Math.floor(scaledViewport.height));
+    const canvasWidth = Math.floor(scaledViewport.width);
+    const canvasHeight = Math.floor(scaledViewport.height);
+    const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
+
+    // Fond blanc
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     // Render PDF page to canvas
     await page.render({
@@ -88,7 +120,7 @@ async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumb
     // Convert canvas to PNG buffer
     return canvas.toBuffer('image/png');
   } catch (err) {
-    console.warn('[pdfToImageWithMarker] Error:', err.message);
+    console.error('[pdfToImageWithMarker] Error:', err.message, err.stack?.split('\n')[1]);
     return null;
   }
 }
@@ -3321,17 +3353,19 @@ app.get("/api/atex/drpce", async (req, res) => {
     const equipmentIds = equipments.map(e => e.id);
     let positionsMap = new Map();
     if (equipmentIds.length > 0) {
+      // Requête améliorée: jointure via logical_name OU plan_id
       const { rows: positions } = await pool.query(`
-        SELECT pos.equipment_id, pos.logical_name, pos.x_frac, pos.y_frac,
-               p.content AS plan_content,
-               COALESCE(pn.display_name, pos.logical_name) AS plan_display_name
+        SELECT pos.equipment_id, pos.logical_name, pos.plan_id, pos.x_frac, pos.y_frac,
+               COALESCE(p_by_logical.content, p_by_id.content) AS plan_content,
+               COALESCE(pn.display_name, pos.logical_name, 'Plan') AS plan_display_name
         FROM atex_positions pos
         LEFT JOIN (
-          SELECT DISTINCT ON (logical_name) logical_name, content
+          SELECT DISTINCT ON (logical_name) id, logical_name, content
           FROM atex_plans
           ORDER BY logical_name, version DESC
-        ) p ON p.logical_name = pos.logical_name
-        LEFT JOIN atex_plan_names pn ON pn.logical_name = pos.logical_name
+        ) p_by_logical ON p_by_logical.logical_name = pos.logical_name
+        LEFT JOIN atex_plans p_by_id ON p_by_id.id = pos.plan_id
+        LEFT JOIN atex_plan_names pn ON pn.logical_name = COALESCE(pos.logical_name, p_by_id.logical_name)
         WHERE pos.equipment_id = ANY($1)
       `, [equipmentIds]);
 
@@ -3342,6 +3376,14 @@ app.get("/api/atex/drpce", async (req, res) => {
         }
       }
       console.log(`[DRPCE] Found ${positions.length} equipment positions on plans`);
+      // Debug: afficher les détails des positions trouvées
+      if (positions.length > 0) {
+        const withContent = positions.filter(p => p.plan_content && p.plan_content.length > 0).length;
+        console.log(`[DRPCE] Positions with plan content: ${withContent}/${positions.length}`);
+        if (withContent === 0) {
+          console.log(`[DRPCE] DEBUG: First pos logical_name=${positions[0].logical_name}, plan_id=${positions[0].plan_id}`);
+        }
+      }
     }
 
     // 3. Récupérer les plans avec leurs images (pour la liste uniquement, plus d'affichage d'images)
