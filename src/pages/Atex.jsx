@@ -281,6 +281,7 @@ export default function Atex() {
         api.infra.listPlans().catch(() => ({ plans: [] })),
         api.infra.listPositions().catch(() => ({ positions: [] })),
       ]);
+      console.log("[ATEX] loadInfraData:", { plans: plansRes?.plans?.length, positions: posRes?.positions?.length });
       setInfraPlans(plansRes?.plans || []);
       setInfraPositions(posRes?.positions || []);
     } catch (e) {
@@ -293,16 +294,19 @@ export default function Atex() {
   // Place equipment on infrastructure plan
   const placeOnInfraPlan = useCallback(async (equipmentId, planId, x_frac = 0.5, y_frac = 0.5) => {
     try {
-      await api.infra.createPosition({
+      console.log("[ATEX] placeOnInfraPlan called:", { equipmentId, planId, x_frac, y_frac });
+      const result = await api.infra.createPosition({
         equipment_id: equipmentId,
         plan_id: planId,
         x_frac,
         y_frac,
         page_index: 0,
       });
+      console.log("[ATEX] createPosition result:", result);
       setToast("Équipement placé sur le plan d'infrastructure");
       // Reload infra positions
       const posRes = await api.infra.listPositions().catch(() => ({ positions: [] }));
+      console.log("[ATEX] listPositions after placement:", posRes?.positions?.length, "positions");
       setInfraPositions(posRes?.positions || []);
       setPlacingOnInfra(null);
     } catch (e) {
