@@ -129,31 +129,46 @@ async function computeVsdTotals(site) {
 async function computeMecaTotals(site) {
   const hasSite = site && site.trim() !== '';
 
-  // Try with all columns, fallback progressively for missing columns
+  // Try progressively simpler queries for missing columns
   let result;
+
+  // Try with installation_date
   try {
     result = await pool.query(`
       SELECT
-        id, name, tag, building, floor, zone, manufacturer, model,
-        category, power_kw, criticality, installation_date, created_at
+        id, name, tag, building, floor, manufacturer, model,
+        category, power_kw, installation_date, created_at
       FROM meca_equipments
       ${hasSite ? 'WHERE site = $1' : ''}
       ORDER BY id ASC
     `, hasSite ? [site] : []);
-  } catch (err) {
-    // Final fallback with minimal columns
+  } catch (err1) {
+    // Try without installation_date
     try {
       result = await pool.query(`
         SELECT
           id, name, tag, building, floor, manufacturer, model,
-          category, power_kw, installation_date, created_at
+          category, power_kw, created_at,
+          NULL AS installation_date
         FROM meca_equipments
         ${hasSite ? 'WHERE site = $1' : ''}
         ORDER BY id ASC
       `, hasSite ? [site] : []);
     } catch (err2) {
-      console.log('[OBS] MECA query failed:', err2.message);
-      return [];
+      // Minimal fallback
+      try {
+        result = await pool.query(`
+          SELECT
+            id, name, tag, building, floor, category, created_at,
+            NULL AS installation_date, NULL AS power_kw, NULL AS manufacturer, NULL AS model
+          FROM meca_equipments
+          ${hasSite ? 'WHERE site = $1' : ''}
+          ORDER BY id ASC
+        `, hasSite ? [site] : []);
+      } catch (err3) {
+        console.log('[OBS] MECA query failed:', err3.message);
+        return [];
+      }
     }
   }
 
