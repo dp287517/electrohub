@@ -1464,9 +1464,34 @@ export default function MobileEquipments() {
     }
   }, []);
 
-  // Load placements
+  // Load placements - get all equipment IDs that are placed on maps
   const loadPlacements = useCallback(async () => {
-    setPlacedIds(new Set());
+    try {
+      // Get list of plans first
+      const plansRes = await api.mobileEquipment.maps.listPlans();
+      const plans = plansRes?.plans || [];
+
+      // Collect all placed equipment IDs from all plans
+      const placedSet = new Set();
+      for (const plan of plans) {
+        try {
+          const res = await api.mobileEquipment.maps.positionsAuto(plan, 0);
+          const positions = res?.positions || [];
+          positions.forEach(p => {
+            if (p.equipment_id) {
+              placedSet.add(String(p.equipment_id));
+            }
+          });
+        } catch (e) {
+          // Ignore errors for individual plans
+        }
+      }
+
+      setPlacedIds(placedSet);
+    } catch (err) {
+      console.error('Load placements error:', err);
+      setPlacedIds(new Set());
+    }
   }, []);
 
   // Load calendar events

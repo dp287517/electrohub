@@ -401,7 +401,11 @@ const LeafletViewer = forwardRef(({
       wheelPxPerZoomLevel: 120,
       attributionControl: false,
       preferCanvas: true,
+      zoomControl: false, // Disable default zoom control
     });
+
+    // Add zoom control on the right
+    L.control.zoom({ position: "topright" }).addTo(map);
 
     map.on("moveend zoomend", () => {
       lastViewRef.current = { center: map.getCenter(), zoom: map.getZoom() };
@@ -487,10 +491,11 @@ const LeafletViewer = forwardRef(({
     layer.clearLayers();
     markersMapRef.current.clear();
 
-    pointsRef.current.forEach((pt) => {
+    // Use initialPoints directly instead of pointsRef.current for proper reactivity
+    initialPoints.forEach((pt) => {
       const lat = -pt.y_frac * imgSize.h;
       const lng = pt.x_frac * imgSize.w;
-      const isSel = pt.equipment_id === selectedIdRef.current;
+      const isSel = pt.equipment_id === selectedId;
 
       const icon = L.divIcon({
         className: "",
@@ -703,6 +708,43 @@ export default function MobileEquipmentsMap() {
     loadAllPositions();
   }, [loadAllPositions]);
 
+  // Handle URL parameter for equipment navigation from MobileEquipments page
+  useEffect(() => {
+    const equipmentIdParam = searchParams.get('equipment');
+    if (!equipmentIdParam || !allPositions.length || !plans.length) return;
+
+    // Find the equipment in allPositions
+    const position = allPositions.find(p => String(p.equipment_id) === equipmentIdParam);
+    if (position) {
+      // Find the plan where this equipment is placed
+      const planKey = position.planId || position.logical_name;
+      const plan = plans.find(p => p.id === planKey || p.logical_name === planKey);
+
+      if (plan && (!selectedPlan || selectedPlan.id !== plan.id)) {
+        setSelectedPlan(plan);
+        setPageIndex(position.page_index || 0);
+      }
+
+      // Find the equipment details
+      const eq = equipments.find(e => String(e.id) === equipmentIdParam);
+      if (eq) {
+        setSelectedEquipment(eq);
+        setSelectedPosition(position);
+      }
+    } else {
+      // Equipment not placed yet - just find it in equipments list
+      const eq = equipments.find(e => String(e.id) === equipmentIdParam);
+      if (eq) {
+        setSelectedEquipment(eq);
+        // Enter placement mode so user can place it
+        setPlacementMode(eq);
+      }
+    }
+
+    // Clear the URL param after handling
+    setSearchParams({}, { replace: true });
+  }, [searchParams, allPositions, plans, equipments, selectedPlan, setSearchParams]);
+
   // Handlers
   const handleSelectEquipment = useCallback((eq) => {
     setSelectedEquipment(eq);
@@ -756,7 +798,8 @@ export default function MobileEquipmentsMap() {
       // Create equipment with auto-generated name
       const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const created = await api.mobileEquipment.create({ name: `Nouvel équipement ${timestamp}`, status: "a_faire" });
-      const id = created?.id || created?.equipment?.id;
+      const newEquipment = created?.equipment || created;
+      const id = newEquipment?.id;
       if (!id) throw new Error("Échec création équipement mobile");
 
       // Set position on the plan
@@ -768,14 +811,24 @@ export default function MobileEquipmentsMap() {
         y_frac: y,
       });
 
-      // Reload data
-      await loadEquipments();
-      const res = await api.mobileEquipment.maps.positionsAuto(selectedPlan, pageIndex);
-      setPositions(res.positions || []);
-      await loadAllPositions();
+      // Add the new position immediately to show the marker
+      const newPosition = {
+        equipment_id: id,
+        name: newEquipment.name || `Nouvel équipement ${timestamp}`,
+        x_frac: x,
+        y_frac: y,
+        building: newEquipment.building || "",
+        category: newEquipment.category || "",
+      };
+      setPositions(prev => [...prev, newPosition]);
 
-      // Open the equipment detail page
-      navigate(`/app/mobile-equipments?equipment=${id}`);
+      // Reload data in background
+      loadEquipments();
+      loadAllPositions();
+
+      // Select the new equipment to show details panel
+      setSelectedEquipment(newEquipment);
+      setSelectedPosition(newPosition);
     } catch (err) {
       console.error("[MobileEquipmentsMap] Create equipment error:", err);
       alert("Erreur lors de la création de l'équipement mobile");
@@ -783,7 +836,7 @@ export default function MobileEquipmentsMap() {
       creatingRef.current = false;
       setCreateMode(false);
     }
-  }, [selectedPlan, pageIndex, navigate, loadEquipments, loadAllPositions]);
+  }, [selectedPlan, pageIndex, loadEquipments, loadAllPositions]);
 
   const handleMovePosition = useCallback(async (equipmentId, x, y) => {
     if (!selectedPlan) return;
