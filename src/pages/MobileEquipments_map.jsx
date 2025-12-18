@@ -621,6 +621,33 @@ export default function MobileEquipmentsMap() {
     return list;
   }, [equipments, search, filterMode, placedIds]);
 
+  // Function to load equipments
+  const loadEquipments = useCallback(async () => {
+    try {
+      const equipRes = await api.mobileEquipment.list();
+      setEquipments(equipRes.items || equipRes.equipments || equipRes.data || []);
+    } catch (e) {
+      console.error("[MobileEquipmentsMap] Load equipments error:", e);
+    }
+  }, []);
+
+  // Function to load all positions for "placed elsewhere" check
+  const loadAllPositions = useCallback(async () => {
+    if (!plans.length) return;
+    try {
+      const allPos = [];
+      for (const plan of plans) {
+        const res = await api.mobileEquipment.maps.positionsAuto(plan, 0);
+        if (res.positions) {
+          allPos.push(...res.positions.map(p => ({ ...p, planId: plan.id })));
+        }
+      }
+      setAllPositions(allPos);
+    } catch (e) {
+      console.error("[MobileEquipmentsMap] Load all positions error:", e);
+    }
+  }, [plans]);
+
   // Load plans and equipments
   useEffect(() => {
     (async () => {
@@ -671,25 +698,10 @@ export default function MobileEquipmentsMap() {
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [selectedPlan, pageIndex]);
 
-  // Load all positions for "placed elsewhere" check
+  // Load all positions when plans change
   useEffect(() => {
-    if (!plans.length) return;
-
-    (async () => {
-      try {
-        const allPos = [];
-        for (const plan of plans) {
-          const res = await api.mobileEquipment.maps.positionsAuto(plan, 0);
-          if (res.positions) {
-            allPos.push(...res.positions.map(p => ({ ...p, planId: plan.id })));
-          }
-        }
-        setAllPositions(allPos);
-      } catch (e) {
-        console.error("[MobileEquipmentsMap] Load all positions error:", e);
-      }
-    })();
-  }, [plans]);
+    loadAllPositions();
+  }, [loadAllPositions]);
 
   // Handlers
   const handleSelectEquipment = useCallback((eq) => {
@@ -771,7 +783,7 @@ export default function MobileEquipmentsMap() {
       creatingRef.current = false;
       setCreateMode(false);
     }
-  }, [selectedPlan, pageIndex, navigate]);
+  }, [selectedPlan, pageIndex, navigate, loadEquipments, loadAllPositions]);
 
   const handleMovePosition = useCallback(async (equipmentId, x, y) => {
     if (!selectedPlan) return;
