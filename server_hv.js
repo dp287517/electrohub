@@ -8,9 +8,10 @@ import OpenAI from 'openai';
 import multer from 'multer';
 import { getSiteFilter } from './lib/tenant-filter.js';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import AdmZip from 'adm-zip';
+import StreamZip from 'node-stream-zip';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +19,15 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// Data directories
+const DATA_DIR = process.env.HV_DATA_DIR || path.resolve(__dirname, './_data_hv');
+const MAPS_INCOMING_DIR = path.join(DATA_DIR, 'maps_incoming');
+(async () => {
+  for (const d of [DATA_DIR, MAPS_INCOMING_DIR]) {
+    await fsp.mkdir(d, { recursive: true });
+  }
+})();
 
 // OpenAI setup
 let openai = null;
@@ -51,8 +61,11 @@ const upload = multer({
 
 // Multer (ZIP uploads for plans)
 const multerZip = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB max ZIP
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, '_')}`),
+  }),
+  limits: { fileSize: 300 * 1024 * 1024 } // 300MB max ZIP
 });
 
 // Utils
@@ -685,22 +698,25 @@ app.post('/api/hv/maps/uploadZip', multerZip.single('zip'), async (req, res) => 
     if (!site) return res.status(400).json({ error: 'Missing site' });
     if (!req.file) return res.status(400).json({ error: 'No ZIP file uploaded' });
 
-    const zip = new AdmZip(req.file.buffer);
-    const entries = zip.getEntries().filter(e =>
+    const zipPath = req.file.path;
+    const zip = new StreamZip.async({ file: zipPath });
+    const entries = await zip.entries();
+    const pdfs = Object.values(entries).filter(e =>
       !e.isDirectory &&
-      e.entryName.toLowerCase().endsWith('.pdf') &&
-      !e.entryName.startsWith('__MACOSX')
+      e.name.toLowerCase().endsWith('.pdf') &&
+      !e.name.startsWith('__MACOSX')
     );
 
-    if (entries.length === 0) {
+    if (pdfs.length === 0) {
+      await zip.close();
       return res.status(400).json({ error: 'No PDF files found in ZIP' });
     }
 
     const results = [];
-    for (const entry of entries) {
-      const filename = path.basename(entry.entryName);
+    for (const entry of pdfs) {
+      const filename = path.basename(entry.name);
       const logical_name = filename.replace(/\.pdf$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const content = entry.getData();
+      const content = await zip.entryData(entry);
       const pageCount = await countPdfPages(content);
 
       // Get next version
@@ -717,9 +733,18 @@ app.post('/api/hv/maps/uploadZip', multerZip.single('zip'), async (req, res) => 
         [site, logical_name, version, filename, `db://${logical_name}`, pageCount, content]
       );
 
+      // Upsert display name
+      await pool.query(
+        `INSERT INTO hv_plan_names (logical_name, display_name)
+         VALUES ($1, $2)
+         ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name`,
+        [logical_name, filename.replace(/\.pdf$/i, '')]
+      );
+
       results.push(insertRes.rows[0]);
     }
 
+    await zip.close();
     res.json({ uploaded: results.length, plans: results });
   } catch (e) {
     console.error('[HV MAPS] Upload ZIP error:', e.message);
