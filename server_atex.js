@@ -3541,16 +3541,43 @@ app.get("/api/atex/drpce", async (req, res) => {
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
     let planListY = 100;
+
+    // Compter les plans qui sont des images vs PDFs
+    const imagePlans = plans.filter(p => {
+      if (!p.content || p.content.length < 4) return false;
+      const isPDF = p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
+      return !isPDF;
+    });
+    const pdfPlans = plans.filter(p => {
+      if (!p.content || p.content.length < 4) return false;
+      const isPDF = p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
+      return isPDF;
+    });
+
     doc.fontSize(11).font('Helvetica').fillColor(colors.text)
        .text(`${plans.length} plan(s) disponible(s) pour cette installation.`, 50, planListY);
-    planListY += 30;
+    planListY += 20;
+
+    if (pdfPlans.length > 0) {
+      doc.fontSize(9).font('Helvetica').fillColor(colors.warning)
+         .text(`Note: ${pdfPlans.length} plan(s) au format PDF ne peuvent pas etre affiches en image dans ce rapport.`, 50, planListY);
+      planListY += 15;
+      doc.fontSize(8).font('Helvetica').fillColor(colors.muted)
+         .text(`Pour inclure les plans dans le rapport, veuillez les uploader au format PNG ou JPEG.`, 50, planListY);
+      planListY += 20;
+    }
 
     // Liste des plans
     plans.forEach((p, idx) => {
       if (planListY > 750) { doc.addPage(); planListY = 50; }
+
+      // Vérifier si c'est un PDF
+      const isPDF = p.content && p.content.length >= 4 &&
+                    p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
+
       doc.rect(50, planListY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
-      doc.fontSize(9).font('Helvetica').fillColor(colors.text)
-         .text(`> ${p.display_name || p.logical_name}`, 60, planListY + 7);
+      doc.fontSize(9).font('Helvetica').fillColor(isPDF ? colors.muted : colors.text)
+         .text(`> ${p.display_name || p.logical_name}${isPDF ? ' (PDF)' : ''}`, 60, planListY + 7);
       if (p.building || p.zone) {
         doc.fillColor(colors.muted).text(`${p.building || ''} ${p.zone ? '- ' + p.zone : ''}`, 350, planListY + 7, { width: 180, align: 'right' });
       }
@@ -3560,6 +3587,17 @@ app.get("/api/atex/drpce", async (req, res) => {
     // Images des plans sur pages dédiées
     for (const plan of plans) {
       if (plan.content && plan.content.length > 0) {
+        // Vérifier si le contenu est un PDF (magic bytes: %PDF = 0x25 0x50 0x44 0x46)
+        const isPDF = plan.content[0] === 0x25 && plan.content[1] === 0x50 &&
+                      plan.content[2] === 0x44 && plan.content[3] === 0x46;
+
+        if (isPDF) {
+          // Les PDFs ne peuvent pas être affichés comme images dans PDFKit
+          // On affiche un message informatif mais on n'ajoute pas de page vide
+          console.log(`[DRPCE] Plan ${plan.logical_name} is a PDF - skipping image display`);
+          continue; // Passer au plan suivant sans ajouter de page
+        }
+
         try {
           doc.addPage();
           doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
@@ -3572,8 +3610,9 @@ app.get("/api/atex/drpce", async (req, res) => {
           doc.image(plan.content, 50, 90, { fit: [495, 680], align: 'center', valign: 'center' });
         } catch (imgErr) {
           console.warn(`[DRPCE] Plan image error ${plan.logical_name}:`, imgErr.message);
+          // Ne pas laisser la page vide - revenir en arrière si possible ou afficher un message utile
           doc.fontSize(10).font('Helvetica').fillColor(colors.muted)
-             .text('(Image du plan non disponible - format non supporte)', 50, 100);
+             .text('(Image du plan non disponible - format non supporte: ' + imgErr.message + ')', 50, 100, { width: 495 });
         }
       }
     }
@@ -3862,10 +3901,12 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     // ========== NUMÉROTATION DES PAGES ==========
     const range = doc.bufferedPageRange();
-    for (let i = range.start; i < range.start + range.count; i++) {
+    const totalPages = range.count;
+    for (let i = range.start; i < range.start + totalPages; i++) {
       doc.switchToPage(i);
+      // Utiliser lineBreak: false pour éviter la création de pages supplémentaires
       doc.fontSize(8).fillColor(colors.muted)
-         .text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495 });
+         .text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
     }
 
     doc.end();
