@@ -69,16 +69,31 @@ function estimateMecaCostGBP(meca) {
 // ========== VSD TOTALS ==========
 async function computeVsdTotals(site) {
   const hasSite = site && site.trim() !== '';
-  const query = `
-    SELECT
-      id, name, tag, building, floor, zone, manufacturer, model,
-      power_kw, voltage, ui_status, criticality, created_at,
-      service_year AS stored_service_year
-    FROM vsd_equipments
-    ${hasSite ? 'WHERE site = $1' : ''}
-    ORDER BY id ASC
-  `;
-  const result = await pool.query(query, hasSite ? [site] : []);
+
+  // Try to select service_year if it exists, otherwise fallback
+  let result;
+  try {
+    result = await pool.query(`
+      SELECT
+        id, name, tag, building, floor, zone, manufacturer, model,
+        power_kw, voltage, ui_status, criticality, created_at,
+        service_year AS stored_service_year
+      FROM vsd_equipments
+      ${hasSite ? 'WHERE site = $1' : ''}
+      ORDER BY id ASC
+    `, hasSite ? [site] : []);
+  } catch (err) {
+    // Fallback if service_year column doesn't exist
+    result = await pool.query(`
+      SELECT
+        id, name, tag, building, floor, zone, manufacturer, model,
+        power_kw, voltage, ui_status, criticality, created_at,
+        NULL AS stored_service_year
+      FROM vsd_equipments
+      ${hasSite ? 'WHERE site = $1' : ''}
+      ORDER BY id ASC
+    `, hasSite ? [site] : []);
+  }
 
   return result.rows.map(vsd => {
     // Use stored service_year if available, otherwise estimate from created_at
@@ -113,16 +128,31 @@ async function computeVsdTotals(site) {
 // ========== MECA TOTALS ==========
 async function computeMecaTotals(site) {
   const hasSite = site && site.trim() !== '';
-  const query = `
-    SELECT
-      id, name, tag, building, floor, zone, manufacturer, model,
-      category, subcategory, power_kw, ui_status, criticality,
-      installation_date, created_at
-    FROM meca_equipments
-    ${hasSite ? 'WHERE site = $1' : ''}
-    ORDER BY id ASC
-  `;
-  const result = await pool.query(query, hasSite ? [site] : []);
+
+  // Try with subcategory, fallback if column doesn't exist
+  let result;
+  try {
+    result = await pool.query(`
+      SELECT
+        id, name, tag, building, floor, zone, manufacturer, model,
+        category, subcategory, power_kw, ui_status, criticality,
+        installation_date, created_at
+      FROM meca_equipments
+      ${hasSite ? 'WHERE site = $1' : ''}
+      ORDER BY id ASC
+    `, hasSite ? [site] : []);
+  } catch (err) {
+    // Fallback without subcategory column
+    result = await pool.query(`
+      SELECT
+        id, name, tag, building, floor, zone, manufacturer, model,
+        category, NULL AS subcategory, power_kw, ui_status, criticality,
+        installation_date, created_at
+      FROM meca_equipments
+      ${hasSite ? 'WHERE site = $1' : ''}
+      ORDER BY id ASC
+    `, hasSite ? [site] : []);
+  }
 
   return result.rows.map(meca => {
     // Use installation_date if available, otherwise estimate from created_at
@@ -392,13 +422,27 @@ function estimateHvDeviceCostGBP(dev) {
 async function computeHvTotals(site) {
   // Support global role: if site is null/undefined, return all HV equipments
   const hasSite = site && site.trim() !== '';
-  const eq = await pool.query(`
-    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site,
-           e.service_year AS stored_service_year
-    FROM hv_equipments e
-    ${hasSite ? 'WHERE e.site = $1' : ''}
-    ORDER BY e.id ASC
-  `, hasSite ? [site] : []);
+
+  // Try to select service_year if it exists, otherwise fallback to basic query
+  let eq;
+  try {
+    eq = await pool.query(`
+      SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site,
+             e.service_year AS stored_service_year
+      FROM hv_equipments e
+      ${hasSite ? 'WHERE e.site = $1' : ''}
+      ORDER BY e.id ASC
+    `, hasSite ? [site] : []);
+  } catch (err) {
+    // Fallback if service_year column doesn't exist
+    eq = await pool.query(`
+      SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site,
+             NULL AS stored_service_year
+      FROM hv_equipments e
+      ${hasSite ? 'WHERE e.site = $1' : ''}
+      ORDER BY e.id ASC
+    `, hasSite ? [site] : []);
+  }
 
   const out = [];
   for (const row of eq.rows) {
