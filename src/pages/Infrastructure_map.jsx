@@ -105,7 +105,16 @@ export default function InfrastructureMap({
       canvas.width = scaledViewport.width;
       canvas.height = scaledViewport.height;
 
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", {
+        alpha: false,           // Pas de canal alpha (opaque) - évite fond noir sur Chrome
+        desynchronized: false,  // Synchrone pour cohérence
+        willReadFrequently: false,
+      });
+
+      // IMPORTANT: Fond blanc AVANT le rendu PDF (sinon fond noir sur Chrome)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
       ctx.imageSmoothingEnabled = config.enableImageSmoothing;
       ctx.imageSmoothingQuality = "high";
 

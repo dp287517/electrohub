@@ -2453,7 +2453,7 @@ app.get("/api/infra/health", (req, res) => {
 // List plans
 app.get("/api/infra/plans", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const filter = getTenantFilter(tenant, "infrastructure_plans");
 
     const { rows } = await pool.query(`
@@ -2473,7 +2473,7 @@ app.get("/api/infra/plans", async (req, res) => {
 // Upload plan
 app.post("/api/infra/plans", multerInfraPlan.single("file"), async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -2527,7 +2527,7 @@ app.delete("/api/infra/plans/:id", async (req, res) => {
 // List zones
 app.get("/api/infra/zones", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const filter = getTenantFilter(tenant, "infrastructure_zones");
     const plan_id = req.query.plan_id;
 
@@ -2550,7 +2550,7 @@ app.get("/api/infra/zones", async (req, res) => {
 // Create zone
 app.post("/api/infra/zones", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const { plan_id, name, kind, geometry, color, page_index, linked_atex_plans } = req.body;
 
     const { rows } = await pool.query(`
@@ -2601,7 +2601,7 @@ app.delete("/api/infra/zones/:id", async (req, res) => {
 // List positions
 app.get("/api/infra/positions", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const filter = getTenantFilter(tenant, "infrastructure_positions");
     const plan_id = req.query.plan_id;
 
@@ -2628,7 +2628,7 @@ app.get("/api/infra/positions", async (req, res) => {
 // Create/update position
 app.post("/api/infra/positions", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const { equipment_id, plan_id, zone_id, page_index, x_frac, y_frac } = req.body;
 
     // Upsert: si position existe déjà, update
@@ -2677,7 +2677,7 @@ app.delete("/api/infra/positions/:id", async (req, res) => {
 
 app.get("/api/infra/stats", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const filter = getTenantFilter(tenant, "infrastructure_plans");
 
     const plansRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_plans ${filter.where}`, filter.params);
