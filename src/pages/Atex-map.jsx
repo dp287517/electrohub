@@ -1985,10 +1985,12 @@ function setupHandleDrag(map, onMoveCallback) {
     // === CORRECTION ICI : ajout de [plan, pageIndex] ===
   }, [lastSubareaId, subareasById, plan, pageIndex]);
   /* ----------------------------- RENDER ----------------------------- */
-  const viewerHeight = Math.min(
-    (typeof window !== "undefined" ? window.innerHeight : 900) - 140,
-    imgSize.h || 900
-  );
+  // 🖥️ Sur grand écran, utiliser toute la hauteur disponible (pas de limite par imgSize)
+  const windowH = typeof window !== "undefined" ? window.innerHeight : 900;
+  const isLargeScreen = windowH > 800;
+  const viewerHeight = isLargeScreen
+    ? windowH - 160  // Grand écran : prendre toute la hauteur moins le header
+    : Math.min(windowH - 140, imgSize.h || 900);  // Mobile/petit écran : limiter
   const toggleLegend = () => {
     setLegendVisible((v) => {
       const next = !v;
@@ -2444,8 +2446,8 @@ function setupHandleDrag(map, onMoveCallback) {
             className="absolute inset-0 bg-black/40"
             onClick={handleClosePlan}
           />
-          {/* Dialog */}
-          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
+          {/* Dialog - 🖥️ Plus large sur grand écran */}
+          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1400px,96vw)] lg:w-[min(1800px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
               {/* 🆕 Header redesigné - compact sur mobile */}
               <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">

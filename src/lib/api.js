@@ -2118,6 +2118,57 @@ export const api = {
     // Get all placed equipment IDs
     placedIds: () => get("/api/hv/maps/placed-ids"),
   },
+
+  // ========== INFRASTRUCTURE (Plans électriques multi-zones) ==========
+  infra: {
+    // Health check
+    health: () => get("/api/infra/health"),
+
+    // ========================= PLANS =========================
+    listPlans: (params = {}) => get("/api/infra/plans", params),
+    getPlan: (id) => get(`/api/infra/plans/${encodeURIComponent(id)}`),
+    createPlan: (payload) => post("/api/infra/plans", payload),
+    updatePlan: (id, payload) => put(`/api/infra/plans/${encodeURIComponent(id)}`, payload),
+    deletePlan: (id) => del(`/api/infra/plans/${encodeURIComponent(id)}`),
+
+    // Upload plan PDF
+    uploadPlan: (file, { building_name = "" } = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (building_name) fd.append("building_name", building_name);
+      return upload("/api/infra/plans", fd);
+    },
+
+    // Plan file URL
+    planFileUrl: (plan, { bust = true } = {}) => {
+      const site = currentSite();
+      const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+      const url = isUuid(key) || isNumericId(key)
+        ? `${API_BASE}/api/infra/plans/${encodeURIComponent(key)}/file?site=${site}`
+        : `${API_BASE}/api/infra/plans/file?logical_name=${encodeURIComponent(key)}&site=${site}`;
+      return withBust(url, bust);
+    },
+
+    // ========================= ZONES =========================
+    listZones: (params = {}) => get("/api/infra/zones", params),
+    getZone: (id) => get(`/api/infra/zones/${encodeURIComponent(id)}`),
+    createZone: (payload) => post("/api/infra/zones", payload),
+    updateZone: (id, payload) => put(`/api/infra/zones/${encodeURIComponent(id)}`, payload),
+    deleteZone: (id) => del(`/api/infra/zones/${encodeURIComponent(id)}`),
+
+    // ========================= ELEMENTS =========================
+    listElements: (params = {}) => get("/api/infra/elements", params),
+    getElement: (id) => get(`/api/infra/elements/${encodeURIComponent(id)}`),
+    createElement: (payload) => post("/api/infra/elements", payload),
+    updateElement: (id, payload) => put(`/api/infra/elements/${encodeURIComponent(id)}`, payload),
+    deleteElement: (id) => del(`/api/infra/elements/${encodeURIComponent(id)}`),
+
+    // ========================= ELEMENT TYPES =========================
+    listElementTypes: () => get("/api/infra/element-types"),
+
+    // ========================= STATS =========================
+    stats: (params = {}) => get("/api/infra/stats", params),
+  },
 };
 
 // Default export for convenience

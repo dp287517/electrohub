@@ -146,6 +146,8 @@ const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
 const mobileEquipTarget = process.env.MOBILE_EQUIP_BASE_URL || "http://127.0.0.1:3022";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
+// 🔵 Infrastructure (plans électriques multi-zones) — microservice sur 3023
+const infraTarget = process.env.INFRA_BASE_URL || "http://127.0.0.1:3023";
 
 // ============================================================
 // PROXY HELPER v3.0 - Avec timeouts stricts
@@ -240,6 +242,9 @@ app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true, timeoutMs:
 
 // >>> Mobile Equipment (Controle Electrique Appareils Mobiles) : re-stream pour uploads
 app.use("/api/mobile-equipment", mkProxy(mobileEquipTarget, { withRestream: true }));
+
+// >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
+app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
