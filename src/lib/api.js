@@ -2156,14 +2156,13 @@ export const api = {
     updateZone: (id, payload) => put(`/api/infra/zones/${encodeURIComponent(id)}`, payload),
     deleteZone: (id) => del(`/api/infra/zones/${encodeURIComponent(id)}`),
 
-    // ========================= ELEMENTS =========================
-    listElements: (params = {}) => get("/api/infra/elements", params),
-    getElement: (id) => get(`/api/infra/elements/${encodeURIComponent(id)}`),
-    createElement: (payload) => post("/api/infra/elements", payload),
-    updateElement: (id, payload) => put(`/api/infra/elements/${encodeURIComponent(id)}`, payload),
-    deleteElement: (id) => del(`/api/infra/elements/${encodeURIComponent(id)}`),
+    // ========================= POSITIONS (équipements ATEX sur plans infra) =========================
+    listPositions: (params = {}) => get("/api/infra/positions", params),
+    createPosition: (payload) => post("/api/infra/positions", payload),
+    updatePosition: (id, payload) => put(`/api/infra/positions/${encodeURIComponent(id)}`, payload),
+    deletePosition: (id) => del(`/api/infra/positions/${encodeURIComponent(id)}`),
 
-    // ========================= ELEMENT TYPES =========================
+    // ========================= ELEMENT TYPES (ATEX equipment types) =========================
     listElementTypes: () => get("/api/infra/element-types"),
 
     // ========================= STATS =========================

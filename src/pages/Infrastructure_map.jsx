@@ -1,5 +1,6 @@
 // src/pages/Infrastructure_map.jsx
 // Vue carte pour les plans d'infrastructure électrique
+// Permet de placer les équipements ATEX sur les plans
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -24,13 +25,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 export default function InfrastructureMap({
   plan,
-  elements = [],
+  positions = [],
   zones = [],
-  elementTypes = [],
-  onElementClick,
-  onElementCreate,
-  onElementUpdate,
-  onElementDelete,
+  atexEquipments = [],
+  onPlaceEquipment,
+  onUpdatePosition,
+  onDeletePosition,
   onZoneCreate,
   onZoneUpdate,
   onZoneDelete,
@@ -49,13 +49,22 @@ export default function InfrastructureMap({
   const [imgSrc, setImgSrc] = useState(null);
 
   // Interaction states
-  const [placingElement, setPlacingElement] = useState(false);
-  const [newElementType, setNewElementType] = useState("");
+  const [placingEquipment, setPlacingEquipment] = useState(false);
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [drawingZone, setDrawingZone] = useState(false);
   const [zonePoints, setZonePoints] = useState([]);
 
-  // Selected element for highlight
-  const [selectedElementId, setSelectedElementId] = useState(null);
+  // Selected position for highlight
+  const [selectedPositionId, setSelectedPositionId] = useState(null);
+
+  // Filter for equipment selector - only show equipment not already placed on this plan
+  const placedEquipmentIds = useMemo(() => {
+    return new Set(positions.map(p => p.equipment_id));
+  }, [positions]);
+
+  const availableEquipments = useMemo(() => {
+    return atexEquipments.filter(eq => !placedEquipmentIds.has(eq.id));
+  }, [atexEquipments, placedEquipmentIds]);
 
   // ============================================================
   // Load PDF
@@ -68,7 +77,7 @@ export default function InfrastructureMap({
 
     try {
       const config = getPDFConfig();
-      const cacheKey = getPlanCacheKey(plan.id || plan.logical_name, 0, config);
+      const cacheKey = getPlanCacheKey(`infra_${plan.id || plan.logical_name}`, 0, config);
 
       // Check cache first
       const cached = getCachedPlan(cacheKey);
@@ -169,22 +178,17 @@ export default function InfrastructureMap({
     markersLayerRef.current = markersLayer;
     zonesLayerRef.current = zonesLayer;
 
-    // Click handler for placing elements
+    // Click handler for placing equipment
     map.on("click", (e) => {
-      if (placingElement && newElementType) {
+      if (placingEquipment && selectedEquipmentId) {
         const { lat, lng } = e.latlng;
         const x_frac = lng / imgSize.w;
         const y_frac = 1 - lat / imgSize.h;
 
-        onElementCreate?.({
-          element_type: newElementType,
-          x_frac,
-          y_frac,
-          page_index: 0,
-        });
+        onPlaceEquipment?.(selectedEquipmentId, x_frac, y_frac, 0);
 
-        setPlacingElement(false);
-        setNewElementType("");
+        setPlacingEquipment(false);
+        setSelectedEquipmentId("");
       }
 
       if (drawingZone) {
@@ -196,7 +200,58 @@ export default function InfrastructureMap({
     return () => {
       map.remove();
     };
-  }, [imgSrc, imgSize, placingElement, newElementType, drawingZone, onElementCreate]);
+  }, [imgSrc, imgSize]);
+
+  // Re-render markers when positions change or when placing mode changes
+  useEffect(() => {
+    if (!markersLayerRef.current || !imgSize.w) return;
+
+    markersLayerRef.current.clearLayers();
+
+    positions.forEach((pos) => {
+      if (pos.x_frac === undefined || pos.y_frac === undefined) return;
+
+      const lat = (1 - pos.y_frac) * imgSize.h;
+      const lng = pos.x_frac * imgSize.w;
+
+      const isSelected = pos.id === selectedPositionId;
+
+      const icon = L.divIcon({
+        className: "infra-marker",
+        html: `
+          <div class="infra-marker-inner ${isSelected ? "selected" : ""}" style="background: #F59E0B">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      });
+
+      const marker = L.marker([lat, lng], {
+        icon,
+        draggable: true,
+      });
+
+      const equipmentName = pos.equipment_name || "Équipement";
+      marker.bindTooltip(`${equipmentName}`, {
+        permanent: false,
+        direction: "top",
+      });
+
+      marker.on("click", () => {
+        setSelectedPositionId(pos.id);
+      });
+
+      marker.on("dragend", (e) => {
+        const { lat: newLat, lng: newLng } = e.target.getLatLng();
+        const x_frac = newLng / imgSize.w;
+        const y_frac = 1 - newLat / imgSize.h;
+        onUpdatePosition?.(pos.id, { x_frac, y_frac });
+      });
+
+      markersLayerRef.current.addLayer(marker);
+    });
+  }, [positions, imgSize, selectedPositionId, onUpdatePosition]);
 
   // ============================================================
   // Draw zones
@@ -212,8 +267,10 @@ export default function InfrastructureMap({
       const color = zone.color || "#6B7280";
       let shape;
 
-      if (zone.kind === "rect" && zone.geometry.x1 !== undefined) {
-        const { x1, y1, x2, y2 } = zone.geometry;
+      const geom = typeof zone.geometry === 'string' ? JSON.parse(zone.geometry) : zone.geometry;
+
+      if (zone.kind === "rect" && geom.x1 !== undefined) {
+        const { x1, y1, x2, y2 } = geom;
         const bounds = [
           [(1 - y2) * imgSize.h, x1 * imgSize.w],
           [(1 - y1) * imgSize.h, x2 * imgSize.w],
@@ -224,8 +281,8 @@ export default function InfrastructureMap({
           fillColor: color,
           fillOpacity: 0.2,
         });
-      } else if (zone.kind === "circle" && zone.geometry.cx !== undefined) {
-        const { cx, cy, r } = zone.geometry;
+      } else if (zone.kind === "circle" && geom.cx !== undefined) {
+        const { cx, cy, r } = geom;
         const lat = (1 - cy) * imgSize.h;
         const lng = cx * imgSize.w;
         const radius = r * Math.min(imgSize.w, imgSize.h);
@@ -236,8 +293,8 @@ export default function InfrastructureMap({
           fillColor: color,
           fillOpacity: 0.2,
         });
-      } else if (zone.kind === "poly" && zone.geometry.points?.length) {
-        const latLngs = zone.geometry.points.map((pt) => {
+      } else if (zone.kind === "poly" && geom.points?.length) {
+        const latLngs = geom.points.map((pt) => {
           const [x, y] = Array.isArray(pt) ? pt : [pt.x, pt.y];
           return [(1 - y) * imgSize.h, x * imgSize.w];
         });
@@ -251,91 +308,30 @@ export default function InfrastructureMap({
 
       if (shape) {
         shape.bindTooltip(zone.name || "Zone", { permanent: false, direction: "center" });
-        shape.on("click", () => {
-          // Could open zone editor
-        });
         zonesLayerRef.current.addLayer(shape);
       }
     });
   }, [zones, imgSize]);
 
   // ============================================================
-  // Draw element markers
-  // ============================================================
-  useEffect(() => {
-    if (!markersLayerRef.current || !imgSize.w) return;
-
-    markersLayerRef.current.clearLayers();
-
-    elements.forEach((el) => {
-      if (el.x_frac === undefined || el.y_frac === undefined) return;
-
-      const lat = (1 - el.y_frac) * imgSize.h;
-      const lng = el.x_frac * imgSize.w;
-
-      // Choose icon based on element type
-      const iconHtml = getElementIcon(el.element_type);
-      const isSelected = el.id === selectedElementId;
-
-      const icon = L.divIcon({
-        className: "infra-marker",
-        html: `
-          <div class="infra-marker-inner ${isSelected ? "selected" : ""}" style="background: ${getElementColor(el.element_type)}">
-            ${iconHtml}
-          </div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16],
-      });
-
-      const marker = L.marker([lat, lng], {
-        icon,
-        draggable: true,
-      });
-
-      marker.bindTooltip(`${el.element_type}${el.label ? ` - ${el.label}` : ""}`, {
-        permanent: false,
-        direction: "top",
-      });
-
-      marker.on("click", () => {
-        setSelectedElementId(el.id);
-        onElementClick?.(el);
-      });
-
-      marker.on("dragend", (e) => {
-        const { lat: newLat, lng: newLng } = e.target.getLatLng();
-        const x_frac = newLng / imgSize.w;
-        const y_frac = 1 - newLat / imgSize.h;
-        onElementUpdate?.(el.id, { x_frac, y_frac });
-      });
-
-      markersLayerRef.current.addLayer(marker);
-    });
-  }, [elements, imgSize, selectedElementId, onElementClick, onElementUpdate]);
-
-  // ============================================================
   // Drawing zone polygon
   // ============================================================
   useEffect(() => {
-    if (!mapRef.current || !drawingZone) return;
+    if (!mapRef.current || !drawingZone || zonePoints.length < 2) return;
 
-    // Draw temporary polygon
-    if (zonePoints.length > 1) {
-      const latLngs = zonePoints.map((p) => [p.lat, p.lng]);
-      const tempPoly = L.polygon(latLngs, {
-        color: "#10B981",
-        weight: 2,
-        dashArray: "5, 5",
-        fillColor: "#10B981",
-        fillOpacity: 0.1,
-      });
-      tempPoly.addTo(mapRef.current);
+    const latLngs = zonePoints.map((p) => [p.lat, p.lng]);
+    const tempPoly = L.polygon(latLngs, {
+      color: "#10B981",
+      weight: 2,
+      dashArray: "5, 5",
+      fillColor: "#10B981",
+      fillOpacity: 0.1,
+    });
+    tempPoly.addTo(mapRef.current);
 
-      return () => {
-        mapRef.current?.removeLayer(tempPoly);
-      };
-    }
+    return () => {
+      mapRef.current?.removeLayer(tempPoly);
+    };
   }, [zonePoints, drawingZone]);
 
   // Finish zone drawing
@@ -381,45 +377,38 @@ export default function InfrastructureMap({
   const viewerHeight = isLargeScreen ? windowH - 200 : Math.min(windowH - 180, 700);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750">
-        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+      <div className="flex flex-wrap items-center gap-2 p-3 border-b border-gray-200 bg-gray-50">
+        <span className="text-sm font-medium text-gray-700">
           {plan?.display_name || plan?.logical_name}
         </span>
 
         <div className="flex-1" />
 
-        {/* Add element button */}
-        {!placingElement && !drawingZone && (
+        {/* Add equipment button */}
+        {!placingEquipment && !drawingZone && (
           <>
             <div className="flex items-center gap-2">
               <select
-                value={newElementType}
-                onChange={(e) => setNewElementType(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                value={selectedEquipmentId}
+                onChange={(e) => setSelectedEquipmentId(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-900 max-w-[200px]"
               >
-                <option value="">Type d'élément...</option>
-                {elementTypes.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                <option value="">Sélectionner équipement...</option>
+                {availableEquipments.map((eq) => (
+                  <option key={eq.id} value={eq.id}>
+                    {eq.name} ({eq.building || "?"})
                   </option>
                 ))}
-                <option value="__custom">Autre...</option>
               </select>
               <button
                 onClick={() => {
-                  if (newElementType === "__custom") {
-                    const custom = prompt("Type d'élément:");
-                    if (custom) {
-                      setNewElementType(custom);
-                      setPlacingElement(true);
-                    }
-                  } else if (newElementType) {
-                    setPlacingElement(true);
+                  if (selectedEquipmentId) {
+                    setPlacingEquipment(true);
                   }
                 }}
-                disabled={!newElementType}
+                disabled={!selectedEquipmentId}
                 className="px-3 py-1.5 text-sm bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Placer
@@ -436,17 +425,17 @@ export default function InfrastructureMap({
         )}
 
         {/* Placing mode indicator */}
-        {placingElement && (
+        {placingEquipment && (
           <div className="flex items-center gap-2">
-            <span className="text-sm text-amber-600 dark:text-amber-400 font-medium">
-              Cliquez sur le plan pour placer: {newElementType}
+            <span className="text-sm text-amber-600 font-medium">
+              Cliquez sur le plan pour placer l'équipement
             </span>
             <button
               onClick={() => {
-                setPlacingElement(false);
-                setNewElementType("");
+                setPlacingEquipment(false);
+                setSelectedEquipmentId("");
               }}
-              className="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg"
+              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
             >
               Annuler
             </button>
@@ -456,7 +445,7 @@ export default function InfrastructureMap({
         {/* Drawing zone mode */}
         {drawingZone && (
           <div className="flex items-center gap-2">
-            <span className="text-sm text-green-600 dark:text-green-400 font-medium">
+            <span className="text-sm text-green-600 font-medium">
               Cliquez pour ajouter des points ({zonePoints.length} points)
             </span>
             <button
@@ -468,7 +457,7 @@ export default function InfrastructureMap({
             </button>
             <button
               onClick={cancelZoneDrawing}
-              className="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg"
+              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
             >
               Annuler
             </button>
@@ -479,16 +468,16 @@ export default function InfrastructureMap({
       {/* Map container */}
       <div style={{ height: viewerHeight }} className="relative">
         {pdfLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-900 z-10">
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10">
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-4 border-amber-500 border-t-transparent mx-auto mb-4" />
-              <p className="text-gray-600 dark:text-gray-400">Chargement du plan...</p>
+              <p className="text-gray-600">Chargement du plan...</p>
             </div>
           </div>
         )}
 
         {pdfError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-900 z-10">
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10">
             <div className="text-center text-red-500">
               <svg className="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -508,15 +497,23 @@ export default function InfrastructureMap({
       </div>
 
       {/* Legend */}
-      <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-750">
+      <div className="p-3 border-t border-gray-200 bg-gray-50">
         <div className="flex flex-wrap gap-4 text-sm">
-          <span className="text-gray-500 dark:text-gray-400">
-            {elements.length} élément(s) - {zones.length} zone(s)
+          <span className="text-gray-500">
+            {positions.length} équipement(s) placé(s) - {zones.length} zone(s)
           </span>
-          {isMobile && (
-            <span className="text-gray-400 dark:text-gray-500">
-              Appuyez longuement pour déplacer
-            </span>
+          {selectedPositionId && (
+            <button
+              onClick={() => {
+                if (confirm("Retirer cet équipement du plan ?")) {
+                  onDeletePosition?.(selectedPositionId);
+                  setSelectedPositionId(null);
+                }
+              }}
+              className="text-red-600 hover:text-red-700"
+            >
+              Retirer l'équipement sélectionné
+            </button>
           )}
         </div>
       </div>
@@ -545,46 +542,11 @@ export default function InfrastructureMap({
         .infra-marker-inner.selected {
           box-shadow: 0 0 0 3px white, 0 0 0 6px #F59E0B;
         }
+        .infra-marker-inner svg {
+          width: 16px;
+          height: 16px;
+        }
       `}</style>
     </div>
   );
-}
-
-// ============================================================
-// Helper functions
-// ============================================================
-
-function getElementIcon(type) {
-  const typeLower = (type || "").toLowerCase();
-
-  if (typeLower.includes("prise")) {
-    return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M7 2v2h2v2h2V4h2V2h4v4H7V2H3v4h4v2h2v4H5v10h14V12h-4V8h2V6h4V2h-4zm8 18H9v-6h6v6z"/></svg>';
-  }
-  if (typeLower.includes("eclairage") || typeLower.includes("lumiere") || typeLower.includes("lampe")) {
-    return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zM9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z"/></svg>';
-  }
-  if (typeLower.includes("coffret")) {
-    return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v12h16V6H4zm2 2h2v2H6V8zm4 0h2v2h-2V8zm4 0h2v2h-2V8z"/></svg>';
-  }
-  if (typeLower.includes("bouton") || typeLower.includes("interrupteur")) {
-    return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/></svg>';
-  }
-  if (typeLower.includes("derivation") || typeLower.includes("boite")) {
-    return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14v14z"/></svg>';
-  }
-
-  // Default icon (lightning bolt)
-  return '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>';
-}
-
-function getElementColor(type) {
-  const typeLower = (type || "").toLowerCase();
-
-  if (typeLower.includes("prise")) return "#3B82F6"; // blue
-  if (typeLower.includes("eclairage") || typeLower.includes("lumiere") || typeLower.includes("lampe")) return "#F59E0B"; // amber
-  if (typeLower.includes("coffret")) return "#8B5CF6"; // purple
-  if (typeLower.includes("bouton") || typeLower.includes("interrupteur")) return "#10B981"; // green
-  if (typeLower.includes("derivation") || typeLower.includes("boite")) return "#6B7280"; // gray
-
-  return "#F59E0B"; // default amber
 }
