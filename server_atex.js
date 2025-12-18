@@ -215,10 +215,8 @@ async function ensureSchema() {
       updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_plans_logical ON atex_plans(logical_name);
-    CREATE INDEX IF NOT EXISTS idx_atex_plans_company ON atex_plans(company_id);
-    CREATE INDEX IF NOT EXISTS idx_atex_plans_site ON atex_plans(site_id);
   `);
-  // Migration: add new columns if they don't exist
+  // Migration: add new columns if they don't exist (BEFORE creating indexes on them)
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS is_multi_zone BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS building_name TEXT DEFAULT ''`);
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS building TEXT DEFAULT ''`);
@@ -227,6 +225,9 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS site_id INTEGER`);
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()`);
   await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()`);
+  // Now create indexes on new columns (after they exist)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_plans_company ON atex_plans(company_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_plans_site ON atex_plans(site_id)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plan_names (
       logical_name TEXT PRIMARY KEY,
