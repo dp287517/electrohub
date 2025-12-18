@@ -31,17 +31,16 @@ import {
   Activity,
   Factory,
 } from "lucide-react";
-import * as pdfjsLib from "pdfjs-dist";
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api, get } from "../lib/api";
 
 // ─────────────────────────────────────────────────────────────────────
-// PDF.js worker
+// PDF.js worker (bundlé localement pour éviter les problèmes CSP)
 // ─────────────────────────────────────────────────────────────────────
-if (typeof window !== "undefined") {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-}
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
