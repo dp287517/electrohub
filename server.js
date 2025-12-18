@@ -144,6 +144,8 @@ const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0
 const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
 // 🔵 Mobile Equipment (Controle Electrique Appareils Mobiles) — microservice sur 3022
 const mobileEquipTarget = process.env.MOBILE_EQUIP_BASE_URL || "http://127.0.0.1:3022";
+// 🔵 GLO (Global Electrical Equipments: UPS, Batteries, Éclairages) — microservice sur 3023
+const gloTarget = process.env.GLO_BASE_URL || "http://127.0.0.1:3023";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 // 🔵 Infrastructure (plans électriques multi-zones) — intégré dans server_atex.js (port 3001)
@@ -243,6 +245,9 @@ app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true, timeoutMs:
 
 // >>> Mobile Equipment (Controle Electrique Appareils Mobiles) : re-stream pour uploads
 app.use("/api/mobile-equipment", mkProxy(mobileEquipTarget, { withRestream: true }));
+
+// >>> GLO (Global Electrical Equipments: UPS, Batteries, Éclairages) : re-stream pour uploads
+app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
 app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));
