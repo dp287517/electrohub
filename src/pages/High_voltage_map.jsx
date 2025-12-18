@@ -9,6 +9,7 @@ import React, {
   forwardRef,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { getOptimalImageFormat } from "../config/mobile-optimization.js";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -592,7 +593,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         await renderTaskRef.current.promise;
         if (cancelled) return;
 
-        const dataUrl = canvas.toDataURL("image/png");
+        // 🚀 JPEG compressé sur mobile, PNG sur desktop
+        const dataUrl = getOptimalImageFormat(canvas);
         setImgSize({ w: canvas.width, h: canvas.height });
 
         const m = L.map(wrapRef.current, {

@@ -140,7 +140,7 @@ export function logDeviceInfo() {
   const isMobile = isMobileDevice();
   const networkQuality = getNetworkQuality();
   const pdfConfig = getPDFConfig();
-  
+
   console.group("📱 Device & Network Info");
   console.log("Mobile:", isMobile);
   console.log("Screen size:", `${window.innerWidth}x${window.innerHeight}`);
@@ -148,4 +148,113 @@ export function logDeviceInfo() {
   console.log("Network quality:", networkQuality);
   console.log("PDF config:", pdfConfig);
   console.groupEnd();
+}
+
+// ============================================================
+// 🚀 CACHE SYSTEM - Évite le re-rendu PDF à chaque visite
+// ============================================================
+
+// Cache en mémoire pour les plans rendus (persiste pendant la session)
+const planRenderCache = new Map();
+const CACHE_MAX_ENTRIES = 10; // Max 10 plans en cache
+const CACHE_MAX_SIZE_MB = 50; // Max 50MB total
+
+/**
+ * Génère une clé de cache unique pour un plan
+ */
+export function getPlanCacheKey(planKey, pageIndex, config) {
+  return `${planKey}:${pageIndex}:${config.maxBitmapWidth}:${config.maxScale}`;
+}
+
+/**
+ * Récupère un plan depuis le cache
+ */
+export function getCachedPlan(cacheKey) {
+  const cached = planRenderCache.get(cacheKey);
+  if (cached) {
+    cached.lastAccess = Date.now();
+    console.log(`[Cache] HIT pour ${cacheKey}`);
+    return cached;
+  }
+  console.log(`[Cache] MISS pour ${cacheKey}`);
+  return null;
+}
+
+/**
+ * Stocke un plan rendu dans le cache
+ */
+export function cachePlan(cacheKey, dataUrl, width, height) {
+  // Estimer la taille en MB (base64 = ~1.37x la taille binaire)
+  const sizeMB = (dataUrl.length * 0.75) / (1024 * 1024);
+
+  // Nettoyer le cache si nécessaire
+  cleanupCache(sizeMB);
+
+  planRenderCache.set(cacheKey, {
+    dataUrl,
+    width,
+    height,
+    sizeMB,
+    createdAt: Date.now(),
+    lastAccess: Date.now(),
+  });
+
+  console.log(`[Cache] Stocké ${cacheKey} (${sizeMB.toFixed(2)}MB, total: ${planRenderCache.size} entrées)`);
+}
+
+/**
+ * Nettoie le cache pour faire de la place
+ */
+function cleanupCache(neededMB = 0) {
+  // Calculer la taille totale actuelle
+  let totalMB = 0;
+  for (const entry of planRenderCache.values()) {
+    totalMB += entry.sizeMB || 0;
+  }
+
+  // Si on dépasse la limite, supprimer les plus anciens
+  while (
+    (planRenderCache.size >= CACHE_MAX_ENTRIES || totalMB + neededMB > CACHE_MAX_SIZE_MB) &&
+    planRenderCache.size > 0
+  ) {
+    // Trouver l'entrée la moins récemment accédée
+    let oldestKey = null;
+    let oldestAccess = Infinity;
+
+    for (const [key, entry] of planRenderCache.entries()) {
+      if (entry.lastAccess < oldestAccess) {
+        oldestAccess = entry.lastAccess;
+        oldestKey = key;
+      }
+    }
+
+    if (oldestKey) {
+      const removed = planRenderCache.get(oldestKey);
+      totalMB -= removed?.sizeMB || 0;
+      planRenderCache.delete(oldestKey);
+      console.log(`[Cache] Supprimé ${oldestKey} (LRU cleanup)`);
+    } else {
+      break;
+    }
+  }
+}
+
+/**
+ * Vide complètement le cache
+ */
+export function clearPlanCache() {
+  planRenderCache.clear();
+  console.log("[Cache] Cache vidé");
+}
+
+/**
+ * Génère le format d'image optimal (JPEG sur mobile, PNG sur desktop)
+ * JPEG 0.85 = ~5-10x plus petit que PNG, qualité excellente pour plans
+ */
+export function getOptimalImageFormat(canvas) {
+  const isMobile = isMobileDevice();
+  if (isMobile) {
+    return canvas.toDataURL("image/jpeg", 0.85);
+  }
+  return canvas.toDataURL("image/png");
 }
