@@ -1745,6 +1745,59 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// List plans without thumbnails (for regeneration)
+app.get("/api/atex/maps/plans-without-thumbnails", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name)
+             p.id,
+             p.logical_name,
+             COALESCE(pn.display_name, p.logical_name) AS display_name
+      FROM atex_plans p
+      LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
+      WHERE p.thumbnail IS NULL
+      ORDER BY p.logical_name, p.version DESC
+    `);
+    res.json({ ok: true, plans: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Update thumbnail for a specific plan (by logical_name)
+const multerThumbnailOnly = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+}).single('thumbnail');
+
+app.put("/api/atex/maps/plans/:logicalName/thumbnail", multerThumbnailOnly, async (req, res) => {
+  try {
+    const { logicalName } = req.params;
+    const thumbnail = req.file;
+
+    if (!thumbnail) {
+      return res.status(400).json({ ok: false, error: "No thumbnail provided" });
+    }
+
+    // Update thumbnail for all versions of this plan
+    const { rowCount } = await pool.query(
+      `UPDATE atex_plans SET thumbnail = $1 WHERE logical_name = $2`,
+      [thumbnail.buffer, logicalName]
+    );
+
+    if (rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "Plan not found" });
+    }
+
+    console.log(`[atex] Updated thumbnail for plan: ${logicalName}`);
+    res.json({ ok: true, updated: rowCount });
+  } catch (e) {
+    console.error("[atex] update thumbnail error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Alias compat (si l'ancien front appelle encore /plans)
 app.get("/api/atex/maps/plans", (req, res) =>
   app._router.handle(Object.assign(req, { url: "/api/atex/maps/listPlans" }), res)
