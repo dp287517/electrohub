@@ -3176,8 +3176,9 @@ app.get("/api/atex/drpce", async (req, res) => {
     // 2. Récupérer tous les équipements ATEX (avec filtre company_id si disponible)
     // Inclure photo_content pour les équipements avec photo
     let equipmentQuery = `
-      SELECT e.id, e.name, e.type, e.building, e.zone, e.brand, e.model, e.serial_number,
-             e.marking, e.category, e.next_check_date, e.photo_content, e.photo_path,
+      SELECT e.id, e.name, e.type, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
+             e.equipment, e.sub_equipment, e.atex_mark_gas, e.atex_mark_dust,
+             e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_content, e.photo_path,
              e.site_id, e.company_id,
              (SELECT result FROM atex_checks c
               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
@@ -3769,15 +3770,17 @@ app.get("/api/atex/drpce", async (req, res) => {
         }
 
         // Informations à gauche
+        const atexMarking = [eq.atex_mark_gas, eq.atex_mark_dust].filter(Boolean).join(' / ') || '-';
+        const zoning = [eq.zoning_gas != null ? `Gaz: ${eq.zoning_gas}` : null, eq.zoning_dust != null ? `Pous.: ${eq.zoning_dust}` : null].filter(Boolean).join(' / ') || '-';
         const infoItems = [
           ['Type', eq.type || '-'],
           ['Batiment', eq.building || '-'],
           ['Zone', eq.zone || '-'],
-          ['Marque', eq.brand || '-'],
-          ['Modele', eq.model || '-'],
-          ['N/S', eq.serial_number || '-'],
-          ['Marquage ATEX', eq.marking || '-'],
-          ['Categorie', eq.category || '-'],
+          ['Fabricant', eq.manufacturer || '-'],
+          ['Reference', eq.manufacturer_ref || '-'],
+          ['Equipement', eq.equipment || '-'],
+          ['Marquage ATEX', atexMarking],
+          ['Zonage', zoning],
           ['Derniere verif.', eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : '-'],
           ['Prochaine verif.', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
         ];
