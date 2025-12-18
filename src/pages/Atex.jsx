@@ -2406,18 +2406,33 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
   const grouped = useMemo(() => {
     const byKey = new Map();
     for (const p of plans) {
-      const batKey = p.building?.trim() || "Autres";
-      const zoneKey = p.zone?.trim() || "Zone non renseignée";
-      const g = byKey.get(batKey) || { key: batKey, zones: new Map() };
-      const z = g.zones.get(zoneKey) || { name: zoneKey, items: [] };
-      z.items.push(p);
-      g.zones.set(zoneKey, z);
-      byKey.set(batKey, g);
+      // Plans multi-zones go to "Infrastructure Globale"
+      if (p.is_multi_zone) {
+        const batKey = "🏗️ Infrastructure Globale";
+        const zoneKey = p.building_name?.trim() || p.display_name || p.logical_name;
+        const g = byKey.get(batKey) || { key: batKey, zones: new Map(), isInfra: true };
+        const z = g.zones.get(zoneKey) || { name: zoneKey, items: [] };
+        z.items.push(p);
+        g.zones.set(zoneKey, z);
+        byKey.set(batKey, g);
+      } else {
+        // Regular ATEX plans grouped by building/zone
+        const batKey = p.building?.trim() || "Autres";
+        const zoneKey = p.zone?.trim() || "Zone non renseignée";
+        const g = byKey.get(batKey) || { key: batKey, zones: new Map() };
+        const z = g.zones.get(zoneKey) || { name: zoneKey, items: [] };
+        z.items.push(p);
+        g.zones.set(zoneKey, z);
+        byKey.set(batKey, g);
+      }
     }
-    return Array.from(byKey.values()).map((g) => ({
+    // Sort to put Infrastructure Globale first
+    const result = Array.from(byKey.values()).map((g) => ({
       key: g.key,
       zones: Array.from(g.zones.values()),
+      isInfra: g.isInfra || false,
     }));
+    return result.sort((a, b) => (b.isInfra ? 1 : 0) - (a.isInfra ? 1 : 0));
   }, [plans]);
 
   return (
@@ -2474,15 +2489,21 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
         <div className="space-y-3">
           {/* Arborescence fermée par défaut */}
           {grouped.map((bat) => (
-            <details key={bat.key} className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
-              <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-150 transition-all">
+            <details key={bat.key} open={bat.isInfra} className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+              <summary className={`flex items-center justify-between px-4 py-3 cursor-pointer transition-all ${
+                bat.isInfra
+                  ? "bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100"
+                  : "bg-gradient-to-r from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-150"
+              }`}>
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-amber-100 rounded-lg">
-                    <span className="text-xl">🏢</span>
+                  <div className={`p-2 rounded-lg ${bat.isInfra ? "bg-blue-100" : "bg-amber-100"}`}>
+                    <span className="text-xl">{bat.isInfra ? "🏗️" : "🏢"}</span>
                   </div>
                   <span className="font-semibold text-gray-800">{bat.key}</span>
                 </div>
-                <span className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">
+                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                  bat.isInfra ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"
+                }`}>
                   {bat.zones.reduce((n, z) => n + z.items.length, 0)} plan(s)
                 </span>
               </summary>
