@@ -202,14 +202,22 @@ export default function InfrastructureMap({
       attributionControl: false,
     });
 
-    // Add image overlay
-    const overlay = L.imageOverlay(imgSrc, bounds);
+    // Create custom panes with z-index ordering (like Atex-map)
+    map.createPane("basePane");
+    map.getPane("basePane").style.zIndex = 200;
+    map.createPane("zonesPane");
+    map.getPane("zonesPane").style.zIndex = 380;
+    map.createPane("markersPane");
+    map.getPane("markersPane").style.zIndex = 400;
+
+    // Add image overlay to base pane
+    const overlay = L.imageOverlay(imgSrc, bounds, { pane: "basePane" });
     overlay.addTo(map);
     map.fitBounds(bounds);
 
-    // Create layers for zones and markers
-    const zonesLayer = L.layerGroup().addTo(map);
-    const markersLayer = L.layerGroup().addTo(map);
+    // Create layers for zones and markers with proper panes
+    const zonesLayer = L.layerGroup({ pane: "zonesPane" }).addTo(map);
+    const markersLayer = L.layerGroup({ pane: "markersPane" }).addTo(map);
 
     mapRef.current = map;
     overlayRef.current = overlay;
@@ -257,6 +265,7 @@ export default function InfrastructureMap({
           weight: 2,
           fillColor: color,
           fillOpacity: 0.2,
+          pane: "zonesPane",
         }).addTo(m);
       }
       if (mode === DRAW_RECT) {
@@ -265,6 +274,7 @@ export default function InfrastructureMap({
           weight: 2,
           fillColor: color,
           fillOpacity: 0.2,
+          pane: "zonesPane",
         }).addTo(m);
       }
       m.dragging.disable();
@@ -333,7 +343,7 @@ export default function InfrastructureMap({
 
     let tempPoly = null;
     const color = selectedZoneColor;
-    const style = { color, weight: 2, fillColor: color, fillOpacity: 0.2, dashArray: "5, 5" };
+    const style = { color, weight: 2, fillColor: color, fillOpacity: 0.2, dashArray: "5, 5", pane: "zonesPane" };
 
     const redraw = () => {
       if (tempPoly) {
@@ -364,7 +374,7 @@ export default function InfrastructureMap({
       ]);
 
       // Create final polygon for visual
-      const finalPoly = L.polygon(polyTemp, { ...style, dashArray: null });
+      const finalPoly = L.polygon(polyTemp, { ...style, dashArray: null, pane: "zonesPane" });
 
       setZoneEditor({ tempLayer: finalPoly, kind: "poly", geometry: { points }, color });
       setPolyTemp([]);
@@ -490,6 +500,7 @@ export default function InfrastructureMap({
           weight: 2,
           fillColor: color,
           fillOpacity: 0.2,
+          pane: "zonesPane",
         });
       } else if (zone.kind === "circle" && geom.cx !== undefined) {
         const { cx, cy, r } = geom;
@@ -502,6 +513,7 @@ export default function InfrastructureMap({
           weight: 2,
           fillColor: color,
           fillOpacity: 0.2,
+          pane: "zonesPane",
         });
       } else if (zone.kind === "poly" && geom.points?.length) {
         const latLngs = geom.points.map((pt) => {
@@ -513,6 +525,7 @@ export default function InfrastructureMap({
           weight: 2,
           fillColor: color,
           fillOpacity: 0.2,
+          pane: "zonesPane",
         });
       }
 
