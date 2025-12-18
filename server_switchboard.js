@@ -2724,8 +2724,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
              ct.name as template_name, ct.target_type, ct.frequency_months,
              sb.name as switchboard_name, sb.code as switchboard_code,
              d.name as device_name, d.position_number as device_position,
-             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
-             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
              hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
       FROM control_schedules cs
@@ -2881,8 +2881,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
              ct.name as template_name,
              sb.name as switchboard_name, sb.code as switchboard_code,
              d.name as device_name, d.position_number as device_position,
-             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
-             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
              hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
       FROM control_records cr
@@ -2951,8 +2951,8 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
              ct.name as template_name, ct.checklist_items as template_items,
              sb.name as switchboard_name, sb.code as switchboard_code,
              d.name as device_name, d.position_number as device_position,
-             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
-             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
@@ -3147,8 +3147,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
              d.position_number, d.name as device_name,
-             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
-             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
@@ -3168,8 +3168,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
              d.position_number, d.name as device_name,
-             vsd.name as vsd_name, vsd.code as vsd_code, vsd.building as vsd_building,
-             meca.name as meca_name, meca.code as meca_code, meca.building as meca_building,
+             vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
+             meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
