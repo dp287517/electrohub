@@ -1,7 +1,7 @@
 // src/pages/Atex.jsx
 // ✅ VERSION REFONDÉE - Design style SwitchboardControls
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
@@ -100,6 +100,7 @@ function getIdentity() {
 // ============================================================
 
 export default function Atex() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Tab state
@@ -961,6 +962,17 @@ export default function Atex() {
         <TabButton id="controls" label="Équipements" count={stats.total} color="bg-blue-100 text-blue-800" />
         <TabButton id="analytics" label="📊 Analyse" color="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-800" />
         <TabButton id="plans" label="Plans" count={plans.length} color="bg-purple-100 text-purple-800" />
+        {/* Lien vers Infrastructure */}
+        <button
+          onClick={() => navigate("/app/infrastructure")}
+          className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-700 hover:from-amber-200 hover:to-yellow-200 flex items-center gap-1.5"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span className="hidden sm:inline">Infrastructure</span>
+          <span className="sm:hidden">Infra</span>
+        </button>
       </div>
 
       {/* Tab Content */}
