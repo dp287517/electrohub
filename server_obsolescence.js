@@ -129,29 +129,32 @@ async function computeVsdTotals(site) {
 async function computeMecaTotals(site) {
   const hasSite = site && site.trim() !== '';
 
-  // Try with subcategory, fallback if column doesn't exist
+  // Try with all columns, fallback progressively for missing columns
   let result;
   try {
     result = await pool.query(`
       SELECT
         id, name, tag, building, floor, zone, manufacturer, model,
-        category, subcategory, power_kw, ui_status, criticality,
-        installation_date, created_at
+        category, power_kw, criticality, installation_date, created_at
       FROM meca_equipments
       ${hasSite ? 'WHERE site = $1' : ''}
       ORDER BY id ASC
     `, hasSite ? [site] : []);
   } catch (err) {
-    // Fallback without subcategory column
-    result = await pool.query(`
-      SELECT
-        id, name, tag, building, floor, zone, manufacturer, model,
-        category, NULL AS subcategory, power_kw, ui_status, criticality,
-        installation_date, created_at
-      FROM meca_equipments
-      ${hasSite ? 'WHERE site = $1' : ''}
-      ORDER BY id ASC
-    `, hasSite ? [site] : []);
+    // Final fallback with minimal columns
+    try {
+      result = await pool.query(`
+        SELECT
+          id, name, tag, building, floor, manufacturer, model,
+          category, power_kw, installation_date, created_at
+        FROM meca_equipments
+        ${hasSite ? 'WHERE site = $1' : ''}
+        ORDER BY id ASC
+      `, hasSite ? [site] : []);
+    } catch (err2) {
+      console.log('[OBS] MECA query failed:', err2.message);
+      return [];
+    }
   }
 
   return result.rows.map(meca => {
@@ -186,9 +189,7 @@ async function computeMecaTotals(site) {
       estimated_cost_gbp: estimateMecaCostGBP(meca),
       manufacturer: meca.manufacturer,
       category: meca.category,
-      subcategory: meca.subcategory,
       power_kw: meca.power_kw,
-      status: meca.ui_status,
       criticality: meca.criticality
     };
   });
@@ -1108,67 +1109,77 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
     switch (kind) {
       case 'sb': {
         // For switchboards, update manufacture_date in obsolescence_parameters
-        // First, ensure parameters exist for all devices
-        await pool.query(`
-          INSERT INTO obsolescence_parameters (device_id, switchboard_id, site)
-          SELECT d.id, d.switchboard_id, d.site
-          FROM devices d
-          LEFT JOIN obsolescence_parameters op
-            ON op.device_id = d.id AND op.switchboard_id = d.switchboard_id AND op.site = d.site
-          WHERE d.switchboard_id = $1 ${site ? 'AND d.site = $2' : ''} AND op.device_id IS NULL
-        `, site ? [equipmentId, site] : [equipmentId]);
-
-        // Then update manufacture_date
         const date = `${year}-01-01`;
+        // Try to update existing rows first
         result = await pool.query(`
           UPDATE obsolescence_parameters
           SET manufacture_date = $1
           WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
         `, site ? [date, equipmentId, site] : [date, equipmentId]);
+
+        // If no rows updated, insert parameters for all devices
+        if (result.rowCount === 0) {
+          await pool.query(`
+            INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
+            SELECT d.id, d.switchboard_id, d.site, $1::date
+            FROM devices d
+            WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
+            ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
+          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        }
         break;
       }
 
       case 'hv': {
-        // For HV equipment, add/update service_year column
-        // First try to add the column if it doesn't exist
+        // For HV equipment, try to update service_year
         try {
-          await pool.query(`ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS service_year INTEGER`);
+          result = await pool.query(`
+            UPDATE hv_equipments
+            SET service_year = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [year, equipmentId, site] : [year, equipmentId]);
         } catch (e) {
-          // Column might already exist or table structure differs
+          // Column doesn't exist - for now, store in a JSON field or return message
+          console.log('[OBS] HV service_year column not available:', e.message);
+          return res.status(400).json({
+            error: 'La colonne service_year n\'existe pas pour les équipements HV. Contactez l\'administrateur.'
+          });
         }
-
-        result = await pool.query(`
-          UPDATE hv_equipments
-          SET service_year = $1
-          WHERE id = $2 ${site ? 'AND site = $3' : ''}
-        `, site ? [year, equipmentId, site] : [year, equipmentId]);
         break;
       }
 
       case 'vsd': {
-        // For VSD equipment, add/update service_year column
+        // For VSD equipment, try to update service_year
         try {
-          await pool.query(`ALTER TABLE vsd_equipments ADD COLUMN IF NOT EXISTS service_year INTEGER`);
+          result = await pool.query(`
+            UPDATE vsd_equipments
+            SET service_year = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [year, equipmentId, site] : [year, equipmentId]);
         } catch (e) {
-          // Column might already exist
+          console.log('[OBS] VSD service_year column not available:', e.message);
+          return res.status(400).json({
+            error: 'La colonne service_year n\'existe pas pour les équipements VSD. Contactez l\'administrateur.'
+          });
         }
-
-        result = await pool.query(`
-          UPDATE vsd_equipments
-          SET service_year = $1
-          WHERE id = $2 ${site ? 'AND site = $3' : ''}
-        `, site ? [year, equipmentId, site] : [year, equipmentId]);
         break;
       }
 
       case 'meca': {
         // For MECA equipment, update installation_date
         const date = `${year}-01-01`;
-        result = await pool.query(`
-          UPDATE meca_equipments
-          SET installation_date = $1
-          WHERE id = $2 ${site ? 'AND site = $3' : ''}
-        `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        try {
+          result = await pool.query(`
+            UPDATE meca_equipments
+            SET installation_date = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        } catch (e) {
+          console.log('[OBS] MECA installation_date update failed:', e.message);
+          return res.status(400).json({
+            error: 'Impossible de mettre à jour la date d\'installation. Contactez l\'administrateur.'
+          });
+        }
         break;
       }
 
