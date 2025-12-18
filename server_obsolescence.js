@@ -1125,22 +1125,33 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
       case 'sb': {
         // For switchboards, update manufacture_date in obsolescence_parameters
         const date = `${year}-01-01`;
-        // Try to update existing rows first
-        result = await pool.query(`
-          UPDATE obsolescence_parameters
-          SET manufacture_date = $1
-          WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
-        `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        try {
+          // Try to update existing rows first (with 5s timeout)
+          result = await Promise.race([
+            pool.query(`
+              UPDATE obsolescence_parameters
+              SET manufacture_date = $1
+              WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
+            `, site ? [date, equipmentId, site] : [date, equipmentId]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
+          ]);
 
-        // If no rows updated, insert parameters for all devices
-        if (result.rowCount === 0) {
-          await pool.query(`
-            INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
-            SELECT d.id, d.switchboard_id, d.site, $1::date
-            FROM devices d
-            WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
-            ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
-          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+          // If no rows updated, try to insert for devices
+          if (result.rowCount === 0) {
+            await Promise.race([
+              pool.query(`
+                INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
+                SELECT d.id, d.switchboard_id, d.site, $1::date
+                FROM devices d
+                WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
+                ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
+              `, site ? [date, equipmentId, site] : [date, equipmentId]),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
+            ]);
+          }
+        } catch (e) {
+          console.log('[OBS] SB update failed:', e.message);
+          return res.status(500).json({ error: 'La mise à jour a échoué ou pris trop de temps. Réessayez.' });
         }
         break;
       }
@@ -1148,14 +1159,16 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
       case 'hv': {
         // For HV equipment, try to update service_year
         try {
-          result = await pool.query(`
-            UPDATE hv_equipments
-            SET service_year = $1
-            WHERE id = $2 ${site ? 'AND site = $3' : ''}
-          `, site ? [year, equipmentId, site] : [year, equipmentId]);
+          result = await Promise.race([
+            pool.query(`
+              UPDATE hv_equipments
+              SET service_year = $1
+              WHERE id = $2 ${site ? 'AND site = $3' : ''}
+            `, site ? [year, equipmentId, site] : [year, equipmentId]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
+          ]);
         } catch (e) {
-          // Column doesn't exist - for now, store in a JSON field or return message
-          console.log('[OBS] HV service_year column not available:', e.message);
+          console.log('[OBS] HV update failed:', e.message);
           return res.status(400).json({
             error: 'La colonne service_year n\'existe pas pour les équipements HV. Contactez l\'administrateur.'
           });
@@ -1166,13 +1179,16 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
       case 'vsd': {
         // For VSD equipment, try to update service_year
         try {
-          result = await pool.query(`
-            UPDATE vsd_equipments
-            SET service_year = $1
-            WHERE id = $2 ${site ? 'AND site = $3' : ''}
-          `, site ? [year, equipmentId, site] : [year, equipmentId]);
+          result = await Promise.race([
+            pool.query(`
+              UPDATE vsd_equipments
+              SET service_year = $1
+              WHERE id = $2 ${site ? 'AND site = $3' : ''}
+            `, site ? [year, equipmentId, site] : [year, equipmentId]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
+          ]);
         } catch (e) {
-          console.log('[OBS] VSD service_year column not available:', e.message);
+          console.log('[OBS] VSD update failed:', e.message);
           return res.status(400).json({
             error: 'La colonne service_year n\'existe pas pour les équipements VSD. Contactez l\'administrateur.'
           });
@@ -1184,13 +1200,16 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
         // For MECA equipment, update installation_date
         const date = `${year}-01-01`;
         try {
-          result = await pool.query(`
-            UPDATE meca_equipments
-            SET installation_date = $1
-            WHERE id = $2 ${site ? 'AND site = $3' : ''}
-          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+          result = await Promise.race([
+            pool.query(`
+              UPDATE meca_equipments
+              SET installation_date = $1
+              WHERE id = $2 ${site ? 'AND site = $3' : ''}
+            `, site ? [date, equipmentId, site] : [date, equipmentId]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 5000))
+          ]);
         } catch (e) {
-          console.log('[OBS] MECA installation_date update failed:', e.message);
+          console.log('[OBS] MECA update failed:', e.message);
           return res.status(400).json({
             error: 'Impossible de mettre à jour la date d\'installation. Contactez l\'administrateur.'
           });
