@@ -299,6 +299,68 @@ async function ensureSchema() {
   } catch (e) {
     console.error('[ATEX] Error creating indexes (may already exist):', e.message);
   }
+
+  // ============================================================
+  // 🔌 INFRASTRUCTURE TABLES (Plans électriques multi-zones)
+  // ============================================================
+  console.log('[ATEX] Creating infrastructure tables...');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS infrastructure_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      logical_name TEXT NOT NULL,
+      display_name TEXT,
+      building_name TEXT DEFAULT '',
+      filename TEXT NOT NULL,
+      file_path TEXT,
+      content BYTEA NULL,
+      page_count INTEGER DEFAULT 1,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_infra_plans_company ON infrastructure_plans(company_id);
+    CREATE INDEX IF NOT EXISTS idx_infra_plans_site ON infrastructure_plans(site_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS infrastructure_zones (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      plan_id UUID REFERENCES infrastructure_plans(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      kind TEXT DEFAULT 'rect',
+      geometry JSONB DEFAULT '{}',
+      color TEXT DEFAULT '#6B7280',
+      page_index INTEGER DEFAULT 0,
+      linked_atex_plans JSONB DEFAULT '[]',
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_infra_zones_plan ON infrastructure_zones(plan_id);
+  `);
+
+  // infrastructure_positions stocke les équipements ATEX placés sur les plans d'infrastructure
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS infrastructure_positions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipment_id UUID NOT NULL REFERENCES atex_equipments(id) ON DELETE CASCADE,
+      plan_id UUID NOT NULL REFERENCES infrastructure_plans(id) ON DELETE CASCADE,
+      zone_id UUID REFERENCES infrastructure_zones(id) ON DELETE SET NULL,
+      page_index INTEGER DEFAULT 0,
+      x_frac NUMERIC NOT NULL,
+      y_frac NUMERIC NOT NULL,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now(),
+      UNIQUE (equipment_id, plan_id, page_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_infra_pos_plan ON infrastructure_positions(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_infra_pos_equipment ON infrastructure_positions(equipment_id);
+  `);
+
+  console.log('[ATEX] Infrastructure tables created ✅');
 }
 // -------------------------------------------------
 // Utils
@@ -2366,6 +2428,286 @@ app.get("/api/atex/audit/stats", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ============================================================
+// 🔌 INFRASTRUCTURE ENDPOINTS (Plans électriques multi-zones)
+// Routes: /api/infra/*
+// ============================================================
+
+const INFRA_DIR = path.join(DATA_DIR, "infra");
+await fsp.mkdir(INFRA_DIR, { recursive: true });
+
+const multerInfraPlan = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
+
+// Health check
+app.get("/api/infra/health", (req, res) => {
+  res.json({ status: "ok", service: "infrastructure", ts: new Date().toISOString() });
+});
+
+// ========================= PLANS =========================
+
+// List plans
+app.get("/api/infra/plans", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const filter = getTenantFilter(tenant, "infrastructure_plans");
+
+    const { rows } = await pool.query(`
+      SELECT id, logical_name, display_name, building_name, filename, page_count, created_at, updated_at
+      FROM infrastructure_plans
+      ${filter.where}
+      ORDER BY building_name, display_name, created_at DESC
+    `, filter.params);
+
+    res.json({ plans: rows });
+  } catch (e) {
+    console.error("[infra] list plans error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Upload plan
+app.post("/api/infra/plans", multerInfraPlan.single("file"), async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const building_name = req.body.building_name || "";
+    const originalName = file.originalname || "plan.pdf";
+    const logical_name = originalName.replace(/\.[^.]+$/, "").replace(/[^\w\-]+/g, "_");
+    const display_name = originalName.replace(/\.[^.]+$/, "");
+
+    const { rows } = await pool.query(`
+      INSERT INTO infrastructure_plans (logical_name, display_name, building_name, filename, content, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, logical_name, display_name, building_name, filename, created_at
+    `, [logical_name, display_name, building_name, originalName, file.buffer, tenant.company_id, tenant.site_id]);
+
+    res.json({ plan: rows[0] });
+  } catch (e) {
+    console.error("[infra] upload plan error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get plan file
+app.get("/api/infra/plans/:id/file", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT content, filename FROM infrastructure_plans WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows[0] || !rows[0].content) return res.status(404).json({ error: "Plan not found" });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
+    res.send(rows[0].content);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete plan
+app.delete("/api/infra/plans/:id", async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM infrastructure_plans WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========================= ZONES =========================
+
+// List zones
+app.get("/api/infra/zones", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const filter = getTenantFilter(tenant, "infrastructure_zones");
+    const plan_id = req.query.plan_id;
+
+    let query = `SELECT * FROM infrastructure_zones ${filter.where}`;
+    let params = [...filter.params];
+
+    if (plan_id) {
+      query += ` AND plan_id = $${params.length + 1}`;
+      params.push(plan_id);
+    }
+
+    query += ` ORDER BY name`;
+    const { rows } = await pool.query(query, params);
+    res.json({ zones: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create zone
+app.post("/api/infra/zones", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const { plan_id, name, kind, geometry, color, page_index, linked_atex_plans } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO infrastructure_zones (plan_id, name, kind, geometry, color, page_index, linked_atex_plans, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [plan_id, name || "", kind || "rect", JSON.stringify(geometry || {}), color || "#6B7280", page_index || 0, JSON.stringify(linked_atex_plans || []), tenant.company_id, tenant.site_id]);
+
+    res.json({ zone: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update zone
+app.put("/api/infra/zones/:id", async (req, res) => {
+  try {
+    const { name, kind, geometry, color, linked_atex_plans } = req.body;
+    const { rows } = await pool.query(`
+      UPDATE infrastructure_zones
+      SET name = COALESCE($2, name),
+          kind = COALESCE($3, kind),
+          geometry = COALESCE($4, geometry),
+          color = COALESCE($5, color),
+          linked_atex_plans = COALESCE($6, linked_atex_plans)
+      WHERE id = $1
+      RETURNING *
+    `, [req.params.id, name, kind, geometry ? JSON.stringify(geometry) : null, color, linked_atex_plans ? JSON.stringify(linked_atex_plans) : null]);
+
+    res.json({ zone: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete zone
+app.delete("/api/infra/zones/:id", async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM infrastructure_zones WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========================= POSITIONS (équipements ATEX sur plans infra) =========================
+
+// List positions
+app.get("/api/infra/positions", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const filter = getTenantFilter(tenant, "infrastructure_positions");
+    const plan_id = req.query.plan_id;
+
+    let query = `
+      SELECT p.*, e.name as equipment_name, e.type as equipment_type, e.building, e.zone
+      FROM infrastructure_positions p
+      JOIN atex_equipments e ON p.equipment_id = e.id
+      ${filter.where}
+    `;
+    let params = [...filter.params];
+
+    if (plan_id) {
+      query += ` AND p.plan_id = $${params.length + 1}`;
+      params.push(plan_id);
+    }
+
+    const { rows } = await pool.query(query, params);
+    res.json({ positions: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create/update position
+app.post("/api/infra/positions", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const { equipment_id, plan_id, zone_id, page_index, x_frac, y_frac } = req.body;
+
+    // Upsert: si position existe déjà, update
+    const { rows } = await pool.query(`
+      INSERT INTO infrastructure_positions (equipment_id, plan_id, zone_id, page_index, x_frac, y_frac, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (equipment_id, plan_id, page_index)
+      DO UPDATE SET x_frac = $5, y_frac = $6, zone_id = $3
+      RETURNING *
+    `, [equipment_id, plan_id, zone_id || null, page_index || 0, x_frac, y_frac, tenant.company_id, tenant.site_id]);
+
+    res.json({ position: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update position
+app.put("/api/infra/positions/:id", async (req, res) => {
+  try {
+    const { x_frac, y_frac, zone_id } = req.body;
+    const { rows } = await pool.query(`
+      UPDATE infrastructure_positions
+      SET x_frac = COALESCE($2, x_frac), y_frac = COALESCE($3, y_frac), zone_id = COALESCE($4, zone_id)
+      WHERE id = $1
+      RETURNING *
+    `, [req.params.id, x_frac, y_frac, zone_id]);
+
+    res.json({ position: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete position
+app.delete("/api/infra/positions/:id", async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM infrastructure_positions WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========================= STATS & ELEMENT TYPES (pour compatibilité frontend) =========================
+
+app.get("/api/infra/stats", async (req, res) => {
+  try {
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), pool);
+    const filter = getTenantFilter(tenant, "infrastructure_plans");
+
+    const plansRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_plans ${filter.where}`, filter.params);
+    const zonesRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_zones ${getTenantFilter(tenant, "infrastructure_zones").where}`, getTenantFilter(tenant, "infrastructure_zones").params);
+    const posRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_positions ${getTenantFilter(tenant, "infrastructure_positions").where}`, getTenantFilter(tenant, "infrastructure_positions").params);
+
+    res.json({
+      plans: parseInt(plansRes.rows[0]?.count || 0),
+      zones: parseInt(zonesRes.rows[0]?.count || 0),
+      positions: parseInt(posRes.rows[0]?.count || 0)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Dummy element-types endpoint for compatibility (infrastructure uses ATEX equipment types)
+app.get("/api/infra/element-types", async (req, res) => {
+  try {
+    // Retourne les types d'équipements ATEX existants
+    const { rows } = await pool.query(`SELECT DISTINCT type FROM atex_equipments WHERE type IS NOT NULL AND type != '' ORDER BY type`);
+    res.json({ types: rows.map(r => r.type) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, types: [] });
+  }
+});
+
+// Dummy elements endpoint - positions are now used instead
+app.get("/api/infra/elements", async (req, res) => {
+  res.json({ elements: [], message: "Use /api/infra/positions instead" });
 });
 
 // -------------------------------------------------
