@@ -514,6 +514,34 @@ async function ensureSchema() {
   } catch (migrationError) {
     console.error('[ATEX] Migration error (non-fatal):', migrationError.message);
   }
+
+  // 🧹 Nettoyage automatique des positions en doublon
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM atex_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+    if (duplicates.length > 0) {
+      console.log(`[ATEX] Found ${duplicates.length} equipments with duplicate positions, cleaning up...`);
+      for (const dup of duplicates) {
+        await pool.query(`
+          DELETE FROM atex_positions
+          WHERE equipment_id = $1
+          AND id NOT IN (
+            SELECT id FROM atex_positions
+            WHERE equipment_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+          )
+        `, [dup.equipment_id]);
+      }
+      console.log('[ATEX] Duplicate positions cleaned up ✅');
+    }
+  } catch (cleanupError) {
+    console.error('[ATEX] Cleanup error (non-fatal):', cleanupError.message);
+  }
 }
 // -------------------------------------------------
 // Utils
@@ -1039,6 +1067,47 @@ app.delete("/api/atex/maps/positions/:equipmentId", async (req, res) => {
     res.json({ ok: true, removed: true });
   } catch (e) {
     console.error('[delete position] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 🧹 NETTOYAGE - Supprime les positions en doublon (garde seulement la plus récente par équipement)
+app.post("/api/atex/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    // 1. Trouver les équipements avec plusieurs positions
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM atex_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[cleanup] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      // Garder seulement la position la plus récente (par created_at)
+      const result = await pool.query(`
+        DELETE FROM atex_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM atex_positions
+          WHERE equipment_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+      console.log(`[cleanup] Equipment ${dup.equipment_id}: removed ${result.rowCount} duplicate positions`);
+    }
+
+    res.json({
+      ok: true,
+      duplicates_found: duplicates.length,
+      positions_removed: totalRemoved
+    });
+  } catch (e) {
+    console.error('[cleanup] Error:', e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
