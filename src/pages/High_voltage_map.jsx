@@ -976,7 +976,7 @@ export default function HighVoltageMap() {
   const refreshPlacedIds = async () => {
     try {
       const res = await api.hvMaps.placedIds();
-      const ids = res?.ids || res || [];
+      const ids = res?.placed_ids || res?.ids || [];
       setPlacedIds(new Set(ids));
     } catch (e) {
       console.error("Erreur chargement placements HV:", e);
