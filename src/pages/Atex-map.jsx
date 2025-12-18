@@ -1233,6 +1233,11 @@ export default function AtexMap({
     } finally { end(); }
   }
   function colorForSubarea(sa) {
+    // For infrastructure zones (multi-zone plans), use custom color if available
+    if (sa?.color && sa.color !== '#6B7280') {
+      return { color: sa.color, weight: 2, opacity: 0.9, fillColor: sa.color, fillOpacity: 0.15, pane: "zonesPane" };
+    }
+    // For ATEX zones, use gas/dust zoning colors
     const stroke = GAS_STROKE[sa?.zoning_gas ?? null];
     const fill = DUST_FILL[sa?.zoning_dust ?? null];
     return { color: stroke, weight: 1, opacity: 0.9, fillColor: fill, fillOpacity: 0.12, pane: "zonesPane" };
@@ -1621,23 +1626,28 @@ function setupHandleDrag(map, onMoveCallback) {
         let layer = null;
         const style = colorForSubarea(sa);
 
+        // Support both old format (x1,y1,x2,y2) and new format (geometry JSONB)
+        const geom = typeof sa.geometry === 'string' && sa.geometry ? JSON.parse(sa.geometry) : (sa.geometry || {});
+        const hasGeometry = geom && Object.keys(geom).length > 0;
+
         if (sa.kind === "rect") {
-          const x1 = bounds.getWest() + (sa.x1 ?? 0) * W;
-          const y1 = bounds.getSouth() + (sa.y1 ?? 0) * H;
-          const x2 = bounds.getWest() + (sa.x2 ?? 0) * W;
-          const y2 = bounds.getSouth() + (sa.y2 ?? 0) * H;
+          const x1 = bounds.getWest() + (hasGeometry ? (geom.x1 ?? 0) : (sa.x1 ?? 0)) * W;
+          const y1 = bounds.getSouth() + (hasGeometry ? (geom.y1 ?? 0) : (sa.y1 ?? 0)) * H;
+          const x2 = bounds.getWest() + (hasGeometry ? (geom.x2 ?? 0) : (sa.x2 ?? 0)) * W;
+          const y2 = bounds.getSouth() + (hasGeometry ? (geom.y2 ?? 0) : (sa.y2 ?? 0)) * H;
           const b = L.latLngBounds(L.latLng(y1, x1), L.latLng(y2, x2));
           layer = L.rectangle(b, style);
         } else if (sa.kind === "circle") {
-          const cx = bounds.getWest() + (sa.cx ?? 0.5) * W;
-          const cy = bounds.getSouth() + (sa.cy ?? 0.5) * H;
-          const r = Math.max(4, (sa.r ?? 0.05) * Math.min(W, H));
+          const cx = bounds.getWest() + (hasGeometry ? (geom.cx ?? 0.5) : (sa.cx ?? 0.5)) * W;
+          const cy = bounds.getSouth() + (hasGeometry ? (geom.cy ?? 0.5) : (sa.cy ?? 0.5)) * H;
+          const r = Math.max(4, (hasGeometry ? (geom.r ?? 0.05) : (sa.r ?? 0.05)) * Math.min(W, H));
           layer = L.circle(L.latLng(cy, cx), { radius: r, ...style });
         } else if (sa.kind === "poly") {
-          const pts = (sa.points || []).map(([xf, yf]) => [
-            bounds.getSouth() + yf * H,
-            bounds.getWest() + xf * W,
-          ]);
+          const points = hasGeometry ? (geom.points || []) : (sa.points || []);
+          const pts = points.map((pt) => {
+            const [xf, yf] = Array.isArray(pt) ? pt : [pt.x, pt.y];
+            return [bounds.getSouth() + yf * H, bounds.getWest() + xf * W];
+          });
           layer = L.polygon(pts, style);
         }
 
