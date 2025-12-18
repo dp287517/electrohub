@@ -3131,26 +3131,54 @@ app.get("/api/infra/elements", async (req, res) => {
 });
 
 // ============================================================
-// 📄 GÉNÉRATION DU DRPCE (Document Relatif à la Protection Contre les Explosions)
+// GENERATION DU DRPCE (Document Relatif a la Protection Contre les Explosions)
 // ============================================================
 app.get("/api/atex/drpce", async (req, res) => {
   try {
-    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
-    const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
+    // 0. Récupérer le site depuis query param (pour accès direct via URL)
+    const siteName = req.query.site;
+    let siteId = null;
+    let companyId = null;
+
+    if (siteName) {
+      try {
+        const siteRes = await pool.query(
+          `SELECT id, company_id FROM sites WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+          [siteName]
+        );
+        if (siteRes.rows[0]) {
+          siteId = siteRes.rows[0].id;
+          companyId = siteRes.rows[0].company_id;
+          console.log(`[DRPCE] Found site: ${siteName} -> site_id=${siteId}, company_id=${companyId}`);
+        }
+      } catch (e) {
+        console.warn('[DRPCE] Site lookup failed:', e.message);
+      }
+    }
+
+    // Fallback sur tenant depuis headers si pas de query param
+    if (!siteId) {
+      const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+      siteId = tenant.siteId;
+      companyId = tenant.companyId;
+    }
 
     // 1. Récupérer les informations du site
-    let siteInfo = { company_name: "Entreprise", site_name: "Site" };
+    let siteInfo = { company_name: "Entreprise", site_name: siteName || "Site" };
     try {
       const siteRes = await pool.query(
         `SELECT company_name, site_name, logo, logo_mime FROM site_settings WHERE site = $1`,
-        [tenant.siteId || 'default']
+        [siteName || 'default']
       );
       if (siteRes.rows[0]) siteInfo = { ...siteInfo, ...siteRes.rows[0] };
     } catch (e) { console.warn('[DRPCE] No site settings:', e.message); }
 
-    // 2. Récupérer tous les équipements ATEX
-    const { rows: equipments } = await pool.query(`
-      SELECT e.*,
+    // 2. Récupérer tous les équipements ATEX (avec filtre company_id si disponible)
+    // Inclure photo_content pour les équipements avec photo
+    let equipmentQuery = `
+      SELECT e.id, e.name, e.type, e.building, e.zone, e.brand, e.model, e.serial_number,
+             e.marking, e.category, e.next_check_date, e.photo_content, e.photo_path,
+             e.site_id, e.company_id,
              (SELECT result FROM atex_checks c
               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
               ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result,
@@ -3158,14 +3186,25 @@ app.get("/api/atex/drpce", async (req, res) => {
               WHERE c.equipment_id=e.id AND c.status='fait'
               ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_check_date
       FROM atex_equipments e
-      WHERE ${tenantFilter.where}
-      ORDER BY e.building, e.zone, e.name
-    `, tenantFilter.params);
+    `;
+    let equipmentParams = [];
 
-    // 3. Récupérer les plans
+    if (siteId) {
+      equipmentQuery += ` WHERE e.site_id = $1`;
+      equipmentParams = [siteId];
+    } else if (companyId) {
+      equipmentQuery += ` WHERE e.company_id = $1`;
+      equipmentParams = [companyId];
+    }
+    equipmentQuery += ` ORDER BY e.building, e.zone, e.name`;
+
+    const { rows: equipments } = await pool.query(equipmentQuery, equipmentParams);
+    console.log(`[DRPCE] Found ${equipments.length} equipments for site_id=${siteId}, company_id=${companyId}`);
+
+    // 3. Récupérer les plans avec leurs images
     const { rows: plans } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
-             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name,
+             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name, p.data,
              COALESCE(pn.display_name, p.logical_name) AS display_name
       FROM atex_plans p
       LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
@@ -3190,8 +3229,8 @@ app.get("/api/atex/drpce", async (req, res) => {
     // Grouper par bâtiment/zone
     const byBuilding = {};
     for (const eq of equipments) {
-      const bat = eq.building || 'Non renseigné';
-      const z = eq.zone || 'Non renseignée';
+      const bat = eq.building || 'Non renseigne';
+      const z = eq.zone || 'Non renseignee';
       if (!byBuilding[bat]) byBuilding[bat] = {};
       if (!byBuilding[bat][z]) byBuilding[bat][z] = [];
       byBuilding[bat][z].push(eq);
@@ -3203,10 +3242,10 @@ app.get("/api/atex/drpce", async (req, res) => {
       margin: 50,
       bufferPages: true,
       info: {
-        Title: 'DRPCE - Document Relatif à la Protection Contre les Explosions',
+        Title: 'DRPCE - Document Relatif a la Protection Contre les Explosions',
         Author: siteInfo.company_name,
         Subject: 'DRPCE Installation ATEX',
-        Keywords: 'ATEX, DRPCE, explosions, sécurité'
+        Keywords: 'ATEX, DRPCE, explosions, securite'
       }
     });
 
@@ -3237,8 +3276,18 @@ app.get("/api/atex/drpce", async (req, res) => {
       } catch (e) { logoY = 100; }
     }
 
-    // Icône ATEX stylisée
-    doc.fontSize(80).fillColor(colors.primary).text('⚠️', 0, logoY, { align: 'center' });
+    // Triangle ATEX stylise (remplace emoji)
+    doc.save();
+    const triangleX = 297.5;
+    const triangleY = logoY + 40;
+    const triangleSize = 60;
+    doc.moveTo(triangleX, triangleY);
+    doc.lineTo(triangleX + triangleSize, triangleY + triangleSize * 1.5);
+    doc.lineTo(triangleX - triangleSize, triangleY + triangleSize * 1.5);
+    doc.closePath();
+    doc.fillAndStroke(colors.warning, colors.primary);
+    doc.fontSize(40).fillColor('#fff').text('!', triangleX - 12, triangleY + 35);
+    doc.restore();
 
     // Titre principal
     doc.fontSize(32).font('Helvetica-Bold').fillColor(colors.primary)
@@ -3268,13 +3317,14 @@ app.get("/api/atex/drpce", async (req, res) => {
     doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
 
     const sommaire = [
-      { num: '1', title: 'Cadre réglementaire', page: 3 },
-      { num: '2', title: 'Présentation de l\'établissement', page: 4 },
-      { num: '3', title: 'Zonage ATEX', page: 5 },
-      { num: '4', title: 'Inventaire des équipements', page: 6 },
-      { num: '5', title: 'État de conformité', page: 7 },
-      { num: '6', title: 'Planification des vérifications', page: 8 },
-      { num: '7', title: 'Mesures de prévention et protection', page: 9 },
+      { num: '1', title: 'Cadre reglementaire' },
+      { num: '2', title: 'Presentation de l\'etablissement' },
+      { num: '3', title: 'Zonage ATEX et plans' },
+      { num: '4', title: 'Inventaire des equipements' },
+      { num: '5', title: 'Etat de conformite' },
+      { num: '6', title: 'Planification des verifications' },
+      { num: '7', title: 'Mesures de prevention et protection' },
+      { num: '8', title: 'Fiches equipements (photos)' },
     ];
 
     let somY = 110;
@@ -3314,7 +3364,7 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     // Encadré important
     doc.rect(50, regY, 495, 80).fillAndStroke('#fef3c7', colors.warning);
-    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.warning).text('⚠️ IMPORTANT', 70, regY + 15);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.warning).text('/!\\ IMPORTANT', 70, regY + 15);
     doc.font('Helvetica').fillColor(colors.text).text(
       'Ce document doit être tenu à jour et à disposition de l\'inspection du travail. Les équipements utilisés dans les zones ATEX doivent être conformes aux exigences de la directive 2014/34/UE (matériels ATEX).',
       70, regY + 35, { width: 455 }
@@ -3363,10 +3413,10 @@ app.get("/api/atex/drpce", async (req, res) => {
     presY += 25;
 
     const statsData = [
-      ['📊 Équipements ATEX', totalEquipments],
-      ['🗺️ Plans', plans.length],
-      ['📍 Zones classées', subareas.length],
-      ['🏢 Bâtiments', Object.keys(byBuilding).length],
+      ['Equipements ATEX', totalEquipments],
+      ['Plans', plans.length],
+      ['Zones classees', subareas.length],
+      ['Batiments', Object.keys(byBuilding).length],
     ];
 
     statsData.forEach(([label, value]) => {
@@ -3394,7 +3444,7 @@ app.get("/api/atex/drpce", async (req, res) => {
       if (zoneY > 750) { doc.addPage(); zoneY = 50; }
       doc.rect(50, zoneY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
       doc.fontSize(9).font('Helvetica').fillColor(colors.text)
-         .text(`📄 ${p.display_name || p.logical_name}`, 60, zoneY + 7);
+         .text(`> ${p.display_name || p.logical_name}`, 60, zoneY + 7);
       if (p.building || p.zone) {
         doc.fillColor(colors.muted).text(`${p.building || ''} ${p.zone ? '• ' + p.zone : ''}`, 350, zoneY + 7, { width: 180, align: 'right' });
       }
@@ -3436,6 +3486,31 @@ app.get("/api/atex/drpce", async (req, res) => {
       });
       zoneY += 10;
     });
+
+    // ========== IMAGES DES PLANS ==========
+    // Ajouter chaque plan comme une page dédiée
+    for (const plan of plans) {
+      if (plan.data) {
+        try {
+          doc.addPage();
+          doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
+             .text(plan.display_name || plan.logical_name, 50, 40);
+          if (plan.building || plan.zone) {
+            doc.fontSize(10).font('Helvetica').fillColor(colors.muted)
+               .text(`${plan.building || ''} ${plan.zone ? '- ' + plan.zone : ''}`, 50, 60);
+          }
+          doc.moveTo(50, 78).lineTo(545, 78).strokeColor(colors.light).lineWidth(1).stroke();
+
+          // Ajouter l'image du plan (max 495x680 pour tenir sur la page)
+          doc.image(plan.data, 50, 90, { fit: [495, 680], align: 'center', valign: 'center' });
+        } catch (imgErr) {
+          console.warn(`[DRPCE] Could not add plan image ${plan.logical_name}:`, imgErr.message);
+          // Afficher un message d'erreur au lieu de l'image
+          doc.fontSize(10).font('Helvetica').fillColor(colors.muted)
+             .text('(Image du plan non disponible)', 50, 100);
+        }
+      }
+    }
 
     // ========== 4. INVENTAIRE DES ÉQUIPEMENTS ==========
     doc.addPage();
@@ -3520,7 +3595,7 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     // Liste des non conformes
     if (nonConformeCount > 0) {
-      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('⚠️ Équipements non conformes', 50, confY);
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('/!\\ Equipements non conformes', 50, confY);
       confY += 25;
 
       const nonConformes = equipments.filter(e => e.last_result === 'non_conforme').slice(0, 10);
@@ -3575,7 +3650,7 @@ app.get("/api/atex/drpce", async (req, res) => {
         const isLate = nextDate < now;
         const isClose = !isLate && (nextDate - now) / (1000 * 60 * 60 * 24) < 90;
         const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
-        const statusText = isLate ? '⚠️' : (isClose ? '⏰' : '✓');
+        const statusText = isLate ? '/!\\' : (isClose ? '(!)' : 'OK');
 
         const row = [
           (eq.name || '-').substring(0, 35),
@@ -3636,11 +3711,86 @@ app.get("/api/atex/drpce", async (req, res) => {
     // Note finale
     mesY += 20;
     doc.rect(50, mesY, 495, 60).fillAndStroke('#f0fdf4', colors.success);
-    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.success).text('✓ Document conforme', 70, mesY + 15);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.success).text('[OK] Document conforme', 70, mesY + 15);
     doc.font('Helvetica').fillColor(colors.text).text(
-      'Ce document doit être mis à jour lors de toute modification des installations ou des conditions d\'exploitation, et au minimum lors de chaque vérification périodique.',
+      'Ce document doit être mis a jour lors de toute modification des installations ou des conditions d\'exploitation, et au minimum lors de chaque verification periodique.',
       70, mesY + 32, { width: 455 }
     );
+
+    // ========== 8. FICHES EQUIPEMENTS (avec photos) ==========
+    // Afficher les équipements qui ont des photos
+    const equipmentsWithPhotos = equipments.filter(e => e.photo_content && e.photo_content.length > 0);
+    if (equipmentsWithPhotos.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted)
+         .text(`${equipmentsWithPhotos.length} equipement(s) avec photo sur ${totalEquipments} au total`, 50, ficheY);
+      ficheY += 30;
+
+      // Afficher les équipements avec photos (2 par page)
+      for (let i = 0; i < equipmentsWithPhotos.length; i++) {
+        const eq = equipmentsWithPhotos[i];
+
+        // Nouvelle page si nécessaire (chaque fiche fait environ 350px)
+        if (ficheY > 450) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Cadre de la fiche
+        doc.rect(50, ficheY, 495, 320).stroke(colors.light);
+
+        // En-tête avec le nom
+        doc.rect(50, ficheY, 495, 35).fill(colors.primary);
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#fff')
+           .text(eq.name || 'Equipement sans nom', 60, ficheY + 10, { width: 475 });
+
+        // Statut (conforme/non conforme)
+        const statusLabel = eq.last_result === 'conforme' ? 'CONFORME' : (eq.last_result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER');
+        const statusBg = eq.last_result === 'conforme' ? colors.success : (eq.last_result === 'non_conforme' ? colors.danger : colors.warning);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(statusBg)
+           .text(statusLabel, 450, ficheY + 13, { width: 80, align: 'right' });
+
+        let infoY = ficheY + 45;
+        const infoX = 60;
+        const photoWidth = 180;
+        const photoHeight = 240;
+        const infoWidth = 280;
+
+        // Photo à droite
+        try {
+          doc.image(eq.photo_content, 360, infoY, { fit: [photoWidth, photoHeight], align: 'center' });
+        } catch (photoErr) {
+          doc.rect(360, infoY, photoWidth, photoHeight).stroke(colors.light);
+          doc.fontSize(8).fillColor(colors.muted).text('Photo non disponible', 380, infoY + 110);
+        }
+
+        // Informations à gauche
+        const infoItems = [
+          ['Type', eq.type || '-'],
+          ['Batiment', eq.building || '-'],
+          ['Zone', eq.zone || '-'],
+          ['Marque', eq.brand || '-'],
+          ['Modele', eq.model || '-'],
+          ['N/S', eq.serial_number || '-'],
+          ['Marquage ATEX', eq.marking || '-'],
+          ['Categorie', eq.category || '-'],
+          ['Derniere verif.', eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : '-'],
+          ['Prochaine verif.', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
+        ];
+
+        infoItems.forEach(([label, value]) => {
+          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 90 });
+          doc.font('Helvetica').fillColor(colors.muted).text(value, infoX + 95, infoY, { width: infoWidth - 95 });
+          infoY += 18;
+        });
+
+        ficheY += 330;
+      }
+    }
 
     // ========== NUMÉROTATION DES PAGES ==========
     const range = doc.bufferedPageRange();
