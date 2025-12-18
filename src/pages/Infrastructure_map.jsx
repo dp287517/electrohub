@@ -20,6 +20,25 @@ import {
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // ============================================================
+// DRAW MODES
+// ============================================================
+const DRAW_NONE = "none";
+const DRAW_RECT = "rect";
+const DRAW_CIRCLE = "circle";
+const DRAW_POLY = "poly";
+
+// Zone colors
+const ZONE_COLORS = [
+  "#6B7280", // Gray
+  "#EF4444", // Red
+  "#F59E0B", // Amber
+  "#10B981", // Green
+  "#3B82F6", // Blue
+  "#8B5CF6", // Purple
+  "#EC4899", // Pink
+];
+
+// ============================================================
 // INFRASTRUCTURE MAP COMPONENT
 // ============================================================
 
@@ -51,8 +70,15 @@ export default function InfrastructureMap({
   // Interaction states
   const [placingEquipment, setPlacingEquipment] = useState(false);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
-  const [drawingZone, setDrawingZone] = useState(false);
-  const [zonePoints, setZonePoints] = useState([]);
+
+  // Drawing states
+  const [drawing, setDrawing] = useState(DRAW_NONE);
+  const [polyTemp, setPolyTemp] = useState([]);
+  const [drawMenu, setDrawMenu] = useState(false);
+  const [selectedZoneColor, setSelectedZoneColor] = useState(ZONE_COLORS[0]);
+
+  // Zone editor modal
+  const [zoneEditor, setZoneEditor] = useState(null); // { tempLayer, kind, geometry }
 
   // Selected position for highlight
   const [selectedPositionId, setSelectedPositionId] = useState(null);
@@ -199,17 +225,187 @@ export default function InfrastructureMap({
         setPlacingEquipment(false);
         setSelectedEquipmentId("");
       }
-
-      if (drawingZone) {
-        const { lat, lng } = e.latlng;
-        setZonePoints((prev) => [...prev, { lat, lng }]);
-      }
     });
 
     return () => {
       map.remove();
     };
   }, [imgSrc, imgSize]);
+
+  // ============================================================
+  // Drawing Rectangle & Circle
+  // ============================================================
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || drawing === DRAW_NONE || drawing === DRAW_POLY) return;
+    if (imgSize.w === 0) return;
+
+    let startPt = null;
+    let tempLayer = null;
+    const mode = drawing;
+    const color = selectedZoneColor;
+
+    const onDown = (e) => {
+      startPt = e.latlng;
+      if (mode === DRAW_CIRCLE) {
+        tempLayer = L.circle(e.latlng, {
+          radius: 1,
+          color,
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.2,
+        }).addTo(m);
+      }
+      if (mode === DRAW_RECT) {
+        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), {
+          color,
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.2,
+        }).addTo(m);
+      }
+      m.dragging.disable();
+    };
+
+    const onMove = (e) => {
+      if (!startPt || !tempLayer) return;
+      if (mode === DRAW_CIRCLE) {
+        const r = m.distance(startPt, e.latlng);
+        tempLayer.setRadius(Math.max(4, r));
+      } else if (mode === DRAW_RECT) {
+        tempLayer.setBounds(L.latLngBounds(startPt, e.latlng));
+      }
+    };
+
+    const onUp = () => {
+      m.dragging.enable();
+      if (!startPt || !tempLayer) {
+        setDrawing(DRAW_NONE);
+        return;
+      }
+
+      // Calculate geometry in normalized coordinates (0-1)
+      let geometry;
+      if (mode === DRAW_CIRCLE) {
+        const ll = tempLayer.getLatLng();
+        const r = tempLayer.getRadius();
+        geometry = {
+          cx: ll.lng / imgSize.w,
+          cy: 1 - ll.lat / imgSize.h,
+          r: r / Math.min(imgSize.w, imgSize.h),
+        };
+      } else if (mode === DRAW_RECT) {
+        const b = tempLayer.getBounds();
+        geometry = {
+          x1: b.getWest() / imgSize.w,
+          y1: 1 - b.getNorth() / imgSize.h,
+          x2: b.getEast() / imgSize.w,
+          y2: 1 - b.getSouth() / imgSize.h,
+        };
+      }
+
+      // Open zone editor modal
+      setZoneEditor({ tempLayer, kind: mode, geometry, color });
+      setDrawing(DRAW_NONE);
+    };
+
+    m.on("mousedown", onDown);
+    m.on("mousemove", onMove);
+    m.on("mouseup", onUp);
+
+    return () => {
+      m.off("mousedown", onDown);
+      m.off("mousemove", onMove);
+      m.off("mouseup", onUp);
+    };
+  }, [drawing, imgSize, selectedZoneColor]);
+
+  // ============================================================
+  // Drawing Polygon
+  // ============================================================
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || drawing !== DRAW_POLY) return;
+    if (imgSize.w === 0) return;
+
+    let tempPoly = null;
+    const color = selectedZoneColor;
+    const style = { color, weight: 2, fillColor: color, fillOpacity: 0.2, dashArray: "5, 5" };
+
+    const redraw = () => {
+      if (tempPoly) {
+        m.removeLayer(tempPoly);
+        tempPoly = null;
+      }
+      if (polyTemp.length >= 1) {
+        tempPoly = L.polygon(polyTemp, style).addTo(m);
+      }
+    };
+
+    const onClick = (e) => {
+      // Don't add points when placing equipment
+      if (placingEquipment) return;
+      setPolyTemp((old) => [...old, e.latlng]);
+    };
+
+    const onMove = () => redraw();
+
+    const onDblClick = (e) => {
+      L.DomEvent.stopPropagation(e);
+      if (polyTemp.length < 3) return;
+
+      // Calculate geometry
+      const points = polyTemp.map((ll) => [
+        ll.lng / imgSize.w,
+        1 - ll.lat / imgSize.h,
+      ]);
+
+      // Create final polygon for visual
+      const finalPoly = L.polygon(polyTemp, { ...style, dashArray: null });
+
+      setZoneEditor({ tempLayer: finalPoly, kind: "poly", geometry: { points }, color });
+      setPolyTemp([]);
+      setDrawing(DRAW_NONE);
+      if (tempPoly) m.removeLayer(tempPoly);
+    };
+
+    m.on("click", onClick);
+    m.on("mousemove", onMove);
+    m.on("dblclick", onDblClick);
+
+    return () => {
+      m.off("click", onClick);
+      m.off("mousemove", onMove);
+      m.off("dblclick", onDblClick);
+      if (tempPoly) m.removeLayer(tempPoly);
+    };
+  }, [drawing, polyTemp, imgSize, selectedZoneColor, placingEquipment]);
+
+  // Handle zone editor save
+  const handleSaveZone = (zoneName) => {
+    if (!zoneEditor || !zoneName) {
+      // Cancel
+      if (zoneEditor?.tempLayer && mapRef.current) {
+        mapRef.current.removeLayer(zoneEditor.tempLayer);
+      }
+      setZoneEditor(null);
+      return;
+    }
+
+    onZoneCreate?.({
+      name: zoneName,
+      kind: zoneEditor.kind,
+      geometry: zoneEditor.geometry,
+      color: zoneEditor.color,
+      page_index: 0,
+    });
+
+    // Remove temp layer
+    if (zoneEditor.tempLayer && mapRef.current) {
+      mapRef.current.removeLayer(zoneEditor.tempLayer);
+    }
+    setZoneEditor(null);
+  };
 
   // Re-render markers when positions change or when placing mode changes
   useEffect(() => {
@@ -322,59 +518,23 @@ export default function InfrastructureMap({
     });
   }, [zones, imgSize]);
 
-  // ============================================================
-  // Drawing zone polygon
-  // ============================================================
-  useEffect(() => {
-    if (!mapRef.current || !drawingZone || zonePoints.length < 2) return;
-
-    const latLngs = zonePoints.map((p) => [p.lat, p.lng]);
-    const tempPoly = L.polygon(latLngs, {
-      color: "#10B981",
-      weight: 2,
-      dashArray: "5, 5",
-      fillColor: "#10B981",
-      fillOpacity: 0.1,
-    });
-    tempPoly.addTo(mapRef.current);
-
-    return () => {
-      mapRef.current?.removeLayer(tempPoly);
-    };
-  }, [zonePoints, drawingZone]);
-
-  // Finish zone drawing
-  const finishZoneDrawing = () => {
-    if (zonePoints.length < 3) {
-      alert("Une zone doit avoir au moins 3 points");
-      return;
+  // Set draw mode helper
+  const setDrawMode = (mode) => {
+    if (mode === DRAW_POLY) {
+      setPolyTemp([]);
     }
-
-    const points = zonePoints.map((p) => [p.lng / imgSize.w, 1 - p.lat / imgSize.h]);
-
-    const zoneName = prompt("Nom de la zone:");
-    if (!zoneName) {
-      setDrawingZone(false);
-      setZonePoints([]);
-      return;
-    }
-
-    onZoneCreate?.({
-      name: zoneName,
-      kind: "poly",
-      geometry: { points },
-      color: "#6B7280",
-      page_index: 0,
-    });
-
-    setDrawingZone(false);
-    setZonePoints([]);
+    setDrawing(mode);
+    setDrawMenu(false);
   };
 
-  // Cancel zone drawing
-  const cancelZoneDrawing = () => {
-    setDrawingZone(false);
-    setZonePoints([]);
+  // Cancel drawing
+  const cancelDrawing = () => {
+    setDrawing(DRAW_NONE);
+    setPolyTemp([]);
+    if (zoneEditor?.tempLayer && mapRef.current) {
+      mapRef.current.removeLayer(zoneEditor.tempLayer);
+    }
+    setZoneEditor(null);
   };
 
   // ============================================================
@@ -395,42 +555,94 @@ export default function InfrastructureMap({
 
         <div className="flex-1" />
 
-        {/* Add equipment button */}
-        {!placingEquipment && !drawingZone && (
-          <>
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedEquipmentId}
-                onChange={(e) => setSelectedEquipmentId(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-900 max-w-[200px]"
-              >
-                <option value="">Sélectionner équipement...</option>
-                {availableEquipments.map((eq) => (
-                  <option key={eq.id} value={eq.id}>
-                    {eq.name} ({eq.building || "?"})
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => {
-                  if (selectedEquipmentId) {
-                    setPlacingEquipment(true);
-                  }
-                }}
-                disabled={!selectedEquipmentId}
-                className="px-3 py-1.5 text-sm bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Placer
-              </button>
-            </div>
-
+        {/* Normal mode - Draw menu */}
+        {drawing === DRAW_NONE && !placingEquipment && (
+          <div className="relative">
             <button
-              onClick={() => setDrawingZone(true)}
-              className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
+              onClick={() => setDrawMenu((v) => !v)}
+              className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center gap-2"
+              title="Dessiner une zone"
             >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
               Dessiner zone
             </button>
-          </>
+
+            {/* Draw menu dropdown */}
+            {drawMenu && (
+              <div className="absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 min-w-[160px]">
+                <button
+                  onClick={() => setDrawMode(DRAW_RECT)}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
+                >
+                  <span className="w-4 h-4 border-2 border-current" />
+                  Rectangle
+                </button>
+                <button
+                  onClick={() => setDrawMode(DRAW_CIRCLE)}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
+                >
+                  <span className="w-4 h-4 border-2 border-current rounded-full" />
+                  Cercle
+                </button>
+                <button
+                  onClick={() => setDrawMode(DRAW_POLY)}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3l14 9-14 9V3z" />
+                  </svg>
+                  Polygone
+                </button>
+                <hr className="my-1" />
+                <div className="px-4 py-2">
+                  <span className="text-xs text-gray-500 block mb-2">Couleur:</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {ZONE_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => setSelectedZoneColor(c)}
+                        className={`w-6 h-6 rounded ${selectedZoneColor === c ? "ring-2 ring-offset-1 ring-gray-400" : ""}`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Drawing mode indicator */}
+        {drawing !== DRAW_NONE && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-green-600 font-medium">
+              {drawing === DRAW_RECT && "Cliquez et glissez pour dessiner un rectangle"}
+              {drawing === DRAW_CIRCLE && "Cliquez et glissez pour dessiner un cercle"}
+              {drawing === DRAW_POLY && `Cliquez pour ajouter des points (${polyTemp.length}) - Double-clic pour terminer`}
+            </span>
+            {drawing === DRAW_POLY && polyTemp.length >= 3 && (
+              <button
+                onClick={() => {
+                  const m = mapRef.current;
+                  if (m) {
+                    const ev = new MouseEvent("dblclick", { bubbles: true });
+                    m.getContainer().dispatchEvent(ev);
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
+              >
+                Terminer
+              </button>
+            )}
+            <button
+              onClick={cancelDrawing}
+              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
+            >
+              Annuler
+            </button>
+          </div>
         )}
 
         {/* Placing mode indicator */}
@@ -444,28 +656,6 @@ export default function InfrastructureMap({
                 setPlacingEquipment(false);
                 setSelectedEquipmentId("");
               }}
-              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
-            >
-              Annuler
-            </button>
-          </div>
-        )}
-
-        {/* Drawing zone mode */}
-        {drawingZone && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-green-600 font-medium">
-              Cliquez pour ajouter des points ({zonePoints.length} points)
-            </span>
-            <button
-              onClick={finishZoneDrawing}
-              disabled={zonePoints.length < 3}
-              className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
-            >
-              Terminer
-            </button>
-            <button
-              onClick={cancelZoneDrawing}
               className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
             >
               Annuler
@@ -526,6 +716,72 @@ export default function InfrastructureMap({
           )}
         </div>
       </div>
+
+      {/* Zone editor modal */}
+      {zoneEditor && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Nouvelle zone
+            </h3>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                handleSaveZone(formData.get("zoneName"));
+              }}
+            >
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nom de la zone
+                </label>
+                <input
+                  type="text"
+                  name="zoneName"
+                  autoFocus
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                  placeholder="Ex: Zone de stockage, Bureau, Atelier..."
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Couleur
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  {ZONE_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setZoneEditor({ ...zoneEditor, color: c });
+                        setSelectedZoneColor(c);
+                      }}
+                      className={`w-8 h-8 rounded ${zoneEditor.color === c ? "ring-2 ring-offset-2 ring-gray-400" : ""}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleSaveZone(null)}
+                  className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
+                >
+                  Créer la zone
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* CSS for markers */}
       <style>{`
