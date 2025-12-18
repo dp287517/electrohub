@@ -180,6 +180,9 @@ export default function Atex() {
   // Toast
   const [toast, setToast] = useState("");
 
+  // Upload plan modal
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+
   // 🆕 Modal de confirmation moderne
   const [confirmModal, setConfirmModal] = useState({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
 
@@ -272,6 +275,18 @@ export default function Atex() {
       setMapsLoading(false);
     }
   }, []);
+
+  // Upload a new plan
+  const handleUploadPlan = useCallback(async (file, buildingName, isMultiZone) => {
+    try {
+      await api.atexMaps.uploadPlan(file, { building_name: buildingName, is_multi_zone: isMultiZone });
+      setToast("Plan importé avec succès");
+      setUploadModalOpen(false);
+      loadPlans();
+    } catch (err) {
+      setToast("Erreur: " + (err.message || "Import échoué"));
+    }
+  }, [loadPlans]);
 
   // Load infrastructure data for equipment placement
   const loadInfraData = useCallback(async () => {
@@ -1038,17 +1053,6 @@ export default function Atex() {
         <TabButton id="controls" label="Équipements" count={stats.total} color="bg-blue-100 text-blue-800" />
         <TabButton id="analytics" label="📊 Analyse" color="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-800" />
         <TabButton id="plans" label="Plans" count={plans.length} color="bg-purple-100 text-purple-800" />
-        {/* Lien vers Infrastructure */}
-        <button
-          onClick={() => navigate("/app/infrastructure")}
-          className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base bg-amber-500 text-white hover:bg-amber-600 shadow-md flex items-center gap-1.5 border-2 border-amber-600"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-          <span className="hidden sm:inline">Infrastructure</span>
-          <span className="sm:hidden">Infra</span>
-        </button>
       </div>
 
       {/* Tab Content */}
@@ -1104,6 +1108,7 @@ export default function Atex() {
             setToast={setToast}
             selectedEquipmentId={selectedEquipmentId}
             setSelectedEquipmentId={setSelectedEquipmentId}
+            onUploadClick={() => setUploadModalOpen(true)}
           />
         )}
 
@@ -1137,6 +1142,7 @@ export default function Atex() {
           infraPositions={infraPositions}
           placeOnInfraPlan={placeOnInfraPlan}
           removeFromInfraPlan={removeFromInfraPlan}
+          onGoToPlans={() => { setActiveTab("plans"); setDrawerOpen(false); }}
         />
       )}
 
@@ -1177,6 +1183,106 @@ export default function Atex() {
           </div>
         </div>
       )}
+
+      {/* Upload Plan Modal */}
+      {uploadModalOpen && (
+        <UploadPlanModal
+          onClose={() => setUploadModalOpen(false)}
+          onUpload={handleUploadPlan}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// UPLOAD PLAN MODAL
+// ============================================================
+
+function UploadPlanModal({ onClose, onUpload }) {
+  const [file, setFile] = useState(null);
+  const [buildingName, setBuildingName] = useState("");
+  const [isMultiZone, setIsMultiZone] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!file) return;
+    setUploading(true);
+    await onUpload(file, buildingName, isMultiZone);
+    setUploading(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Importer un plan PDF</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Fichier PDF *
+            </label>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Nom du bâtiment (optionnel)
+            </label>
+            <input
+              type="text"
+              value={buildingName}
+              onChange={(e) => setBuildingName(e.target.value)}
+              placeholder="Ex: Bâtiment A"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+          </div>
+
+          <div className="flex items-center gap-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+            <input
+              type="checkbox"
+              id="multi-zone"
+              checked={isMultiZone}
+              onChange={(e) => setIsMultiZone(e.target.checked)}
+              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            />
+            <label htmlFor="multi-zone" className="text-sm">
+              <span className="font-medium text-blue-800">Plan Infrastructure</span>
+              <span className="block text-xs text-blue-600">Plan multi-zones (non ATEX) pour positionner les équipements</span>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium"
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              disabled={!file || uploading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {uploading ? "Import..." : "Importer"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -2285,7 +2391,7 @@ function CalendarTab({ items, onOpenEquipment }) {
 // PLANS TAB
 // ============================================================
 
-function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId }) {
+function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId, onUploadClick }) {
   const grouped = useMemo(() => {
     const byKey = new Map();
     for (const p of plans) {
@@ -2316,23 +2422,31 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             <p className="text-xs text-amber-700">Importez un ZIP contenant vos PDFs ATEX</p>
           </div>
         </div>
-        <label className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 cursor-pointer font-medium text-center shadow-md transition-all">
-          <input
-            type="file"
-            accept=".zip"
-            className="hidden"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (f) {
-                await api.atexMaps.uploadZip(f);
-                setToast("Plans importés ✓");
-                await loadPlans();
-              }
-              e.target.value = "";
-            }}
-          />
-          📤 Import ZIP
-        </label>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <label className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 cursor-pointer font-medium text-center shadow-md transition-all">
+            <input
+              type="file"
+              accept=".zip"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  await api.atexMaps.uploadZip(f);
+                  setToast("Plans importés ✓");
+                  await loadPlans();
+                }
+                e.target.value = "";
+              }}
+            />
+            📤 Import ZIP
+          </label>
+          <button
+            onClick={onUploadClick}
+            className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 font-medium text-center shadow-md transition-all"
+          >
+            📄 Import PDF
+          </button>
+        </div>
       </div>
 
       {/* Plans List */}
@@ -2487,6 +2601,7 @@ function EquipmentDrawer({
   infraPositions = [],
   placeOnInfraPlan,
   removeFromInfraPlan,
+  onGoToPlans,
 }) {
   const [activeSection, setActiveSection] = useState("info");
 
@@ -2933,9 +3048,12 @@ function EquipmentDrawer({
                     ) : (
                       <div className="text-center py-4 text-gray-500">
                         <p className="text-sm">Aucun plan d'infrastructure disponible.</p>
-                        <a href="/app/infrastructure" className="text-sm text-amber-600 hover:text-amber-700 underline mt-1 inline-block">
+                        <button
+                          onClick={onGoToPlans}
+                          className="text-sm text-amber-600 hover:text-amber-700 underline mt-1 inline-block"
+                        >
                           Importer des plans →
-                        </a>
+                        </button>
                       </div>
                     )}
                   </>
@@ -2945,8 +3063,8 @@ function EquipmentDrawer({
               <div className="atex-section bg-blue-50 border-blue-200">
                 <div className="atex-section-title text-blue-800">💡 Astuce</div>
                 <p className="text-sm text-blue-700">
-                  Après avoir placé l'équipement, vous pouvez le déplacer précisément sur le plan depuis la page{" "}
-                  <a href="/app/infrastructure" className="font-medium underline">Infrastructure</a>.
+                  Après avoir placé l'équipement, vous pouvez le déplacer précisément sur le plan depuis l'onglet{" "}
+                  <button onClick={onGoToPlans} className="font-medium underline">Plans</button>.
                 </p>
               </div>
             </div>

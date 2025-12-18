@@ -35,7 +35,7 @@ import MecaMap from './pages/Meca_map.jsx';
 import MobileEquipments from './pages/MobileEquipments.jsx';
 import MobileEquipmentsMap from './pages/MobileEquipments_map.jsx';
 import HighVoltageMap from './pages/High_voltage_map.jsx';
-import Infrastructure from './pages/Infrastructure.jsx';
+// Infrastructure is now unified under ATEX
 
 // Component to redirect authenticated users to dashboard
 function AuthRedirect({ children }) {
@@ -106,7 +106,8 @@ export default function App() {
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
           <Route path="/app/mobile-equipments" element={<ProtectedRoute><MobileEquipments /></ProtectedRoute>} />
           <Route path="/app/mobile-equipments/map" element={<ProtectedRoute><MobileEquipmentsMap /></ProtectedRoute>} />
-          <Route path="/app/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
+          {/* Infrastructure is now unified under ATEX - redirect */}
+          <Route path="/app/infrastructure" element={<Navigate to="/app/atex?tab=plans" replace />} />
 
           {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />

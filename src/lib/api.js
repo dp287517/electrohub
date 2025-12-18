@@ -970,6 +970,14 @@ export const api = {
       if (name) fd.append("user_name", name);
       return upload(`/api/atex/maps/uploadZip`, fd);
     },
+    // Upload single PDF plan (with optional multi-zone for infrastructure plans)
+    uploadPlan: (file, { building_name = "", is_multi_zone = false } = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (building_name) fd.append("building_name", building_name);
+      fd.append("is_multi_zone", String(is_multi_zone));
+      return upload("/api/atex/maps/uploadPlan", fd);
+    },
     listPlans: () => get(`/api/atex/maps/listPlans`),
     listPlansCompat: () => get(`/api/atex/maps/plans`),
     renamePlan: (logical_name, display_name) =>

@@ -204,10 +204,29 @@ async function ensureSchema() {
       filename TEXT NOT NULL,
       file_path TEXT NOT NULL,
       page_count INTEGER DEFAULT 1,
-      content BYTEA NULL
+      content BYTEA NULL,
+      is_multi_zone BOOLEAN DEFAULT false,
+      building_name TEXT DEFAULT '',
+      building TEXT DEFAULT '',
+      zone TEXT DEFAULT '',
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_plans_logical ON atex_plans(logical_name);
+    CREATE INDEX IF NOT EXISTS idx_atex_plans_company ON atex_plans(company_id);
+    CREATE INDEX IF NOT EXISTS idx_atex_plans_site ON atex_plans(site_id);
   `);
+  // Migration: add new columns if they don't exist
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS is_multi_zone BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS building_name TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS building TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS zone TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS company_id INTEGER`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS site_id INTEGER`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()`);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plan_names (
       logical_name TEXT PRIMARY KEY,
@@ -220,13 +239,23 @@ async function ensureSchema() {
       equipment_id UUID NOT NULL REFERENCES atex_equipments(id) ON DELETE CASCADE,
       logical_name TEXT NOT NULL,
       plan_id UUID NULL,
+      zone_id UUID NULL,
       page_index INTEGER NOT NULL DEFAULT 0,
       x_frac NUMERIC NOT NULL,
       y_frac NUMERIC NOT NULL,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now(),
       UNIQUE (equipment_id, logical_name, page_index)
     );
     CREATE INDEX IF NOT EXISTS idx_atex_positions_lookup ON atex_positions(logical_name, page_index);
+    CREATE INDEX IF NOT EXISTS idx_atex_positions_equipment ON atex_positions(equipment_id);
   `);
+  // Migration: add new columns to atex_positions if they don't exist
+  await pool.query(`ALTER TABLE atex_positions ADD COLUMN IF NOT EXISTS zone_id UUID NULL`);
+  await pool.query(`ALTER TABLE atex_positions ADD COLUMN IF NOT EXISTS company_id INTEGER`);
+  await pool.query(`ALTER TABLE atex_positions ADD COLUMN IF NOT EXISTS site_id INTEGER`);
+  await pool.query(`ALTER TABLE atex_positions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_subareas (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -238,14 +267,27 @@ async function ensureSchema() {
       x2 NUMERIC NULL, y2 NUMERIC NULL,
       cx NUMERIC NULL, cy NUMERIC NULL, r NUMERIC NULL,
       points JSONB NULL,
+      geometry JSONB DEFAULT '{}',
       name TEXT DEFAULT '',
+      building TEXT DEFAULT '',
+      zone TEXT DEFAULT '',
+      color TEXT DEFAULT '#6B7280',
       zoning_gas INTEGER NULL,
       zoning_dust INTEGER NULL,
+      company_id INTEGER,
+      site_id INTEGER,
       created_at TIMESTAMP DEFAULT now(),
       updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_subareas_lookup ON atex_subareas(logical_name, page_index);
   `);
+  // Migration: add new columns to atex_subareas if they don't exist
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS geometry JSONB DEFAULT '{}'`);
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS building TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS zone TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS color TEXT DEFAULT '#6B7280'`);
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS company_id INTEGER`);
+  await pool.query(`ALTER TABLE atex_subareas ADD COLUMN IF NOT EXISTS site_id INTEGER`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_settings (
       id INTEGER PRIMARY KEY DEFAULT 1,
@@ -367,6 +409,110 @@ async function ensureSchema() {
   `);
 
   console.log('[ATEX] Infrastructure tables created ✅');
+
+  // ============================================================
+  // MIGRATION: Move infrastructure data to unified atex tables
+  // ============================================================
+  console.log('[ATEX] Running infrastructure → atex migration...');
+
+  try {
+    // Check if there are infrastructure_plans not yet migrated
+    const { rows: infraPlans } = await pool.query(`
+      SELECT ip.* FROM infrastructure_plans ip
+      WHERE NOT EXISTS (
+        SELECT 1 FROM atex_plans ap
+        WHERE ap.logical_name = 'infra_' || ip.id::text
+      )
+    `);
+
+    if (infraPlans.length > 0) {
+      console.log(`[ATEX] Migrating ${infraPlans.length} infrastructure plans...`);
+
+      for (const plan of infraPlans) {
+        const newLogicalName = 'infra_' + plan.id;
+
+        // Insert into atex_plans with is_multi_zone = true
+        await pool.query(`
+          INSERT INTO atex_plans (
+            id, logical_name, version, filename, file_path, page_count, content,
+            is_multi_zone, building_name, company_id, site_id, created_at, updated_at
+          ) VALUES (
+            gen_random_uuid(), $1, 1, $2, $3, $4, $5,
+            true, $6, $7, $8, $9, $10
+          )
+        `, [
+          newLogicalName, plan.filename, plan.file_path || '', plan.page_count || 1, plan.content,
+          plan.building_name || '', plan.company_id, plan.site_id, plan.created_at, plan.updated_at
+        ]);
+
+        // Also add to atex_plan_names for display
+        await pool.query(`
+          INSERT INTO atex_plan_names (logical_name, display_name)
+          VALUES ($1, $2)
+          ON CONFLICT (logical_name) DO UPDATE SET display_name = $2
+        `, [newLogicalName, plan.display_name || plan.building_name || plan.logical_name]);
+
+        // Migrate zones for this plan
+        const { rows: zones } = await pool.query(`
+          SELECT * FROM infrastructure_zones WHERE plan_id = $1
+        `, [plan.id]);
+
+        for (const zone of zones) {
+          await pool.query(`
+            INSERT INTO atex_subareas (
+              logical_name, plan_id, page_index, kind, geometry,
+              name, building, zone, color, zoning_gas, zoning_dust,
+              company_id, site_id, created_at
+            ) VALUES (
+              $1, NULL, $2, $3, $4,
+              $5, $6, $7, $8, $9, $10,
+              $11, $12, $13
+            )
+          `, [
+            newLogicalName, zone.page_index || 0, zone.kind || 'rect', zone.geometry || '{}',
+            zone.name || '', '', '', zone.color || '#6B7280', zone.zoning_gas, zone.zoning_dust,
+            zone.company_id, zone.site_id, zone.created_at
+          ]);
+        }
+
+        // Migrate positions for this plan
+        const { rows: positions } = await pool.query(`
+          SELECT * FROM infrastructure_positions WHERE plan_id = $1
+        `, [plan.id]);
+
+        for (const pos of positions) {
+          // Check if position already exists
+          const { rows: existing } = await pool.query(`
+            SELECT id FROM atex_positions
+            WHERE equipment_id = $1 AND logical_name = $2 AND page_index = $3
+          `, [pos.equipment_id, newLogicalName, pos.page_index || 0]);
+
+          if (existing.length === 0) {
+            await pool.query(`
+              INSERT INTO atex_positions (
+                equipment_id, logical_name, plan_id, zone_id, page_index, x_frac, y_frac,
+                company_id, site_id, created_at
+              ) VALUES (
+                $1, $2, NULL, $3, $4, $5, $6,
+                $7, $8, $9
+              )
+            `, [
+              pos.equipment_id, newLogicalName, pos.zone_id, pos.page_index || 0, pos.x_frac, pos.y_frac,
+              pos.company_id, pos.site_id, pos.created_at
+            ]);
+          }
+        }
+
+        console.log(`[ATEX] Migrated plan: ${plan.display_name || plan.logical_name} → ${newLogicalName}`);
+      }
+
+      console.log('[ATEX] Infrastructure migration completed ✅');
+    } else {
+      console.log('[ATEX] No new infrastructure plans to migrate');
+    }
+  } catch (migrationError) {
+    console.error('[ATEX] Migration error (non-fatal):', migrationError.message);
+  }
 }
 // -------------------------------------------------
 // Utils
@@ -1209,6 +1355,63 @@ app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) =
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// Upload single PDF plan (supports multi-zone option for infrastructure plans)
+const multerSinglePlan = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
+
+app.post("/api/atex/maps/uploadPlan", multerSinglePlan.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ ok: false, error: "No file uploaded" });
+
+    const building_name = req.body.building_name || "";
+    const is_multi_zone = req.body.is_multi_zone === "true" || req.body.is_multi_zone === true;
+    const originalName = file.originalname || "plan.pdf";
+    const baseName = originalName.replace(/\.[^.]+$/, "");
+    const logical = baseName.replace(/[^\w.-]+/g, "_").toLowerCase();
+    const version = Math.floor(Date.now() / 1000);
+    const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
+
+    // Check for previous version to preserve building/zone
+    const { rows: prev } = await pool.query(
+      `SELECT building, zone FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
+      [logical]
+    );
+    const existingBuilding = prev?.[0]?.building || "";
+    const existingZone = prev?.[0]?.zone || "";
+
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    await fsp.writeFile(dest, file.buffer);
+
+    // Insert into atex_plans with multi-zone flag
+    await pool.query(
+      `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content, building, zone, is_multi_zone, building_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [logical, version, path.basename(dest), dest, 1, file.buffer, existingBuilding, existingZone, is_multi_zone, building_name]
+    );
+
+    // Insert display name
+    await pool.query(
+      `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
+       ON CONFLICT (logical_name) DO NOTHING`,
+      [logical, baseName]
+    );
+
+    const { rows } = await pool.query(
+      `SELECT id, logical_name, version, page_count, is_multi_zone, building_name, building, zone FROM atex_plans WHERE logical_name=$1 AND version=$2`,
+      [logical, version]
+    );
+
+    res.json({ ok: true, plan: rows[0] });
+  } catch (e) {
+    console.error("[atex] upload plan error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ⚙️ listPlans => id = UUID de la dernière version
 app.get("/api/atex/maps/listPlans", async (_req, res) => {
   try {
@@ -1220,6 +1423,8 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
              COALESCE(p.page_count, 1) AS page_count,
              p.building,
              p.zone,
+             COALESCE(p.is_multi_zone, false) AS is_multi_zone,
+             COALESCE(p.building_name, '') AS building_name,
              (SELECT display_name
                 FROM atex_plan_names n
                WHERE n.logical_name = p.logical_name
@@ -1236,6 +1441,8 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
       display_name: r.display_name || r.logical_name,
       building: r.building || "",
       zone: r.zone || "",
+      is_multi_zone: r.is_multi_zone || false,
+      building_name: r.building_name || "",
     }));
 
     res.json({ plans, items: plans });
@@ -1744,7 +1951,11 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
       x1 = null, y1 = null, x2 = null, y2 = null,
       cx = null, cy = null, r = null,
       points = null,
+      geometry = null,
       name = "",
+      building = "",
+      zone = "",
+      color = "#6B7280",
       zoning_gas = null, zoning_dust = null,
       logical_name, plan_id = null, page_index = 0,
     } = req.body || {};
@@ -1753,18 +1964,20 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     if (!["rect","circle","poly"].includes(kind)) return res.status(400).json({ ok:false, error:"invalid kind" });
 
     const planIdSafe = isUuid(plan_id) ? plan_id : null;
-    
+
     // 1. CRÉATION DE LA ZONE
     const { rows } = await pool.query(
       `INSERT INTO atex_subareas
-        (logical_name, plan_id, page_index, kind, x1,y1,x2,y2,cx,cy,r,points,name,zoning_gas,zoning_dust)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        (logical_name, plan_id, page_index, kind, x1,y1,x2,y2,cx,cy,r,points,geometry,name,building,zone,color,zoning_gas,zoning_dust)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING *`,
       [
         logical_name, planIdSafe, page_index, kind,
         x1, y1, x2, y2, cx, cy, r,
         points ? JSON.stringify(points) : null,
-        name, zoning_gas, zoning_dust,
+        geometry ? JSON.stringify(geometry) : '{}',
+        name, building || '', zone || '', color || '#6B7280',
+        zoning_gas, zoning_dust,
       ]
     );
     const created = rows[0];
@@ -1842,6 +2055,9 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     let i = 1;
 
     if (body.name !== undefined) { set.push(`name=$${i++}`); vals.push(body.name); }
+    if (body.building !== undefined) { set.push(`building=$${i++}`); vals.push(body.building); }
+    if (body.zone !== undefined) { set.push(`zone=$${i++}`); vals.push(body.zone); }
+    if (body.color !== undefined) { set.push(`color=$${i++}`); vals.push(body.color); }
     if (body.zoning_gas !== undefined) { set.push(`zoning_gas=$${i++}`); vals.push(body.zoning_gas); }
     if (body.zoning_dust !== undefined) { set.push(`zoning_dust=$${i++}`); vals.push(body.zoning_dust); }
     if (body.kind) {
@@ -1854,6 +2070,9 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     }
     if (body.points !== undefined) {
       set.push(`points=$${i++}`); vals.push(body.points ? JSON.stringify(body.points) : null);
+    }
+    if (body.geometry !== undefined) {
+      set.push(`geometry=$${i++}`); vals.push(body.geometry ? JSON.stringify(body.geometry) : '{}');
     }
 
     if (!set.length) {
