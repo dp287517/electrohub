@@ -32,6 +32,7 @@ const electricalApps = [
   { label: 'Variable Speed Drives', to: '/app/vsd', description: 'VSD maintenance: frequency inverters, power ratings, checks', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
   { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
   { label: 'Mobile Equipments', to: '/app/mobile-equipments', description: 'Electrical controls for mobile equipment: drills, angle grinders...', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
+  { label: 'Infrastructure', to: '/app/infrastructure', description: 'Electrical infrastructure plans: sockets, lighting, panels, junction boxes...', icon: '⚡', color: 'from-amber-400 to-yellow-500' },
 ];
 
 // Other apps

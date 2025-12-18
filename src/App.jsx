@@ -35,6 +35,7 @@ import MecaMap from './pages/Meca_map.jsx';
 import MobileEquipments from './pages/MobileEquipments.jsx';
 import MobileEquipmentsMap from './pages/MobileEquipments_map.jsx';
 import HighVoltageMap from './pages/High_voltage_map.jsx';
+import Infrastructure from './pages/Infrastructure.jsx';
 
 // Component to redirect authenticated users to dashboard
 function AuthRedirect({ children }) {
@@ -105,6 +106,7 @@ export default function App() {
           <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
           <Route path="/app/mobile-equipments" element={<ProtectedRoute><MobileEquipments /></ProtectedRoute>} />
           <Route path="/app/mobile-equipments/map" element={<ProtectedRoute><MobileEquipmentsMap /></ProtectedRoute>} />
+          <Route path="/app/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
 
           {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />
