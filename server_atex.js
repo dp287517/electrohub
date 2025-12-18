@@ -4076,12 +4076,12 @@ app.get("/api/atex/drpce", async (req, res) => {
     // Afficher tous les équipements avec vignette du plan si disponible
     if (equipments.length > 0) {
       doc.addPage();
-      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50, { lineBreak: false });
       doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
       let ficheY = 100;
       doc.fontSize(11).font('Helvetica').fillColor(colors.muted)
-         .text(`${equipments.length} equipement(s) ATEX`, 50, ficheY);
+         .text(`${equipments.length} equipement(s) ATEX`, 50, ficheY, { lineBreak: false });
       ficheY += 30;
 
       for (let i = 0; i < equipments.length; i++) {
@@ -4124,11 +4124,11 @@ app.get("/api/atex/drpce", async (req, res) => {
             doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke('#e5e7eb');
           } catch (photoErr) {
             doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
-            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 35, rightY + 50);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 35, rightY + 50, { lineBreak: false });
           }
         } else {
           doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
-          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 50);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 50, { lineBreak: false });
         }
 
         // Vignette du plan avec localisation (à côté de la photo)
@@ -4194,16 +4194,16 @@ app.get("/api/atex/drpce", async (req, res) => {
                  .text(planDisplayName, planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
             } else {
               doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
-              doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50);
+              doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50, { lineBreak: false });
             }
           } catch (planErr) {
             console.warn(`[DRPCE] Plan thumbnail error for ${eq.name}:`, planErr.message);
             doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
-            doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50);
+            doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50, { lineBreak: false });
           }
         } else {
           doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
-          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 25, rightY + 50);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 25, rightY + 50, { lineBreak: false });
         }
 
         // === COLONNE GAUCHE: Informations ===
@@ -4231,7 +4231,7 @@ app.get("/api/atex/drpce", async (req, res) => {
 
         // Légende en bas de la fiche
         doc.fontSize(7).fillColor(colors.muted)
-           .text('Photo equipement', rightColX, rightY + imgHeight + 2, { width: imgWidth, align: 'center' });
+           .text('Photo equipement', rightColX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
 
         ficheY += 330;
       }
