@@ -446,6 +446,50 @@ export default function Atex() {
     });
   }
 
+  // 🔄 Fonction de duplication d'équipement
+  async function handleDuplicateEquipment() {
+    if (!editing?.id) return;
+    try {
+      const result = await api.atex.duplicateEquipment(editing.id, { copy_position: false });
+      if (result?.equipment) {
+        // Fermer le drawer actuel et ouvrir le nouvel équipement
+        closeEdit();
+        await reload();
+        setMapRefreshTick((t) => t + 1);
+        // Ouvrir le nouvel équipement créé
+        setEditing(result.equipment);
+        setDrawerOpen(true);
+        setToast("Équipement dupliqué !");
+      }
+    } catch (e) {
+      console.error("[ATEX] Duplicate error:", e);
+      setToast("Erreur de duplication");
+    }
+  }
+
+  // 🗺️ Retirer l'équipement de tous les plans (supprime sa position)
+  async function handleRemoveFromPlan() {
+    if (!editing?.id) return;
+    setConfirmModal({
+      open: true,
+      title: "Retirer du plan ?",
+      message: `L'équipement "${editing.name || 'cet équipement'}" sera retiré de tous les plans. Vous pourrez le repositionner depuis la carte.`,
+      variant: "warning",
+      onConfirm: async () => {
+        try {
+          await api.atexMaps.removePosition(editing.id);
+          await reload();
+          setMapRefreshTick((t) => t + 1);
+          setToast("Équipement retiré du plan");
+        } catch (e) {
+          console.error("[ATEX] Remove from plan error:", e);
+          setToast("Erreur lors du retrait");
+        }
+        setConfirmModal({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
+      }
+    });
+  }
+
   /* ----------------------------- Photos / Files ----------------------------- */
   async function uploadMainPhoto(file) {
     if (!editing?.id || !file) return;
@@ -785,11 +829,13 @@ export default function Atex() {
             <div className={`p-5 ${
               confirmModal.variant === "danger"
                 ? "bg-gradient-to-r from-red-500 to-rose-600"
+                : confirmModal.variant === "warning"
+                ? "bg-gradient-to-r from-orange-500 to-amber-600"
                 : "bg-gradient-to-r from-blue-500 to-indigo-600"
             } text-white`}>
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
-                  <span className="text-2xl">{confirmModal.variant === "danger" ? "⚠️" : "❓"}</span>
+                  <span className="text-2xl">{confirmModal.variant === "danger" ? "⚠️" : confirmModal.variant === "warning" ? "📍" : "❓"}</span>
                 </div>
                 <h3 className="text-lg font-bold">{confirmModal.title}</h3>
               </div>
@@ -811,6 +857,8 @@ export default function Atex() {
                 className={`px-4 py-2.5 rounded-xl text-white font-medium transition-all ${
                   confirmModal.variant === "danger"
                     ? "bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700"
+                    : confirmModal.variant === "warning"
+                    ? "bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700"
                     : "bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
                 }`}
               >
@@ -982,6 +1030,8 @@ export default function Atex() {
           onClose={closeEdit}
           onSave={saveBase}
           onDelete={confirmDeleteEquipment}
+          onDuplicate={handleDuplicateEquipment}
+          onRemoveFromPlan={handleRemoveFromPlan}
           files={files}
           history={history}
           onUploadPhoto={uploadMainPhoto}
@@ -2325,6 +2375,8 @@ function EquipmentDrawer({
   onClose,
   onSave,
   onDelete,
+  onDuplicate,
+  onRemoveFromPlan,
   files,
   history,
   onUploadPhoto,
@@ -2676,6 +2728,24 @@ function EquipmentDrawer({
                   </div>
                 </div>
               </div>
+
+              {/* Actions sur le plan */}
+              {editing.id && onRemoveFromPlan && (
+                <div className="atex-section">
+                  <div className="atex-section-title">🗺️ Actions sur le plan</div>
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm text-gray-600">
+                      Retirez l'équipement du plan actuel pour le repositionner sur un autre plan depuis la carte.
+                    </p>
+                    <button
+                      onClick={onRemoveFromPlan}
+                      className="atex-btn bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 w-full sm:w-auto"
+                    >
+                      📍 Retirer du plan actuel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2911,7 +2981,16 @@ function EquipmentDrawer({
           <button onClick={onClose} className="atex-btn atex-btn-secondary">
             ✕ Fermer
           </button>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            {editing.id && onDuplicate && (
+              <button
+                onClick={onDuplicate}
+                className="atex-btn bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                title="Créer une copie de cet équipement"
+              >
+                📋 Dupliquer
+              </button>
+            )}
             {editing.id && (
               <button onClick={onDelete} className="atex-btn atex-btn-danger">
                 🗑️ Supprimer
