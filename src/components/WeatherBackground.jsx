@@ -889,15 +889,15 @@ export default function WeatherBackground({ site, children }) {
         </div>
       )}
 
-      {/* Content */}
-      <div className="relative z-10">
+      {/* Content - avec padding-bottom pour éviter que la vague ne coupe les éléments */}
+      <div className="relative z-20 pb-16">
         {children}
       </div>
 
-      {/* Wave decoration */}
-      <div className="absolute bottom-0 left-0 right-0 z-10">
-        <svg viewBox="0 0 1440 100" className="w-full h-auto fill-gray-50" preserveAspectRatio="none">
-          <path d="M0,50 C360,100 1080,0 1440,50 L1440,100 L0,100 Z" />
+      {/* Wave decoration - z-index inférieur au contenu */}
+      <div className="absolute bottom-0 left-0 right-0 z-10 pointer-events-none">
+        <svg viewBox="0 0 1440 60" className="w-full h-12 fill-gray-50" preserveAspectRatio="none">
+          <path d="M0,30 C360,60 1080,0 1440,30 L1440,60 L0,60 Z" />
         </svg>
       </div>
     </div>
