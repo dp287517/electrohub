@@ -2636,7 +2636,8 @@ app.get("/api/infra/positions", async (req, res) => {
     const plan_id = req.query.plan_id;
 
     let query = `
-      SELECT p.*, e.name as equipment_name, e.type as equipment_type, e.building, e.zone
+      SELECT p.*, e.name as equipment_name, e.type as equipment_type, e.building, e.zone,
+             e.status as equipment_status, e.zoning_gas, e.zoning_dust, e.photo_url as equipment_photo
       FROM infrastructure_positions p
       JOIN atex_equipments e ON p.equipment_id = e.id
       WHERE ${filter.where}

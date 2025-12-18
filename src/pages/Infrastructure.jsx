@@ -231,15 +231,18 @@ export default function Infrastructure() {
         </div>
 
         {/* Stats */}
-        <div className="max-w-7xl mx-auto mt-4 flex gap-4 text-sm">
+        <div className="max-w-7xl mx-auto mt-4 flex gap-4 text-sm flex-wrap">
+          <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full font-medium">
+            {stats.equipmentsCount} équipements ATEX
+          </span>
+          <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full">
+            {stats.positionsCount} placés sur infra
+          </span>
           <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full">
             {stats.plansCount} plans
           </span>
           <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full">
             {stats.zonesCount} zones
-          </span>
-          <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full">
-            {stats.positionsCount} équipements placés
           </span>
         </div>
       </header>
@@ -339,6 +342,7 @@ export default function Infrastructure() {
                   onZoneCreate={(data) => handleSaveZone({ ...data, plan_id: selectedPlan.id })}
                   onZoneUpdate={(id, data) => handleSaveZone({ ...data, id })}
                   onZoneDelete={handleDeleteZone}
+                  onEquipmentClick={(equipmentId) => navigate(`/app/atex?eq=${equipmentId}`)}
                   refreshTick={mapRefreshTick}
                 />
               </div>

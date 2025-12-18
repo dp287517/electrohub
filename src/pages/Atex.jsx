@@ -188,20 +188,26 @@ export default function Atex() {
     const eqId = searchParams.get("eq");
     if (eqId) {
       setSelectedEquipmentId(eqId);
-      // Trouver le plan de l'équipement et l'afficher
+      // Trouver le plan de l'équipement, afficher et ouvrir le drawer
       const findEquipmentPlan = async () => {
         try {
           const res = await api.atex.getEquipment(eqId);
           const eq = res?.equipment;
-          if (eq?.building || eq?.zone) {
-            // Chercher un plan correspondant
-            const plansRes = await api.atexMaps.listPlans();
-            const matchingPlan = (plansRes?.plans || []).find(
-              p => p.building === eq.building && p.zone === eq.zone
-            );
-            if (matchingPlan) {
-              setSelectedPlan(matchingPlan);
-              setActiveTab("plans");
+          if (eq) {
+            // Ouvrir le drawer avec l'équipement
+            setEditing(eq);
+            setDrawerOpen(true);
+
+            if (eq.building || eq.zone) {
+              // Chercher un plan correspondant
+              const plansRes = await api.atexMaps.listPlans();
+              const matchingPlan = (plansRes?.plans || []).find(
+                p => p.building === eq.building && p.zone === eq.zone
+              );
+              if (matchingPlan) {
+                setSelectedPlan(matchingPlan);
+                setActiveTab("plans");
+              }
             }
           }
         } catch (e) {

@@ -27,7 +27,7 @@ const DRAW_RECT = "rect";
 const DRAW_CIRCLE = "circle";
 const DRAW_POLY = "poly";
 
-// Zone colors
+// Zone colors (legacy - used for zones without ATEX zoning)
 const ZONE_COLORS = [
   "#6B7280", // Gray
   "#EF4444", // Red
@@ -37,6 +37,88 @@ const ZONE_COLORS = [
   "#8B5CF6", // Purple
   "#EC4899", // Pink
 ];
+
+// ATEX zone colors (same as Atex-map.jsx)
+const GAS_STROKE = { 0: "#0ea5e9", 1: "#ef4444", 2: "#f59e0b", null: "#6b7280", undefined: "#6b7280" };
+const DUST_FILL = { 20: "#84cc16", 21: "#8b5cf6", 22: "#06b6d4", null: "#e5e7eb", undefined: "#e5e7eb" };
+
+// Get colors for a zone based on ATEX zoning
+function getAtexZoneColors(zone) {
+  const hasAtex = zone.zoning_gas !== null || zone.zoning_dust !== null;
+  if (!hasAtex) {
+    // Use the zone's custom color or default
+    const color = zone.color || "#6B7280";
+    return { stroke: color, fill: color };
+  }
+  return {
+    stroke: GAS_STROKE[zone.zoning_gas] || GAS_STROKE[null],
+    fill: DUST_FILL[zone.zoning_dust] || DUST_FILL[null],
+  };
+}
+
+// ============================================================
+// EQUIPMENT MARKER DESIGN (same as Atex-map.jsx)
+// ============================================================
+const ICON_PX = 22;
+const ICON_PX_SELECTED = 34;
+
+// Gradients par statut pour un design moderne
+const STATUS_GRADIENT = {
+  a_faire: { from: "#34d399", to: "#059669" },      // Vert emeraude
+  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
+  en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
+  fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
+  selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
+};
+
+// Icône SVG flamme ATEX
+const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
+</svg>`;
+
+function makeEquipIcon(status, isSelected = false) {
+  const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+
+  // Utilise le gradient violet si sélectionné, sinon le gradient du statut
+  const grad = isSelected
+    ? STATUS_GRADIENT.selected
+    : (STATUS_GRADIENT[status] || STATUS_GRADIENT.fait);
+
+  // Classes d'animation
+  let animClass = "";
+  if (isSelected) {
+    animClass = "atex-marker-selected";
+  } else if (status === "en_retard") {
+    animClass = "atex-marker-pulse-red";
+  } else if (status === "en_cours_30") {
+    animClass = "atex-marker-pulse-orange";
+  }
+
+  // Bordure plus visible pour sélection
+  const borderStyle = isSelected
+    ? "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);"
+    : "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
+
+  const html = `
+    <div class="${animClass}" style="
+      width:${s}px;height:${s}px;border-radius:9999px;
+      background: radial-gradient(circle at 30% 30%, ${grad.from}, ${grad.to});
+      ${borderStyle}
+      display:flex;align-items:center;justify-content:center;
+      transition:all 0.2s ease;
+      z-index:${isSelected ? 1000 : 1};
+    ">
+      ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
+    </div>`;
+
+  return L.divIcon({
+    className: "atex-marker-inline",
+    html,
+    iconSize: [s, s],
+    iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+    popupAnchor: [0, -Math.round(s / 2)],
+  });
+}
 
 // ============================================================
 // INFRASTRUCTURE MAP COMPONENT
@@ -53,6 +135,7 @@ export default function InfrastructureMap({
   onZoneCreate,
   onZoneUpdate,
   onZoneDelete,
+  onEquipmentClick,
   refreshTick = 0,
 }) {
   const containerRef = useRef(null);
@@ -436,30 +519,33 @@ export default function InfrastructureMap({
 
       const isSelected = pos.id === selectedPositionId;
 
-      const icon = L.divIcon({
-        className: "infra-marker",
-        html: `
-          <div class="infra-marker-inner ${isSelected ? "selected" : ""}" style="background: #F59E0B">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-          </div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16],
-      });
+      // Use the same marker design as Atex-map with status-based gradient
+      const icon = makeEquipIcon(pos.equipment_status, isSelected);
 
       const marker = L.marker([lat, lng], {
         icon,
         draggable: true,
       });
 
+      // Tooltip with equipment name and status
       const equipmentName = pos.equipment_name || "Équipement";
-      marker.bindTooltip(`${equipmentName}`, {
+      const statusLabel = {
+        a_faire: "À faire",
+        en_cours_30: "≤ 90 jours",
+        en_retard: "En retard",
+        fait: "Fait",
+      }[pos.equipment_status] || "";
+      marker.bindTooltip(`${equipmentName}${statusLabel ? ` (${statusLabel})` : ""}`, {
         permanent: false,
         direction: "top",
       });
 
       marker.on("click", () => {
         setSelectedPositionId(pos.id);
+        // Open equipment drawer if callback provided
+        if (onEquipmentClick && pos.equipment_id) {
+          onEquipmentClick(pos.equipment_id);
+        }
       });
 
       marker.on("dragend", (e) => {
@@ -471,7 +557,7 @@ export default function InfrastructureMap({
 
       markersLayerRef.current.addLayer(marker);
     });
-  }, [positions, imgSize, selectedPositionId, onUpdatePosition]);
+  }, [positions, imgSize, selectedPositionId, onUpdatePosition, onEquipmentClick]);
 
   // ============================================================
   // Draw zones
@@ -484,7 +570,8 @@ export default function InfrastructureMap({
     zones.forEach((zone) => {
       if (!zone.geometry) return;
 
-      const color = zone.color || "#6B7280";
+      // Use ATEX colors if zoning is defined, otherwise use zone's custom color
+      const { stroke, fill } = getAtexZoneColors(zone);
       let shape;
 
       const geom = typeof zone.geometry === 'string' ? JSON.parse(zone.geometry) : zone.geometry;
@@ -496,10 +583,10 @@ export default function InfrastructureMap({
           [(1 - y1) * imgSize.h, x2 * imgSize.w],
         ];
         shape = L.rectangle(bounds, {
-          color,
+          color: stroke,
           weight: 2,
-          fillColor: color,
-          fillOpacity: 0.2,
+          fillColor: fill,
+          fillOpacity: 0.15,
           pane: "zonesPane",
         });
       } else if (zone.kind === "circle" && geom.cx !== undefined) {
@@ -509,10 +596,10 @@ export default function InfrastructureMap({
         const radius = r * Math.min(imgSize.w, imgSize.h);
         shape = L.circle([lat, lng], {
           radius,
-          color,
+          color: stroke,
           weight: 2,
-          fillColor: color,
-          fillOpacity: 0.2,
+          fillColor: fill,
+          fillOpacity: 0.15,
           pane: "zonesPane",
         });
       } else if (zone.kind === "poly" && geom.points?.length) {
@@ -521,10 +608,10 @@ export default function InfrastructureMap({
           return [(1 - y) * imgSize.h, x * imgSize.w];
         });
         shape = L.polygon(latLngs, {
-          color,
+          color: stroke,
           weight: 2,
-          fillColor: color,
-          fillOpacity: 0.2,
+          fillColor: fill,
+          fillOpacity: 0.15,
           pane: "zonesPane",
         });
       }
