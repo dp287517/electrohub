@@ -2468,11 +2468,16 @@ function setupHandleDrag(map, onMoveCallback) {
                     <div className="min-w-0">
                       <div className="font-bold text-sm sm:text-base truncate">
                         {planDisplayName || title || "Plan ATEX"}
+                        {plan?.is_multi_zone && (
+                          <span className="ml-2 px-2 py-0.5 bg-blue-500/30 text-white text-xs rounded-full">Multi-zones</span>
+                        )}
                       </div>
-                      {/* Mobile: affiche bâtiment/zone en sous-titre */}
-                      <div className="text-amber-100 text-xs sm:hidden truncate">
-                        {building || "Bâtiment"} • {zone || "Zone"}
-                      </div>
+                      {/* Mobile: affiche bâtiment/zone en sous-titre (sauf multi-zone) */}
+                      {!plan?.is_multi_zone && (
+                        <div className="text-amber-100 text-xs sm:hidden truncate">
+                          {building || "Bâtiment"} • {zone || "Zone"}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <button
@@ -2484,7 +2489,8 @@ function setupHandleDrag(map, onMoveCallback) {
                   </button>
                 </div>
 
-                {/* Ligne 2: Champs bâtiment/zone (masqués sur mobile petit) */}
+                {/* Ligne 2: Champs bâtiment/zone (masqués sur mobile et pour plans multi-zone) */}
+                {!plan?.is_multi_zone && (
                 <div className="hidden sm:flex items-center gap-3 px-4 pb-3 flex-wrap">
                   {/* Champ Bâtiment */}
                   <div className="flex items-center gap-1.5">
@@ -2532,6 +2538,7 @@ function setupHandleDrag(map, onMoveCallback) {
                     )}
                   </div>
                 </div>
+                )}
               </div>
 
               <div className="flex-1 overflow-hidden">
