@@ -1617,7 +1617,8 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           if (targetType === 'switchboard') payload.switchboard_id = Number(ids[i]);
           else if (targetType === 'vsd') payload.vsd_equipment_id = Number(ids[i]);
           else if (targetType === 'meca') payload.meca_equipment_id = Number(ids[i]);
-          else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = Number(ids[i]);
+          else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID, not Number
+          else if (targetType === 'hv') payload.hv_equipment_id = Number(ids[i]);
 
           await onSave(payload, i === ids.length - 1); // Only reload on last item
           successCount++;
