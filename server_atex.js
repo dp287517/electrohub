@@ -2486,7 +2486,7 @@ app.post("/api/infra/plans", multerInfraPlan.single("file"), async (req, res) =>
       INSERT INTO infrastructure_plans (logical_name, display_name, building_name, filename, content, company_id, site_id)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING id, logical_name, display_name, building_name, filename, created_at
-    `, [logical_name, display_name, building_name, originalName, file.buffer, tenant.company_id, tenant.site_id]);
+    `, [logical_name, display_name, building_name, originalName, file.buffer, tenant.companyId, tenant.siteId]);
 
     res.json({ plan: rows[0] });
   } catch (e) {
@@ -2557,7 +2557,7 @@ app.post("/api/infra/zones", async (req, res) => {
       INSERT INTO infrastructure_zones (plan_id, name, kind, geometry, color, page_index, linked_atex_plans, company_id, site_id)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
-    `, [plan_id, name || "", kind || "rect", JSON.stringify(geometry || {}), color || "#6B7280", page_index || 0, JSON.stringify(linked_atex_plans || []), tenant.company_id, tenant.site_id]);
+    `, [plan_id, name || "", kind || "rect", JSON.stringify(geometry || {}), color || "#6B7280", page_index || 0, JSON.stringify(linked_atex_plans || []), tenant.companyId, tenant.siteId]);
 
     res.json({ zone: rows[0] });
   } catch (e) {
@@ -2638,7 +2638,7 @@ app.post("/api/infra/positions", async (req, res) => {
       ON CONFLICT (equipment_id, plan_id, page_index)
       DO UPDATE SET x_frac = $5, y_frac = $6, zone_id = $3
       RETURNING *
-    `, [equipment_id, plan_id, zone_id || null, page_index || 0, x_frac, y_frac, tenant.company_id, tenant.site_id]);
+    `, [equipment_id, plan_id, zone_id || null, page_index || 0, x_frac, y_frac, tenant.companyId, tenant.siteId]);
 
     res.json({ position: rows[0] });
   } catch (e) {
