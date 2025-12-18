@@ -18,6 +18,8 @@ import StreamZip from "node-stream-zip";
 import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { createRequire } from "module";
+import { createCanvas } from "canvas";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
@@ -35,6 +37,62 @@ const MAPS_DIR = path.join(DATA_DIR, "maps");
 for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
   await fsp.mkdir(d, { recursive: true });
 }
+
+// -------------------------------------------------
+// Helper: Convert PDF buffer to PNG image with optional marker
+// -------------------------------------------------
+async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumbnailWidth = 150) {
+  try {
+    // Load PDF document
+    const loadingTask = pdfjsLib.getDocument({ data: pdfBuffer });
+    const pdfDoc = await loadingTask.promise;
+    const page = await pdfDoc.getPage(1);
+
+    // Calculate scale for thumbnail
+    const viewport = page.getViewport({ scale: 1 });
+    const scale = thumbnailWidth / viewport.width;
+    const scaledViewport = page.getViewport({ scale });
+
+    // Create canvas
+    const canvas = createCanvas(Math.floor(scaledViewport.width), Math.floor(scaledViewport.height));
+    const ctx = canvas.getContext('2d');
+
+    // Render PDF page to canvas
+    await page.render({
+      canvasContext: ctx,
+      viewport: scaledViewport,
+    }).promise;
+
+    // Draw marker if position provided
+    if (xFrac !== null && yFrac !== null && !isNaN(xFrac) && !isNaN(yFrac)) {
+      const markerX = xFrac * scaledViewport.width;
+      const markerY = yFrac * scaledViewport.height;
+      const markerRadius = Math.max(6, thumbnailWidth / 25);
+
+      // Draw outer circle (red)
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
+      ctx.fillStyle = '#dc2626';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Draw inner dot
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+    }
+
+    // Convert canvas to PNG buffer
+    return canvas.toBuffer('image/png');
+  } catch (err) {
+    console.warn('[pdfToImageWithMarker] Error:', err.message);
+    return null;
+  }
+}
+
 // -------------------------------------------------
 const app = express();
 app.use(express.json({ limit: "25mb" }));
@@ -3259,10 +3317,37 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     console.log(`[DRPCE] Found ${equipments.length} equipments (filters: building=${filterBuilding}, zone=${filterZone}, compliance=${filterCompliance})`);
 
-    // 3. Récupérer les plans avec leurs images
+    // 2b. Récupérer les positions des équipements sur les plans
+    const equipmentIds = equipments.map(e => e.id);
+    let positionsMap = new Map();
+    if (equipmentIds.length > 0) {
+      const { rows: positions } = await pool.query(`
+        SELECT pos.equipment_id, pos.logical_name, pos.x_frac, pos.y_frac,
+               p.content AS plan_content,
+               COALESCE(pn.display_name, pos.logical_name) AS plan_display_name
+        FROM atex_positions pos
+        LEFT JOIN (
+          SELECT DISTINCT ON (logical_name) logical_name, content
+          FROM atex_plans
+          ORDER BY logical_name, version DESC
+        ) p ON p.logical_name = pos.logical_name
+        LEFT JOIN atex_plan_names pn ON pn.logical_name = pos.logical_name
+        WHERE pos.equipment_id = ANY($1)
+      `, [equipmentIds]);
+
+      // Map positions by equipment_id (prendre la première position si plusieurs)
+      for (const pos of positions) {
+        if (!positionsMap.has(pos.equipment_id)) {
+          positionsMap.set(pos.equipment_id, pos);
+        }
+      }
+      console.log(`[DRPCE] Found ${positions.length} equipment positions on plans`);
+    }
+
+    // 3. Récupérer les plans avec leurs images (pour la liste uniquement, plus d'affichage d'images)
     const { rows: plans } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
-             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name, p.content,
+             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name,
              COALESCE(pn.display_name, p.logical_name) AS display_name
       FROM atex_plans p
       LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
@@ -3542,80 +3627,26 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     let planListY = 100;
 
-    // Compter les plans qui sont des images vs PDFs
-    const imagePlans = plans.filter(p => {
-      if (!p.content || p.content.length < 4) return false;
-      const isPDF = p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
-      return !isPDF;
-    });
-    const pdfPlans = plans.filter(p => {
-      if (!p.content || p.content.length < 4) return false;
-      const isPDF = p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
-      return isPDF;
-    });
-
     doc.fontSize(11).font('Helvetica').fillColor(colors.text)
        .text(`${plans.length} plan(s) disponible(s) pour cette installation.`, 50, planListY);
     planListY += 20;
 
-    if (pdfPlans.length > 0) {
-      doc.fontSize(9).font('Helvetica').fillColor(colors.warning)
-         .text(`Note: ${pdfPlans.length} plan(s) au format PDF ne peuvent pas etre affiches en image dans ce rapport.`, 50, planListY);
-      planListY += 15;
-      doc.fontSize(8).font('Helvetica').fillColor(colors.muted)
-         .text(`Pour inclure les plans dans le rapport, veuillez les uploader au format PNG ou JPEG.`, 50, planListY);
-      planListY += 20;
-    }
+    doc.fontSize(9).font('Helvetica').fillColor(colors.muted)
+       .text(`Les vignettes des plans avec localisation des equipements sont affichees dans les fiches equipements (section 8).`, 50, planListY);
+    planListY += 25;
 
     // Liste des plans
     plans.forEach((p, idx) => {
       if (planListY > 750) { doc.addPage(); planListY = 50; }
 
-      // Vérifier si c'est un PDF
-      const isPDF = p.content && p.content.length >= 4 &&
-                    p.content[0] === 0x25 && p.content[1] === 0x50 && p.content[2] === 0x44 && p.content[3] === 0x46;
-
       doc.rect(50, planListY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
-      doc.fontSize(9).font('Helvetica').fillColor(isPDF ? colors.muted : colors.text)
-         .text(`> ${p.display_name || p.logical_name}${isPDF ? ' (PDF)' : ''}`, 60, planListY + 7);
+      doc.fontSize(9).font('Helvetica').fillColor(colors.text)
+         .text(`${idx + 1}. ${p.display_name || p.logical_name}`, 60, planListY + 7);
       if (p.building || p.zone) {
         doc.fillColor(colors.muted).text(`${p.building || ''} ${p.zone ? '- ' + p.zone : ''}`, 350, planListY + 7, { width: 180, align: 'right' });
       }
       planListY += 25;
     });
-
-    // Images des plans sur pages dédiées
-    for (const plan of plans) {
-      if (plan.content && plan.content.length > 0) {
-        // Vérifier si le contenu est un PDF (magic bytes: %PDF = 0x25 0x50 0x44 0x46)
-        const isPDF = plan.content[0] === 0x25 && plan.content[1] === 0x50 &&
-                      plan.content[2] === 0x44 && plan.content[3] === 0x46;
-
-        if (isPDF) {
-          // Les PDFs ne peuvent pas être affichés comme images dans PDFKit
-          // On affiche un message informatif mais on n'ajoute pas de page vide
-          console.log(`[DRPCE] Plan ${plan.logical_name} is a PDF - skipping image display`);
-          continue; // Passer au plan suivant sans ajouter de page
-        }
-
-        try {
-          doc.addPage();
-          doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
-             .text(plan.display_name || plan.logical_name, 50, 40);
-          if (plan.building || plan.zone) {
-            doc.fontSize(10).font('Helvetica').fillColor(colors.muted)
-               .text(`${plan.building || ''} ${plan.zone ? '- ' + plan.zone : ''}`, 50, 60);
-          }
-          doc.moveTo(50, 78).lineTo(545, 78).strokeColor(colors.light).lineWidth(1).stroke();
-          doc.image(plan.content, 50, 90, { fit: [495, 680], align: 'center', valign: 'center' });
-        } catch (imgErr) {
-          console.warn(`[DRPCE] Plan image error ${plan.logical_name}:`, imgErr.message);
-          // Ne pas laisser la page vide - revenir en arrière si possible ou afficher un message utile
-          doc.fontSize(10).font('Helvetica').fillColor(colors.muted)
-             .text('(Image du plan non disponible - format non supporte: ' + imgErr.message + ')', 50, 100, { width: 495 });
-        }
-      }
-    }
 
     // ========== 4. INVENTAIRE DES ÉQUIPEMENTS ==========
     doc.addPage();
@@ -3826,19 +3857,20 @@ app.get("/api/atex/drpce", async (req, res) => {
     );
 
     // ========== 8. FICHES EQUIPEMENTS ==========
-    const equipmentsWithPhotos = equipments.filter(e => e.photo_content && e.photo_content.length > 0);
-    if (equipmentsWithPhotos.length > 0) {
+    // Afficher tous les équipements avec vignette du plan si disponible
+    if (equipments.length > 0) {
       doc.addPage();
       doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
       doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
       let ficheY = 100;
       doc.fontSize(11).font('Helvetica').fillColor(colors.muted)
-         .text(`${equipmentsWithPhotos.length} equipement(s) avec photo`, 50, ficheY);
+         .text(`${equipments.length} equipement(s) ATEX`, 50, ficheY);
       ficheY += 30;
 
-      for (let i = 0; i < equipmentsWithPhotos.length; i++) {
-        const eq = equipmentsWithPhotos[i];
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const position = positionsMap.get(eq.id); // Position sur le plan si disponible
 
         if (ficheY > 450) {
           doc.addPage();
@@ -3851,7 +3883,7 @@ app.get("/api/atex/drpce", async (req, res) => {
         // En-tête avec le nom - couleur Haleon
         doc.rect(50, ficheY, 495, 35).fill(colors.primary);
         doc.fontSize(12).font('Helvetica-Bold').fillColor('#fff')
-           .text(eq.name || 'Equipement sans nom', 60, ficheY + 10, { width: 475 });
+           .text(eq.name || 'Equipement sans nom', 60, ficheY + 10, { width: 380, lineBreak: false });
 
         // Statut
         const statusLabel = eq.last_result === 'conforme' ? 'CONFORME' : (eq.last_result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER');
@@ -3861,19 +3893,61 @@ app.get("/api/atex/drpce", async (req, res) => {
 
         let infoY = ficheY + 45;
         const infoX = 60;
-        const photoWidth = 180;
-        const photoHeight = 240;
-        const infoWidth = 280;
+        const infoWidth = 240;
+        const rightColX = 310;
+        const imgWidth = 115;
+        const imgHeight = 115;
 
-        // Photo à droite
-        try {
-          doc.image(eq.photo_content, 360, infoY, { fit: [photoWidth, photoHeight], align: 'center' });
-        } catch (photoErr) {
-          doc.rect(360, infoY, photoWidth, photoHeight).stroke(colors.light);
-          doc.fontSize(8).fillColor(colors.muted).text('Photo non disponible', 380, infoY + 110);
+        // === COLONNE DROITE: Photo équipement + Vignette plan ===
+        let rightY = infoY;
+
+        // Photo de l'équipement (en haut à droite)
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            doc.image(eq.photo_content, rightColX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+            doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke('#e5e7eb');
+          } catch (photoErr) {
+            doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 35, rightY + 50);
+          }
+        } else {
+          doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 50);
         }
 
-        // Informations à gauche
+        // Vignette du plan avec localisation (à côté de la photo)
+        const planX = rightColX + imgWidth + 10;
+        if (position && position.plan_content) {
+          try {
+            // Convertir le PDF en image avec marqueur de position
+            const planThumbnail = await pdfToImageWithMarker(
+              position.plan_content,
+              position.x_frac,
+              position.y_frac,
+              imgWidth * 2 // Générer à 2x pour meilleure qualité
+            );
+
+            if (planThumbnail) {
+              doc.image(planThumbnail, planX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+              doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.primary);
+              // Nom du plan en dessous
+              doc.fontSize(6).fillColor(colors.muted)
+                 .text(position.plan_display_name || 'Plan', planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
+            } else {
+              doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+              doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50);
+            }
+          } catch (planErr) {
+            console.warn(`[DRPCE] Plan thumbnail error for ${eq.name}:`, planErr.message);
+            doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50);
+          }
+        } else {
+          doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 25, rightY + 50);
+        }
+
+        // === COLONNE GAUCHE: Informations ===
         const atexMarking = [eq.atex_mark_gas, eq.atex_mark_dust].filter(Boolean).join(' / ') || '-';
         const zoning = [eq.zoning_gas != null ? `Gaz: ${eq.zoning_gas}` : null, eq.zoning_dust != null ? `Pous.: ${eq.zoning_dust}` : null].filter(Boolean).join(' / ') || '-';
         const infoItems = [
@@ -3883,6 +3957,7 @@ app.get("/api/atex/drpce", async (req, res) => {
           ['Fabricant', eq.manufacturer || '-'],
           ['Reference', eq.manufacturer_ref || '-'],
           ['Equipement', eq.equipment || '-'],
+          ['Sous-equip.', eq.sub_equipment || '-'],
           ['Marquage ATEX', atexMarking],
           ['Zonage', zoning],
           ['Derniere verif.', eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : '-'],
@@ -3890,10 +3965,14 @@ app.get("/api/atex/drpce", async (req, res) => {
         ];
 
         infoItems.forEach(([label, value]) => {
-          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 90 });
-          doc.font('Helvetica').fillColor(colors.muted).text(value, infoX + 95, infoY, { width: infoWidth - 95 });
-          infoY += 18;
+          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 85 });
+          doc.font('Helvetica').fillColor(colors.muted).text(value, infoX + 88, infoY, { width: infoWidth - 88, lineBreak: false });
+          infoY += 16;
         });
+
+        // Légende en bas de la fiche
+        doc.fontSize(7).fillColor(colors.muted)
+           .text('Photo equipement', rightColX, rightY + imgHeight + 2, { width: imgWidth, align: 'center' });
 
         ficheY += 330;
       }
