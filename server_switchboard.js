@@ -2735,7 +2735,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
-      LEFT JOIN hv_equipments hv ON cs.hv_equipment_id = hv.id
+      LEFT JOIN hv_equipments hv ON cs.hv_equipment_id::text = hv.id::text
       WHERE cs.site = $1
     `;
     const params = [site];
@@ -2762,8 +2762,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       params.push(String(mobile_equipment_id));
     }
     if (hv_equipment_id) {
-      sql += ` AND cs.hv_equipment_id = $${idx++}`;
-      params.push(hv_equipment_id);
+      sql += ` AND cs.hv_equipment_id::text = $${idx++}`;
+      params.push(String(hv_equipment_id));
     }
     if (equipment_type) {
       sql += ` AND cs.equipment_type = $${idx++}`;
@@ -2829,7 +2829,7 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     if (vsd_equipment_id) { conditions.push(`vsd_equipment_id = $${pIdx++}`); existingParams.push(vsd_equipment_id); }
     if (meca_equipment_id) { conditions.push(`meca_equipment_id = $${pIdx++}`); existingParams.push(meca_equipment_id); }
     if (mobile_equipment_id) { conditions.push(`mobile_equipment_id::text = $${pIdx++}`); existingParams.push(String(mobile_equipment_id)); }
-    if (hv_equipment_id) { conditions.push(`hv_equipment_id = $${pIdx++}`); existingParams.push(hv_equipment_id); }
+    if (hv_equipment_id) { conditions.push(`hv_equipment_id::text = $${pIdx++}`); existingParams.push(String(hv_equipment_id)); }
 
     existingCheck += conditions.join(' OR ') + ')';
 
@@ -2892,7 +2892,7 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       LEFT JOIN vsd_equipments vsd ON cr.vsd_equipment_id = vsd.id
       LEFT JOIN meca_equipments meca ON cr.meca_equipment_id = meca.id
       LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
-      LEFT JOIN hv_equipments hv ON cr.hv_equipment_id = hv.id
+      LEFT JOIN hv_equipments hv ON cr.hv_equipment_id::text = hv.id::text
       WHERE cr.site = $1
     `;
     const params = [site];
@@ -2915,8 +2915,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       params.push(meca_equipment_id);
     }
     if (hv_equipment_id) {
-      sql += ` AND cr.hv_equipment_id = $${idx++}`;
-      params.push(hv_equipment_id);
+      sql += ` AND cr.hv_equipment_id::text = $${idx++}`;
+      params.push(String(hv_equipment_id));
     }
     if (mobile_equipment_id) {
       sql += ` AND cr.mobile_equipment_id::text = $${idx++}`;
