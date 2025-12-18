@@ -909,8 +909,14 @@ export const api = {
       ),
 
     calendar: () => get(`/api/atex/calendar`),
-    // Générer le DRPCE (Document Relatif à la Protection Contre les Explosions)
-    drpceUrl: () => `${API_BASE}/api/atex/drpce?site=${currentSite()}`,
+    // Générer le Management Monitoring (anciennement DRPCE)
+    drpceUrl: (filters = {}) => {
+      const params = new URLSearchParams({ site: currentSite() });
+      if (filters.building) params.append('building', filters.building);
+      if (filters.zone) params.append('zone', filters.zone);
+      if (filters.compliance) params.append('compliance', filters.compliance);
+      return `${API_BASE}/api/atex/drpce?${params.toString()}`;
+    },
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 
