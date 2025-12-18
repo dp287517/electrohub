@@ -3205,7 +3205,7 @@ app.get("/api/atex/drpce", async (req, res) => {
     // 3. Récupérer les plans avec leurs images
     const { rows: plans } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
-             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name, p.data,
+             p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name, p.content,
              COALESCE(pn.display_name, p.logical_name) AS display_name
       FROM atex_plans p
       LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
@@ -3491,7 +3491,7 @@ app.get("/api/atex/drpce", async (req, res) => {
     // ========== IMAGES DES PLANS ==========
     // Ajouter chaque plan comme une page dédiée
     for (const plan of plans) {
-      if (plan.data) {
+      if (plan.content) {
         try {
           doc.addPage();
           doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
@@ -3503,7 +3503,7 @@ app.get("/api/atex/drpce", async (req, res) => {
           doc.moveTo(50, 78).lineTo(545, 78).strokeColor(colors.light).lineWidth(1).stroke();
 
           // Ajouter l'image du plan (max 495x680 pour tenir sur la page)
-          doc.image(plan.data, 50, 90, { fit: [495, 680], align: 'center', valign: 'center' });
+          doc.image(plan.content, 50, 90, { fit: [495, 680], align: 'center', valign: 'center' });
         } catch (imgErr) {
           console.warn(`[DRPCE] Could not add plan image ${plan.logical_name}:`, imgErr.message);
           // Afficher un message d'erreur au lieu de l'image
