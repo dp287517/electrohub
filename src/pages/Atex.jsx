@@ -186,6 +186,10 @@ export default function Atex() {
   // 🆕 Modal de confirmation moderne
   const [confirmModal, setConfirmModal] = useState({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
 
+  // 🆕 Modal Management Monitoring (ex-DRPCE) avec filtres
+  const [drpceModalOpen, setDrpceModalOpen] = useState(false);
+  const [drpceFilters, setDrpceFilters] = useState({ building: "", zone: "", compliance: "" });
+
   // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
     const eqId = searchParams.get("eq");
@@ -974,6 +978,113 @@ export default function Atex() {
         </div>
       )}
 
+      {/* 🆕 Modal Management Monitoring avec Filtres */}
+      {drpceModalOpen && (
+        <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fadeIn p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-slideUp">
+            {/* Header avec gradient Haleon */}
+            <div className="p-5 bg-gradient-to-r from-teal-500 to-teal-700 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+                  <span className="text-2xl">📄</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold">Management Monitoring</h3>
+                  <p className="text-white/80 text-sm">Générer le rapport ATEX</p>
+                </div>
+              </div>
+            </div>
+            {/* Content - Filtres */}
+            <div className="p-5 space-y-4">
+              <p className="text-gray-600 text-sm">
+                Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
+              </p>
+
+              {/* Filtre Bâtiment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+                <select
+                  value={drpceFilters.building}
+                  onChange={e => setDrpceFilters(f => ({ ...f, building: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                >
+                  <option value="">Tous les bâtiments</option>
+                  {buildings.map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtre Zone */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Zone</label>
+                <select
+                  value={drpceFilters.zone}
+                  onChange={e => setDrpceFilters(f => ({ ...f, zone: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                >
+                  <option value="">Toutes les zones</option>
+                  {zones.map(z => (
+                    <option key={z} value={z}>{z}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtre Conformité */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">État de conformité</label>
+                <select
+                  value={drpceFilters.compliance}
+                  onChange={e => setDrpceFilters(f => ({ ...f, compliance: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                >
+                  <option value="">Tous les états</option>
+                  <option value="conforme">Conformes uniquement</option>
+                  <option value="non_conforme">Non conformes uniquement</option>
+                  <option value="na">Non vérifiés uniquement</option>
+                </select>
+              </div>
+
+              {/* Résumé des filtres */}
+              <div className="bg-teal-50 rounded-lg p-3 text-sm text-teal-800">
+                <p className="font-medium">Résumé :</p>
+                <p>
+                  {drpceFilters.building || "Tous les bâtiments"}
+                  {" / "}
+                  {drpceFilters.zone || "Toutes les zones"}
+                  {" / "}
+                  {drpceFilters.compliance === "conforme" ? "Conformes" :
+                   drpceFilters.compliance === "non_conforme" ? "Non conformes" :
+                   drpceFilters.compliance === "na" ? "Non vérifiés" : "Tous les états"}
+                </p>
+              </div>
+            </div>
+            {/* Actions */}
+            <div className="flex justify-end gap-3 p-4 bg-gray-50 border-t">
+              <button
+                onClick={() => {
+                  setDrpceModalOpen(false);
+                  setDrpceFilters({ building: "", zone: "", compliance: "" });
+                }}
+                className="px-4 py-2.5 rounded-xl text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 font-medium transition-all"
+              >
+                Annuler
+              </button>
+              <a
+                href={api.atex.drpceUrl(drpceFilters)}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setDrpceModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl text-white font-medium transition-all bg-gradient-to-r from-teal-500 to-teal-700 hover:from-teal-600 hover:to-teal-800 flex items-center gap-2"
+              >
+                <span>📄</span>
+                Générer le PDF
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header - Style Switchboard */}
       <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 rounded-2xl sm:rounded-3xl p-4 sm:p-6 text-white shadow-lg">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -1356,21 +1467,19 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
             </div>
           </div>
         </div>
-        {/* Bouton DRPCE */}
-        <a
-          href={api.atex.drpceUrl()}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bg-gradient-to-br from-amber-500 to-orange-600 border border-amber-300 rounded-xl p-3 sm:p-4 hover:from-amber-600 hover:to-orange-700 transition-all shadow-md hover:shadow-lg group"
+        {/* Bouton Management Monitoring (ex-DRPCE) */}
+        <button
+          onClick={() => setDrpceModalOpen(true)}
+          className="bg-gradient-to-br from-teal-500 to-teal-700 border border-teal-400 rounded-xl p-3 sm:p-4 hover:from-teal-600 hover:to-teal-800 transition-all shadow-md hover:shadow-lg group text-left"
         >
           <div className="flex items-center gap-3">
             <span className="text-xl sm:text-2xl group-hover:scale-110 transition-transform">📄</span>
             <div>
-              <p className="text-xs sm:text-sm text-white/80">Générer le</p>
-              <p className="text-lg sm:text-xl font-bold text-white">DRPCE</p>
+              <p className="text-xs sm:text-sm text-white/80">Générer le rapport</p>
+              <p className="text-lg sm:text-xl font-bold text-white">Management Monitoring</p>
             </div>
           </div>
-        </a>
+        </button>
         <button
           onClick={runMassComplianceCheck}
           disabled={massComplianceRunning || items.length === 0}
@@ -1510,6 +1619,12 @@ function AnalyticsTab({ items, stats, loading }) {
   // Liste unique des bâtiments
   const buildings = useMemo(() => {
     const set = new Set(items.map(it => it.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [items]);
+
+  // Liste unique des zones
+  const zones = useMemo(() => {
+    const set = new Set(items.map(it => it.zone).filter(Boolean));
     return Array.from(set).sort();
   }, [items]);
 
