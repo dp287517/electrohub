@@ -19,7 +19,6 @@ import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 import { createCanvas } from "canvas";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
@@ -40,87 +39,140 @@ for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
 
 // -------------------------------------------------
 // Helper: Convert PDF buffer to PNG image with optional marker
+// Uses sharp for PDF conversion if available, otherwise creates a placeholder
 // -------------------------------------------------
-async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumbnailWidth = 150) {
+async function pdfToImageWithMarker(pdfBuffer, xFrac = null, yFrac = null, thumbnailWidth = 150, planName = 'Plan') {
   try {
     if (!pdfBuffer || pdfBuffer.length === 0) {
-      console.warn('[pdfToImageWithMarker] Empty buffer');
       return null;
     }
 
-    // Convertir en Uint8Array si nécessaire (pdfjs-dist en a besoin)
-    let data;
-    if (Buffer.isBuffer(pdfBuffer)) {
-      data = new Uint8Array(pdfBuffer);
-    } else if (pdfBuffer instanceof Uint8Array) {
-      data = pdfBuffer;
-    } else {
-      data = new Uint8Array(pdfBuffer);
+    const thumbnailHeight = Math.floor(thumbnailWidth * 1.4); // Ratio A4 approximatif
+
+    // Essayer d'utiliser sharp pour convertir le PDF (nécessite libvips avec support poppler)
+    try {
+      const pngBuffer = await sharp(pdfBuffer, { density: 72 })
+        .resize(thumbnailWidth, thumbnailHeight, { fit: 'contain', background: '#ffffff' })
+        .png()
+        .toBuffer();
+
+      // Si sharp a réussi, ajouter le marqueur avec canvas
+      if (xFrac !== null && yFrac !== null && !isNaN(xFrac) && !isNaN(yFrac)) {
+        // Charger l'image PNG dans un canvas pour ajouter le marqueur
+        const { loadImage } = await import('canvas');
+        const img = await loadImage(pngBuffer);
+        const canvas = createCanvas(img.width, img.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        // Dessiner le marqueur
+        const markerX = xFrac * img.width;
+        const markerY = yFrac * img.height;
+        const markerRadius = Math.max(8, thumbnailWidth / 20);
+
+        // Cercle rouge
+        ctx.beginPath();
+        ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
+        ctx.fillStyle = '#dc2626';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Point central
+        ctx.beginPath();
+        ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        return canvas.toBuffer('image/png');
+      }
+
+      return pngBuffer;
+    } catch (sharpErr) {
+      // Sharp n'a pas pu convertir le PDF, créer un placeholder visuel
+      // console.log('[pdfToImageWithMarker] Sharp cannot convert PDF, creating placeholder');
     }
 
-    // Vérifier que c'est un PDF (magic bytes: %PDF)
-    if (data[0] !== 0x25 || data[1] !== 0x50 || data[2] !== 0x44 || data[3] !== 0x46) {
-      console.warn('[pdfToImageWithMarker] Not a valid PDF (wrong magic bytes)');
-      return null;
-    }
-
-    // Load PDF document avec options pour Node.js
-    const loadingTask = pdfjsLib.getDocument({
-      data: data,
-      useSystemFonts: true,
-      disableFontFace: true,
-      verbosity: 0
-    });
-    const pdfDoc = await loadingTask.promise;
-    const page = await pdfDoc.getPage(1);
-
-    // Calculate scale for thumbnail
-    const viewport = page.getViewport({ scale: 1 });
-    const scale = thumbnailWidth / viewport.width;
-    const scaledViewport = page.getViewport({ scale });
-
-    // Create canvas
-    const canvasWidth = Math.floor(scaledViewport.width);
-    const canvasHeight = Math.floor(scaledViewport.height);
-    const canvas = createCanvas(canvasWidth, canvasHeight);
+    // Créer un placeholder visuel avec le marqueur de position
+    const canvas = createCanvas(thumbnailWidth, thumbnailHeight);
     const ctx = canvas.getContext('2d');
 
-    // Fond blanc
+    // Fond gris clair
+    ctx.fillStyle = '#f3f4f6';
+    ctx.fillRect(0, 0, thumbnailWidth, thumbnailHeight);
+
+    // Bordure
+    ctx.strokeStyle = '#d1d5db';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, thumbnailWidth, thumbnailHeight);
+
+    // Icône PDF stylisée
+    const iconSize = thumbnailWidth * 0.3;
+    const iconX = (thumbnailWidth - iconSize) / 2;
+    const iconY = thumbnailHeight * 0.25;
+
+    // Rectangle du document
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillRect(iconX, iconY, iconSize, iconSize * 1.3);
+
+    // Coin replié
+    ctx.fillStyle = '#6b7280';
+    ctx.beginPath();
+    ctx.moveTo(iconX + iconSize * 0.7, iconY);
+    ctx.lineTo(iconX + iconSize, iconY + iconSize * 0.3);
+    ctx.lineTo(iconX + iconSize * 0.7, iconY + iconSize * 0.3);
+    ctx.closePath();
+    ctx.fill();
+
+    // Texte "PDF"
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.font = `bold ${Math.floor(iconSize * 0.25)}px Helvetica`;
+    ctx.textAlign = 'center';
+    ctx.fillText('PDF', iconX + iconSize / 2, iconY + iconSize * 0.9);
 
-    // Render PDF page to canvas
-    await page.render({
-      canvasContext: ctx,
-      viewport: scaledViewport,
-    }).promise;
-
-    // Draw marker if position provided
+    // Dessiner le marqueur de position si fourni
     if (xFrac !== null && yFrac !== null && !isNaN(xFrac) && !isNaN(yFrac)) {
-      const markerX = xFrac * scaledViewport.width;
-      const markerY = yFrac * scaledViewport.height;
-      const markerRadius = Math.max(6, thumbnailWidth / 25);
+      const markerX = xFrac * thumbnailWidth;
+      const markerY = yFrac * thumbnailHeight;
+      const markerRadius = Math.max(8, thumbnailWidth / 18);
 
-      // Draw outer circle (red)
+      // Cercle extérieur rouge
       ctx.beginPath();
       ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
       ctx.fillStyle = '#dc2626';
       ctx.fill();
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Draw inner dot
+      // Point central blanc
       ctx.beginPath();
       ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
+
+      // Ligne de pointage
+      ctx.strokeStyle = '#dc2626';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(markerX, markerY + markerRadius);
+      ctx.lineTo(markerX, thumbnailHeight - 15);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
-    // Convert canvas to PNG buffer
+    // Texte du nom du plan en bas
+    ctx.fillStyle = '#374151';
+    ctx.font = `${Math.floor(thumbnailWidth * 0.07)}px Helvetica`;
+    ctx.textAlign = 'center';
+    const shortName = planName.length > 20 ? planName.substring(0, 17) + '...' : planName;
+    ctx.fillText(shortName, thumbnailWidth / 2, thumbnailHeight - 5);
+
     return canvas.toBuffer('image/png');
   } catch (err) {
-    console.error('[pdfToImageWithMarker] Error:', err.message, err.stack?.split('\n')[1]);
+    console.error('[pdfToImageWithMarker] Error:', err.message);
     return null;
   }
 }
@@ -3962,11 +4014,13 @@ app.get("/api/atex/drpce", async (req, res) => {
         if (position && position.plan_content) {
           try {
             // Convertir le PDF en image avec marqueur de position
+            const planDisplayName = position.plan_display_name || 'Plan';
             const planThumbnail = await pdfToImageWithMarker(
               position.plan_content,
               position.x_frac,
               position.y_frac,
-              imgWidth * 2 // Générer à 2x pour meilleure qualité
+              imgWidth * 2, // Générer à 2x pour meilleure qualité
+              planDisplayName
             );
 
             if (planThumbnail) {
@@ -3974,7 +4028,7 @@ app.get("/api/atex/drpce", async (req, res) => {
               doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.primary);
               // Nom du plan en dessous
               doc.fontSize(6).fillColor(colors.muted)
-                 .text(position.plan_display_name || 'Plan', planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
+                 .text(planDisplayName, planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
             } else {
               doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
               doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50);

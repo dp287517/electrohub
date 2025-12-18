@@ -53,6 +53,7 @@
     "node-stream-zip": "^1.15.0",
     "openai": "^4.25.0",
     "pdf-parse": "^1.1.1",
+    "pdf-poppler": "^0.2.3",
     "pdfjs-dist": "^4.7.21",
     "pdfkit": "^0.15.0",
     "pg": "^8.16.3",
