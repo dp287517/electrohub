@@ -296,8 +296,15 @@ export default function Atex() {
       const plansRes = await api.atexMaps.listPlans().catch(() => ({ plans: [] }));
       const allPlans = plansRes?.plans || [];
       const multiZonePlans = allPlans.filter(p => p.is_multi_zone === true);
-      console.log("[ATEX] loadInfraData:", { total: allPlans.length, multiZone: multiZonePlans.length });
-      setInfraPlans(multiZonePlans);
+      // Deduplicate by logical_name (keep only the first/latest version)
+      const seen = new Set();
+      const uniquePlans = multiZonePlans.filter(p => {
+        if (seen.has(p.logical_name)) return false;
+        seen.add(p.logical_name);
+        return true;
+      });
+      console.log("[ATEX] loadInfraData:", { total: allPlans.length, multiZone: multiZonePlans.length, unique: uniquePlans.length });
+      setInfraPlans(uniquePlans);
       // Positions are in atex_positions - we'll check them when needed
       setInfraPositions([]);
     } catch (e) {
