@@ -382,8 +382,8 @@ export default function InfrastructureMap({
   }, [drawing, polyTemp, imgSize, selectedZoneColor, placingEquipment]);
 
   // Handle zone editor save
-  const handleSaveZone = (zoneName) => {
-    if (!zoneEditor || !zoneName) {
+  const handleSaveZone = (zoneData) => {
+    if (!zoneEditor || !zoneData?.name) {
       // Cancel
       if (zoneEditor?.tempLayer && mapRef.current) {
         mapRef.current.removeLayer(zoneEditor.tempLayer);
@@ -393,10 +393,12 @@ export default function InfrastructureMap({
     }
 
     onZoneCreate?.({
-      name: zoneName,
+      name: zoneData.name,
       kind: zoneEditor.kind,
       geometry: zoneEditor.geometry,
       color: zoneEditor.color,
+      zoning_gas: zoneData.zoning_gas ?? null,
+      zoning_dust: zoneData.zoning_dust ?? null,
       page_index: 0,
     });
 
@@ -728,7 +730,13 @@ export default function InfrastructureMap({
               onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
-                handleSaveZone(formData.get("zoneName"));
+                const zoningGasVal = formData.get("zoning_gas");
+                const zoningDustVal = formData.get("zoning_dust");
+                handleSaveZone({
+                  name: formData.get("zoneName"),
+                  zoning_gas: zoningGasVal === "" ? null : Number(zoningGasVal),
+                  zoning_dust: zoningDustVal === "" ? null : Number(zoningDustVal),
+                });
               }}
             >
               <div className="mb-4">
@@ -744,6 +752,47 @@ export default function InfrastructureMap({
                   placeholder="Ex: Zone de stockage, Bureau, Atelier..."
                 />
               </div>
+
+              {/* Zonage ATEX */}
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="text-sm font-medium text-amber-800 mb-3 flex items-center gap-2">
+                  <span>⚠️</span> Zonage ATEX
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Zone Gaz
+                    </label>
+                    <select
+                      name="zoning_gas"
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">Non classée</option>
+                      <option value="0">Zone 0 (Gaz permanent)</option>
+                      <option value="1">Zone 1 (Gaz occasionnel)</option>
+                      <option value="2">Zone 2 (Gaz rare)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Zone Poussière
+                    </label>
+                    <select
+                      name="zoning_dust"
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                    >
+                      <option value="">Non classée</option>
+                      <option value="20">Zone 20 (Poussière permanente)</option>
+                      <option value="21">Zone 21 (Poussière occasionnelle)</option>
+                      <option value="22">Zone 22 (Poussière rare)</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-xs text-amber-700 mt-2">
+                  Définissez le classement ATEX selon la directive 1999/92/CE
+                </p>
+              </div>
+
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Couleur
