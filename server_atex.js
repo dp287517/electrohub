@@ -334,12 +334,18 @@ async function ensureSchema() {
       color TEXT DEFAULT '#6B7280',
       page_index INTEGER DEFAULT 0,
       linked_atex_plans JSONB DEFAULT '[]',
+      zoning_gas INTEGER NULL,
+      zoning_dust INTEGER NULL,
       company_id INTEGER,
       site_id INTEGER,
       created_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_infra_zones_plan ON infrastructure_zones(plan_id);
   `);
+
+  // Ajouter colonnes zoning_gas et zoning_dust si elles n'existent pas (migration)
+  await pool.query(`ALTER TABLE infrastructure_zones ADD COLUMN IF NOT EXISTS zoning_gas INTEGER NULL`);
+  await pool.query(`ALTER TABLE infrastructure_zones ADD COLUMN IF NOT EXISTS zoning_dust INTEGER NULL`);
 
   // infrastructure_positions stocke les équipements ATEX placés sur les plans d'infrastructure
   await pool.query(`
@@ -2551,13 +2557,25 @@ app.get("/api/infra/zones", async (req, res) => {
 app.post("/api/infra/zones", async (req, res) => {
   try {
     const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
-    const { plan_id, name, kind, geometry, color, page_index, linked_atex_plans } = req.body;
+    const { plan_id, name, kind, geometry, color, page_index, linked_atex_plans, zoning_gas, zoning_dust } = req.body;
 
     const { rows } = await pool.query(`
-      INSERT INTO infrastructure_zones (plan_id, name, kind, geometry, color, page_index, linked_atex_plans, company_id, site_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO infrastructure_zones (plan_id, name, kind, geometry, color, page_index, linked_atex_plans, zoning_gas, zoning_dust, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
-    `, [plan_id, name || "", kind || "rect", JSON.stringify(geometry || {}), color || "#6B7280", page_index || 0, JSON.stringify(linked_atex_plans || []), tenant.companyId, tenant.siteId]);
+    `, [
+      plan_id,
+      name || "",
+      kind || "rect",
+      JSON.stringify(geometry || {}),
+      color || "#6B7280",
+      page_index || 0,
+      JSON.stringify(linked_atex_plans || []),
+      zoning_gas ?? null,
+      zoning_dust ?? null,
+      tenant.companyId,
+      tenant.siteId
+    ]);
 
     res.json({ zone: rows[0] });
   } catch (e) {
@@ -2568,17 +2586,28 @@ app.post("/api/infra/zones", async (req, res) => {
 // Update zone
 app.put("/api/infra/zones/:id", async (req, res) => {
   try {
-    const { name, kind, geometry, color, linked_atex_plans } = req.body;
+    const { name, kind, geometry, color, linked_atex_plans, zoning_gas, zoning_dust } = req.body;
     const { rows } = await pool.query(`
       UPDATE infrastructure_zones
       SET name = COALESCE($2, name),
           kind = COALESCE($3, kind),
           geometry = COALESCE($4, geometry),
           color = COALESCE($5, color),
-          linked_atex_plans = COALESCE($6, linked_atex_plans)
+          linked_atex_plans = COALESCE($6, linked_atex_plans),
+          zoning_gas = COALESCE($7, zoning_gas),
+          zoning_dust = COALESCE($8, zoning_dust)
       WHERE id = $1
       RETURNING *
-    `, [req.params.id, name, kind, geometry ? JSON.stringify(geometry) : null, color, linked_atex_plans ? JSON.stringify(linked_atex_plans) : null]);
+    `, [
+      req.params.id,
+      name,
+      kind,
+      geometry ? JSON.stringify(geometry) : null,
+      color,
+      linked_atex_plans ? JSON.stringify(linked_atex_plans) : null,
+      zoning_gas,
+      zoning_dust
+    ]);
 
     res.json({ zone: rows[0] });
   } catch (e) {
