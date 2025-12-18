@@ -814,13 +814,13 @@ const DeviceTree = React.memo(({ devices, level = 0, onEdit, onDelete, downstrea
 
 // ==================== EQUIPMENT CARD COMPONENT ====================
 
-const EquipmentCard = React.memo(({ equipment, isExpanded, onToggle, onEdit, onDelete, onShare, onAddDevice, devices, onEditDevice, onDeleteDevice, downstreamInfo }) => {
+const EquipmentCard = React.memo(({ equipment, isExpanded, onToggle, onEdit, onDelete, onShare, onAddDevice, devices, onEditDevice, onDeleteDevice, downstreamInfo, isPlaced, controlStatus, onNavigateToMap, onNavigateToControls }) => {
   const deviceCount = equipment.devices_count || devices?.length || 0;
   const progress = Math.min(100, (deviceCount / 10) * 100);
 
   return (
     <AnimatedCard className="mb-4">
-      <div className={`bg-white rounded-2xl border-2 ${equipment.is_principal ? 'border-amber-400' : 'border-gray-100'} overflow-hidden hover:shadow-xl transition-all duration-300`}>
+      <div className={`bg-white rounded-2xl border-2 ${controlStatus?.status === 'overdue' ? 'border-red-400' : equipment.is_principal ? 'border-amber-400' : 'border-gray-100'} overflow-hidden hover:shadow-xl transition-all duration-300`}>
         {/* Header */}
         <div className={`p-5 ${equipment.is_principal ? 'bg-gradient-to-r from-amber-50 to-orange-50' : ''}`}>
           <div className="flex items-center gap-4">
@@ -833,10 +833,31 @@ const EquipmentCard = React.memo(({ equipment, isExpanded, onToggle, onEdit, onD
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-xl font-bold text-gray-900 truncate">{equipment.name}</h3>
                 {equipment.code && <Badge variant="default" size="md">{equipment.code}</Badge>}
                 {equipment.is_principal && <Badge variant="warning" size="sm"><Star size={10} />Principal</Badge>}
+                {/* Placement badge */}
+                {isPlaced ? (
+                  <Badge variant="success" size="sm" className="cursor-pointer" onClick={() => onNavigateToMap?.(equipment)}>
+                    <MapPin size={10} />Localisé
+                  </Badge>
+                ) : (
+                  <Badge variant="default" size="sm" className="cursor-pointer" onClick={() => onNavigateToMap?.(equipment)}>
+                    <MapPin size={10} />Non localisé
+                  </Badge>
+                )}
+                {/* Control status badge */}
+                {controlStatus?.overdueCount > 0 && (
+                  <Badge variant="danger" size="sm" className="cursor-pointer" onClick={() => onNavigateToControls?.(equipment)}>
+                    <AlertTriangle size={10} />{controlStatus.overdueCount} en retard
+                  </Badge>
+                )}
+                {controlStatus?.pendingCount > 0 && controlStatus?.overdueCount === 0 && (
+                  <Badge variant="info" size="sm" className="cursor-pointer" onClick={() => onNavigateToControls?.(equipment)}>
+                    <Clock size={10} />{controlStatus.pendingCount} à venir
+                  </Badge>
+                )}
               </div>
               <div className="flex items-center gap-4 text-sm text-gray-500 mt-1 flex-wrap">
                 <span className="flex items-center gap-1"><MapPin size={14} />{equipment.building_code || '—'} / {equipment.floor || '—'} / {equipment.room || '—'}</span>
@@ -856,6 +877,12 @@ const EquipmentCard = React.memo(({ equipment, isExpanded, onToggle, onEdit, onD
               </div>
 
               <div className="flex items-center gap-1">
+                <button onClick={() => onNavigateToMap?.(equipment)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400 hover:text-emerald-600" title="Voir sur le plan">
+                  <MapPin size={18} />
+                </button>
+                <button onClick={() => onNavigateToControls?.(equipment)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400 hover:text-blue-600" title="Contrôles">
+                  <ClipboardCheck size={18} />
+                </button>
                 <button onClick={() => onShare(equipment)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-400 hover:text-amber-600" title="Partager">
                   <Share2 size={18} />
                 </button>
@@ -918,6 +945,15 @@ export default function HighVoltage() {
   const [switchboards, setSwitchboards] = useState([]);
   const [lvDevices, setLvDevices] = useState([]);
 
+  // Placement state
+  const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
+
+  // Control status state
+  const [controlStatuses, setControlStatuses] = useState({});
+  const [upcomingControls, setUpcomingControls] = useState([]);
+  const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
+
   // UI state
   const [expanded, setExpanded] = useState({});
   const [showFilters, setShowFilters] = useState(false);
@@ -937,8 +973,11 @@ export default function HighVoltage() {
     const totalDevices = Object.values(devices).flat().length;
     const principalCount = equipments.filter(e => e.is_principal).length;
     const withTransformers = Object.values(devices).flat().filter(d => d.device_type === 'Transformer').length;
-    return { totalDevices, principalCount, withTransformers, equipmentCount: equipments.length };
-  }, [equipments, devices]);
+    const placedCount = equipments.filter(e => placedIds.has(e.id)).length;
+    const unplacedCount = equipments.length - placedCount;
+    const overdueCount = upcomingControls.filter(c => c.isOverdue).length;
+    return { totalDevices, principalCount, withTransformers, equipmentCount: equipments.length, placedCount, unplacedCount, overdueCount };
+  }, [equipments, devices, placedIds, upcomingControls]);
 
   // Load equipments
   const loadEquipments = useCallback(async () => {
@@ -953,6 +992,80 @@ export default function HighVoltage() {
       setLoading(false);
     }
   }, [q]);
+
+  // Load placements
+  const loadPlacements = useCallback(async () => {
+    try {
+      const response = await api.hvMaps.placedIds();
+      const ids = (response?.placed_ids || response?.ids || []).map(Number);
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(response?.placed_details || {});
+    } catch (e) {
+      console.error('Load placements error:', e);
+    }
+  }, []);
+
+  // Load control statuses for HV equipments
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const res = await api.switchboardControls.listSchedules({ equipment_type: 'hv' });
+      const schedules = res?.schedules || [];
+      const statuses = {};
+      const upcoming30Days = [];
+      const now = new Date();
+      const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      schedules.forEach(s => {
+        if (s.hv_equipment_id) {
+          const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          const isOverdue = nextDue && nextDue < now;
+          const isUpcoming = nextDue && !isOverdue && nextDue <= in30Days;
+
+          if (nextDue && (isOverdue || isUpcoming)) {
+            upcoming30Days.push({
+              ...s,
+              isOverdue,
+              daysUntil: isOverdue
+                ? -Math.ceil((now - nextDue) / (1000 * 60 * 60 * 24))
+                : Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24))
+            });
+          }
+
+          if (!statuses[s.hv_equipment_id]) {
+            statuses[s.hv_equipment_id] = {
+              status: 'ok',
+              controls: [],
+              overdueCount: 0,
+              pendingCount: 0
+            };
+          }
+
+          statuses[s.hv_equipment_id].controls.push({
+            template_name: s.template_name,
+            next_due: s.next_due_date,
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
+          });
+
+          if (isOverdue) {
+            statuses[s.hv_equipment_id].overdueCount++;
+            statuses[s.hv_equipment_id].status = 'overdue';
+          } else if (nextDue) {
+            statuses[s.hv_equipment_id].pendingCount++;
+            if (statuses[s.hv_equipment_id].status !== 'overdue') {
+              statuses[s.hv_equipment_id].status = 'pending';
+            }
+          }
+        }
+      });
+
+      upcoming30Days.sort((a, b) => new Date(a.next_due_date || 0) - new Date(b.next_due_date || 0));
+      setUpcomingControls(upcoming30Days);
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.error('Load control statuses error:', e);
+    }
+  }, []);
 
   // Load devices for an equipment
   const loadDevices = useCallback(async (equipmentId) => {
@@ -997,11 +1110,29 @@ export default function HighVoltage() {
     }
   }, []);
 
+  // Navigate to map with equipment
+  const handleNavigateToMap = useCallback((equipment) => {
+    const eqId = equipment?.id;
+    if (!eqId) {
+      navigate('/app/hv/map');
+      return;
+    }
+    const details = placedDetails[eqId];
+    if (details?.plans?.length > 0) {
+      const planKey = details.plans[0];
+      navigate(`/app/hv/map?hv=${eqId}&plan=${encodeURIComponent(planKey)}`);
+    } else {
+      navigate('/app/hv/map');
+    }
+  }, [navigate, placedDetails]);
+
   useEffect(() => {
     loadEquipments();
     loadSwitchboards();
     loadLvDevices();
-  }, [loadEquipments, loadSwitchboards, loadLvDevices]);
+    loadPlacements();
+    loadControlStatuses();
+  }, [loadEquipments, loadSwitchboards, loadLvDevices, loadPlacements, loadControlStatuses]);
 
   // Load devices when expanded
   useEffect(() => {
@@ -1159,6 +1290,14 @@ export default function HighVoltage() {
                 <MapPin size={18} />
                 Plans
               </button>
+              <button onClick={() => setShowUpcomingPanel(!showUpcomingPanel)}
+                className={`px-4 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors ${stats.overdueCount > 0 ? 'bg-red-500/80 hover:bg-red-500' : 'bg-white/20 hover:bg-white/30'}`}>
+                <ClipboardCheck size={18} />
+                Contrôles
+                {stats.overdueCount > 0 && (
+                  <span className="px-2 py-0.5 bg-white text-red-600 rounded-full text-xs font-bold">{stats.overdueCount}</span>
+                )}
+              </button>
               <button onClick={() => setShowFilters(!showFilters)}
                 className="px-4 py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium flex items-center gap-2 transition-colors">
                 <Search size={18} />
@@ -1181,13 +1320,87 @@ export default function HighVoltage() {
 
       {/* Stats Cards */}
       <div className="max-w-[95vw] mx-auto px-4 -mt-6 relative z-10">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           <StatCard icon={Zap} label="Équipements HV" value={stats.equipmentCount} color="amber" />
           <StatCard icon={CircleDot} label="Devices totaux" value={stats.totalDevices} color="orange" />
-          <StatCard icon={Star} label="Principaux" value={stats.principalCount} color="yellow" />
-          <StatCard icon={Factory} label="Transformateurs" value={stats.withTransformers} color="red" />
+          <StatCard icon={MapPin} label="Localisés" value={stats.placedCount} color="emerald" onClick={() => navigate('/app/hv/map')} />
+          <StatCard icon={Target} label="Non localisés" value={stats.unplacedCount} color="gray" />
+          <StatCard icon={ClipboardCheck} label="Contrôles à venir" value={upcomingControls.length} color="blue" onClick={() => setShowUpcomingPanel(true)} />
+          <StatCard icon={AlertTriangle} label="En retard" value={stats.overdueCount} color="red" onClick={() => navigate('/app/switchboard-controls?tab=overdue&equipment_type=hv')} />
         </div>
       </div>
+
+      {/* Upcoming Controls Panel */}
+      {showUpcomingPanel && (
+        <div className="max-w-[95vw] mx-auto px-4 mt-6">
+          <AnimatedCard>
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+              <div className="p-4 bg-gradient-to-r from-blue-500 to-indigo-600 text-white flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <ClipboardCheck size={24} />
+                  <div>
+                    <h3 className="font-bold">Contrôles à venir</h3>
+                    <p className="text-blue-100 text-sm">{upcomingControls.length} contrôle(s) dans les 30 prochains jours</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => navigate('/app/switchboard-controls?equipment_type=hv')}
+                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium flex items-center gap-1"
+                  >
+                    Voir tout
+                    <ArrowRight size={14} />
+                  </button>
+                  <button onClick={() => setShowUpcomingPanel(false)} className="p-1.5 hover:bg-white/20 rounded-lg">
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+              <div className="p-4 max-h-[300px] overflow-y-auto">
+                {upcomingControls.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <ClipboardCheck size={40} className="mx-auto mb-2 text-gray-300" />
+                    <p>Aucun contrôle planifié</p>
+                    <button
+                      onClick={() => navigate('/app/switchboard-controls?tab=schedules&equipment_type=hv')}
+                      className="mt-3 px-4 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200"
+                    >
+                      Planifier un contrôle
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {upcomingControls.map((ctrl, idx) => (
+                      <div
+                        key={ctrl.id || idx}
+                        className={`p-3 rounded-xl border-2 flex items-center justify-between ${ctrl.isOverdue ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${ctrl.isOverdue ? 'bg-red-500 text-white' : 'bg-blue-100 text-blue-600'}`}>
+                            {ctrl.isOverdue ? <AlertTriangle size={20} /> : <Calendar size={20} />}
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">{ctrl.template_name || 'Contrôle'}</p>
+                            <p className="text-sm text-gray-500">{ctrl.equipment_name || ctrl.hv_equipment_name || `Équipement #${ctrl.hv_equipment_id}`}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant={ctrl.isOverdue ? 'danger' : ctrl.daysUntil <= 7 ? 'warning' : 'info'}>
+                            {ctrl.isOverdue ? `${Math.abs(ctrl.daysUntil)}j de retard` : `Dans ${ctrl.daysUntil}j`}
+                          </Badge>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {ctrl.next_due_date ? new Date(ctrl.next_due_date).toLocaleDateString('fr-FR') : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </AnimatedCard>
+        </div>
+      )}
 
       {/* Filters */}
       {showFilters && (
@@ -1264,6 +1477,10 @@ export default function HighVoltage() {
                 onEditDevice={(device) => setDeviceModal({ open: true, data: device, equipmentId: equipment.id })}
                 onDeleteDevice={(device) => setDeleteModal({ open: true, item: { ...device, hv_equipment_id: equipment.id }, type: 'device' })}
                 downstreamInfo={{}}
+                isPlaced={placedIds.has(equipment.id)}
+                controlStatus={controlStatuses[equipment.id]}
+                onNavigateToMap={handleNavigateToMap}
+                onNavigateToControls={(eq) => navigate(`/app/switchboard-controls?tab=schedules&equipment_type=hv&hv_equipment_id=${eq.id}`)}
               />
             ))}
           </div>
