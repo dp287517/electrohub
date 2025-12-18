@@ -410,11 +410,21 @@ const DoorLeafletViewer = forwardRef(({
     }
   }, [selectedId]);
 
-  function makeDoorIcon(isSelected = false) {
+  // Color mapping based on door control status
+  const STATUS_COLORS = {
+    en_retard: { gradient: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)", label: "En retard" }, // Red
+    en_cours_30: { gradient: "radial-gradient(circle at 30% 30%, #fbbf24, #f59e0b)", label: "Sous 30j" }, // Orange/Amber
+    a_faire: { gradient: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)", label: "OK" }, // Green
+    fait: { gradient: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)", label: "Fait" }, // Green
+  };
+  const DEFAULT_STATUS_COLOR = STATUS_COLORS.a_faire;
+
+  function makeDoorIcon(isSelected = false, status = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+    const statusColor = STATUS_COLORS[status] || DEFAULT_STATUS_COLOR;
     const bg = isSelected
       ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
-      : "background: radial-gradient(circle at 30% 30%, #fb7185, #e11d48);";
+      : `background: ${statusColor.gradient};`;
     const animClass = isSelected ? "door-marker-selected" : "";
 
     const html = `
@@ -448,7 +458,7 @@ const DoorLeafletViewer = forwardRef(({
 
       const latlng = L.latLng(y, x);
       const isSelected = p.door_id === selectedIdRef.current;
-      const icon = makeDoorIcon(isSelected);
+      const icon = makeDoorIcon(isSelected, p.status);
 
       const mk = L.marker(latlng, {
         icon,
@@ -786,10 +796,18 @@ const DoorLeafletViewer = forwardRef(({
         </div>
       )}
 
-      <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white">
+      <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white flex-wrap">
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fb7185, #e11d48)" }} />
-          Porte
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)" }} />
+          OK
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fbbf24, #f59e0b)" }} />
+          Sous 30j
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)" }} />
+          En retard
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)" }} />
