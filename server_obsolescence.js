@@ -276,6 +276,15 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_obsolescence_parameters_site ON obsolescence_parameters(site);
   `);
+
+  // Add service_year column to switchboards if it doesn't exist (like hv_equipments)
+  try {
+    await pool.query(`ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS service_year INTEGER`);
+    console.log('[OBS] switchboards.service_year column ensured');
+  } catch (e) {
+    // Column might already exist or table structure differs
+    console.log('[OBS] service_year column check:', e.message);
+  }
 }
 ensureSchema().catch(console.error);
 
@@ -371,6 +380,7 @@ async function computeSwitchboardTotals(site) {
   const hasSite = site && site.trim() !== '';
   const r = await pool.query(`
     SELECT s.id AS switchboard_id, s.name, s.code, s.building_code, s.floor, s.site,
+           s.service_year AS stored_service_year,
            d.id AS device_id, d.device_type, d.in_amps,
            op.replacement_cost, op.manufacture_date, op.avg_life_years
     FROM switchboards s
@@ -389,6 +399,7 @@ async function computeSwitchboardTotals(site) {
       building_code: row.building_code,
       floor: row.floor,
       site: row.site,
+      stored_service_year: row.stored_service_year,
       devices: [],
     });
     bySB.get(row.switchboard_id).devices.push(row);
@@ -405,8 +416,14 @@ async function computeSwitchboardTotals(site) {
       sumDevices += c;
     }
     const total = GBP((boardBase + sumDevices) * 1.15);
-    const years = sb.devices.map(d => d.manufacture_date).filter(Boolean).map(x => new Date(x).getFullYear()).filter(y => Number.isFinite(y));
-    const service_year = years.length ? years.sort((a,b)=>a-b)[Math.floor(years.length/2)] : null;
+
+    // Priority: use stored service_year from switchboards table, fallback to device median
+    let service_year = sb.stored_service_year;
+    if (!service_year) {
+      const years = sb.devices.map(d => d.manufacture_date).filter(Boolean).map(x => new Date(x).getFullYear()).filter(y => Number.isFinite(y));
+      service_year = years.length ? years.sort((a,b)=>a-b)[Math.floor(years.length/2)] : null;
+    }
+
     const lifeVals = sb.devices.map(d => Number(d.avg_life_years)).filter(v => Number.isFinite(v) && v>0);
     const avg_life_years = lifeVals.length ? Math.round(lifeVals.reduce((a,b)=>a+b,0)/lifeVals.length) : 25;
 
@@ -1135,29 +1152,19 @@ app.put('/api/obsolescence/service-year', async (req, res) => {
 
     switch (kind) {
       case 'sb': {
-        // For switchboards, update manufacture_date in obsolescence_parameters
-        const date = `${year}-01-01`;
+        // For switchboards, update service_year directly on switchboards table (like HV/VSD)
         try {
-          // Try to update existing rows first
           result = await pool.query(`
-            UPDATE obsolescence_parameters
-            SET manufacture_date = $1
-            WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
-          `, site ? [date, equipmentId, site] : [date, equipmentId]);
+            UPDATE switchboards
+            SET service_year = $1
+            WHERE id = $2 ${site ? 'AND site = $3' : ''}
+          `, site ? [year, equipmentId, site] : [year, equipmentId]);
           rowsAffected = result.rowCount;
           console.log(`[OBS SERVICE-YEAR] SB update: ${rowsAffected} rows affected`);
 
-          // If no rows updated, try to insert for devices
           if (rowsAffected === 0) {
-            result = await pool.query(`
-              INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date)
-              SELECT d.id, d.switchboard_id, d.site, $1::date
-              FROM devices d
-              WHERE d.switchboard_id = $2 ${site ? 'AND d.site = $3' : ''}
-              ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET manufacture_date = EXCLUDED.manufacture_date
-            `, site ? [date, equipmentId, site] : [date, equipmentId]);
-            rowsAffected = result.rowCount;
-            console.log(`[OBS SERVICE-YEAR] SB insert: ${rowsAffected} rows affected`);
+            console.log(`[OBS SERVICE-YEAR] SB not found: id=${equipmentId}, site=${site}`);
+            return res.status(404).json({ error: 'Switchboard non trouvé.' });
           }
         } catch (e) {
           console.error('[OBS SERVICE-YEAR] SB update failed:', e.message, `(${Date.now() - startTime}ms)`);
