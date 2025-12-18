@@ -241,7 +241,8 @@ const STATUS_GRADIENT = {
   en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
   en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
   fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
-  selected: { from: "#a78bfa", to: "#7c3aed" },     // 🆕 Violet pour sélection
+  selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
+  non_conforme: { from: "#ef4444", to: "#b91c1c" }, // Rouge vif pour non conforme
 };
 
 // Icône SVG flamme ATEX
@@ -249,7 +250,7 @@ const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.
   <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
 </svg>`;
 
-function makeEquipIcon(status, isUnsaved, isSelected = false) {
+function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na") {
   const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
 
   // Marqueur non sauvegardé (nouveau)
@@ -274,15 +275,22 @@ function makeEquipIcon(status, isUnsaved, isSelected = false) {
     });
   }
 
-  // 🆕 Utilise le gradient violet si sélectionné, sinon le gradient du statut
-  const grad = isSelected
-    ? STATUS_GRADIENT.selected
-    : (STATUS_GRADIENT[status] || STATUS_GRADIENT.fait);
+  // Priorité: 1) Sélectionné = violet, 2) Non conforme = rouge, 3) Statut normal
+  let grad;
+  if (isSelected) {
+    grad = STATUS_GRADIENT.selected;
+  } else if (complianceState === "non_conforme") {
+    grad = STATUS_GRADIENT.non_conforme;
+  } else {
+    grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
+  }
 
-  // Classes d'animation
+  // Classes d'animation - non conforme = pulsation rouge prioritaire
   let animClass = "";
   if (isSelected) {
     animClass = "atex-marker-selected";
+  } else if (complianceState === "non_conforme") {
+    animClass = "atex-marker-pulse-red"; // Rouge pulsant pour non conforme
   } else if (status === "en_retard") {
     animClass = "atex-marker-pulse-red";
   } else if (status === "en_cours_30") {
@@ -969,6 +977,7 @@ export default function AtexMap({
             x: Number(it.x_frac ?? it.x ?? 0),
             y: Number(it.y_frac ?? it.y ?? 0),
             status: it.status || "a_faire",
+            compliance_state: it.compliance_state || "na",
             zoning_gas: it.zoning_gas ?? null,
             zoning_dust: it.zoning_dust ?? null,
           }))
@@ -1133,9 +1142,9 @@ export default function AtexMap({
       positionsRef.current = list || [];
       (list || []).forEach((p) => {
         const latlng = toLatLngFrac(p.x, p.y, base);
-        // 🆕 Passer isSelected pour highlight violet
+        // Passer isSelected pour highlight violet, compliance_state pour rouge si non conforme
         const isSelected = p.id === selectedEquipmentIdRef.current;
-        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected);
+        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state);
         const mk = L.marker(latlng, {
           icon,
           draggable: true,

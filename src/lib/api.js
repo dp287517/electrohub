@@ -982,6 +982,7 @@ export const api = {
     listPlansCompat: () => get(`/api/atex/maps/plans`),
     renamePlan: (logical_name, display_name) =>
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
+    deletePlan: (planId) => del(`/api/atex/maps/plans/${encodeURIComponent(planId)}`),
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(

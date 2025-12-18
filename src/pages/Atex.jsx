@@ -445,6 +445,8 @@ export default function Atex() {
 
   function closeEdit() {
     setDrawerOpen(false);
+    // Nettoyer l'URL - ne plus garder l'équipement sélectionné
+    setSelectedEquipmentId(null);
     setTimeout(() => {
       setEditing(null);
       initialRef.current = null;
@@ -2515,32 +2517,57 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
                     </summary>
                     <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {z.items.map((p) => (
-                        <button
+                        <div
                           key={p.id || p.logical_name}
-                          onClick={() => {
-                            if (selectedPlan?.logical_name === p.logical_name) {
-                              setSelectedPlan(null);
-                            } else {
-                              setSelectedPlan(p);
-                              setMapRefreshTick((t) => t + 1);
-                            }
-                          }}
-                          className={`p-3 border rounded-xl text-left transition-all hover:shadow-md ${
+                          className={`relative p-3 border rounded-xl text-left transition-all hover:shadow-md group ${
                             selectedPlan?.logical_name === p.logical_name
                               ? "border-amber-400 bg-gradient-to-br from-amber-50 to-orange-50 ring-2 ring-amber-200"
                               : "bg-white hover:bg-gray-50 border-gray-200"
                           }`}
                         >
-                          <div className="flex items-center gap-2">
-                            <span className={`text-xl ${selectedPlan?.logical_name === p.logical_name ? "" : "opacity-60"}`}>📄</span>
-                            <span className="font-medium truncate text-gray-800">{p.display_name || p.logical_name}</span>
-                          </div>
-                          {selectedPlan?.logical_name === p.logical_name && (
-                            <span className="mt-2 inline-flex px-2 py-0.5 bg-amber-500 text-white text-xs rounded-full">
-                              Actif
-                            </span>
-                          )}
-                        </button>
+                          <button
+                            onClick={() => {
+                              if (selectedPlan?.logical_name === p.logical_name) {
+                                setSelectedPlan(null);
+                              } else {
+                                setSelectedPlan(p);
+                                setMapRefreshTick((t) => t + 1);
+                              }
+                            }}
+                            className="w-full text-left"
+                          >
+                            <div className="flex items-center gap-2 pr-8">
+                              <span className={`text-xl ${selectedPlan?.logical_name === p.logical_name ? "" : "opacity-60"}`}>📄</span>
+                              <span className="font-medium truncate text-gray-800">{p.display_name || p.logical_name}</span>
+                            </div>
+                            {selectedPlan?.logical_name === p.logical_name && (
+                              <span className="mt-2 inline-flex px-2 py-0.5 bg-amber-500 text-white text-xs rounded-full">
+                                Actif
+                              </span>
+                            )}
+                          </button>
+                          {/* Bouton supprimer */}
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!confirm(`Supprimer le plan "${p.display_name || p.logical_name}" ?\n\nCela supprimera aussi les positions des équipements sur ce plan (les équipements ne seront pas supprimés).`)) return;
+                              try {
+                                await api.atexMaps.deletePlan(p.id);
+                                setToast("Plan supprimé ✓");
+                                if (selectedPlan?.logical_name === p.logical_name) {
+                                  setSelectedPlan(null);
+                                }
+                                await loadPlans();
+                              } catch (err) {
+                                setToast("Erreur: " + (err.message || "Suppression échouée"));
+                              }
+                            }}
+                            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-lg bg-red-50 text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-100 transition-all"
+                            title="Supprimer ce plan"
+                          >
+                            🗑️
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </details>

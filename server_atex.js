@@ -1549,6 +1549,66 @@ app.put("/api/atex/maps/renamePlan", async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
+// 🗑️ Supprimer un plan (et ses positions/sous-zones associées)
+app.delete("/api/atex/maps/plans/:id", async (req, res) => {
+  try {
+    const planId = req.params.id;
+
+    // 1. Récupérer le logical_name du plan
+    const { rows } = await pool.query(
+      `SELECT logical_name FROM atex_plans WHERE id = $1`,
+      [planId]
+    );
+    const logicalName = rows?.[0]?.logical_name;
+
+    if (!logicalName) {
+      return res.status(404).json({ ok: false, error: "Plan not found" });
+    }
+
+    console.log(`[deletePlan] Deleting plan ${planId} (logical_name: ${logicalName})`);
+
+    // 2. Supprimer les positions sur ce plan (ne supprime PAS l'équipement, juste la position)
+    const posResult = await pool.query(
+      `DELETE FROM atex_positions WHERE logical_name = $1`,
+      [logicalName]
+    );
+    console.log(`[deletePlan] Removed ${posResult.rowCount} positions`);
+
+    // 3. Supprimer les sous-zones (subareas) de ce plan
+    const subResult = await pool.query(
+      `DELETE FROM atex_subareas WHERE logical_name = $1`,
+      [logicalName]
+    );
+    console.log(`[deletePlan] Removed ${subResult.rowCount} subareas`);
+
+    // 4. Supprimer le nom d'affichage
+    await pool.query(
+      `DELETE FROM atex_plan_names WHERE logical_name = $1`,
+      [logicalName]
+    );
+
+    // 5. Supprimer toutes les versions du plan
+    const planResult = await pool.query(
+      `DELETE FROM atex_plans WHERE logical_name = $1`,
+      [logicalName]
+    );
+    console.log(`[deletePlan] Removed ${planResult.rowCount} plan versions`);
+
+    res.json({
+      ok: true,
+      deleted: {
+        positions: posResult.rowCount,
+        subareas: subResult.rowCount,
+        plans: planResult.rowCount
+      }
+    });
+  } catch (e) {
+    console.error('[deletePlan] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // 🔹 Fichier du plan
 app.get("/api/atex/maps/planFile", async (req, res) => {
   try {
@@ -1924,26 +1984,40 @@ app.get("/api/atex/maps/positions", async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT p.equipment_id, p.x_frac, p.y_frac,
-             e.name, e.building, e.zone, e.status, e.zoning_gas, e.zoning_dust, e.equipment, e.sub_equipment
+             e.name, e.building, e.zone, e.status, e.zoning_gas, e.zoning_dust, e.equipment, e.sub_equipment,
+             (SELECT result FROM atex_checks c
+               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+               ORDER BY c.date DESC NULLS LAST
+               LIMIT 1) AS last_result
       FROM atex_positions p
       JOIN atex_equipments e ON e.id=p.equipment_id
       WHERE p.logical_name=$1 AND p.page_index=$2
       `,
       [logical, pageIndex]
     );
-    const items = rows.map((r) => ({
-      equipment_id: r.equipment_id,
-      name: r.name,
-      x_frac: Number(r.x_frac),
-      y_frac: Number(r.y_frac),
-      status: r.status,
-      building: r.building,
-      zone: r.zone,
-      zoning_gas: r.zoning_gas,
-      zoning_dust: r.zoning_dust,
-      equipment_macro: r.equipment || null,
-      sub_equipment: r.sub_equipment || null,
-    }));
+    const items = rows.map((r) => {
+      // Calculer compliance_state comme dans listEquipments
+      const compliance_state =
+        r.last_result === "conforme"
+          ? "conforme"
+          : r.last_result === "non_conforme"
+          ? "non_conforme"
+          : "na";
+      return {
+        equipment_id: r.equipment_id,
+        name: r.name,
+        x_frac: Number(r.x_frac),
+        y_frac: Number(r.y_frac),
+        status: r.status,
+        compliance_state,
+        building: r.building,
+        zone: r.zone,
+        zoning_gas: r.zoning_gas,
+        zoning_dust: r.zoning_dust,
+        equipment_macro: r.equipment || null,
+        sub_equipment: r.sub_equipment || null,
+      };
+    });
     res.json({ items });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
