@@ -612,6 +612,7 @@ app.get("/api/atex/equipments", async (req, res) => {
 
     // 🚀 OPTIMISATION : Requête avec JOIN au lieu de sous-requêtes corrélées
     // 🏢 MULTI-TENANT: Filtrage par company_id/site_id
+    // 📍 Ajout de la position actuelle (logical_name) pour savoir sur quel plan l'équipement est placé
     const { rows } = await pool.query(
       `
       WITH last_checks AS (
@@ -622,6 +623,14 @@ app.get("/api/atex/equipments", async (req, res) => {
         FROM atex_checks
         WHERE status = 'fait' AND result IS NOT NULL
         ORDER BY equipment_id, date DESC NULLS LAST
+      ),
+      current_positions AS (
+        SELECT DISTINCT ON (equipment_id)
+               equipment_id,
+               logical_name,
+               plan_id
+        FROM atex_positions
+        ORDER BY equipment_id, created_at DESC
       )
       SELECT
         e.id,
@@ -647,9 +656,12 @@ app.get("/api/atex/equipments", async (req, res) => {
         e.created_at,
         e.updated_at,
         lc.last_check_date,
-        lc.result AS last_result
+        lc.result AS last_result,
+        cp.logical_name,
+        cp.plan_id AS position_plan_id
       FROM atex_equipments e
       LEFT JOIN last_checks lc ON lc.equipment_id = e.id
+      LEFT JOIN current_positions cp ON cp.equipment_id = e.id
       WHERE ${tenantFilter.where}
       ORDER BY e.created_at DESC
       LIMIT $${tenantFilter.nextParam}
@@ -1646,7 +1658,8 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing params" });
 
     // 1. SUPPRIMER toutes les anciennes positions de cet équipement (permet le déplacement entre plans)
-    await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+    const deleteResult = await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+    console.log(`[setPosition] DELETE for equipment ${equipment_id}: ${deleteResult.rowCount} rows removed`);
 
     // 2. Créer la nouvelle position
     await pool.query(
@@ -1654,9 +1667,10 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
+    console.log(`[setPosition] INSERT for equipment ${equipment_id} on plan ${logical_name}`);
 
     // 3. Répondre IMMÉDIATEMENT au frontend (UX rapide)
-    res.json({ ok: true, position_saved: true });
+    res.json({ ok: true, position_saved: true, deleted_count: deleteResult.rowCount });
 
     // 3. Mettre à jour le contexte de zone EN ARRIÈRE-PLAN (fire and forget)
     setImmediate(async () => {
@@ -1692,7 +1706,8 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing params" });
 
     // 1. SUPPRIMER toutes les anciennes positions de cet équipement (permet le déplacement entre plans)
-    await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+    const deleteResult = await pool.query(`DELETE FROM atex_positions WHERE equipment_id = $1`, [equipment_id]);
+    console.log(`[setPosition/:id] DELETE for equipment ${equipment_id}: ${deleteResult.rowCount} rows removed`);
 
     // 2. Créer la nouvelle position
     await pool.query(
@@ -1700,9 +1715,10 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
+    console.log(`[setPosition/:id] INSERT for equipment ${equipment_id} on plan ${logical_name}`);
 
     // 3. Répondre IMMÉDIATEMENT
-    res.json({ ok: true, position_saved: true });
+    res.json({ ok: true, position_saved: true, deleted_count: deleteResult.rowCount });
 
     // 3. Mise à jour des zones en arrière-plan
     setImmediate(async () => {
