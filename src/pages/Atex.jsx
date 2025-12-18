@@ -139,6 +139,18 @@ export default function Atex() {
     })
   , [items]);
 
+  // Liste unique des bâtiments (pour le modal DRPCE)
+  const buildings = useMemo(() => {
+    const set = new Set(items.map(it => it.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [items]);
+
+  // Liste unique des zones (pour le modal DRPCE)
+  const zones = useMemo(() => {
+    const set = new Set(items.map(it => it.zone).filter(Boolean));
+    return Array.from(set).sort();
+  }, [items]);
+
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
