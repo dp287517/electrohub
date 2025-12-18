@@ -668,6 +668,12 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'hv_equipment_id') THEN
         ALTER TABLE control_schedules ADD COLUMN hv_equipment_id INTEGER;
+      ELSE
+        -- Migrate from UUID to INTEGER if needed (hv_equipments uses SERIAL integer id)
+        IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'hv_equipment_id' AND data_type = 'uuid') THEN
+          ALTER TABLE control_schedules DROP COLUMN hv_equipment_id;
+          ALTER TABLE control_schedules ADD COLUMN hv_equipment_id INTEGER;
+        END IF;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_schedules ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
@@ -693,6 +699,12 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'hv_equipment_id') THEN
         ALTER TABLE control_records ADD COLUMN hv_equipment_id INTEGER;
+      ELSE
+        -- Migrate from UUID to INTEGER if needed (hv_equipments uses SERIAL integer id)
+        IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'hv_equipment_id' AND data_type = 'uuid') THEN
+          ALTER TABLE control_records DROP COLUMN hv_equipment_id;
+          ALTER TABLE control_records ADD COLUMN hv_equipment_id INTEGER;
+        END IF;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_records ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
