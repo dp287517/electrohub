@@ -1596,12 +1596,30 @@ app.delete("/api/atex/maps/plans/:id", async (req, res) => {
     );
     console.log(`[deletePlan] Removed ${planResult.rowCount} plan versions`);
 
+    // 6. Si c'est un plan migré depuis infrastructure, supprimer aussi l'original
+    //    pour éviter qu'il soit recréé au prochain démarrage
+    let infraDeleted = 0;
+    if (logicalName.startsWith('infra_')) {
+      const infraId = logicalName.replace('infra_', '');
+      try {
+        // Supprimer zones et positions infrastructure d'abord
+        await pool.query(`DELETE FROM infrastructure_positions WHERE plan_id = $1`, [infraId]);
+        await pool.query(`DELETE FROM infrastructure_zones WHERE plan_id = $1`, [infraId]);
+        const infraResult = await pool.query(`DELETE FROM infrastructure_plans WHERE id = $1`, [infraId]);
+        infraDeleted = infraResult.rowCount;
+        console.log(`[deletePlan] Also removed original infrastructure plan ${infraId}`);
+      } catch (e) {
+        console.warn(`[deletePlan] Could not delete infrastructure_plans ${infraId}:`, e.message);
+      }
+    }
+
     res.json({
       ok: true,
       deleted: {
         positions: posResult.rowCount,
         subareas: subResult.rowCount,
-        plans: planResult.rowCount
+        plans: planResult.rowCount,
+        infrastructure: infraDeleted
       }
     });
   } catch (e) {
