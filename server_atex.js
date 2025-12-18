@@ -2631,7 +2631,8 @@ app.delete("/api/infra/zones/:id", async (req, res) => {
 app.get("/api/infra/positions", async (req, res) => {
   try {
     const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
-    const filter = getTenantFilter(tenant, "infrastructure_positions");
+    // Use table alias 'p' to avoid ambiguous column error in JOIN
+    const filter = getTenantFilter(tenant, { tableAlias: 'p' });
     const plan_id = req.query.plan_id;
 
     let query = `
