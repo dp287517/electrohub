@@ -262,6 +262,15 @@ export default function Infrastructure() {
           {/* Action buttons */}
           <div className="flex gap-2">
             <button
+              onClick={() => navigate("/app/atex")}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg font-medium transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              Retour ATEX
+            </button>
+            <button
               onClick={() => setUploadModalOpen(true)}
               className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-medium transition-colors"
             >
