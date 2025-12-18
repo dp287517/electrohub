@@ -822,9 +822,9 @@ export default function AtexMap({
             });
             await renderTaskRef.current.promise;
 
-            // 🚀 JPEG compressé sur mobile (beaucoup plus rapide), PNG sur desktop
+            // 🚀 JPEG haute qualité sur mobile (rapide + beau), PNG sur desktop
             dataUrl = isMobile
-              ? canvas.toDataURL("image/jpeg", 0.85)
+              ? canvas.toDataURL("image/jpeg", 0.92)
               : canvas.toDataURL("image/png");
             canvasW = canvas.width;
             canvasH = canvas.height;

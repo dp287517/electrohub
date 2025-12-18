@@ -51,55 +51,58 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 VERSION ULTRA-OPTIMISÉE pour chargement rapide
+ * 🚀 VERSION OPTIMISÉE pour qualité + performance
  */
 export function getPDFConfig() {
   const isMobile = isMobileDevice();
   const networkQuality = getNetworkQuality();
 
-  // 🔥 Configuration ULTRA-LÉGÈRE par défaut (PC / réseau rapide)
-  // Réduit drastiquement pour un chargement instantané
+  // Adapter la qualité au DPR de l'écran (smartphones haute résolution)
+  const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
+  const isHighDPI = dpr >= 2;
+
+  // 🔥 Configuration par défaut (PC / réseau rapide)
   let config = {
-    qualityBoost: 1.5,        // ⬇️ Réduit de 3.5 à 1.5
-    maxBitmapWidth: 3000,     // ⬇️ Réduit de 12288 à 3000
-    minBitmapWidth: 800,      // ⬇️ Réduit de 1800 à 800
-    maxScale: 2.5,            // ⬇️ Réduit de 6.0 à 2.5
+    qualityBoost: 1.5,
+    maxBitmapWidth: 3500,
+    minBitmapWidth: 1000,
+    maxScale: 3.0,
     minScale: 0.5,
     enableImageSmoothing: true,
     intent: "display",
   };
 
-  // Mobile + réseau lent → ULTRA LÉGER
+  // Mobile + réseau lent → Qualité réduite mais lisible
   if (isMobile && networkQuality === "slow") {
     config = {
-      qualityBoost: 1.0,
-      maxBitmapWidth: 1200,
-      minBitmapWidth: 600,
-      maxScale: 1.2,
-      minScale: 0.4,
-      enableImageSmoothing: false,
-      intent: "display",
-    };
-  }
-  // Mobile + réseau moyen
-  else if (isMobile && networkQuality === "medium") {
-    config = {
-      qualityBoost: 1.2,
-      maxBitmapWidth: 1800,
-      minBitmapWidth: 700,
-      maxScale: 1.8,
+      qualityBoost: isHighDPI ? 1.5 : 1.0,
+      maxBitmapWidth: isHighDPI ? 2000 : 1400,
+      minBitmapWidth: 800,
+      maxScale: isHighDPI ? 2.0 : 1.5,
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
     };
   }
-  // Mobile + réseau rapide
+  // Mobile + réseau moyen → Bonne qualité
+  else if (isMobile && networkQuality === "medium") {
+    config = {
+      qualityBoost: isHighDPI ? 1.8 : 1.3,
+      maxBitmapWidth: isHighDPI ? 2800 : 2200,
+      minBitmapWidth: 900,
+      maxScale: isHighDPI ? 2.5 : 2.0,
+      minScale: 0.5,
+      enableImageSmoothing: true,
+      intent: "display",
+    };
+  }
+  // Mobile + réseau rapide/inconnu → Haute qualité
   else if (isMobile) {
     config = {
-      qualityBoost: 1.3,
-      maxBitmapWidth: 2200,
-      minBitmapWidth: 800,
-      maxScale: 2.0,
+      qualityBoost: isHighDPI ? 2.0 : 1.5,
+      maxBitmapWidth: isHighDPI ? 3200 : 2600,
+      minBitmapWidth: 1000,
+      maxScale: isHighDPI ? 2.8 : 2.2,
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
@@ -254,7 +257,8 @@ export function clearPlanCache() {
 export function getOptimalImageFormat(canvas) {
   const isMobile = isMobileDevice();
   if (isMobile) {
-    return canvas.toDataURL("image/jpeg", 0.85);
+    // 0.92 = haute qualité, bien meilleur rendu sur écrans haute résolution
+    return canvas.toDataURL("image/jpeg", 0.92);
   }
   return canvas.toDataURL("image/png");
 }
