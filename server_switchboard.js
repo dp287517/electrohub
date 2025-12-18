@@ -2727,7 +2727,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
              vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
-             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
+             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building, hv.regime_neutral as hv_regime_neutral
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
@@ -2884,7 +2884,7 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
              vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
-             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building
+             hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building, hv.regime_neutral as hv_regime_neutral
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
