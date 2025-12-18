@@ -2459,7 +2459,7 @@ app.get("/api/infra/plans", async (req, res) => {
     const { rows } = await pool.query(`
       SELECT id, logical_name, display_name, building_name, filename, page_count, created_at, updated_at
       FROM infrastructure_plans
-      ${filter.where}
+      WHERE ${filter.where}
       ORDER BY building_name, display_name, created_at DESC
     `, filter.params);
 
@@ -2531,7 +2531,7 @@ app.get("/api/infra/zones", async (req, res) => {
     const filter = getTenantFilter(tenant, "infrastructure_zones");
     const plan_id = req.query.plan_id;
 
-    let query = `SELECT * FROM infrastructure_zones ${filter.where}`;
+    let query = `SELECT * FROM infrastructure_zones WHERE ${filter.where}`;
     let params = [...filter.params];
 
     if (plan_id) {
@@ -2609,7 +2609,7 @@ app.get("/api/infra/positions", async (req, res) => {
       SELECT p.*, e.name as equipment_name, e.type as equipment_type, e.building, e.zone
       FROM infrastructure_positions p
       JOIN atex_equipments e ON p.equipment_id = e.id
-      ${filter.where}
+      WHERE ${filter.where}
     `;
     let params = [...filter.params];
 
@@ -2680,9 +2680,9 @@ app.get("/api/infra/stats", async (req, res) => {
     const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const filter = getTenantFilter(tenant, "infrastructure_plans");
 
-    const plansRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_plans ${filter.where}`, filter.params);
-    const zonesRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_zones ${getTenantFilter(tenant, "infrastructure_zones").where}`, getTenantFilter(tenant, "infrastructure_zones").params);
-    const posRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_positions ${getTenantFilter(tenant, "infrastructure_positions").where}`, getTenantFilter(tenant, "infrastructure_positions").params);
+    const plansRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_plans WHERE ${filter.where}`, filter.params);
+    const zonesRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_zones WHERE ${getTenantFilter(tenant).where}`, getTenantFilter(tenant).params);
+    const posRes = await pool.query(`SELECT COUNT(*) as count FROM infrastructure_positions WHERE ${getTenantFilter(tenant).where}`, getTenantFilter(tenant).params);
 
     res.json({
       plans: parseInt(plansRes.rows[0]?.count || 0),
