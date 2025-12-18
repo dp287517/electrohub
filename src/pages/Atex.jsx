@@ -189,6 +189,7 @@ export default function Atex() {
   // 🆕 Modal Management Monitoring (ex-DRPCE) avec filtres
   const [drpceModalOpen, setDrpceModalOpen] = useState(false);
   const [drpceFilters, setDrpceFilters] = useState({ building: "", zone: "", compliance: "" });
+  const [drpceLoading, setDrpceLoading] = useState(false);
 
   // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
@@ -1066,20 +1067,41 @@ export default function Atex() {
                   setDrpceModalOpen(false);
                   setDrpceFilters({ building: "", zone: "", compliance: "" });
                 }}
-                className="px-4 py-2.5 rounded-xl text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 font-medium transition-all"
+                disabled={drpceLoading}
+                className="px-4 py-2.5 rounded-xl text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 font-medium transition-all disabled:opacity-50"
               >
                 Annuler
               </button>
-              <a
-                href={api.atex.drpceUrl(drpceFilters)}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setDrpceModalOpen(false)}
-                className="px-4 py-2.5 rounded-xl text-white font-medium transition-all bg-gradient-to-r from-teal-500 to-teal-700 hover:from-teal-600 hover:to-teal-800 flex items-center gap-2"
+              <button
+                onClick={() => {
+                  setDrpceLoading(true);
+                  // Ouvrir le PDF dans un nouvel onglet
+                  window.open(api.atex.drpceUrl(drpceFilters), '_blank');
+                  // Fermer le modal après un délai pour montrer l'animation
+                  setTimeout(() => {
+                    setDrpceLoading(false);
+                    setDrpceModalOpen(false);
+                    setDrpceFilters({ building: "", zone: "", compliance: "" });
+                  }, 1500);
+                }}
+                disabled={drpceLoading}
+                className="px-4 py-2.5 rounded-xl text-white font-medium transition-all bg-gradient-to-r from-teal-500 to-teal-700 hover:from-teal-600 hover:to-teal-800 flex items-center gap-2 disabled:opacity-70 min-w-[160px] justify-center"
               >
-                <span>📄</span>
-                Générer le PDF
-              </a>
+                {drpceLoading ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Génération...
+                  </>
+                ) : (
+                  <>
+                    <span>📄</span>
+                    Générer le PDF
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -1191,6 +1213,7 @@ export default function Atex() {
             items={items}
             runMassComplianceCheck={runMassComplianceCheck}
             massComplianceRunning={massComplianceRunning}
+            onOpenDrpceModal={() => setDrpceModalOpen(true)}
           />
         )}
 
@@ -1415,7 +1438,7 @@ function UploadPlanModal({ onClose, onUpload }) {
 // DASHBOARD TAB
 // ============================================================
 
-function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items, runMassComplianceCheck, massComplianceRunning }) {
+function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items, runMassComplianceCheck, massComplianceRunning, onOpenDrpceModal }) {
   const StatCard = ({ label, value, color, icon }) => {
     const colors = {
       blue: "bg-blue-50 text-blue-800 border-blue-200",
@@ -1469,7 +1492,7 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
         </div>
         {/* Bouton Management Monitoring (ex-DRPCE) */}
         <button
-          onClick={() => setDrpceModalOpen(true)}
+          onClick={onOpenDrpceModal}
           className="bg-gradient-to-br from-teal-500 to-teal-700 border border-teal-400 rounded-xl p-3 sm:p-4 hover:from-teal-600 hover:to-teal-800 transition-all shadow-md hover:shadow-lg group text-left"
         >
           <div className="flex items-center gap-3">
