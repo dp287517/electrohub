@@ -2631,8 +2631,8 @@ app.delete("/api/infra/zones/:id", async (req, res) => {
 app.get("/api/infra/positions", async (req, res) => {
   try {
     const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
-    // Use table alias 'p' to avoid ambiguous column error in JOIN
-    const filter = getTenantFilter(tenant, { tableAlias: 'p' });
+    // Filter on equipment (e) instead of position to ensure we see all positions for visible equipments
+    const filter = getTenantFilter(tenant, { tableAlias: 'e' });
     const plan_id = req.query.plan_id;
 
     let query = `
@@ -2649,9 +2649,12 @@ app.get("/api/infra/positions", async (req, res) => {
       params.push(plan_id);
     }
 
+    console.log("[INFRA] GET /api/infra/positions filter:", { where: filter.where, params, plan_id });
     const { rows } = await pool.query(query, params);
+    console.log("[INFRA] GET /api/infra/positions returned:", rows.length, "positions");
     res.json({ positions: rows });
   } catch (e) {
+    console.error("[INFRA] GET /api/infra/positions error:", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2662,6 +2665,8 @@ app.post("/api/infra/positions", async (req, res) => {
     const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
     const { equipment_id, plan_id, zone_id, page_index, x_frac, y_frac } = req.body;
 
+    console.log("[INFRA] POST /api/infra/positions:", { equipment_id, plan_id, zone_id, page_index, x_frac, y_frac, tenant: { companyId: tenant.companyId, siteId: tenant.siteId } });
+
     // Upsert: si position existe déjà, update
     const { rows } = await pool.query(`
       INSERT INTO infrastructure_positions (equipment_id, plan_id, zone_id, page_index, x_frac, y_frac, company_id, site_id)
@@ -2671,8 +2676,10 @@ app.post("/api/infra/positions", async (req, res) => {
       RETURNING *
     `, [equipment_id, plan_id, zone_id || null, page_index || 0, x_frac, y_frac, tenant.companyId, tenant.siteId]);
 
+    console.log("[INFRA] Position created/updated:", rows[0]);
     res.json({ position: rows[0] });
   } catch (e) {
+    console.error("[INFRA] POST /api/infra/positions error:", e);
     res.status(500).json({ error: e.message });
   }
 });
