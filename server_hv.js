@@ -752,38 +752,58 @@ app.post('/api/hv/maps/uploadZip', multerZip.single('zip'), async (req, res) => 
   }
 });
 
-// List plans
+// List plans - now includes VSD plans as well for unified plan management
 app.get('/api/hv/maps/listPlans', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    const { rows } = await pool.query(`
+    // Fetch HV-specific plans
+    const hvResult = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
              p.id, p.logical_name, p.version, p.filename, p.page_count,
-             COALESCE(pn.display_name, p.logical_name) AS display_name
+             COALESCE(pn.display_name, p.logical_name) AS display_name,
+             'hv' AS source
         FROM hv_plans p
         LEFT JOIN hv_plan_names pn ON pn.logical_name = p.logical_name AND pn.site = p.site
        WHERE p.site = $1
        ORDER BY p.logical_name, p.version DESC
     `, [site]);
 
-    res.json(rows);
+    // Also fetch VSD plans (shared across electrical systems)
+    const vsdResult = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name)
+             p.id, p.logical_name, p.version, p.filename, p.page_count,
+             COALESCE(pn.display_name, p.logical_name) AS display_name,
+             'vsd' AS source
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+       ORDER BY p.logical_name, p.version DESC
+    `);
+
+    // Merge plans: HV plans first, then VSD plans (excluding duplicates by logical_name)
+    const hvPlans = hvResult.rows;
+    const hvLogicalNames = new Set(hvPlans.map(p => p.logical_name));
+    const vsdPlans = vsdResult.rows.filter(p => !hvLogicalNames.has(p.logical_name));
+
+    const allPlans = [...hvPlans, ...vsdPlans];
+    res.json(allPlans);
   } catch (e) {
     console.error('[HV MAPS] List plans error:', e.message);
     res.status(500).json({ error: 'List plans failed', details: e.message });
   }
 });
 
-// Get plan file (PDF)
+// Get plan file (PDF) - checks HV plans first, then VSD plans
 app.get('/api/hv/maps/planFile', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
     const { id, logical_name } = req.query;
-    let rows;
+    let rows = [];
 
+    // Try HV plans first
     if (id) {
       const result = await pool.query(
         `SELECT content, filename FROM hv_plans WHERE id = $1 AND site = $2`,
@@ -798,6 +818,23 @@ app.get('/api/hv/maps/planFile', async (req, res) => {
       rows = result.rows;
     } else {
       return res.status(400).json({ error: 'Missing id or logical_name' });
+    }
+
+    // If not found in HV plans, try VSD plans
+    if (rows.length === 0) {
+      if (id) {
+        const result = await pool.query(
+          `SELECT content, filename FROM vsd_plans WHERE id = $1`,
+          [id]
+        );
+        rows = result.rows;
+      } else if (logical_name) {
+        const result = await pool.query(
+          `SELECT content, filename FROM vsd_plans WHERE logical_name = $1 ORDER BY version DESC LIMIT 1`,
+          [logical_name]
+        );
+        rows = result.rows;
+      }
     }
 
     if (rows.length === 0) return res.status(404).json({ error: 'Plan not found' });

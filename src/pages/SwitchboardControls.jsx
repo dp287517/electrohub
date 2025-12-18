@@ -69,6 +69,15 @@ const getEquipmentDisplay = (item) => {
       category: ''
     };
   }
+  if (item.hv_equipment_id) {
+    return {
+      name: item.hv_equipment_name || item.equipment_name || `Équip. HT #${item.hv_equipment_id}`,
+      type: 'hv',
+      icon: '⚡',
+      link: `/app/hv?equipment=${item.hv_equipment_id}`,
+      category: item.hv_regime_neutral || ''
+    };
+  }
   if (item.mobile_equipment_id) {
     return {
       name: item.mobile_equipment_name || item.equipment_name || `Équip. mobile #${item.mobile_equipment_id}`,
@@ -1288,12 +1297,14 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
                 t.target_type === 'vsd' ? 'bg-slate-100 text-slate-700' :
                 t.target_type === 'meca' ? 'bg-orange-100 text-orange-700' :
                 t.target_type === 'mobile_equipment' ? 'bg-cyan-100 text-cyan-700' :
+                t.target_type === 'hv' ? 'bg-amber-100 text-amber-700' :
                 'bg-purple-100 text-purple-700'
               }`}>
                 {t.target_type === 'switchboard' ? '⚡ Tableau' :
                  t.target_type === 'vsd' ? '⚙️ VSD' :
                  t.target_type === 'meca' ? '🔧 Mécanique' :
-                 t.target_type === 'mobile_equipment' ? '🔌 Mobile' :
+                 t.target_type === 'mobile_equipment' ? '🚜 Mobile' :
+                 t.target_type === 'hv' ? '⚡ HT' :
                  '🔌 Disjoncteur'}
               </span>
             </div>
@@ -1301,7 +1312,8 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
               t.target_type === 'switchboard' ? '⚡' :
               t.target_type === 'vsd' ? '⚙️' :
               t.target_type === 'meca' ? '🔧' :
-              t.target_type === 'mobile_equipment' ? '🔌' :
+              t.target_type === 'mobile_equipment' ? '🚜' :
+              t.target_type === 'hv' ? '⚡' :
               '🔌'
             }</span>
           </div>
@@ -1415,7 +1427,8 @@ function TemplateModal({ template, onClose, onSave }) {
                 <option value="device">🔌 Disjoncteur</option>
                 <option value="vsd">⚙️ Variateur (VSD)</option>
                 <option value="meca">🔧 Équip. Mécanique</option>
-                <option value="mobile_equipment">🔌 Équip. Mobile</option>
+                <option value="mobile_equipment">🚜 Équip. Mobile</option>
+                <option value="hv">⚡ Haute Tension (HT)</option>
               </select>
             </div>
             <div>
@@ -1527,17 +1540,19 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [vsdEquipments, setVsdEquipments] = useState([]);
   const [mecaEquipments, setMecaEquipments] = useState([]);
   const [mobileEquipments, setMobileEquipments] = useState([]);
+  const [hvEquipments, setHvEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
 
   // Load equipment when target type changes
   useEffect(() => {
-    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment') {
+    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv') {
       setLoadingEquipments(true);
       api.switchboardControls.listEquipment(targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType)
         .then(res => {
           if (targetType === 'vsd') setVsdEquipments(res.vsd || []);
           else if (targetType === 'meca') setMecaEquipments(res.meca || []);
           else if (targetType === 'mobile_equipment') setMobileEquipments(res.mobile_equipment || []);
+          else if (targetType === 'hv') setHvEquipments(res.hv || []);
         })
         .catch(e => console.warn('Load equipment error:', e))
         .finally(() => setLoadingEquipments(false));
@@ -1552,6 +1567,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     if (targetType === 'vsd') return vsdEquipments;
     if (targetType === 'meca') return mecaEquipments;
     if (targetType === 'mobile_equipment') return mobileEquipments;
+    if (targetType === 'hv') return hvEquipments;
     return [];
   };
 
@@ -1589,6 +1605,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       case 'vsd': return 'variateurs';
       case 'meca': return 'équipements mécaniques';
       case 'mobile_equipment': return 'équipements mobiles';
+      case 'hv': return 'équipements haute tension';
       default: return 'équipements';
     }
   };
@@ -1666,7 +1683,8 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
               <option value="device">🔌 Disjoncteur</option>
               <option value="vsd">⚙️ Variateur (VSD)</option>
               <option value="meca">🔧 Équip. Mécanique</option>
-              <option value="mobile_equipment">🔌 Équip. Mobile</option>
+              <option value="mobile_equipment">🚜 Équip. Mobile</option>
+              <option value="hv">⚡ Haute Tension (HT)</option>
             </select>
           </div>
 
