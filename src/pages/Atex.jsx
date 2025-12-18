@@ -965,7 +965,7 @@ export default function Atex() {
         {/* Lien vers Infrastructure */}
         <button
           onClick={() => navigate("/app/infrastructure")}
-          className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-700 hover:from-amber-200 hover:to-yellow-200 flex items-center gap-1.5"
+          className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base bg-amber-500 text-white hover:bg-amber-600 shadow-md flex items-center gap-1.5 border-2 border-amber-600"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
