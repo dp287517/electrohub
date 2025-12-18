@@ -72,7 +72,8 @@ async function computeVsdTotals(site) {
   const query = `
     SELECT
       id, name, tag, building, floor, zone, manufacturer, model,
-      power_kw, voltage, ui_status, criticality, created_at
+      power_kw, voltage, ui_status, criticality, created_at,
+      service_year AS stored_service_year
     FROM vsd_equipments
     ${hasSite ? 'WHERE site = $1' : ''}
     ORDER BY id ASC
@@ -80,9 +81,14 @@ async function computeVsdTotals(site) {
   const result = await pool.query(query, hasSite ? [site] : []);
 
   return result.rows.map(vsd => {
-    // Estimate service year from created_at or default to 5 years ago
-    const createdAt = vsd.created_at ? new Date(vsd.created_at).getFullYear() : new Date().getFullYear() - 5;
-    const service_year = createdAt;
+    // Use stored service_year if available, otherwise estimate from created_at
+    let service_year;
+    if (vsd.stored_service_year) {
+      service_year = vsd.stored_service_year;
+    } else {
+      const createdAt = vsd.created_at ? new Date(vsd.created_at).getFullYear() : new Date().getFullYear() - 5;
+      service_year = createdAt;
+    }
     const avg_life_years = 15; // VSD typical lifespan
 
     return {
@@ -387,7 +393,8 @@ async function computeHvTotals(site) {
   // Support global role: if site is null/undefined, return all HV equipments
   const hasSite = site && site.trim() !== '';
   const eq = await pool.query(`
-    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site
+    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor, e.site,
+           e.service_year AS stored_service_year
     FROM hv_equipments e
     ${hasSite ? 'WHERE e.site = $1' : ''}
     ORDER BY e.id ASC
@@ -408,7 +415,8 @@ async function computeHvTotals(site) {
     for (const d of devs.rows) sum += estimateHvDeviceCostGBP(d);
     const estimated_cost_gbp = GBP((base + sum) * 1.10);
 
-    const service_year = null; // si tu as une source, connecte-la ici
+    // Use stored service_year if available
+    const service_year = row.stored_service_year || null;
     const avg_life_years = 30; // défaut HV
 
     out.push({
@@ -1027,6 +1035,114 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
   } catch (e) {
     console.error('[OBS GANTT]', e.message);
     res.status(500).json({ error: 'Gantt data failed' });
+  }
+});
+
+// ---------- UPDATE SERVICE YEAR (all asset types) ----------
+app.put('/api/obsolescence/service-year', async (req, res) => {
+  try {
+    const { siteName, role } = getSiteFilter(req);
+    const site = (role === 'global' || role === 'admin' || role === 'superadmin') ? (siteName || null) : (siteName || siteOf(req));
+    const { kind, id, service_year } = req.body || {};
+
+    if (!kind || !id || service_year === undefined) {
+      return res.status(400).json({ error: 'Missing required fields: kind, id, service_year' });
+    }
+
+    const year = parseInt(service_year, 10);
+    if (!Number.isFinite(year) || year < 1900 || year > 2100) {
+      return res.status(400).json({ error: 'Invalid service_year (must be between 1900 and 2100)' });
+    }
+
+    const equipmentId = parseInt(id, 10);
+    if (!Number.isFinite(equipmentId)) {
+      return res.status(400).json({ error: 'Invalid equipment id' });
+    }
+
+    let result;
+
+    switch (kind) {
+      case 'sb': {
+        // For switchboards, update manufacture_date in obsolescence_parameters
+        // First, ensure parameters exist for all devices
+        await pool.query(`
+          INSERT INTO obsolescence_parameters (device_id, switchboard_id, site)
+          SELECT d.id, d.switchboard_id, d.site
+          FROM devices d
+          LEFT JOIN obsolescence_parameters op
+            ON op.device_id = d.id AND op.switchboard_id = d.switchboard_id AND op.site = d.site
+          WHERE d.switchboard_id = $1 ${site ? 'AND d.site = $2' : ''} AND op.device_id IS NULL
+        `, site ? [equipmentId, site] : [equipmentId]);
+
+        // Then update manufacture_date
+        const date = `${year}-01-01`;
+        result = await pool.query(`
+          UPDATE obsolescence_parameters
+          SET manufacture_date = $1
+          WHERE switchboard_id = $2 ${site ? 'AND site = $3' : ''}
+        `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        break;
+      }
+
+      case 'hv': {
+        // For HV equipment, add/update service_year column
+        // First try to add the column if it doesn't exist
+        try {
+          await pool.query(`ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS service_year INTEGER`);
+        } catch (e) {
+          // Column might already exist or table structure differs
+        }
+
+        result = await pool.query(`
+          UPDATE hv_equipments
+          SET service_year = $1
+          WHERE id = $2 ${site ? 'AND site = $3' : ''}
+        `, site ? [year, equipmentId, site] : [year, equipmentId]);
+        break;
+      }
+
+      case 'vsd': {
+        // For VSD equipment, add/update service_year column
+        try {
+          await pool.query(`ALTER TABLE vsd_equipments ADD COLUMN IF NOT EXISTS service_year INTEGER`);
+        } catch (e) {
+          // Column might already exist
+        }
+
+        result = await pool.query(`
+          UPDATE vsd_equipments
+          SET service_year = $1
+          WHERE id = $2 ${site ? 'AND site = $3' : ''}
+        `, site ? [year, equipmentId, site] : [year, equipmentId]);
+        break;
+      }
+
+      case 'meca': {
+        // For MECA equipment, update installation_date
+        const date = `${year}-01-01`;
+        result = await pool.query(`
+          UPDATE meca_equipments
+          SET installation_date = $1
+          WHERE id = $2 ${site ? 'AND site = $3' : ''}
+        `, site ? [date, equipmentId, site] : [date, equipmentId]);
+        break;
+      }
+
+      default:
+        return res.status(400).json({ error: `Unknown equipment kind: ${kind}` });
+    }
+
+    console.log(`[OBS SERVICE-YEAR] Updated ${kind}-${equipmentId} to ${year}`);
+    res.json({
+      success: true,
+      message: `Service year updated to ${year}`,
+      kind,
+      id: equipmentId,
+      service_year: year
+    });
+  } catch (e) {
+    console.error('[OBS SERVICE-YEAR]', e.message);
+    res.status(500).json({ error: `Update failed: ${e.message}` });
   }
 });
 

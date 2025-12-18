@@ -2,7 +2,7 @@
 // Redesigned with VSD/MECA support, beautiful animations, timeline, pro PDF export
 import React, { useEffect, useState, Fragment, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { get, post } from '../lib/api.js';
+import { get, post, put } from '../lib/api.js';
 import {
   HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal,
   TrendingUp, AlertTriangle, Clock, Building2, Zap, Cpu, Cog, Gauge,
@@ -264,8 +264,10 @@ export default function Obsolescence() {
   const [aiMessages, setAiMessages] = useState([]);
   const [health, setHealth] = useState({ openai: false, web_cost: false });
 
-  // Quick edit
-  const [quickEditItem, setQuickEditItem] = useState(null);
+  // Quick edit service year
+  const [editServiceYear, setEditServiceYear] = useState(null);
+  const [editServiceYearValue, setEditServiceYearValue] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
 
   // Building color map
   const buildingColorMap = useMemo(() => {
@@ -526,6 +528,40 @@ export default function Obsolescence() {
   // Get display name (prefer code over name)
   const getItemDisplayName = (item) => {
     return item.code || item.name || `${(item.kind || 'item').toUpperCase()}-${item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id}`;
+  };
+
+  // ==================== SERVICE YEAR EDIT ====================
+
+  const openServiceYearEdit = (item) => {
+    const currentYear = item.service_year || item.forecast_year - (item.avg_life_years || 25);
+    setEditServiceYear(item);
+    setEditServiceYearValue(currentYear || new Date().getFullYear() - 10);
+  };
+
+  const saveServiceYear = async () => {
+    if (!editServiceYear) return;
+
+    const kind = editServiceYear.kind;
+    const id = editServiceYear.switchboard_id || editServiceYear.hv_equipment_id || editServiceYear.vsd_id || editServiceYear.meca_id;
+
+    try {
+      setEditSaving(true);
+      await put('/api/obsolescence/service-year', {
+        kind,
+        id,
+        service_year: parseInt(editServiceYearValue, 10)
+      });
+      setToast({ msg: 'Date de mise en service mise à jour!', type: 'success' });
+      setEditServiceYear(null);
+      // Refresh data
+      loadItems();
+      loadGanttData();
+      loadAssetStats();
+    } catch (e) {
+      setToast({ msg: `Erreur: ${e.message}`, type: 'error' });
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   // ==================== AI ASSISTANT ====================
@@ -1025,7 +1061,14 @@ END:VCALENDAR`;
                               <p className="font-bold text-red-600">{item.forecast_year}</p>
                               <p className="text-sm text-gray-500">£{(item.estimated_cost_gbp || 0).toLocaleString('en-GB')}</p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => openServiceYearEdit(item)}
+                                className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                                title="Modifier la date de mise en service"
+                              >
+                                <Pencil size={18} />
+                              </button>
                               <button
                                 onClick={() => downloadICS(item)}
                                 className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -1121,12 +1164,22 @@ END:VCALENDAR`;
                               </Badge>
                             </td>
                             <td className="px-6 py-4">
-                              <button
-                                onClick={() => navigateToItem(item)}
-                                className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                              >
-                                <ExternalLink size={16} />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => openServiceYearEdit(item)}
+                                  className="p-2 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                                  title="Modifier la date de mise en service"
+                                >
+                                  <Pencil size={16} />
+                                </button>
+                                <button
+                                  onClick={() => navigateToItem(item)}
+                                  className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Voir les détails"
+                                >
+                                  <ExternalLink size={16} />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1334,7 +1387,23 @@ END:VCALENDAR`;
                                             />
                                           </div>
                                         </div>
-                                        <ExternalLink size={16} className="text-gray-300 group-hover/card:text-emerald-500 transition-colors" />
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const item = items.find(it =>
+                                                (it.kind === kind) &&
+                                                ((it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id) === parseInt(id, 10))
+                                              );
+                                              if (item) openServiceYearEdit(item);
+                                            }}
+                                            className="p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+                                            title="Modifier la date de mise en service"
+                                          >
+                                            <Pencil size={14} />
+                                          </button>
+                                          <ExternalLink size={16} className="text-gray-300 group-hover/card:text-emerald-500 transition-colors" />
+                                        </div>
                                       </div>
                                     );
                                   })}
@@ -1657,6 +1726,102 @@ END:VCALENDAR`;
             <p className="text-xs text-red-600">OpenAI not configured. Set OPENAI_API_KEY to enable AI features.</p>
           )}
         </div>
+      </Modal>
+
+      {/* Service Year Edit Modal */}
+      <Modal
+        open={!!editServiceYear}
+        onClose={() => setEditServiceYear(null)}
+        title="Modifier la date de mise en service"
+        icon={Calendar}
+      >
+        {editServiceYear && (
+          <div className="space-y-6">
+            {/* Equipment Info */}
+            <div className="p-4 bg-gray-50 rounded-xl">
+              <div className="flex items-center gap-3 mb-3">
+                {(() => {
+                  const Icon = ASSET_ICONS[editServiceYear.kind] || CircleDot;
+                  return (
+                    <div className="p-2 rounded-xl" style={{ backgroundColor: withAlpha(ASSET_COLORS[editServiceYear.kind] || '#6b7280', 0.1) }}>
+                      <Icon size={20} style={{ color: ASSET_COLORS[editServiceYear.kind] || '#6b7280' }} />
+                    </div>
+                  );
+                })()}
+                <div>
+                  <p className="font-bold text-gray-900">{getItemDisplayName(editServiceYear)}</p>
+                  <p className="text-sm text-gray-500">{ASSET_LABELS[editServiceYear.kind]} • {editServiceYear.building_code}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-500">Durée de vie estimée:</span>
+                  <span className="ml-2 font-medium text-gray-700">{editServiceYear.avg_life_years || 25} ans</span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Coût estimé:</span>
+                  <span className="ml-2 font-medium text-gray-700">£{(editServiceYear.estimated_cost_gbp || 0).toLocaleString('en-GB')}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Service Year Input */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Année de mise en service
+              </label>
+              <input
+                type="number"
+                min="1900"
+                max="2100"
+                value={editServiceYearValue}
+                onChange={e => setEditServiceYearValue(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-lg font-semibold text-center"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Entrez l'année de mise en service de l'équipement (ex: 2015)
+              </p>
+            </div>
+
+            {/* Preview */}
+            <div className="p-4 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-800">
+                <strong>Nouvelle prévision de remplacement:</strong>{' '}
+                {parseInt(editServiceYearValue, 10) + (editServiceYear.avg_life_years || 25)}
+                <span className="ml-2 text-blue-600">
+                  (dans {parseInt(editServiceYearValue, 10) + (editServiceYear.avg_life_years || 25) - new Date().getFullYear()} ans)
+                </span>
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setEditServiceYear(null)}
+                className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={saveServiceYear}
+                disabled={editSaving}
+                className="flex-1 px-4 py-3 rounded-xl bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {editSaving ? (
+                  <>
+                    <RefreshCw size={18} className="animate-spin" />
+                    Enregistrement...
+                  </>
+                ) : (
+                  <>
+                    <Check size={18} />
+                    Enregistrer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Toast */}
