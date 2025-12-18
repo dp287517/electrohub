@@ -19,6 +19,9 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Mobile optimization
+import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+
 // Icons
 import {
   Cpu,
@@ -451,7 +454,8 @@ const LeafletViewer = forwardRef(({
 
         if (!aliveRef.current || lastJob.current.key !== jobKey) return;
 
-        const dataUrl = canvas.toDataURL("image/png");
+        // 🚀 JPEG compressé sur mobile, PNG sur desktop
+        const dataUrl = getOptimalImageFormat(canvas);
         const bounds = [[0, 0], [-vp.height, vp.width]];
 
         if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);

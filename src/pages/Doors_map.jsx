@@ -19,6 +19,9 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Mobile optimization
+import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+
 // Icons
 import {
   DoorOpen,
@@ -605,7 +608,8 @@ const DoorLeafletViewer = forwardRef(({
         await renderTaskRef.current.promise;
         if (cancelled) return;
 
-        const dataUrl = canvas.toDataURL("image/png");
+        // 🚀 JPEG compressé sur mobile, PNG sur desktop
+        const dataUrl = getOptimalImageFormat(canvas);
         setImgSize({ w: canvas.width, h: canvas.height });
 
         const m = L.map(wrapRef.current, {

@@ -6,7 +6,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
-import { isMobileDevice } from "../config/mobile-optimization.js";
+import { isMobileDevice, getPDFConfig, getNetworkQuality, getPlanCacheKey, getCachedPlan, cachePlan } from "../config/mobile-optimization.js";
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -757,63 +757,89 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2️⃣ Rendu PDF -> image ULTRA HAUTE QUALITÉ pour plans ATEX
+        // 2️⃣ Rendu PDF -> image OPTIMISÉE pour performance + qualité
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = window.devicePixelRatio || 1;
 
-          // 🔥🔥 ULTRA HAUTE RÉSOLUTION pour lisibilité parfaite des textes
-          // - Mobile: jusqu'à 6144px (compromis qualité/mémoire)
-          // - Desktop: jusqu'à 16384px pour texte cristallin
+          // 🚀 UTILISER LA CONFIG MOBILE-OPTIMIZATION (adaptée au réseau)
           const isMobile = isMobileDevice() || window.innerWidth < 768;
-          const maxBitmapW = isMobile ? 6144 : 16384;
-          const qualityMultiplier = isMobile ? 3.0 : 5.0;
-          const targetBitmapW = Math.min(maxBitmapW, Math.max(3072, Math.floor(containerW * dpr * qualityMultiplier)));
+          const networkQuality = getNetworkQuality();
+          const pdfConfig = getPDFConfig();
 
-          loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
-          const pdf = await loadingTaskRef.current.promise;
-          const page = await pdf.getPage(Number(pageIndex) + 1);
-          const baseVp = page.getViewport({ scale: 1 });
+          // 🚀 CACHE: Vérifier si le plan est déjà rendu en cache
+          const cacheKey = getPlanCacheKey(planKey || fileUrl, pageIndex, pdfConfig);
+          const cached = getCachedPlan(cacheKey);
 
-          // Scale très élevé pour lisibilité maximale (jusqu'à 8.0 sur desktop)
-          const maxScale = isMobile ? 4.0 : 8.0;
-          const safeScale = Math.min(maxScale, Math.max(1.5, targetBitmapW / baseVp.width));
-          const viewport = page.getViewport({ scale: safeScale });
+          let dataUrl, canvasW, canvasH;
 
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.floor(viewport.width);
-          canvas.height = Math.floor(viewport.height);
+          if (cached) {
+            // ⚡ CACHE HIT - Utiliser les données en cache (instantané!)
+            dataUrl = cached.dataUrl;
+            canvasW = cached.width;
+            canvasH = cached.height;
+            console.log(`[ATEX] ⚡ Cache HIT - Plan affiché instantanément!`);
+          } else {
+            // 🔄 CACHE MISS - Rendre le PDF
+            const targetBitmapW = Math.min(
+              pdfConfig.maxBitmapWidth,
+              Math.max(pdfConfig.minBitmapWidth, Math.floor(containerW * dpr * pdfConfig.qualityBoost))
+            );
 
-          // 🔥 Context optimisé pour rendu texte haute qualité
-          const ctx = canvas.getContext("2d", {
-            alpha: false, // Pas de transparence = meilleur rendu texte
-            desynchronized: false,
-            willReadFrequently: false,
-          });
+            loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
+            const pdf = await loadingTaskRef.current.promise;
+            const page = await pdf.getPage(Number(pageIndex) + 1);
+            const baseVp = page.getViewport({ scale: 1 });
 
-          // Fond blanc pour meilleur contraste
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Scale adapté à la config (réduit sur mobile/réseau lent)
+            const safeScale = Math.min(pdfConfig.maxScale, Math.max(pdfConfig.minScale, targetBitmapW / baseVp.width));
+            const viewport = page.getViewport({ scale: safeScale });
 
-          // Anti-aliasing haute qualité pour le texte
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.floor(viewport.width);
+            canvas.height = Math.floor(viewport.height);
 
-          renderTaskRef.current = page.render({
-            canvasContext: ctx,
-            viewport,
-            intent: 'display', // Optimisé pour affichage écran
-            annotationMode: 2, // Inclure les annotations
-          });
-          await renderTaskRef.current.promise;
+            // Context optimisé
+            const ctx = canvas.getContext("2d", {
+              alpha: false,
+              desynchronized: false,
+              willReadFrequently: false,
+            });
 
-          // PNG non compressé pour qualité maximale
-          const dataUrl = canvas.toDataURL("image/png");
-          setImgSize({ w: canvas.width, h: canvas.height });
+            // Fond blanc pour meilleur contraste
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          console.log(`[ATEX] PDF rendu: ${canvas.width}x${canvas.height}px (scale: ${safeScale.toFixed(2)})`);
+            // Anti-aliasing selon config
+            ctx.imageSmoothingEnabled = pdfConfig.enableImageSmoothing;
+            ctx.imageSmoothingQuality = pdfConfig.enableImageSmoothing ? 'high' : 'low';
 
-          const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+            renderTaskRef.current = page.render({
+              canvasContext: ctx,
+              viewport,
+              intent: pdfConfig.intent || 'display',
+              annotationMode: 2,
+            });
+            await renderTaskRef.current.promise;
+
+            // 🚀 JPEG compressé sur mobile (beaucoup plus rapide), PNG sur desktop
+            dataUrl = isMobile
+              ? canvas.toDataURL("image/jpeg", 0.85)
+              : canvas.toDataURL("image/png");
+            canvasW = canvas.width;
+            canvasH = canvas.height;
+
+            // 💾 Stocker dans le cache pour les prochaines visites
+            cachePlan(cacheKey, dataUrl, canvasW, canvasH);
+
+            console.log(`[ATEX] PDF rendu: ${canvasW}x${canvasH}px (scale: ${safeScale.toFixed(2)}, network: ${networkQuality}, format: ${isMobile ? 'JPEG' : 'PNG'})`);
+
+            try { await pdf.cleanup?.(); } catch {}
+          }
+
+          setImgSize({ w: canvasW, h: canvasH });
+
+          const bounds = L.latLngBounds([[0, 0], [canvasH, canvasW]]);
           const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
           baseLayerRef.current = base;
 
@@ -822,8 +848,8 @@ export default function AtexMap({
 
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 1);
-          // 🔥 Zoom max augmenté pour lire les textes fins
-          m.setMaxZoom(fitZoom2 + 8);
+          // Zoom max adapté (moins élevé sur mobile pour économiser la mémoire)
+          m.setMaxZoom(fitZoom2 + (isMobile ? 4 : 6));
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [8, 8] });
 
@@ -833,8 +859,6 @@ export default function AtexMap({
 
           // 🚀 Charger les données en arrière-plan (non-bloquant)
           reloadAll().catch(console.error);
-
-          try { await pdf.cleanup?.(); } catch {}
         }
       } catch (e) {
         console.error("[AtexMap] init error", e);
