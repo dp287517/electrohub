@@ -134,6 +134,7 @@ const Btn = ({ children, variant = "primary", className = "", ...props }) => {
   const base = "px-4 py-2 rounded-xl font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50";
   const variants = {
     primary: "bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700",
+    subtle: "bg-amber-100 text-amber-700 hover:bg-amber-200",
     ghost: "bg-gray-100 text-gray-700 hover:bg-gray-200",
     danger: "bg-red-500 text-white hover:bg-red-600",
   };
@@ -877,7 +878,6 @@ export default function HighVoltageMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // Ref to prevent double creation
   const creatingRef = useRef(false);
@@ -900,16 +900,6 @@ export default function HighVoltageMap() {
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
 
   const selectedEquipmentId = useMemo(() => selectedPosition?.equipment_id || null, [selectedPosition]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth < 768) setShowSidebar(false);
-    };
-    window.addEventListener("resize", handleResize);
-    handleResize();
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   useEffect(() => {
     loadPlans();
@@ -1197,60 +1187,59 @@ export default function HighVoltageMap() {
 
       {/* Header */}
       <div className="bg-white border-b shadow-sm z-20">
-        <div className="px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <button onClick={() => navigate('/app/hv')} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
-              <ArrowLeft size={20} />
+        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/app/hv')}
+              className="p-2 rounded-lg hover:bg-gray-100 transition"
+              title="Retour HV"
+            >
+              <ArrowLeft size={18} />
             </button>
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="p-1.5 sm:p-2 bg-amber-100 rounded-lg sm:rounded-xl flex-shrink-0">
-                <MapPin size={18} className="sm:w-5 sm:h-5 text-amber-600" />
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-amber-100 rounded-xl">
+                <MapPin size={18} className="text-amber-600" />
               </div>
-              <div className="min-w-0">
-                <h1 className="font-bold text-gray-900 text-sm sm:text-base truncate">Plans HV</h1>
-                <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">Localisation des équipements haute tension</p>
+              <div>
+                <h1 className="font-bold text-gray-900">Localisation HV</h1>
+                <p className="text-xs text-gray-500">Placez / déplacez les équipements sur les plans</p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            {/* Stats - hidden on mobile, compact on tablet */}
-            <div className="hidden md:flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Stats badges */}
+            <div className="flex items-center gap-1 text-xs">
               <Badge variant="default">Total: {stats.total}</Badge>
               <Badge variant="success">Localisés: {stats.placed}</Badge>
               <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
             </div>
 
-            {/* Compact stats badge on tablet */}
-            <div className="hidden sm:flex md:hidden">
-              <Badge variant="default" className="text-[10px]">{stats.placed}/{stats.total}</Badge>
-            </div>
-
-            {/* Import button - icon only on mobile */}
+            {/* Import button */}
             <button
               onClick={() => zipInputRef.current?.click()}
-              className="p-2 sm:px-3 sm:py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
+              className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
               title="Importer un ZIP"
             >
-              <Upload size={16} />
+              <Upload size={14} />
               <span className="hidden sm:inline">Import</span>
             </button>
             <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
 
-            {/* Toggle sidebar - desktop only */}
-            {!isMobile && (
-              <button
-                onClick={() => setShowSidebar(!showSidebar)}
-                className="hidden sm:flex px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 items-center gap-2"
-              >
-                {showSidebar ? "Masquer" : "Afficher"}
-              </button>
-            )}
+            {/* Toggle sidebar */}
+            <Btn
+              variant="ghost"
+              onClick={() => setShowSidebar(!showSidebar)}
+              className="flex items-center gap-2"
+            >
+              <Zap size={16} />
+              {showSidebar ? "Masquer" : "Afficher"} liste
+            </Btn>
           </div>
         </div>
 
-        {/* Plan selector - optimized for mobile */}
-        <div className="px-3 sm:px-4 pb-2 sm:pb-3 flex items-center gap-2">
+        {/* Plan selector */}
+        <div className="px-4 pb-3 flex items-center gap-2">
           <select
             value={selectedPlan?.logical_name || ""}
             onChange={async (e) => {
@@ -1263,7 +1252,7 @@ export default function HighVoltageMap() {
                 setInitialPoints(positions || []);
               }
             }}
-            className="flex-1 min-w-0 px-3 py-2.5 border rounded-xl text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+            className="flex-1 min-w-0 px-3 py-2 border rounded-xl text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-transparent"
           >
             {plans.length === 0 && <option value="">Aucun plan disponible</option>}
             {plans.map(p => (
@@ -1274,11 +1263,11 @@ export default function HighVoltageMap() {
           </select>
 
           {numPages > 1 && (
-            <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+            <div className="flex items-center gap-1 flex-shrink-0">
               <Btn variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(i => i - 1)} className="p-2">
                 <ChevronLeft size={16} />
               </Btn>
-              <span className="text-xs sm:text-sm text-gray-600 min-w-[3rem] text-center">{pageIndex + 1}/{numPages}</span>
+              <span className="text-sm text-gray-600 min-w-[3rem] text-center">{pageIndex + 1}/{numPages}</span>
               <Btn variant="ghost" disabled={pageIndex >= numPages - 1} onClick={() => setPageIndex(i => i + 1)} className="p-2">
                 <ChevronRight size={16} />
               </Btn>
@@ -1290,27 +1279,27 @@ export default function HighVoltageMap() {
       {/* Content */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Sidebar */}
-        {showSidebar && !isMobile && (
-          <div className="w-80 bg-white border-r shadow-sm flex flex-col z-10">
+        {showSidebar && (
+          <div className="w-full max-w-[360px] bg-white border-r shadow-sm flex flex-col animate-slideRight z-10">
             <div className="p-3 border-b space-y-2">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <Input
                   value={searchQuery}
                   onChange={setSearchQuery}
-                  placeholder="Rechercher..."
-                  className="pl-9"
+                  placeholder="Rechercher un équipement..."
+                  className="pl-8"
                 />
               </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+              <div className="flex gap-2">
+                <Btn variant={filterMode === "all" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
                   Tous
                 </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                <Btn variant={filterMode === "placed" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
                   Placés
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés
                 </Btn>
               </div>
             </div>
@@ -1318,7 +1307,7 @@ export default function HighVoltageMap() {
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {loadingEquipments ? (
                 <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                  <RefreshCw size={24} className="animate-spin text-amber-500" />
                 </div>
               ) : filteredEquipments.length === 0 ? (
                 <EmptyState icon={Zap} title="Aucun équipement" description="Créez des équipements HV pour les placer sur le plan" />
@@ -1475,122 +1464,6 @@ export default function HighVoltageMap() {
           )}
         </div>
       </div>
-
-      {/* Mobile FAB - Equipment list toggle */}
-      {isMobile && (
-        <button
-          onClick={() => setShowSidebar(!showSidebar)}
-          className="fixed bottom-20 right-4 z-30 w-14 h-14 bg-gradient-to-br from-amber-500 to-orange-600 text-white rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform"
-          style={{ touchAction: 'manipulation' }}
-        >
-          <Zap size={24} />
-          {stats.unplaced > 0 && (
-            <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-[10px] font-bold flex items-center justify-center">
-              {stats.unplaced > 9 ? '9+' : stats.unplaced}
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Mobile sidebar drawer with animation */}
-      {isMobile && showSidebar && (
-        <div className="fixed inset-0 z-40 animate-fadeIn">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowSidebar(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-[85vw] max-w-[360px] bg-white shadow-2xl flex flex-col animate-slideRight">
-            {/* Header with gradient */}
-            <div className="p-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white flex items-center justify-between safe-area-inset-top">
-              <div className="flex items-center gap-3">
-                <Zap size={20} />
-                <div>
-                  <h2 className="font-bold">Équipements HV</h2>
-                  <p className="text-xs text-amber-100">{stats.placed}/{stats.total} localisés</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSidebar(false)}
-                className="p-2.5 hover:bg-white/20 rounded-xl active:scale-95 transition-transform"
-                style={{ touchAction: 'manipulation' }}
-              >
-                <X size={22} />
-              </button>
-            </div>
-
-            {/* Search and filters */}
-            <div className="p-3 border-b space-y-3 bg-gray-50">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Rechercher un équipement..."
-                  className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl bg-white text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setFilterMode("all")}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    filterMode === "all"
-                      ? "bg-amber-500 text-white"
-                      : "bg-white text-gray-600 border border-gray-200"
-                  }`}
-                >
-                  Tous ({stats.total})
-                </button>
-                <button
-                  onClick={() => setFilterMode("unplaced")}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                    filterMode === "unplaced"
-                      ? "bg-amber-500 text-white"
-                      : "bg-white text-gray-600 border border-gray-200"
-                  }`}
-                >
-                  À placer ({stats.unplaced})
-                </button>
-              </div>
-            </div>
-
-            {/* Equipment list */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
-              {loadingEquipments ? (
-                <div className="flex items-center justify-center py-12">
-                  <RefreshCw size={28} className="animate-spin text-amber-500" />
-                </div>
-              ) : filteredEquipments.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
-                    <Zap size={32} className="text-gray-400" />
-                  </div>
-                  <p className="font-medium text-gray-900">Aucun équipement</p>
-                  <p className="text-sm text-gray-500 mt-1">Créez des équipements HV pour les placer</p>
-                </div>
-              ) : (
-                filteredEquipments.map(eq => (
-                  <HvCard
-                    key={eq.id}
-                    equipment={eq}
-                    isPlacedHere={isPlacedHere(eq.id)}
-                    isPlacedSomewhere={placedIds.has(eq.id)}
-                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
-                    isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        setSelectedPosition(pos);
-                        setSelectedEquipment(eq);
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                      setShowSidebar(false);
-                    }}
-                    onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
-                  />
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Confirm modal */}
       <ConfirmModal

@@ -2281,13 +2281,11 @@ export const api = {
     renamePlan: (logical_name, display_name) =>
       put("/api/hv/maps/renamePlan", { logical_name, display_name }),
 
-    // Get PDF file URL
+    // Get PDF file URL (always use logical_name - plans from VSD are identified by logical_name)
     planFileUrl: (plan, { bust = true } = {}) => {
       const site = currentSite();
-      const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
-      const url = isUuid(key) || isNumericId(key)
-        ? `${API_BASE}/api/hv/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
-        : `${API_BASE}/api/hv/maps/planFile?logical_name=${encodeURIComponent(key)}&site=${site}`;
+      const key = typeof plan === "string" ? plan : plan?.logical_name || plan?.id || "";
+      const url = `${API_BASE}/api/hv/maps/planFile?logical_name=${encodeURIComponent(key)}&site=${site}`;
       return withBust(url, bust);
     },
 
