@@ -371,6 +371,7 @@ const VsdLeafletViewer = forwardRef(({
   pageIndex = 0,
   initialPoints = [],
   selectedId = null,
+  controlStatuses = {}, // { equipment_id: { status: 'overdue'|'upcoming'|'done' } }
   onReady,
   onMovePoint,
   onClickPoint,
@@ -390,6 +391,7 @@ const VsdLeafletViewer = forwardRef(({
 
   const pointsRef = useRef(initialPoints);
   const selectedIdRef = useRef(selectedId);
+  const controlStatusesRef = useRef(controlStatuses);
   const placementActiveRef = useRef(placementActive);
   const aliveRef = useRef(true);
 
@@ -418,12 +420,35 @@ const VsdLeafletViewer = forwardRef(({
     }
   }, [selectedId]);
 
-  function makeVsdIcon(isSelected = false) {
+  // Keep controlStatuses ref in sync and redraw markers when it changes
+  useEffect(() => {
+    controlStatusesRef.current = controlStatuses;
+    if (mapRef.current && imgSize.w > 0) {
+      drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+    }
+  }, [controlStatuses]);
+
+  function makeVsdIcon(isSelected = false, equipmentId = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const bg = isSelected
-      ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
-      : "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
-    const animClass = isSelected ? "vsd-marker-selected" : "";
+    const controlStatus = equipmentId ? controlStatusesRef.current[equipmentId] : null;
+    const isOverdue = controlStatus?.status === 'overdue';
+    const isUpcoming = controlStatus?.status === 'upcoming';
+
+    // Color based on control status: red for overdue, amber for upcoming, green for normal
+    let bg;
+    if (isSelected) {
+      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+    } else if (isOverdue) {
+      bg = "background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);";
+    } else if (isUpcoming) {
+      bg = "background: radial-gradient(circle at 30% 30%, #fbbf24, #d97706);";
+    } else {
+      bg = "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
+    }
+
+    let animClass = "";
+    if (isSelected) animClass = "vsd-marker-selected";
+    else if (isOverdue) animClass = "vsd-marker-overdue";
 
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
@@ -458,7 +483,7 @@ const VsdLeafletViewer = forwardRef(({
 
       const latlng = L.latLng(y, x);
       const isSelected = p.equipment_id === selectedIdRef.current;
-      const icon = makeVsdIcon(isSelected);
+      const icon = makeVsdIcon(isSelected, p.equipment_id);
 
       const mk = L.marker(latlng, {
         icon,
@@ -888,6 +913,9 @@ export default function VsdMap() {
   const [loadingEquipments, setLoadingEquipments] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
 
+  // Control statuses for equipment markers { equipment_id: { status: 'overdue'|'upcoming'|'done' } }
+  const [controlStatuses, setControlStatuses] = useState({});
+
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
@@ -933,7 +961,34 @@ export default function VsdMap() {
   useEffect(() => {
     loadPlans();
     loadEquipments();
+    loadControlStatuses();
   }, []);
+
+  // Load control statuses from switchboardControls API
+  const loadControlStatuses = async () => {
+    try {
+      const dashboardRes = await api.switchboardControls.dashboard();
+      const statuses = {};
+
+      // Process overdue items
+      (dashboardRes?.overdue_list || []).forEach(item => {
+        if (item.vsd_equipment_id) {
+          statuses[item.vsd_equipment_id] = { status: 'overdue', template_name: item.template_name };
+        }
+      });
+
+      // Process upcoming items
+      (dashboardRes?.upcoming || []).forEach(item => {
+        if (item.vsd_equipment_id && !statuses[item.vsd_equipment_id]) {
+          statuses[item.vsd_equipment_id] = { status: 'upcoming', template_name: item.template_name };
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (err) {
+      console.error("Erreur chargement statuts contrôle:", err);
+    }
+  };
 
   // Restore plan from URL params or localStorage
   useEffect(() => {
@@ -1189,12 +1244,19 @@ export default function VsdMap() {
             box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
           }
         }
+        @keyframes blink-overdue {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.6; }
+        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
         .vsd-marker-flash > div {
           animation: flash-marker 2s ease-in-out;
         }
         .vsd-marker-selected > div {
           animation: pulse-selected 1.5s ease-in-out infinite;
+        }
+        .vsd-marker-overdue > div {
+          animation: blink-overdue 1s ease-in-out infinite;
         }
         .vsd-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
@@ -1374,6 +1436,7 @@ export default function VsdMap() {
                 pageIndex={pageIndex}
                 initialPoints={initialPoints}
                 selectedId={selectedEquipmentId}
+                controlStatuses={controlStatuses}
                 onReady={() => setPdfReady(true)}
                 onMovePoint={async (equipmentId, xy) => {
                   if (!stableSelectedPlan) return;

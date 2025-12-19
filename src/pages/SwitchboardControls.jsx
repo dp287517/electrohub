@@ -448,6 +448,14 @@ export default function SwitchboardControls() {
             </div>
             <div className="flex gap-2 sm:gap-3">
               <button
+                onClick={() => navigate('/app/switchboard-controls/map')}
+                className="flex-1 sm:flex-none px-3 sm:px-4 py-2 sm:py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium backdrop-blur-sm transition-all text-sm sm:text-base flex items-center justify-center gap-2"
+              >
+                <span>🗺️</span>
+                <span className="hidden sm:inline">Voir le plan</span>
+                <span className="sm:hidden">Plan</span>
+              </button>
+              <button
                 onClick={() => { setEditingTemplate(null); setShowTemplateModal(true); }}
                 className="flex-1 sm:flex-none px-3 sm:px-4 py-2 sm:py-2.5 bg-white/20 hover:bg-white/30 rounded-xl font-medium backdrop-blur-sm transition-all text-sm sm:text-base flex items-center justify-center gap-2"
               >
