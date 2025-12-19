@@ -884,7 +884,7 @@ app.delete("/api/glo/files/:id", async (req, res) => {
 // MAPS (PDF Plans + positions)
 // -------------------------------------------------
 
-// POST /api/glo/maps/uploadZip
+// POST /api/glo/maps/uploadZip - Uploads into VSD plans for symbiosis (shared plans)
 app.post(
   "/api/glo/maps/uploadZip",
   multerZip.single("zip"),
@@ -909,8 +909,9 @@ app.post(
         const dest = path.join(MAPS_DIR, `${Date.now()}_${base}.pdf`);
         await fsp.writeFile(dest, buf);
 
+        // Use VSD plans for symbiosis with all modules (VSD, Switchboard, Mobile, GLO)
         const { rows: existing } = await pool.query(
-          `SELECT id, version FROM glo_plans
+          `SELECT id, version FROM vsd_plans
             WHERE logical_name=$1
             ORDER BY version DESC
             LIMIT 1`,
@@ -919,14 +920,14 @@ app.post(
         const nextVer = existing[0] ? existing[0].version + 1 : 1;
 
         const { rows } = await pool.query(
-          `INSERT INTO glo_plans(logical_name, version, filename, file_path, content, page_count)
+          `INSERT INTO vsd_plans(logical_name, version, filename, file_path, content, page_count)
            VALUES($1,$2,$3,$4,$5,1)
            RETURNING *`,
           [logical, nextVer, e.name, dest, buf]
         );
 
         await pool.query(
-          `INSERT INTO glo_plan_names(logical_name, display_name)
+          `INSERT INTO vsd_plan_names(logical_name, display_name)
            VALUES($1,$2)
            ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
           [logical, base]
@@ -944,9 +945,10 @@ app.post(
   }
 );
 
-// GET /api/glo/maps/listPlans
+// GET /api/glo/maps/listPlans - Uses VSD plans for symbiosis (shared plans across modules)
 app.get("/api/glo/maps/listPlans", async (_req, res) => {
   try {
+    // Use VSD plans (vsd_plans, vsd_plan_names) for symbiosis with VSD/Switchboard/Mobile modules
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
              p.id,
@@ -955,8 +957,8 @@ app.get("/api/glo/maps/listPlans", async (_req, res) => {
              p.filename,
              p.page_count,
              COALESCE(pn.display_name, p.logical_name) AS display_name
-        FROM glo_plans p
-        LEFT JOIN glo_plan_names pn ON pn.logical_name = p.logical_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
        ORDER BY p.logical_name, p.version DESC
     `);
     res.json({ ok: true, plans: rows });
@@ -965,11 +967,12 @@ app.get("/api/glo/maps/listPlans", async (_req, res) => {
   }
 });
 
-// GET /api/glo/maps/planFile?logical_name=... or ?id=...
+// GET /api/glo/maps/planFile?logical_name=... or ?id=... - Uses VSD plans for symbiosis
 app.get("/api/glo/maps/planFile", async (req, res) => {
   try {
     const { logical_name, id } = req.query;
-    let q = `SELECT file_path, content, filename FROM glo_plans WHERE `;
+    // Use VSD plans for symbiosis
+    let q = `SELECT file_path, content, filename FROM vsd_plans WHERE `;
     let val;
 
     if (id) {
@@ -1039,9 +1042,9 @@ app.get("/api/glo/maps/positions", async (req, res) => {
     let params;
 
     if (id) {
-      // Get logical_name from plan id first
+      // Get logical_name from plan id first (using VSD plans for symbiosis)
       const { rows: planRows } = await pool.query(
-        `SELECT logical_name FROM glo_plans WHERE id = $1`,
+        `SELECT logical_name FROM vsd_plans WHERE id = $1`,
         [id]
       );
       if (!planRows[0]) {
@@ -1092,10 +1095,10 @@ app.post("/api/glo/maps/setPosition", async (req, res) => {
     if (!equipment_id || (!logical_name && !plan_id))
       return res.status(400).json({ ok: false, error: "equipment_id and logical_name/plan_id required" });
 
-    // Get logical_name from plan_id if needed
+    // Get logical_name from plan_id if needed (using VSD plans for symbiosis)
     let finalLogicalName = logical_name;
     if (!finalLogicalName && plan_id) {
-      const { rows } = await pool.query(`SELECT logical_name FROM glo_plans WHERE id = $1`, [plan_id]);
+      const { rows } = await pool.query(`SELECT logical_name FROM vsd_plans WHERE id = $1`, [plan_id]);
       if (rows[0]) finalLogicalName = rows[0].logical_name;
     }
 
