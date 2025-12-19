@@ -1360,7 +1360,7 @@ export default function GloMap() {
 
           {placementMode && <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />}
 
-          {selectedPosition && !placementMode && (
+          {selectedPosition && !placementMode && !createMode && (
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}
