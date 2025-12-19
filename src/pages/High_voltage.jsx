@@ -293,7 +293,7 @@ const AIPhotoModal = ({ isOpen, onClose, onComplete, showToast }) => {
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className={labelClass}>Fabricant (indice)</label>
                 <input type="text" value={hints.manufacturer} onChange={e => setHints(h => ({ ...h, manufacturer: e.target.value }))} className={inputBaseClass} placeholder="Ex: ABB, Schneider..." />
@@ -437,7 +437,7 @@ const HVEquipmentFormModal = ({ isOpen, onClose, equipment, onSave, showToast, s
             <MapPin size={18} className="text-amber-500" />
             Localisation
           </h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className={labelClass}>Bâtiment</label>
               <input type="text" value={form.building_code} onChange={e => setForm(f => ({ ...f, building_code: e.target.value }))}
@@ -462,7 +462,7 @@ const HVEquipmentFormModal = ({ isOpen, onClose, equipment, onSave, showToast, s
             <Zap size={18} className="text-amber-600" />
             Caractéristiques électriques
           </h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className={labelClass}>Tension (kV)</label>
               <select value={form.voltage_kv} onChange={e => setForm(f => ({ ...f, voltage_kv: Number(e.target.value) }))} className={selectBaseClass}>
@@ -638,7 +638,7 @@ const HVDeviceFormModal = ({ isOpen, onClose, device, equipmentId, onSave, showT
               <Zap size={18} className="text-orange-600" />
               Caractéristiques électriques
             </h4>
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div>
                 <label className={labelClass}>Tension (kV)</label>
                 <input type="number" step="0.1" value={form.voltage_class_kv} onChange={e => setForm(f => ({ ...f, voltage_class_kv: Number(e.target.value) }))}
@@ -686,7 +686,7 @@ const HVDeviceFormModal = ({ isOpen, onClose, device, equipmentId, onSave, showT
               <Network size={18} className="text-blue-600" />
               Connexion aval (BT)
             </h4>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className={labelClass}>Tableau BT connecté</label>
                 <select value={form.downstream_switchboard_id || ''} onChange={e => setForm(f => ({ ...f, downstream_switchboard_id: e.target.value ? Number(e.target.value) : null }))} className={selectBaseClass}>
@@ -749,7 +749,7 @@ const DeviceTree = React.memo(({ devices, level = 0, onEdit, onDelete, downstrea
   };
 
   return (
-    <div className={`space-y-2 ${level > 0 ? 'ml-8 pl-4 border-l-2 border-orange-200' : ''}`}>
+    <div className={`space-y-2 ${level > 0 ? 'ml-4 sm:ml-8 pl-2 sm:pl-4 border-l-2 border-orange-200' : ''}`}>
       {devices.map((device, idx) => {
         const Icon = getDeviceIcon(device.device_type);
         const downstream = downstreamInfo?.[device.id];
@@ -789,7 +789,7 @@ const DeviceTree = React.memo(({ devices, level = 0, onEdit, onDelete, downstrea
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <button onClick={() => onEdit(device)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-xl" title="Modifier">
                     <Edit3 size={18} />
                   </button>
@@ -1320,7 +1320,7 @@ export default function HighVoltage() {
 
       {/* Stats Cards */}
       <div className="max-w-[95vw] mx-auto px-4 -mt-6 relative z-10">
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatCard icon={Zap} label="Équipements HV" value={stats.equipmentCount} color="amber" />
           <StatCard icon={CircleDot} label="Devices totaux" value={stats.totalDevices} color="orange" />
           <StatCard icon={MapPin} label="Localisés" value={stats.placedCount} color="emerald" onClick={() => navigate('/app/hv/map')} />

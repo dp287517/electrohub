@@ -6,7 +6,8 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
-  Tag, Hash, Factory, Gauge, Thermometer, Network, Info
+  Tag, Hash, Factory, Gauge, Thermometer, Network, Info,
+  ClipboardCheck, History
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -435,7 +436,9 @@ const DetailPanel = ({
   onNavigateToMap,
   onPhotoUpload,
   isPlaced,
-  showToast
+  showToast,
+  controlStatuses,
+  navigate
 }) => {
   const [files, setFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
@@ -660,6 +663,108 @@ const DetailPanel = ({
             <p className="text-sm text-gray-600 whitespace-pre-wrap">{equipment.comments}</p>
           </div>
         )}
+
+        {/* Control Status Section - Same as Switchboards */}
+        <div className="bg-white rounded-xl border p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-xl ${
+                controlStatuses?.[equipment.id]?.status === 'overdue' ? 'bg-red-100' :
+                controlStatuses?.[equipment.id]?.status === 'pending' ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <ClipboardCheck size={20} className={
+                  controlStatuses?.[equipment.id]?.status === 'overdue' ? 'text-red-600' :
+                  controlStatuses?.[equipment.id]?.status === 'pending' ? 'text-blue-600' : 'text-gray-400'
+                } />
+              </div>
+              <div>
+                <h4 className="font-medium text-gray-900">
+                  Contrôles planifiés
+                  {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                      {controlStatuses[equipment.id].controls.length}
+                    </span>
+                  )}
+                </h4>
+                <div className="flex items-center gap-2 mt-1">
+                  {controlStatuses?.[equipment.id]?.overdueCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                      <AlertTriangle size={10} />
+                      {controlStatuses[equipment.id].overdueCount} en retard
+                    </span>
+                  )}
+                  {controlStatuses?.[equipment.id]?.pendingCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full flex items-center gap-1">
+                      <CheckCircle size={10} />
+                      {controlStatuses[equipment.id].pendingCount} planifié(s)
+                    </span>
+                  )}
+                  {!controlStatuses?.[equipment.id]?.controls?.length && (
+                    <span className="text-sm text-gray-400">Aucun contrôle planifié</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 sm:gap-2">
+              <button
+                onClick={() => navigate(`/app/switchboard-controls?tab=history&equipment_type=vsd&vsd_equipment_id=${equipment.id}`)}
+                className="p-2 sm:px-3 sm:py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                title="Historique"
+              >
+                <History size={14} />
+                <span className="hidden sm:inline">Historique</span>
+              </button>
+              <button
+                onClick={() => navigate(`/app/switchboard-controls?tab=schedules&equipment_type=vsd&vsd_equipment_id=${equipment.id}`)}
+                className="p-2 sm:px-3 sm:py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
+                title="Gérer"
+              >
+                <ClipboardCheck size={14} />
+                <span className="hidden sm:inline">Gérer</span>
+              </button>
+            </div>
+          </div>
+
+          {/* List all controls */}
+          {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              {controlStatuses[equipment.id].controls.map((ctrl, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {ctrl.status === 'overdue' ? (
+                      <AlertTriangle size={14} className="text-red-600" />
+                    ) : (
+                      <CheckCircle size={14} className="text-blue-600" />
+                    )}
+                    <span className={ctrl.status === 'overdue' ? 'text-red-700 font-medium' : 'text-blue-700'}>
+                      {ctrl.template_name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}`}>
+                      {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
+                    </span>
+                    <button
+                      onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule=${ctrl.schedule_id}`)}
+                      className={`px-2 py-1 text-xs rounded ${
+                        ctrl.status === 'overdue'
+                          ? 'bg-red-200 text-red-700 hover:bg-red-300'
+                          : 'bg-blue-200 text-blue-700 hover:bg-blue-300'
+                      }`}
+                    >
+                      Voir
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Files */}
         {files.length > 0 && (
@@ -1126,6 +1231,9 @@ export default function Vsd() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Control statuses (like Switchboards)
+  const [controlStatuses, setControlStatuses] = useState({});
+
   // Functions - defined before useEffects that use them
   const loadEquipments = useCallback(async () => {
     setIsLoading(true);
@@ -1152,6 +1260,56 @@ export default function Vsd() {
     }
   }, []);
 
+  // Load control statuses for all VSD equipments (like Switchboards)
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const res = await api.switchboardControls.listSchedules({ equipment_type: 'vsd' });
+      const schedules = res.schedules || [];
+      const statuses = {};
+      const now = new Date();
+
+      schedules.forEach(s => {
+        if (s.vsd_equipment_id) {
+          const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          const isOverdue = nextDue && nextDue < now;
+
+          // Initialize if not exists
+          if (!statuses[s.vsd_equipment_id]) {
+            statuses[s.vsd_equipment_id] = {
+              status: 'ok',
+              controls: [],
+              overdueCount: 0,
+              pendingCount: 0
+            };
+          }
+
+          const controlInfo = {
+            template_name: s.template_name,
+            next_due: s.next_due_date,
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
+          };
+
+          statuses[s.vsd_equipment_id].controls.push(controlInfo);
+
+          if (isOverdue) {
+            statuses[s.vsd_equipment_id].overdueCount++;
+            statuses[s.vsd_equipment_id].status = 'overdue';
+          } else {
+            statuses[s.vsd_equipment_id].pendingCount++;
+            if (statuses[s.vsd_equipment_id].status !== 'overdue') {
+              statuses[s.vsd_equipment_id].status = 'pending';
+            }
+          }
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.warn('Load control statuses error:', e);
+    }
+  }, []);
+
   // Effects
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -1162,7 +1320,8 @@ export default function Vsd() {
   useEffect(() => {
     loadEquipments();
     loadPlacements();
-  }, [loadEquipments, loadPlacements]);
+    loadControlStatuses();
+  }, [loadEquipments, loadPlacements, loadControlStatuses]);
 
   // Refresh placements on visibility change
   useEffect(() => {
@@ -1488,6 +1647,8 @@ export default function Vsd() {
                 onPhotoUpload={handlePhotoUpload}
                 isPlaced={placedIds.has(selectedEquipment.id)}
                 showToast={showToast}
+                controlStatuses={controlStatuses}
+                navigate={navigate}
               />
             )
           ) : (
