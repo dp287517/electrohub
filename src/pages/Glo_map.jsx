@@ -927,7 +927,7 @@ export default function GloMap() {
 
       if (urlPlanKey && !urlParamsHandledRef.current) {
         planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlGloId) targetEquipmentIdRef.current = urlGloId;
+        if (urlGloId) targetEquipmentIdRef.current = Number(urlGloId);
         urlParamsHandledRef.current = true;
         setSearchParams({}, { replace: true });
       }
@@ -1320,11 +1320,17 @@ export default function GloMap() {
 
           {/* Floating Toolbar */}
           {stableFileUrl && (
-            <div className="absolute bottom-24 left-4 z-30 flex flex-col gap-2">
+            <div className="absolute top-2 left-2 sm:top-3 sm:left-3 z-[5000] flex flex-col gap-2">
               <button
-                onClick={() => { setCreateMode(true); setPlacementMode(null); }}
+                onClick={() => {
+                  setCreateMode(true);
+                  setPlacementMode(null);
+                  setSelectedPosition(null);
+                  setSelectedEquipment(null);
+                }}
                 disabled={createMode || !pdfReady}
-                className="p-3 rounded-xl shadow-lg transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-br from-green-500 to-emerald-600 text-white hover:from-green-600 hover:to-emerald-700"
+                className="w-11 h-11 sm:w-10 sm:h-10 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 rounded-xl border-none bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg cursor-pointer text-lg flex items-center justify-center transition-all hover:from-green-400 hover:to-emerald-500 hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ touchAction: 'manipulation' }}
                 title="Creer un nouvel equipement GLO"
               >
                 <Plus size={20} />
