@@ -1913,18 +1913,19 @@ app.get("/api/mobile-equipment/maps/positions", async (req, res) => {
     `;
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
-    const points = rows.map((r) => ({
+    // Format positions with proper field names expected by frontend
+    const positions = rows.map((r) => ({
       equipment_id: r.equipment_id,
-      equipment_name: r.name,
+      name: r.name,
       building: r.building,
       floor: r.floor,
       equipment_state: r.equipment_state,
-      x: Number(r.x_frac ?? 0),
-      y: Number(r.y_frac ?? 0),
+      x_frac: Number(r.x_frac ?? 0),
+      y_frac: Number(r.y_frac ?? 0),
       status: r.status,
     }));
 
-    res.json({ ok: true, items: rows, points });
+    res.json({ ok: true, positions, items: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -2007,10 +2008,10 @@ app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) =>
       y,
     } = req.body || {};
 
-    // if plan_id provided and logical_name missing -> resolve
+    // if plan_id provided and logical_name missing -> resolve from VSD plans (symbiosis)
     if ((!logical_name || String(logical_name).trim() === "") && plan_id && /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
       const { rows } = await pool.query(
-        `SELECT logical_name FROM me_plans WHERE id=$1 LIMIT 1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
         [plan_id]
       );
       logical_name = rows?.[0]?.logical_name || null;
