@@ -2116,12 +2116,10 @@ export const api = {
       return withBust(url, bust);
     },
 
-    // Get positions for plan/page
+    // Get positions for plan/page (always use logical_name - positions are stored by logical_name, not UUID)
     positions: (planOrKey, page_index = 0) => {
-      const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
-      return isUuid(key) || isNumericId(key)
-        ? get("/api/hv/maps/positions", { id: key, page_index })
-        : get("/api/hv/maps/positions", { logical_name: key, page_index });
+      const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.logical_name || planOrKey?.id || "";
+      return get("/api/hv/maps/positions", { logical_name: key, page_index });
     },
 
     // Set/update position
