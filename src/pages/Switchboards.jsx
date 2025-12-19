@@ -1327,7 +1327,8 @@ export default function Switchboards() {
       const planKey = details.plans[0];
       navigate(`/app/switchboards/map?switchboard=${boardId}&plan=${encodeURIComponent(planKey)}`);
     } else {
-      navigate('/app/switchboards/map');
+      // Pass switchboard ID so user can position it on map
+      navigate(`/app/switchboards/map?switchboard=${boardId}`);
     }
   };
 
