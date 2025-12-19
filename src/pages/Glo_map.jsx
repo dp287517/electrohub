@@ -879,6 +879,7 @@ export default function GloMap() {
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
@@ -1093,6 +1094,37 @@ export default function GloMap() {
     setContextMenu(null);
   };
 
+  // Create a new GLO equipment directly from the plan
+  const createEquipmentAtFrac = async (xFrac, yFrac) => {
+    if (creatingRef.current) return;
+    if (!stableSelectedPlan) return;
+    creatingRef.current = true;
+    try {
+      const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const created = await api.glo.createEquipment({ name: `Nouvel equipement GLO ${timestamp}`, status: "a_faire" });
+      const id = created?.id || created?.equipment?.id;
+      if (!id) throw new Error("Echec creation equipement GLO");
+      // Set position for newly created equipment
+      await api.gloMaps.setPosition(id, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id,
+        page_index: pageIndex,
+        x_frac: xFrac,
+        y_frac: yFrac,
+      });
+      // Reload data
+      await loadEquipments();
+      await refreshPositions(stableSelectedPlan, pageIndex);
+      // Navigate to equipment detail
+      navigate(`/app/glo?glo=${id}`);
+    } catch (err) {
+      console.error("Erreur creation equipement GLO:", err);
+    } finally {
+      creatingRef.current = false;
+      setCreateMode(false);
+    }
+  };
+
   const handleContextMenu = (meta, coords) => {
     setContextMenu({ ...meta, ...coords });
   };
@@ -1274,10 +1306,50 @@ export default function GloMap() {
               onReady={() => setPdfReady(true)}
               onClickPoint={handleClickMarker}
               onMovePoint={handleMoveMarker}
-              onCreatePoint={handleCreatePosition}
+              onCreatePoint={(xFrac, yFrac) => {
+                if (createMode) {
+                  createEquipmentAtFrac(xFrac, yFrac);
+                } else if (placementMode) {
+                  handleCreatePosition(xFrac, yFrac);
+                }
+              }}
               onContextMenu={handleContextMenu}
-              placementActive={!!placementMode}
+              placementActive={!!placementMode || createMode}
             />
+          )}
+
+          {/* Floating Toolbar */}
+          {stableFileUrl && (
+            <div className="absolute bottom-24 left-4 z-30 flex flex-col gap-2">
+              <button
+                onClick={() => { setCreateMode(true); setPlacementMode(null); }}
+                disabled={createMode || !pdfReady}
+                className="p-3 rounded-xl shadow-lg transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-br from-green-500 to-emerald-600 text-white hover:from-green-600 hover:to-emerald-700"
+                title="Creer un nouvel equipement GLO"
+              >
+                <Plus size={20} />
+              </button>
+            </div>
+          )}
+
+          {/* Create Mode Indicator */}
+          {createMode && (
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30">
+              <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
+                <div className="p-2 bg-white/20 rounded-lg">
+                  <Plus size={20} className="animate-pulse" />
+                </div>
+                <div>
+                  <p className="font-semibold">Mode creation actif</p>
+                  <p className="text-green-100 text-sm">
+                    Cliquez sur le plan pour creer un nouvel equipement GLO
+                  </p>
+                </div>
+                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
           )}
 
           {placementMode && <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />}
