@@ -5,7 +5,7 @@ import {
   GitBranch, CreditCard, Cog, Flame, Wrench, Users, MessageCircle,
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
   Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase,
-  Shield, Globe, Crown, Star, RefreshCcw, Repeat
+  Shield, Globe, Crown, Star, RefreshCcw, Repeat, Battery
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
@@ -15,7 +15,7 @@ const iconMap = {
   '⚡': Zap, '♻️': Recycle, '🧩': Puzzle, '📈': TrendingUp, '⚠️': AlertTriangle,
   '🔄': RefreshCw, '📐': GitBranch, '💳': CreditCard, '⚙️': Cog, '🧯': Flame,
   '🛠️': Wrench, '🤝': Users, '💬': MessageCircle, '🚪': DoorOpen, '📊': BarChart3,
-  '📋': ClipboardCheck,
+  '📋': ClipboardCheck, '🔋': Battery,
 };
 
 
@@ -32,6 +32,7 @@ const electricalApps = [
   { label: 'Variable Speed Drives', to: '/app/vsd', description: 'VSD maintenance: frequency inverters, power ratings, checks', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
   { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
   { label: 'Mobile Equipments', to: '/app/mobile-equipments', description: 'Electrical controls for mobile equipment: drills, angle grinders...', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
+  { label: 'Global Electrical Equipments', to: '/app/glo', description: 'UPS, compensation batteries & emergency lighting management', icon: '🔋', color: 'from-emerald-400 to-teal-500' },
 ];
 
 // Other apps
