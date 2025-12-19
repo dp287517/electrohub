@@ -7,7 +7,8 @@ import {
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Power, Battery,
   Tag, Hash, Factory, Gauge, Thermometer, Network, Info, Lightbulb, Sun,
-  FolderPlus, Folder, ChevronUp, GripVertical, ClipboardCheck, Clock, Calendar
+  FolderPlus, Folder, ChevronUp, GripVertical, ClipboardCheck, Clock, Calendar,
+  History
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -262,21 +263,18 @@ const DetailPanel = ({
   onNavigateToMap,
   onPhotoUpload,
   isPlaced,
-  showToast
+  showToast,
+  controlStatuses,
+  navigate
 }) => {
-  const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [schedules, setSchedules] = useState([]);
-  const [recentRecords, setRecentRecords] = useState([]);
-  const [loadingControls, setLoadingControls] = useState(false);
   const [showTechnical, setShowTechnical] = useState(false);
   const photoInputRef = useRef(null);
 
   useEffect(() => {
     if (equipment?.id) {
       loadFiles();
-      loadControls();
     }
   }, [equipment?.id]);
 
@@ -290,22 +288,6 @@ const DetailPanel = ({
       console.error(e);
     } finally {
       setLoadingFiles(false);
-    }
-  };
-
-  const loadControls = async () => {
-    if (!equipment?.id) return;
-    setLoadingControls(true);
-    try {
-      const schedulesRes = await api.switchboardControls.listSchedules({ glo_equipment_id: equipment.id }).catch(() => ({}));
-      setSchedules(schedulesRes?.schedules || []);
-
-      const recordsRes = await api.switchboardControls.listRecords({ glo_equipment_id: equipment.id, limit: 5 }).catch(() => ({}));
-      setRecentRecords(recordsRes?.records || []);
-    } catch (e) {
-      console.error('Load controls error:', e);
-    } finally {
-      setLoadingControls(false);
     }
   };
 
@@ -678,69 +660,105 @@ const DetailPanel = ({
           </div>
         )}
 
-        {/* Controls Section */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <ClipboardCheck size={16} className="text-blue-500" />
-            Controles
-          </h3>
-
-          {loadingControls ? (
-            <div className="flex items-center justify-center py-4">
-              <RefreshCw size={20} className="animate-spin text-blue-500" />
+        {/* Control Status Section - Same as Switchboards */}
+        <div className="bg-white rounded-xl border p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-xl ${
+                controlStatuses?.[equipment.id]?.status === 'overdue' ? 'bg-red-100' :
+                controlStatuses?.[equipment.id]?.status === 'pending' ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <ClipboardCheck size={20} className={
+                  controlStatuses?.[equipment.id]?.status === 'overdue' ? 'text-red-600' :
+                  controlStatuses?.[equipment.id]?.status === 'pending' ? 'text-blue-600' : 'text-gray-400'
+                } />
+              </div>
+              <div>
+                <h4 className="font-medium text-gray-900">
+                  Contrôles planifiés
+                  {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                      {controlStatuses[equipment.id].controls.length}
+                    </span>
+                  )}
+                </h4>
+                <div className="flex items-center gap-2 mt-1">
+                  {controlStatuses?.[equipment.id]?.overdueCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
+                      <AlertTriangle size={10} />
+                      {controlStatuses[equipment.id].overdueCount} en retard
+                    </span>
+                  )}
+                  {controlStatuses?.[equipment.id]?.pendingCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full flex items-center gap-1">
+                      <CheckCircle size={10} />
+                      {controlStatuses[equipment.id].pendingCount} planifié(s)
+                    </span>
+                  )}
+                  {!controlStatuses?.[equipment.id]?.controls?.length && (
+                    <span className="text-sm text-gray-400">Aucun contrôle planifié</span>
+                  )}
+                </div>
+              </div>
             </div>
-          ) : (
-            <>
-              {schedules.length > 0 ? (
-                <div className="space-y-2 mb-3">
-                  <p className="text-xs text-gray-500 font-medium">Controles programmes</p>
-                  {schedules.slice(0, 3).map(schedule => (
-                    <div key={schedule.id} className="bg-white rounded-lg p-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Calendar size={14} className="text-blue-500" />
-                        <span className="text-sm font-medium">{schedule.template_name || 'Controle'}</span>
-                      </div>
-                      <span className="text-xs text-gray-500">
-                        {schedule.frequency === 'daily' ? 'Quotidien' :
-                         schedule.frequency === 'weekly' ? 'Hebdo' :
-                         schedule.frequency === 'monthly' ? 'Mensuel' :
-                         schedule.frequency === 'quarterly' ? 'Trim.' :
-                         schedule.frequency === 'yearly' ? 'Annuel' : schedule.frequency}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="bg-white rounded-lg p-3 text-center mb-3">
-                  <p className="text-sm text-gray-500">Aucun controle programme</p>
-                </div>
-              )}
-
-              {recentRecords.length > 0 && (
-                <div className="space-y-2 mb-3">
-                  <p className="text-xs text-gray-500 font-medium">Derniers controles</p>
-                  {recentRecords.slice(0, 3).map(record => (
-                    <div key={record.id} className="bg-white rounded-lg p-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <CheckCircle size={14} className={record.status === 'conforme' ? 'text-emerald-500' : 'text-amber-500'} />
-                        <span className="text-sm">{record.template_name || 'Controle'}</span>
-                      </div>
-                      <span className="text-xs text-gray-500">
-                        {new Date(record.created_at).toLocaleDateString('fr-FR')}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
+            <div className="flex items-center gap-1 sm:gap-2">
               <button
-                onClick={() => navigate('/app/switchboard-controls?tab=schedules&equipment_type=glo')}
-                className="w-full py-2 px-3 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition-colors flex items-center justify-center gap-2"
+                onClick={() => navigate(`/app/switchboard-controls?tab=history&equipment_type=glo&glo_equipment_id=${equipment.id}`)}
+                className="p-2 sm:px-3 sm:py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                title="Historique"
               >
-                <ClipboardCheck size={16} />
-                {schedules.length > 0 ? 'Gerer les controles' : 'Creer un controle'}
+                <History size={14} />
+                <span className="hidden sm:inline">Historique</span>
               </button>
-            </>
+              <button
+                onClick={() => navigate(`/app/switchboard-controls?tab=schedules&equipment_type=glo&glo_equipment_id=${equipment.id}`)}
+                className="p-2 sm:px-3 sm:py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 flex items-center gap-1"
+                title="Gérer"
+              >
+                <ClipboardCheck size={14} />
+                <span className="hidden sm:inline">Gérer</span>
+              </button>
+            </div>
+          </div>
+
+          {/* List all controls */}
+          {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              {controlStatuses[equipment.id].controls.map((ctrl, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {ctrl.status === 'overdue' ? (
+                      <AlertTriangle size={14} className="text-red-600" />
+                    ) : (
+                      <CheckCircle size={14} className="text-blue-600" />
+                    )}
+                    <span className={ctrl.status === 'overdue' ? 'text-red-700 font-medium' : 'text-blue-700'}>
+                      {ctrl.template_name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}`}>
+                      {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
+                    </span>
+                    <button
+                      onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule=${ctrl.schedule_id}`)}
+                      className={`px-2 py-1 text-xs rounded ${
+                        ctrl.status === 'overdue'
+                          ? 'bg-red-200 text-red-700 hover:bg-red-300'
+                          : 'bg-blue-200 text-blue-700 hover:bg-blue-300'
+                      }`}
+                    >
+                      Voir
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -1517,6 +1535,9 @@ export default function Glo() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Control statuses (like Switchboards)
+  const [controlStatuses, setControlStatuses] = useState({});
+
   const loadEquipments = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -1551,6 +1572,56 @@ export default function Glo() {
     }
   }, []);
 
+  // Load control statuses for all GLO equipments (like Switchboards)
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const res = await api.switchboardControls.listSchedules({ equipment_type: 'glo' });
+      const schedules = res.schedules || [];
+      const statuses = {};
+      const now = new Date();
+
+      schedules.forEach(s => {
+        if (s.glo_equipment_id) {
+          const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          const isOverdue = nextDue && nextDue < now;
+
+          // Initialize if not exists
+          if (!statuses[s.glo_equipment_id]) {
+            statuses[s.glo_equipment_id] = {
+              status: 'ok',
+              controls: [],
+              overdueCount: 0,
+              pendingCount: 0
+            };
+          }
+
+          const controlInfo = {
+            template_name: s.template_name,
+            next_due: s.next_due_date,
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
+          };
+
+          statuses[s.glo_equipment_id].controls.push(controlInfo);
+
+          if (isOverdue) {
+            statuses[s.glo_equipment_id].overdueCount++;
+            statuses[s.glo_equipment_id].status = 'overdue';
+          } else {
+            statuses[s.glo_equipment_id].pendingCount++;
+            if (statuses[s.glo_equipment_id].status !== 'overdue') {
+              statuses[s.glo_equipment_id].status = 'pending';
+            }
+          }
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (e) {
+      console.warn('Load control statuses error:', e);
+    }
+  }, []);
+
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
@@ -1561,7 +1632,8 @@ export default function Glo() {
     loadEquipments();
     loadPlacements();
     loadCategories();
-  }, [loadEquipments, loadPlacements, loadCategories]);
+    loadControlStatuses();
+  }, [loadEquipments, loadPlacements, loadCategories, loadControlStatuses]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -1879,6 +1951,8 @@ export default function Glo() {
                 onPhotoUpload={handlePhotoUpload}
                 isPlaced={placedIds.has(selectedEquipment.id)}
                 showToast={showToast}
+                controlStatuses={controlStatuses}
+                navigate={navigate}
               />
             )
           ) : (
