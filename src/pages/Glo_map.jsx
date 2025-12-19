@@ -1,0 +1,1319 @@
+// src/pages/Glo_map.jsx - Global Electrical Equipments Map
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, API_BASE } from "../lib/api.js";
+
+// PDF.js
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+// Leaflet
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+// Mobile optimization
+import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+
+// Icons
+import {
+  Zap,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Building2,
+  MapPin,
+  CheckCircle,
+  AlertCircle,
+  X,
+  RefreshCw,
+  Trash2,
+  ExternalLink,
+  Crosshair,
+  Target,
+  ArrowLeft,
+  Settings,
+  Upload,
+  Plus,
+  Battery,
+  Lightbulb,
+} from "lucide-react";
+
+/* ----------------------------- PDF.js Config ----------------------------- */
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
+
+/* ----------------------------- LocalStorage Keys ----------------------------- */
+const STORAGE_KEY_PLAN = "glo_map_selected_plan";
+const STORAGE_KEY_PAGE = "glo_map_page_index";
+
+/* ----------------------------- Helpers ----------------------------- */
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  }
+  return { email, name };
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+
+function pdfDocOpts(url) {
+  return {
+    url,
+    withCredentials: true,
+    httpHeaders: userHeaders(),
+    standardFontDataUrl: "/standard_fonts/",
+  };
+}
+
+const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+
+/* ----------------------------- UI Components ----------------------------- */
+const AnimatedCard = ({ children, delay = 0, className = "" }) => (
+  <div
+    className={`animate-slideUp ${className}`}
+    style={{ animationDelay: `${delay}ms`, animationFillMode: "backwards" }}
+  >
+    {children}
+  </div>
+);
+
+const Badge = ({ children, variant = "default", className = "" }) => {
+  const variants = {
+    default: "bg-gray-100 text-gray-700",
+    success: "bg-emerald-100 text-emerald-700",
+    warning: "bg-amber-100 text-amber-700",
+    danger: "bg-red-100 text-red-700",
+    info: "bg-blue-100 text-blue-700",
+    purple: "bg-purple-100 text-purple-700",
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>
+      {children}
+    </span>
+  );
+};
+
+const EmptyState = ({ icon: Icon, title, description, action }) => (
+  <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
+      <Icon size={32} className="text-gray-400" />
+    </div>
+    <h3 className="text-lg font-medium text-gray-700">{title}</h3>
+    {description && <p className="text-gray-500 mt-1 max-w-sm">{description}</p>}
+    {action && <div className="mt-4">{action}</div>}
+  </div>
+);
+
+function Input({ value, onChange, className = "", ...p }) {
+  return (
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-emerald-100 bg-white text-black placeholder-gray-400 ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange?.(e.target.value)}
+      {...p}
+    />
+  );
+}
+
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary: "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
+    ghost: "bg-white text-black border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed",
+    subtle: "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed",
+  };
+  return (
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
+      {children}
+    </button>
+  );
+}
+
+/* ----------------------------- Confirm Modal ----------------------------- */
+function ConfirmModal({ open, title = "Confirmation", message, confirmText = "Confirmer", cancelText = "Annuler", onConfirm, onCancel, danger = false }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[7000] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative w-[92vw] max-w-md bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp">
+        <div className={`px-4 py-3 ${danger ? "bg-gradient-to-r from-rose-500 to-red-600 text-white" : "bg-gradient-to-r from-emerald-500 to-teal-600 text-white"}`}>
+          <h3 className="font-semibold">{title}</h3>
+        </div>
+        <div className="p-4 text-sm text-gray-700">{message}</div>
+        <div className="px-4 pb-4 flex gap-2 justify-end">
+          <Btn variant="ghost" onClick={onCancel}>{cancelText}</Btn>
+          <Btn variant={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmText}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Context Menu ----------------------------- */
+function ContextMenu({ x, y, onDelete, onClose }) {
+  useEffect(() => {
+    const handleClick = () => onClose();
+    const handleScroll = () => onClose();
+    window.addEventListener("click", handleClick);
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed bg-white rounded-xl shadow-2xl border py-1 z-[6000] min-w-[160px] animate-slideUp"
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+      >
+        <Trash2 size={16} />
+        Detacher du plan
+      </button>
+    </div>
+  );
+}
+
+/* ----------------------------- Sidebar Card ----------------------------- */
+const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
+  return (
+    <div
+      className={`p-3 rounded-xl border transition-all cursor-pointer group
+        ${isSelected ? "bg-emerald-50 border-emerald-300 shadow-sm" : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}
+      onClick={onClick}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`font-semibold text-sm ${isSelected ? "text-emerald-700" : "text-gray-900"}`}>
+              {equipment.name || equipment.tag || "Equipement"}
+            </span>
+            {isPlacedElsewhere && <Badge variant="purple">Place ailleurs</Badge>}
+          </div>
+          <p className={`text-xs truncate mt-0.5 ${isSelected ? "text-emerald-600" : "text-gray-500"}`}>
+            {equipment.category_name || equipment.equipment_type || "-"} {equipment.power_kva ? `${equipment.power_kva} kVA` : ""}
+          </p>
+          <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
+            <span className="flex items-center gap-0.5">
+              <Building2 size={10} />
+              {equipment.building || "-"}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-1">
+          {isPlacedHere ? (
+            <span className="flex items-center gap-1 text-emerald-600 text-xs">
+              <CheckCircle size={14} />
+              Place
+            </span>
+          ) : isPlacedSomewhere ? (
+            <span className="flex items-center gap-1 text-purple-600 text-xs">
+              <CheckCircle size={14} />
+              Ailleurs
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-amber-600 text-xs">
+              <AlertCircle size={14} />
+              Non place
+            </span>
+          )}
+
+          <button
+            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
+            className="px-2 py-1 bg-emerald-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-emerald-600 transition-colors"
+            title={isPlacedSomewhere ? "Deplacer sur ce plan" : "Placer sur ce plan"}
+          >
+            <Target size={12} />
+            {isPlacedSomewhere ? "Deplacer" : "Placer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ----------------------------- Detail Panel ----------------------------- */
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
+  if (!position) return null;
+  return (
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
+      <div className="bg-gradient-to-r from-emerald-500 to-teal-600 p-4 text-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-white/20 rounded-lg">
+              <Zap size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold">{position.name || equipment?.name || "Equipement"}</h3>
+              <p className="text-emerald-100 text-sm">{position.tag || equipment?.tag || "-"}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Batiment</span>
+            <span className="font-semibold text-gray-900">{position.building || equipment?.building || "-"}</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Categorie</span>
+            <span className="font-semibold text-gray-900">{equipment?.category_name || "-"}</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Puissance</span>
+            <span className="font-semibold text-gray-900">{equipment?.power_kva || equipment?.power_kw || "-"}</span>
+          </div>
+        </div>
+
+        <div className="text-xs text-gray-400 flex items-center gap-2">
+          <MapPin size={12} />
+          Position: {(position.x_frac * 100).toFixed(1)}%, {(position.y_frac * 100).toFixed(1)}%
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={() => onNavigate(position.equipment_id)}
+            className="flex-1 py-2.5 px-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl font-medium hover:from-emerald-600 hover:to-teal-700 transition-all flex items-center justify-center gap-2"
+          >
+            <ExternalLink size={16} />
+            Ouvrir la fiche
+          </button>
+
+          <button
+            onClick={() => onDelete?.(position)}
+            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
+            title="Detacher du plan"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+    </AnimatedCard>
+  );
+};
+
+/* ----------------------------- Placement Mode Indicator ----------------------------- */
+const PlacementModeIndicator = ({ equipment, onCancel }) => (
+  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30">
+    <div className="bg-emerald-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
+      <div className="p-2 bg-white/20 rounded-lg">
+        <Crosshair size={20} className="animate-pulse" />
+      </div>
+      <div>
+        <p className="font-semibold">Mode placement actif</p>
+        <p className="text-emerald-200 text-sm">
+          Cliquez sur le plan pour placer <span className="font-semibold">{equipment.name || equipment.tag || "l'equipement"}</span>
+        </p>
+      </div>
+      <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+        <X size={18} />
+      </button>
+    </div>
+  </div>
+);
+
+/* ----------------------------- Leaflet Viewer ----------------------------- */
+const GloLeafletViewer = forwardRef(({
+  fileUrl,
+  pageIndex = 0,
+  initialPoints = [],
+  selectedId = null,
+  onReady,
+  onMovePoint,
+  onClickPoint,
+  onCreatePoint,
+  onContextMenu,
+  disabled = false,
+  placementActive = false,
+}, ref) => {
+  const wrapRef = useRef(null);
+  const mapRef = useRef(null);
+  const imageLayerRef = useRef(null);
+  const markersLayerRef = useRef(null);
+  const markersMapRef = useRef(new Map());
+
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const [picker, setPicker] = useState(null);
+
+  const pointsRef = useRef(initialPoints);
+  const selectedIdRef = useRef(selectedId);
+  const placementActiveRef = useRef(placementActive);
+  const aliveRef = useRef(true);
+
+  const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
+  const initialFitDoneRef = useRef(false);
+  const userViewTouchedRef = useRef(false);
+
+  const lastJob = useRef({ key: null });
+  const loadingTaskRef = useRef(null);
+  const renderTaskRef = useRef(null);
+
+  const longPressTimerRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
+  const onCreatePointRef = useRef(onCreatePoint);
+
+  const ICON_PX = 22;
+  const ICON_PX_SELECTED = 30;
+  const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
+
+  useEffect(() => { placementActiveRef.current = placementActive; }, [placementActive]);
+  useEffect(() => { onCreatePointRef.current = onCreatePoint; }, [onCreatePoint]);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    if (mapRef.current && imgSize.w > 0) {
+      drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+    }
+  }, [selectedId]);
+
+  function makeGloIcon(isSelected = false) {
+    const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+    const bg = isSelected
+      ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
+      : "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
+    const animClass = isSelected ? "glo-marker-selected" : "";
+
+    const html = `
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/>
+        </svg>
+      </div>`;
+    return L.divIcon({
+      className: "glo-marker-inline",
+      html,
+      iconSize: [s, s],
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+      popupAnchor: [0, -Math.round(s / 2)],
+    });
+  }
+
+  const drawMarkers = useCallback((list, w, h) => {
+    const map = mapRef.current;
+    const g = markersLayerRef.current;
+    if (!map || !g || w === 0 || h === 0) return;
+
+    pointsRef.current = list;
+    g.clearLayers();
+    markersMapRef.current.clear();
+
+    (list || []).forEach((p) => {
+      const x = Number(p.x_frac ?? p.x ?? 0) * w;
+      const y = Number(p.y_frac ?? p.y ?? 0) * h;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+      const latlng = L.latLng(y, x);
+      const isSelected = p.equipment_id === selectedIdRef.current;
+      const icon = makeGloIcon(isSelected);
+
+      const mk = L.marker(latlng, {
+        icon,
+        draggable: !disabled && !placementActiveRef.current,
+        autoPan: true,
+        bubblingMouseEvents: false,
+        keyboard: false,
+        riseOnHover: true,
+      });
+
+      mk.__meta = {
+        id: p.id,
+        equipment_id: p.equipment_id,
+        name: p.name || p.equipment_name,
+        tag: p.tag,
+        x_frac: p.x_frac,
+        y_frac: p.y_frac,
+        building: p.building,
+      };
+
+      mk.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        if (longPressTriggeredRef.current) {
+          longPressTriggeredRef.current = false;
+          return;
+        }
+        setPicker(null);
+        onClickPoint?.(mk.__meta);
+      });
+
+      mk.on("dragend", () => {
+        if (!onMovePoint) return;
+        const ll = mk.getLatLng();
+        const xFrac = clamp(ll.lng / w, 0, 1);
+        const yFrac = clamp(ll.lat / h, 0, 1);
+        onMovePoint(mk.__meta.equipment_id, { x: Math.round(xFrac * 1e6) / 1e6, y: Math.round(yFrac * 1e6) / 1e6 });
+      });
+
+      mk.on("contextmenu", (e) => {
+        L.DomEvent.stopPropagation(e);
+        L.DomEvent.preventDefault(e);
+        const containerPoint = map.latLngToContainerPoint(e.latlng);
+        const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+        onContextMenu?.(mk.__meta, { x: rect.left + containerPoint.x, y: rect.top + containerPoint.y });
+      });
+
+      mk.addTo(g);
+      markersMapRef.current.set(p.equipment_id, mk);
+
+      setTimeout(() => {
+        const el = mk.getElement();
+        if (!el) return;
+
+        const startLongPress = (clientX, clientY) => {
+          longPressTriggeredRef.current = false;
+          longPressTimerRef.current = setTimeout(() => {
+            longPressTriggeredRef.current = true;
+            onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
+          }, 600);
+        };
+
+        const cancelLongPress = () => {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+          }
+        };
+
+        el.addEventListener("touchstart", (e) => {
+          const touch = e.touches[0];
+          startLongPress(touch.clientX, touch.clientY);
+        }, { passive: true });
+
+        el.addEventListener("touchend", cancelLongPress, { passive: true });
+        el.addEventListener("touchcancel", cancelLongPress, { passive: true });
+        el.addEventListener("touchmove", cancelLongPress, { passive: true });
+      }, 50);
+    });
+  }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
+
+  const highlightMarker = useCallback((equipmentId) => {
+    const mk = markersMapRef.current.get(equipmentId);
+    if (!mk || !mapRef.current) return;
+
+    const ll = mk.getLatLng();
+    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("glo-marker-flash");
+      setTimeout(() => el.classList.remove("glo-marker-flash"), 2000);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (disabled) return;
+    if (!fileUrl || !wrapRef.current) return;
+
+    let cancelled = false;
+    aliveRef.current = true;
+
+    const jobKey = `${fileUrl}::${pageIndex}`;
+    if (lastJob.current.key === jobKey) {
+      onReady?.();
+      return;
+    }
+    lastJob.current.key = jobKey;
+
+    const cleanupMap = () => {
+      const map = mapRef.current;
+      if (map) {
+        try { map.stop(); map.off(); map.eachLayer((l) => map.removeLayer(l)); map.remove(); } catch {}
+      }
+      mapRef.current = null;
+      imageLayerRef.current = null;
+      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
+      markersMapRef.current.clear();
+      initialFitDoneRef.current = false;
+      userViewTouchedRef.current = false;
+    };
+
+    const cleanupPdf = async () => {
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { await loadingTaskRef.current?.destroy(); } catch {}
+      renderTaskRef.current = null;
+      loadingTaskRef.current = null;
+    };
+
+    (async () => {
+      try {
+        await cleanupPdf();
+        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
+        const dpr = window.devicePixelRatio || 1;
+
+        loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
+        const pdf = await loadingTaskRef.current.promise;
+        if (cancelled) return;
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
+
+        const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5)));
+        const safeScale = clamp(targetBitmapW / baseVp.width, 0.5, 3.0);
+        const viewport = page.getViewport({ scale: safeScale });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext("2d", { alpha: true });
+
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
+        await renderTaskRef.current.promise;
+        if (cancelled) return;
+
+        const dataUrl = getOptimalImageFormat(canvas);
+        setImgSize({ w: canvas.width, h: canvas.height });
+
+        const m = L.map(wrapRef.current, {
+          crs: L.CRS.Simple,
+          zoomControl: false,
+          zoomAnimation: true,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+          scrollWheelZoom: true,
+          touchZoom: true,
+          tap: false,
+          preferCanvas: true,
+          center: lastViewRef.current.center,
+          zoom: lastViewRef.current.zoom,
+        });
+
+        L.control.zoom({ position: "topright" }).addTo(m);
+        mapRef.current = m;
+
+        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: true, opacity: 1 });
+        imageLayerRef.current = layer;
+        layer.addTo(m);
+
+        await new Promise(requestAnimationFrame);
+        if (cancelled) return;
+        m.invalidateSize(false);
+
+        const fitZoom = m.getBoundsZoom(bounds, true);
+        m.options.zoomSnap = 0.1;
+        m.options.zoomDelta = 0.5;
+        m.setMinZoom(fitZoom - 1);
+
+        if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
+          m.fitBounds(bounds, { padding: [8, 8] });
+          lastViewRef.current.center = m.getCenter();
+          lastViewRef.current.zoom = m.getZoom();
+          initialFitDoneRef.current = true;
+        } else {
+          m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
+        }
+
+        m.setMaxZoom(fitZoom + 6);
+        m.setMaxBounds(bounds.pad(0.5));
+
+        markersLayerRef.current = L.layerGroup().addTo(m);
+
+        m.on("click", (e) => {
+          if (!aliveRef.current) return;
+          if (placementActiveRef.current && onCreatePointRef.current) {
+            const ll = e.latlng;
+            const xFrac = clamp(ll.lng / canvas.width, 0, 1);
+            const yFrac = clamp(ll.lat / canvas.height, 0, 1);
+            onCreatePointRef.current(xFrac, yFrac);
+            return;
+          }
+
+          const clicked = e.containerPoint;
+          const near = [];
+          markersLayerRef.current?.eachLayer((mk) => {
+            const mp = m.latLngToContainerPoint(mk.getLatLng());
+            const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
+            if (dist <= PICK_RADIUS) near.push(mk.__meta);
+          });
+
+          if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
+          else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
+          else setPicker(null);
+        });
+
+        m.on("contextmenu", (e) => L.DomEvent.preventDefault(e));
+        m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
+        m.on("movestart", () => { setPicker(null); userViewTouchedRef.current = true; });
+        m.on("zoomend", () => { lastViewRef.current.zoom = m.getZoom(); });
+        m.on("moveend", () => { lastViewRef.current.center = m.getCenter(); });
+
+        drawMarkers(pointsRef.current, canvas.width, canvas.height);
+        try { await pdf.cleanup(); } catch {}
+        onReady?.();
+      } catch (e) {
+        if (String(e?.name) === "RenderingCancelledException") return;
+        const msg = String(e?.message || "");
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
+        console.error("GLO Leaflet viewer error", e);
+      }
+    })();
+
+    const onResize = () => {
+      const m = mapRef.current;
+      const layer = imageLayerRef.current;
+      if (!m || !layer) return;
+      const keepCenter = lastViewRef.current.center;
+      const keepZoom = lastViewRef.current.zoom;
+      m.invalidateSize(false);
+      if (!initialFitDoneRef.current) {
+        m.fitBounds(layer.getBounds(), { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+      } else {
+        m.setView(keepCenter, keepZoom, { animate: false });
+      }
+    };
+
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+
+    return () => {
+      cancelled = true;
+      aliveRef.current = false;
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      cleanupMap();
+      cleanupPdf();
+    };
+  }, [fileUrl, pageIndex, disabled]);
+
+  useEffect(() => {
+    pointsRef.current = initialPoints;
+    if (mapRef.current && imgSize.w > 0) {
+      drawMarkers(initialPoints, imgSize.w, imgSize.h);
+    }
+  }, [initialPoints, drawMarkers, imgSize.w, imgSize.h]);
+
+  const adjust = () => {
+    const m = mapRef.current;
+    const layer = imageLayerRef.current;
+    if (!m || !layer) return;
+    const b = layer.getBounds();
+    try { m.scrollWheelZoom?.disable(); } catch {}
+    m.invalidateSize(false);
+    const fitZoom = m.getBoundsZoom(b, true);
+    m.setMinZoom(fitZoom - 1);
+    m.fitBounds(b, { padding: [8, 8] });
+    lastViewRef.current.center = m.getCenter();
+    lastViewRef.current.zoom = m.getZoom();
+    initialFitDoneRef.current = true;
+    userViewTouchedRef.current = false;
+    setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
+  };
+
+  useImperativeHandle(ref, () => ({
+    adjust,
+    drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
+    highlightMarker,
+  }));
+
+  const onPickEquipment = useCallback((it) => {
+    setPicker(null);
+    onClickPoint?.(it);
+  }, [onClickPoint]);
+
+  return (
+    <div className="relative flex-1 flex flex-col">
+      <div className="flex items-center justify-end gap-2 p-2 border-b bg-white">
+        <Btn variant="ghost" onClick={adjust}>Ajuster</Btn>
+      </div>
+
+      <div ref={wrapRef} className="flex-1 w-full bg-gray-100" style={{ minHeight: 400 }} />
+
+      {picker && (
+        <div
+          className="absolute bg-white border rounded-xl shadow-xl p-2 z-50"
+          style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}
+        >
+          {picker.items.slice(0, 8).map((it) => (
+            <button
+              key={it.equipment_id || it.id}
+              className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded-lg truncate"
+              onClick={() => onPickEquipment(it)}
+            >
+              {it.name || it.equipment_id}
+            </button>
+          ))}
+          {picker.items.length > 8 && <div className="text-xs text-gray-500 px-3 py-1">...</div>}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #34d399, #059669)" }} />
+          Equipement
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)" }} />
+          Selectionne
+        </span>
+      </div>
+    </div>
+  );
+});
+
+/* ----------------------------- Hook de gestion des positions ----------------------------- */
+function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
+  const reloadPositionsRef = useRef(null);
+  const latestPositionsRef = useRef([]);
+
+  const loadPositions = useCallback(async (plan, pageIdx = 0) => {
+    if (!plan) return [];
+    const key = plan.id || plan.logical_name || "";
+    try {
+      const r = await api.gloMaps.positionsAuto(key, pageIdx).catch(() => ({}));
+      const list = Array.isArray(r?.positions)
+        ? r.positions.map((item) => ({
+            id: item.id,
+            equipment_id: item.equipment_id,
+            name: item.name || item.equipment_name || `Equipement #${item.equipment_id}`,
+            tag: item.tag || "",
+            x_frac: Number(item.x_frac ?? item.x ?? 0),
+            y_frac: Number(item.y_frac ?? item.y ?? 0),
+            x: Number(item.x_frac ?? item.x ?? 0),
+            y: Number(item.y_frac ?? item.y ?? 0),
+            building: item.building || "",
+          }))
+        : [];
+
+      latestPositionsRef.current = list;
+      viewerRef.current?.drawMarkers(list);
+      return list;
+    } catch (e) {
+      console.error("Erreur chargement positions GLO", e);
+      latestPositionsRef.current = [];
+      viewerRef.current?.drawMarkers([]);
+      return [];
+    }
+  }, [viewerRef]);
+
+  useEffect(() => { reloadPositionsRef.current = loadPositions; }, [loadPositions]);
+
+  useEffect(() => {
+    if (!stableSelectedPlan) return;
+    const tick = () => reloadPositionsRef.current?.(stableSelectedPlan, pageIndex);
+    tick();
+    const iv = setInterval(tick, 8000);
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [stableSelectedPlan, pageIndex]);
+
+  const refreshPositions = useCallback((p, idx = 0) => reloadPositionsRef.current?.(p, idx), []);
+  const getLatestPositions = useCallback(() => latestPositionsRef.current, []);
+
+  return { refreshPositions, getLatestPositions };
+}
+
+/* ----------------------------- Main Page ----------------------------- */
+export default function GloMap() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const urlParamsHandledRef = useRef(false);
+  const targetEquipmentIdRef = useRef(null);
+
+  const [plans, setPlans] = useState([]);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [numPages, setNumPages] = useState(1);
+  const [loadingPlans, setLoadingPlans] = useState(false);
+
+  const [initialPoints, setInitialPoints] = useState([]);
+  const [pdfReady, setPdfReady] = useState(false);
+
+  const [equipments, setEquipments] = useState([]);
+  const [loadingEquipments, setLoadingEquipments] = useState(false);
+  const [placedIds, setPlacedIds] = useState(new Set());
+
+  const [selectedPosition, setSelectedPosition] = useState(null);
+  const [selectedEquipment, setSelectedEquipment] = useState(null);
+  const [placementMode, setPlacementMode] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterMode, setFilterMode] = useState("all");
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  const creatingRef = useRef(false);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [confirmState, setConfirmState] = useState({ open: false, position: null });
+
+  const viewerRef = useRef(null);
+  const zipInputRef = useRef(null);
+
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
+  const stableFileUrl = useMemo(() => {
+    if (!stableSelectedPlan) return null;
+    return api.gloMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
+  }, [stableSelectedPlan]);
+
+  const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
+
+  const selectedEquipmentId = useMemo(() => selectedPosition?.equipment_id || null, [selectedPosition]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth < 768) setShowSidebar(false);
+    };
+    window.addEventListener("resize", handleResize);
+    handleResize();
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    loadPlans();
+    loadEquipments();
+  }, []);
+
+  useEffect(() => {
+    if (plans.length > 0 && !selectedPlan) {
+      const urlGloId = searchParams.get('glo');
+      const urlPlanKey = searchParams.get('plan');
+
+      let planToSelect = null;
+      let pageIdx = 0;
+
+      if (urlPlanKey && !urlParamsHandledRef.current) {
+        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
+        if (urlGloId) targetEquipmentIdRef.current = urlGloId;
+        urlParamsHandledRef.current = true;
+        setSearchParams({}, { replace: true });
+      }
+
+      if (!planToSelect) {
+        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+        if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+        if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
+      }
+
+      if (!planToSelect) planToSelect = plans[0];
+
+      setSelectedPlan(planToSelect);
+      setPageIndex(pageIdx);
+
+      if (planToSelect) {
+        refreshPositions(planToSelect, pageIdx).then(positions => setInitialPoints(positions || []));
+      }
+    }
+  }, [plans, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (selectedPlan?.logical_name) localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);
+  }, [selectedPlan]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
+  }, [pageIndex]);
+
+  useEffect(() => {
+    if (!pdfReady || !targetEquipmentIdRef.current) return;
+    const targetId = targetEquipmentIdRef.current;
+    targetEquipmentIdRef.current = null;
+    setTimeout(() => viewerRef.current?.highlightMarker(targetId), 300);
+  }, [pdfReady]);
+
+  const loadPlans = async () => {
+    setLoadingPlans(true);
+    try {
+      const res = await api.gloMaps.listPlans();
+      setPlans(res?.plans || res || []);
+    } catch (err) {
+      console.error("Erreur chargement plans GLO:", err);
+    } finally {
+      setLoadingPlans(false);
+    }
+  };
+
+  const refreshPlacedIds = async () => {
+    try {
+      const res = await api.gloMaps.placedIds();
+      setPlacedIds(new Set(res?.placed_ids || []));
+    } catch {}
+  };
+
+  const loadEquipments = async () => {
+    setLoadingEquipments(true);
+    try {
+      const res = await api.glo.listEquipments({});
+      setEquipments(res?.equipments || res || []);
+      await refreshPlacedIds();
+    } catch (err) {
+      console.error("Erreur chargement equipements GLO:", err);
+    } finally {
+      setLoadingEquipments(false);
+    }
+  };
+
+  const handleZipUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.gloMaps.uploadZip(file);
+      await loadPlans();
+    } catch (err) {
+      console.error("Erreur upload ZIP:", err);
+    }
+    if (zipInputRef.current) zipInputRef.current.value = "";
+  };
+
+  const handleSelectPlan = async (plan) => {
+    setSelectedPosition(null);
+    setSelectedPlan(plan);
+    setPageIndex(0);
+    setPdfReady(false);
+    const positions = await refreshPositions(plan, 0);
+    setInitialPoints(positions || []);
+  };
+
+  const handleChangePage = async (delta) => {
+    const newIdx = clamp(pageIndex + delta, 0, numPages - 1);
+    setPageIndex(newIdx);
+    setSelectedPosition(null);
+    const positions = await refreshPositions(selectedPlan, newIdx);
+    setInitialPoints(positions || []);
+  };
+
+  const handleClickMarker = (meta) => {
+    setContextMenu(null);
+    const eq = equipments.find(e => e.id === meta.equipment_id);
+    setSelectedEquipment(eq || null);
+    setSelectedPosition({
+      ...meta,
+      name: meta.name || eq?.name || "Equipement",
+      building: meta.building || eq?.building || "",
+    });
+  };
+
+  const handleMoveMarker = async (equipmentId, coords) => {
+    if (!selectedPlan) return;
+    try {
+      await api.gloMaps.setPosition(equipmentId, {
+        logical_name: selectedPlan.logical_name,
+        plan_id: selectedPlan.id,
+        page_index: pageIndex,
+        x_frac: coords.x,
+        y_frac: coords.y,
+      });
+      await refreshPositions(selectedPlan, pageIndex);
+    } catch (err) {
+      console.error("Erreur deplacement marqueur:", err);
+    }
+  };
+
+  const handlePlaceEquipment = (eq) => {
+    setPlacementMode(eq);
+    setSelectedPosition(null);
+    setContextMenu(null);
+  };
+
+  const handleCreatePosition = async (xFrac, yFrac) => {
+    if (!placementMode || !selectedPlan || creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      await api.gloMaps.setPosition(placementMode.id, {
+        logical_name: selectedPlan.logical_name,
+        plan_id: selectedPlan.id,
+        page_index: pageIndex,
+        x_frac: xFrac,
+        y_frac: yFrac,
+      });
+      await refreshPositions(selectedPlan, pageIndex);
+      await refreshPlacedIds();
+    } catch (err) {
+      console.error("Erreur creation position:", err);
+    } finally {
+      creatingRef.current = false;
+      setPlacementMode(null);
+    }
+  };
+
+  const handleDeletePosition = async (position) => {
+    if (!position?.id) return;
+    try {
+      await api.gloMaps.deletePosition(position.id);
+      setSelectedPosition(null);
+      await refreshPositions(selectedPlan, pageIndex);
+      await refreshPlacedIds();
+    } catch (err) {
+      console.error("Erreur suppression position:", err);
+    }
+    setConfirmState({ open: false, position: null });
+    setContextMenu(null);
+  };
+
+  const handleContextMenu = (meta, coords) => {
+    setContextMenu({ ...meta, ...coords });
+  };
+
+  const filteredEquipments = useMemo(() => {
+    let list = equipments;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(eq =>
+        eq.name?.toLowerCase().includes(q) ||
+        eq.tag?.toLowerCase().includes(q) ||
+        eq.building?.toLowerCase().includes(q) ||
+        eq.category_name?.toLowerCase().includes(q)
+      );
+    }
+    if (filterMode === "placed") list = list.filter(eq => placedIds.has(eq.id));
+    else if (filterMode === "unplaced") list = list.filter(eq => !placedIds.has(eq.id));
+    return list;
+  }, [equipments, searchQuery, filterMode, placedIds]);
+
+  const currentPositions = getLatestPositions();
+  const currentPlacedHere = useMemo(() => new Set(currentPositions.map(p => p.equipment_id)), [currentPositions]);
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <style>{`
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slideUp { animation: slideUp .3s ease-out forwards; }
+        .glo-marker-selected { animation: pulse 1.5s infinite; }
+        .glo-marker-flash { animation: flash 0.5s ease-out 3; }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
+        @keyframes flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+      `}</style>
+
+      {/* Header */}
+      <div className="bg-white border-b shadow-sm">
+        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate('/app/glo')} className="p-2 hover:bg-gray-100 rounded-lg">
+              <ArrowLeft size={20} />
+            </button>
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-emerald-100 rounded-xl">
+                <MapPin size={20} className="text-emerald-600" />
+              </div>
+              <div>
+                <h1 className="font-bold text-gray-900">Carte GLO</h1>
+                <p className="text-xs text-gray-500">{selectedPlan?.display_name || "Selectionnez un plan"}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <select
+              className="px-3 py-2 border rounded-lg text-sm bg-white"
+              value={selectedPlan?.logical_name || ""}
+              onChange={(e) => {
+                const plan = plans.find(p => p.logical_name === e.target.value);
+                if (plan) handleSelectPlan(plan);
+              }}
+            >
+              {plans.length === 0 && <option value="">Aucun plan</option>}
+              {plans.map(p => <option key={p.logical_name} value={p.logical_name}>{p.display_name || p.logical_name}</option>)}
+            </select>
+
+            {numPages > 1 && (
+              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+                <button onClick={() => handleChangePage(-1)} disabled={pageIndex === 0} className="p-1.5 hover:bg-gray-200 rounded disabled:opacity-50">
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="text-sm px-2">{pageIndex + 1} / {numPages}</span>
+                <button onClick={() => handleChangePage(1)} disabled={pageIndex >= numPages - 1} className="p-1.5 hover:bg-gray-200 rounded disabled:opacity-50">
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+
+            <button onClick={() => zipInputRef.current?.click()} className="px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 flex items-center gap-2">
+              <Upload size={16} />
+              Importer
+            </button>
+            <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
+
+            {!isMobile && (
+              <button onClick={() => setShowSidebar(!showSidebar)} className="p-2 hover:bg-gray-100 rounded-lg">
+                {showSidebar ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar */}
+        {showSidebar && (
+          <div className="w-80 bg-white border-r flex flex-col">
+            <div className="p-3 border-b space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Input
+                  placeholder="Rechercher..."
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  className="pl-9"
+                />
+              </div>
+              <div className="flex gap-1">
+                {[
+                  { key: "all", label: "Tous" },
+                  { key: "placed", label: "Places" },
+                  { key: "unplaced", label: "Non places" },
+                ].map(f => (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilterMode(f.key)}
+                    className={`flex-1 py-1.5 px-2 text-xs rounded-lg transition ${
+                      filterMode === f.key ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {loadingEquipments ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : filteredEquipments.length === 0 ? (
+                <EmptyState icon={Zap} title="Aucun equipement" description="Ajoutez des equipements depuis la page principale" />
+              ) : (
+                filteredEquipments.map(eq => (
+                  <GloCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={currentPlacedHere.has(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !currentPlacedHere.has(eq.id)}
+                    isSelected={selectedEquipmentId === eq.id}
+                    onClick={() => {
+                      const pos = currentPositions.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        handleClickMarker(pos);
+                        viewerRef.current?.highlightMarker(eq.id);
+                      }
+                    }}
+                    onPlace={handlePlaceEquipment}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Map Area */}
+        <div className="flex-1 relative">
+          {!stableFileUrl ? (
+            <EmptyState
+              icon={MapPin}
+              title="Aucun plan selectionne"
+              description="Selectionnez un plan ou importez-en un nouveau"
+              action={
+                <button onClick={() => zipInputRef.current?.click()} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-600 flex items-center gap-2">
+                  <Upload size={16} />
+                  Importer un plan
+                </button>
+              }
+            />
+          ) : (
+            <GloLeafletViewer
+              ref={viewerRef}
+              fileUrl={stableFileUrl}
+              pageIndex={pageIndex}
+              initialPoints={initialPoints}
+              selectedId={selectedEquipmentId}
+              onReady={() => setPdfReady(true)}
+              onClickPoint={handleClickMarker}
+              onMovePoint={handleMoveMarker}
+              onCreatePoint={handleCreatePosition}
+              onContextMenu={handleContextMenu}
+              placementActive={!!placementMode}
+            />
+          )}
+
+          {placementMode && <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />}
+
+          {selectedPosition && !placementMode && (
+            <DetailPanel
+              position={selectedPosition}
+              equipment={selectedEquipment}
+              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); }}
+              onNavigate={(id) => navigate(`/app/glo?glo=${id}`)}
+              onDelete={(pos) => setConfirmState({ open: true, position: pos })}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onDelete={() => setConfirmState({ open: true, position: contextMenu })}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Confirm Modal */}
+      <ConfirmModal
+        open={confirmState.open}
+        title="Detacher du plan"
+        message="Voulez-vous detacher cet equipement du plan ?"
+        confirmText="Detacher"
+        onConfirm={() => handleDeletePosition(confirmState.position)}
+        onCancel={() => setConfirmState({ open: false, position: null })}
+        danger
+      />
+    </div>
+  );
+}

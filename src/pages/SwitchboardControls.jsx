@@ -87,6 +87,15 @@ const getEquipmentDisplay = (item) => {
       category: item.mobile_category || item.category || ''
     };
   }
+  if (item.glo_equipment_id) {
+    return {
+      name: item.glo_equipment_name || item.equipment_name || `Équip. GLO #${item.glo_equipment_id}`,
+      type: 'glo',
+      icon: '🔋',
+      link: `/app/glo?glo=${item.glo_equipment_id}`,
+      category: item.glo_category || item.category || ''
+    };
+  }
   if (item.device_id) {
     return {
       name: `Disj. ${item.device_position || item.device_id}`,
@@ -1298,6 +1307,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
                 t.target_type === 'meca' ? 'bg-orange-100 text-orange-700' :
                 t.target_type === 'mobile_equipment' ? 'bg-cyan-100 text-cyan-700' :
                 t.target_type === 'hv' ? 'bg-amber-100 text-amber-700' :
+                t.target_type === 'glo' ? 'bg-emerald-100 text-emerald-700' :
                 'bg-purple-100 text-purple-700'
               }`}>
                 {t.target_type === 'switchboard' ? '⚡ Tableau' :
@@ -1305,6 +1315,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
                  t.target_type === 'meca' ? '🔧 Mécanique' :
                  t.target_type === 'mobile_equipment' ? '🚜 Mobile' :
                  t.target_type === 'hv' ? '⚡ HT' :
+                 t.target_type === 'glo' ? '🔋 GLO' :
                  '🔌 Disjoncteur'}
               </span>
             </div>
@@ -1314,6 +1325,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
               t.target_type === 'meca' ? '🔧' :
               t.target_type === 'mobile_equipment' ? '🚜' :
               t.target_type === 'hv' ? '⚡' :
+              t.target_type === 'glo' ? '🔋' :
               '🔌'
             }</span>
           </div>
@@ -1429,6 +1441,7 @@ function TemplateModal({ template, onClose, onSave }) {
                 <option value="meca">🔧 Équip. Mécanique</option>
                 <option value="mobile_equipment">🚜 Équip. Mobile</option>
                 <option value="hv">⚡ Haute Tension (HT)</option>
+                <option value="glo">🔋 Équip. GLO</option>
               </select>
             </div>
             <div>
@@ -1541,11 +1554,12 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [mecaEquipments, setMecaEquipments] = useState([]);
   const [mobileEquipments, setMobileEquipments] = useState([]);
   const [hvEquipments, setHvEquipments] = useState([]);
+  const [gloEquipments, setGloEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
 
   // Load equipment when target type changes
   useEffect(() => {
-    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv') {
+    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo') {
       setLoadingEquipments(true);
       api.switchboardControls.listEquipment(targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType)
         .then(res => {
@@ -1553,6 +1567,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           else if (targetType === 'meca') setMecaEquipments(res.meca || []);
           else if (targetType === 'mobile_equipment') setMobileEquipments(res.mobile_equipment || []);
           else if (targetType === 'hv') setHvEquipments(res.hv || []);
+          else if (targetType === 'glo') setGloEquipments(res.glo || []);
         })
         .catch(e => console.warn('Load equipment error:', e))
         .finally(() => setLoadingEquipments(false));
@@ -1568,6 +1583,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     if (targetType === 'meca') return mecaEquipments;
     if (targetType === 'mobile_equipment') return mobileEquipments;
     if (targetType === 'hv') return hvEquipments;
+    if (targetType === 'glo') return gloEquipments;
     return [];
   };
 
@@ -1636,6 +1652,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           else if (targetType === 'meca') payload.meca_equipment_id = Number(ids[i]);
           else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID, not Number
           else if (targetType === 'hv') payload.hv_equipment_id = Number(ids[i]);
+          else if (targetType === 'glo') payload.glo_equipment_id = String(ids[i]); // UUID
 
           await onSave(payload, i === ids.length - 1); // Only reload on last item
           successCount++;
@@ -1685,6 +1702,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
               <option value="meca">🔧 Équip. Mécanique</option>
               <option value="mobile_equipment">🚜 Équip. Mobile</option>
               <option value="hv">⚡ Haute Tension (HT)</option>
+              <option value="glo">🔋 Équip. GLO</option>
             </select>
           </div>
 
@@ -1886,6 +1904,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
         vsd_equipment_id: schedule.vsd_equipment_id,
         meca_equipment_id: schedule.meca_equipment_id,
         mobile_equipment_id: schedule.mobile_equipment_id,
+        glo_equipment_id: schedule.glo_equipment_id,
         equipment_type: schedule.equipment_type,
         checklist_results: results,
         global_notes: globalNotes,

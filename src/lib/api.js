@@ -1559,6 +1559,181 @@ export const api = {
     },
   },
 
+  /** --- GLO (Global Electrical Equipments) --- */
+  glo: {
+    listEquipments: (params) => get("/api/glo/equipments", params),
+    getEquipment: (id) => get(`/api/glo/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post("/api/glo/equipments", payload),
+    updateEquipment: (id, payload) =>
+      put(`/api/glo/equipments/${encodeURIComponent(id)}`, payload),
+    deleteEquipment: (id) =>
+      del(`/api/glo/equipments/${encodeURIComponent(id)}`),
+
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/glo/equipments/${encodeURIComponent(id)}/photo?site=${currentSite()}`,
+        bust
+      ),
+
+    uploadPhoto: (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/glo/equipments/${encodeURIComponent(id)}/photo`, fd);
+    },
+
+    listFiles: (equipmentId) =>
+      get("/api/glo/files", { equipment_id: equipmentId }),
+
+    uploadFiles: (equipmentId, files = []) => {
+      const fd = new FormData();
+      fd.append("equipment_id", equipmentId);
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload("/api/glo/files", fd);
+    },
+
+    deleteFile: (fileId) =>
+      del(`/api/glo/files/${encodeURIComponent(fileId)}`),
+
+    // Categories
+    listCategories: () => get("/api/glo/categories"),
+    getCategory: (id) => get(`/api/glo/categories/${encodeURIComponent(id)}`),
+    createCategory: (payload) => post("/api/glo/categories", payload),
+    updateCategory: (id, payload) =>
+      put(`/api/glo/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) =>
+      del(`/api/glo/categories/${encodeURIComponent(id)}`),
+
+    // Subcategories
+    listSubcategories: (categoryId) =>
+      get("/api/glo/subcategories", categoryId ? { category_id: categoryId } : {}),
+    createSubcategory: (payload) => post("/api/glo/subcategories", payload),
+    updateSubcategory: (id, payload) =>
+      put(`/api/glo/subcategories/${encodeURIComponent(id)}`, payload),
+    deleteSubcategory: (id) =>
+      del(`/api/glo/subcategories/${encodeURIComponent(id)}`),
+  },
+
+  /** --- GLO MAPS --- */
+  gloMaps: {
+    uploadZip: (file) => {
+      const fd = new FormData();
+      fd.append("zip", file);
+      return upload(`/api/glo/maps/uploadZip`, fd);
+    },
+
+    listPlans: () => get(`/api/glo/maps/listPlans`),
+
+    renamePlan: (logical_name, display_name) =>
+      put(`/api/glo/maps/renamePlan`, { logical_name, display_name }),
+
+    planFileUrl: (logical_name, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/glo/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}&site=${currentSite()}`,
+        bust
+      ),
+
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/glo/maps/planFile?id=${encodeURIComponent(id)}&site=${currentSite()}`,
+        bust
+      ),
+
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const site = currentSite();
+      const key =
+        typeof plan === "string"
+          ? plan
+          : plan?.id || plan?.logical_name || "";
+
+      const url =
+        isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/glo/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
+          : `${API_BASE}/api/glo/maps/planFile?logical_name=${encodeURIComponent(
+              key
+            )}&site=${site}`;
+
+      return withBust(url, bust);
+    },
+
+    positions: (logical_name, page_index = 0) =>
+      get(`/api/glo/maps/positions`, { logical_name, page_index }),
+
+    positionsById: (id, page_index = 0) =>
+      get(`/api/glo/maps/positions`, { id, page_index }),
+
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : planOrKey?.id || planOrKey?.logical_name || "";
+
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/glo/maps/positions`, { id: key, page_index });
+
+      return get(`/api/glo/maps/positions`, {
+        logical_name: key,
+        page_index,
+      });
+    },
+
+    setPosition: (equipmentId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+      post(`/api/glo/maps/setPosition`, {
+        equipment_id: equipmentId,
+        logical_name,
+        plan_id,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
+    deletePosition: (positionId) =>
+      del(`/api/glo/maps/positions/${encodeURIComponent(positionId)}`),
+    placedIds: async () => {
+      // Try dedicated endpoint first, then fallback to building from plans
+      const tryDedicatedEndpoint = async () => {
+        try {
+          const res = await get("/api/glo/maps/placed-ids");
+          if (res?.placed_ids) return res;
+          throw new Error("Invalid response");
+        } catch {
+          return null;
+        }
+      };
+
+      const buildFromPlans = async () => {
+        const placed_ids = [];
+        const placed_details = {};
+        try {
+          const plansRes = await get("/api/glo/maps/listPlans").catch(() => null);
+          const plans = plansRes?.plans || plansRes || [];
+          for (const plan of plans) {
+            try {
+              const posRes = await get("/api/glo/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+              for (const pos of (posRes?.positions || [])) {
+                if (pos.equipment_id) {
+                  // Keep equipment_id as string (UUIDs)
+                  const eqId = String(pos.equipment_id);
+                  if (!placed_ids.includes(eqId)) {
+                    placed_ids.push(eqId);
+                    placed_details[eqId] = { plans: [plan.logical_name] };
+                  } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
+                    placed_details[eqId].plans.push(plan.logical_name);
+                  }
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+        return { placed_ids, placed_details };
+      };
+
+      const dedicated = await tryDedicatedEndpoint();
+      if (dedicated) return dedicated;
+      return buildFromPlans();
+    },
+  },
+
   /** --- DCF ASSISTANT --- */
   dcf: {
     health: () => get("/api/dcf/health"),
