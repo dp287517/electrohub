@@ -899,7 +899,8 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
     if (building !== undefined) { fields.push(`building=$${i++}`); values.push(building); }
     if (floor !== undefined) { fields.push(`floor=$${i++}`); values.push(floor); }
     if (location !== undefined) { fields.push(`location=$${i++}`); values.push(location); }
-    if (category_id !== undefined) { fields.push(`category_id=$${i++}`); values.push(category_id); }
+    // category_id is UUID - convert empty string to null
+    if (category_id !== undefined) { fields.push(`category_id=$${i++}`); values.push(category_id === '' ? null : category_id); }
     if (serial_number !== undefined) { fields.push(`serial_number=$${i++}`); values.push(serial_number); }
     if (brand !== undefined) { fields.push(`brand=$${i++}`); values.push(brand); }
     if (model !== undefined) { fields.push(`model=$${i++}`); values.push(model); }
@@ -920,7 +921,16 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
         values
       );
     }
-    res.json({ ok: true });
+
+    // Return updated equipment data (frontend expects it)
+    const { rows } = await pool.query(
+      `SELECT e.*, c.name as category_name, c.frequency as category_frequency
+       FROM me_equipments e
+       LEFT JOIN me_categories c ON c.id = e.category_id
+       WHERE e.id=$1`,
+      [req.params.id]
+    );
+    res.json({ ok: true, equipment: rows[0] });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
