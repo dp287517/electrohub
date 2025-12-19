@@ -303,66 +303,69 @@ const HvCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere,
 };
 
 // ─────────────────────────────────────────────────────────────────────
-// Detail Panel (Bottom sheet)
+// Detail Panel (Bottom sheet) - Mobile optimized
 // ─────────────────────────────────────────────────────────────────────
 const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-50 animate-slideUp">
-      <div className="bg-white rounded-t-3xl shadow-2xl border-t border-gray-200 max-h-[40vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-100 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center text-white">
-              <Zap size={24} />
+    <div className="absolute bottom-0 left-0 right-0 z-50 animate-slideUp safe-area-inset-bottom">
+      <div className="bg-white rounded-t-3xl shadow-2xl border-t border-gray-200 max-h-[50vh] sm:max-h-[40vh] overflow-y-auto">
+        {/* Drag handle for mobile */}
+        <div className="flex justify-center pt-2 pb-1">
+          <div className="w-10 h-1 bg-gray-300 rounded-full" />
+        </div>
+
+        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 pb-3 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center text-white flex-shrink-0">
+              <Zap size={22} />
             </div>
-            <div>
-              <h3 className="font-bold text-gray-900">{position?.name || equipment?.name || "Équipement HV"}</h3>
-              <p className="text-sm text-gray-500">
-                {equipment?.code || position?.code || "—"} • {equipment?.voltage_kv || "?"} kV
+            <div className="min-w-0">
+              <h3 className="font-bold text-gray-900 truncate">{position?.name || equipment?.name || "Équipement HV"}</h3>
+              <p className="text-sm text-gray-500 truncate">
+                {equipment?.code || position?.code || "—"} {equipment?.regime_neutral ? `• ${equipment.regime_neutral}` : ""}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl">
-            <X size={20} />
+          <button
+            onClick={onClose}
+            className="p-2.5 hover:bg-gray-100 rounded-xl flex-shrink-0 active:scale-95 transition-transform"
+            style={{ touchAction: 'manipulation' }}
+          >
+            <X size={22} />
           </button>
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Equipment info */}
+          {/* Equipment info - responsive grid */}
           {equipment && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-xs text-gray-500 uppercase">Localisation</span>
-                <p className="font-medium text-gray-900">
-                  {equipment.building_code || "—"} / {equipment.floor || "—"} / {equipment.room || "—"}
+                <span className="text-[10px] sm:text-xs text-gray-500 uppercase">Localisation</span>
+                <p className="font-medium text-gray-900 text-sm sm:text-base truncate">
+                  {equipment.building_code || "—"} / {equipment.floor || "—"}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-xs text-gray-500 uppercase">Régime</span>
-                <p className="font-medium text-gray-900">{equipment.regime_neutral || "—"}</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-xs text-gray-500 uppercase">Tension</span>
-                <p className="font-medium text-gray-900">{equipment.voltage_kv || "?"} kV</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-xs text-gray-500 uppercase">Icc</span>
-                <p className="font-medium text-gray-900">{equipment.short_circuit_ka || "?"} kA</p>
+                <span className="text-[10px] sm:text-xs text-gray-500 uppercase">Régime</span>
+                <p className="font-medium text-gray-900 text-sm sm:text-base">{equipment.regime_neutral || "—"}</p>
               </div>
             </div>
           )}
 
-          {/* Actions */}
+          {/* Actions - touch optimized */}
           <div className="flex gap-3">
             <button
               onClick={() => onNavigate(position?.equipment_id || equipment?.id)}
-              className="flex-1 py-3 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium flex items-center justify-center gap-2"
+              className="flex-1 py-3.5 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+              style={{ touchAction: 'manipulation' }}
             >
               <Eye size={18} />
               Voir détails
             </button>
             <button
               onClick={() => onDelete(position)}
-              className="py-3 px-4 bg-red-100 text-red-600 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-200"
+              className="py-3.5 px-4 bg-red-100 text-red-600 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-200 active:scale-95 transition-transform"
+              style={{ touchAction: 'manipulation' }}
             >
               <Trash2 size={18} />
             </button>
@@ -374,14 +377,14 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
 };
 
 // ─────────────────────────────────────────────────────────────────────
-// Placement Mode Indicator
+// Placement Mode Indicator - Mobile optimized
 // ─────────────────────────────────────────────────────────────────────
 const PlacementModeIndicator = ({ equipment, onCancel }) => (
-  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
-    <div className="flex items-center gap-3 px-4 py-3 bg-amber-600 text-white rounded-2xl shadow-xl">
-      <Crosshair size={20} className="animate-pulse" />
-      <div>
-        <p className="font-semibold">Mode placement actif</p>
+  <div className="absolute bottom-4 sm:bottom-6 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-slideUp">
+    <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 bg-amber-600 text-white rounded-2xl shadow-xl">
+      <Crosshair size={20} className="animate-pulse flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm sm:text-base">Mode placement</p>
         <p className="text-xs text-amber-200">Cliquez sur le plan pour placer "{equipment?.name}"</p>
       </div>
       <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
@@ -1135,6 +1138,14 @@ export default function HighVoltageMap() {
           from { opacity: 0; transform: scale(0.95); }
           to { opacity: 1; transform: scale(1); }
         }
+        @keyframes slideRight {
+          from { opacity: 0; transform: translateX(-100%); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
         @keyframes flash-marker {
           0%, 100% {
             transform: scale(1);
@@ -1165,6 +1176,8 @@ export default function HighVoltageMap() {
         }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
         .animate-scaleIn { animation: scaleIn .3s ease-out forwards; }
+        .animate-slideRight { animation: slideRight .25s ease-out forwards; }
+        .animate-fadeIn { animation: fadeIn .2s ease-out forwards; }
         .hv-marker-flash > div {
           animation: flash-marker 2s ease-in-out;
         }
@@ -1172,55 +1185,71 @@ export default function HighVoltageMap() {
           animation: pulse-selected 1.5s ease-in-out infinite;
         }
         .hv-marker-inline { background: transparent !important; border: none !important; }
+
+        /* Mobile safe area support */
+        .safe-area-inset-top { padding-top: env(safe-area-inset-top, 0); }
+        .safe-area-inset-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
+
+        /* Smooth scrolling for equipment list */
+        .overscroll-contain { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
       `}</style>
 
       {/* Header */}
       <div className="bg-white border-b shadow-sm z-20">
-        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/app/hv')} className="p-2 hover:bg-gray-100 rounded-lg">
+        <div className="px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button onClick={() => navigate('/app/hv')} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
               <ArrowLeft size={20} />
             </button>
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-amber-100 rounded-xl">
-                <MapPin size={20} className="text-amber-600" />
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="p-1.5 sm:p-2 bg-amber-100 rounded-lg sm:rounded-xl flex-shrink-0">
+                <MapPin size={18} className="sm:w-5 sm:h-5 text-amber-600" />
               </div>
-              <div>
-                <h1 className="font-bold text-gray-900">Plans HV</h1>
-                <p className="text-xs text-gray-500">Localisation des équipements haute tension</p>
+              <div className="min-w-0">
+                <h1 className="font-bold text-gray-900 text-sm sm:text-base truncate">Plans HV</h1>
+                <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">Localisation des équipements haute tension</p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {/* Stats - hidden on mobile, compact on tablet */}
+            <div className="hidden md:flex items-center gap-1 text-xs">
               <Badge variant="default">Total: {stats.total}</Badge>
               <Badge variant="success">Localisés: {stats.placed}</Badge>
               <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
             </div>
 
+            {/* Compact stats badge on tablet */}
+            <div className="hidden sm:flex md:hidden">
+              <Badge variant="default" className="text-[10px]">{stats.placed}/{stats.total}</Badge>
+            </div>
+
+            {/* Import button - icon only on mobile */}
             <button
               onClick={() => zipInputRef.current?.click()}
-              className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
+              className="p-2 sm:px-3 sm:py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
+              title="Importer un ZIP"
             >
               <Upload size={16} />
-              Import ZIP
+              <span className="hidden sm:inline">Import</span>
             </button>
             <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
 
+            {/* Toggle sidebar - desktop only */}
             {!isMobile && (
               <button
                 onClick={() => setShowSidebar(!showSidebar)}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
+                className="hidden sm:flex px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 items-center gap-2"
               >
-                {showSidebar ? "Masquer la liste" : "Afficher la liste"}
+                {showSidebar ? "Masquer" : "Afficher"}
               </button>
             )}
           </div>
         </div>
 
-        {/* Plan selector */}
-        <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+        {/* Plan selector - optimized for mobile */}
+        <div className="px-3 sm:px-4 pb-2 sm:pb-3 flex items-center gap-2">
           <select
             value={selectedPlan?.logical_name || ""}
             onChange={async (e) => {
@@ -1233,7 +1262,7 @@ export default function HighVoltageMap() {
                 setInitialPoints(positions || []);
               }
             }}
-            className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg text-sm bg-white"
+            className="flex-1 min-w-0 px-3 py-2.5 border rounded-xl text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-transparent"
           >
             {plans.length === 0 && <option value="">Aucun plan disponible</option>}
             {plans.map(p => (
@@ -1244,12 +1273,12 @@ export default function HighVoltageMap() {
           </select>
 
           {numPages > 1 && (
-            <div className="flex items-center gap-1">
-              <Btn variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(i => i - 1)}>
+            <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+              <Btn variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(i => i - 1)} className="p-2">
                 <ChevronLeft size={16} />
               </Btn>
-              <span className="text-sm text-gray-600">Page {pageIndex + 1}/{numPages}</span>
-              <Btn variant="ghost" disabled={pageIndex >= numPages - 1} onClick={() => setPageIndex(i => i + 1)}>
+              <span className="text-xs sm:text-sm text-gray-600 min-w-[3rem] text-center">{pageIndex + 1}/{numPages}</span>
+              <Btn variant="ghost" disabled={pageIndex >= numPages - 1} onClick={() => setPageIndex(i => i + 1)} className="p-2">
                 <ChevronRight size={16} />
               </Btn>
             </div>
@@ -1403,16 +1432,20 @@ export default function HighVoltageMap() {
             <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />
           )}
 
-          {/* Create mode indicator */}
+          {/* Create mode indicator - Mobile optimized */}
           {createMode && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
-              <div className="flex items-center gap-3 px-4 py-3 bg-blue-600 text-white rounded-2xl shadow-xl">
-                <Crosshair size={20} className="animate-pulse" />
-                <div>
-                  <p className="font-semibold">Mode création actif</p>
-                  <p className="text-xs text-blue-200">Cliquez sur le plan pour créer un nouvel équipement HV</p>
+            <div className="absolute bottom-4 sm:bottom-6 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-slideUp">
+              <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 bg-blue-600 text-white rounded-2xl shadow-xl">
+                <Crosshair size={20} className="animate-pulse flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm sm:text-base">Mode création</p>
+                  <p className="text-xs text-blue-200 truncate">Touchez le plan pour créer un équipement</p>
                 </div>
-                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                <button
+                  onClick={() => setCreateMode(false)}
+                  className="p-2.5 hover:bg-white/20 rounded-lg transition-colors active:scale-95"
+                  style={{ touchAction: 'manipulation' }}
+                >
                   <X size={18} />
                 </button>
               </div>
@@ -1442,57 +1475,95 @@ export default function HighVoltageMap() {
         </div>
       </div>
 
-      {/* Mobile sidebar button */}
+      {/* Mobile FAB - Equipment list toggle */}
       {isMobile && (
         <button
           onClick={() => setShowSidebar(!showSidebar)}
-          className="fixed bottom-4 right-4 z-30 w-14 h-14 bg-amber-600 text-white rounded-full shadow-xl flex items-center justify-center"
+          className="fixed bottom-20 right-4 z-30 w-14 h-14 bg-gradient-to-br from-amber-500 to-orange-600 text-white rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+          style={{ touchAction: 'manipulation' }}
         >
           <Zap size={24} />
+          {stats.unplaced > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-[10px] font-bold flex items-center justify-center">
+              {stats.unplaced > 9 ? '9+' : stats.unplaced}
+            </span>
+          )}
         </button>
       )}
 
-      {/* Mobile sidebar drawer */}
+      {/* Mobile sidebar drawer with animation */}
       {isMobile && showSidebar && (
-        <div className="fixed inset-0 z-40">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSidebar(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl flex flex-col">
-            <div className="p-4 border-b bg-gradient-to-r from-amber-500 to-orange-600 text-white flex items-center justify-between">
-              <h2 className="font-bold">Équipements HV</h2>
-              <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-white/20 rounded-lg">
-                <X size={20} />
+        <div className="fixed inset-0 z-40 animate-fadeIn">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowSidebar(false)} />
+          <div className="absolute left-0 top-0 bottom-0 w-[85vw] max-w-[360px] bg-white shadow-2xl flex flex-col animate-slideRight">
+            {/* Header with gradient */}
+            <div className="p-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white flex items-center justify-between safe-area-inset-top">
+              <div className="flex items-center gap-3">
+                <Zap size={20} />
+                <div>
+                  <h2 className="font-bold">Équipements HV</h2>
+                  <p className="text-xs text-amber-100">{stats.placed}/{stats.total} localisés</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSidebar(false)}
+                className="p-2.5 hover:bg-white/20 rounded-xl active:scale-95 transition-transform"
+                style={{ touchAction: 'manipulation' }}
+              >
+                <X size={22} />
               </button>
             </div>
+
             {/* Search and filters */}
-            <div className="p-3 border-b space-y-2">
+            <div className="p-3 border-b space-y-3 bg-gray-50">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <Input
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
                   value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="Rechercher..."
-                  className="pl-9"
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Rechercher un équipement..."
+                  className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl bg-white text-sm focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                 />
               </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
-                </Btn>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setFilterMode("all")}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                    filterMode === "all"
+                      ? "bg-amber-500 text-white"
+                      : "bg-white text-gray-600 border border-gray-200"
+                  }`}
+                >
+                  Tous ({stats.total})
+                </button>
+                <button
+                  onClick={() => setFilterMode("unplaced")}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                    filterMode === "unplaced"
+                      ? "bg-amber-500 text-white"
+                      : "bg-white text-gray-600 border border-gray-200"
+                  }`}
+                >
+                  À placer ({stats.unplaced})
+                </button>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+
+            {/* Equipment list */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
               {loadingEquipments ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw size={28} className="animate-spin text-amber-500" />
                 </div>
               ) : filteredEquipments.length === 0 ? (
-                <EmptyState icon={Zap} title="Aucun équipement" description="Créez des équipements HV pour les placer sur le plan" />
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
+                    <Zap size={32} className="text-gray-400" />
+                  </div>
+                  <p className="font-medium text-gray-900">Aucun équipement</p>
+                  <p className="text-sm text-gray-500 mt-1">Créez des équipements HV pour les placer</p>
+                </div>
               ) : (
                 filteredEquipments.map(eq => (
                   <HvCard
