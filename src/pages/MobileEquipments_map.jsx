@@ -741,6 +741,11 @@ export default function MobileEquipmentsMap() {
       if (eq) {
         setSelectedEquipment(eq);
         setSelectedPosition(position);
+
+        // Fly to the equipment position after a short delay to let the map render
+        setTimeout(() => {
+          viewerRef.current?.flyTo(position.x_frac, position.y_frac, 2);
+        }, 500);
       }
     } else {
       // Equipment not placed yet - just find it in equipments list
@@ -808,19 +813,24 @@ export default function MobileEquipmentsMap() {
     try {
       // Create equipment with auto-generated name
       const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-      const created = await api.mobileEquipment.create({ name: `Nouvel équipement ${timestamp}`, status: "a_faire" });
+      const created = await api.mobileEquipment.create({ name: `Nouvel équipement ${timestamp}` });
       const newEquipment = created?.equipment || created;
       const id = newEquipment?.id;
-      if (!id) throw new Error("Échec création équipement mobile");
+      if (!id) throw new Error("ID non retourné par le serveur");
 
       // Set position on the plan
-      await api.mobileEquipment.maps.setPosition(id, {
-        plan_id: selectedPlan.id,
-        logical_name: selectedPlan.logical_name,
-        page_index: pageIndex,
-        x_frac: x,
-        y_frac: y,
-      });
+      try {
+        await api.mobileEquipment.maps.setPosition(id, {
+          plan_id: selectedPlan.id,
+          logical_name: selectedPlan.logical_name,
+          page_index: pageIndex,
+          x_frac: x,
+          y_frac: y,
+        });
+      } catch (posErr) {
+        console.warn("[MobileEquipmentsMap] Position error (equipment created):", posErr);
+        // Equipment was created but position failed - still show it
+      }
 
       // Add the new position immediately to show the marker
       const newPosition = {
@@ -833,7 +843,7 @@ export default function MobileEquipmentsMap() {
       };
       setPositions(prev => [...prev, newPosition]);
 
-      // Reload data in background
+      // Reload data in background (don't await to make it faster)
       loadEquipments();
       loadAllPositions();
 
@@ -843,6 +853,9 @@ export default function MobileEquipmentsMap() {
     } catch (err) {
       console.error("[MobileEquipmentsMap] Create equipment error:", err);
       alert("Erreur lors de la création de l'équipement mobile");
+      // Reload to check if it was actually created
+      loadEquipments();
+      loadAllPositions();
     } finally {
       creatingRef.current = false;
       setCreateMode(false);
@@ -851,6 +864,11 @@ export default function MobileEquipmentsMap() {
 
   const handleMovePosition = useCallback(async (equipmentId, x, y) => {
     if (!selectedPlan) return;
+
+    // Immediately update local state for responsive UI
+    setPositions(prev => prev.map(p =>
+      p.equipment_id === equipmentId ? { ...p, x_frac: x, y_frac: y } : p
+    ));
 
     try {
       await api.mobileEquipment.maps.setPosition(equipmentId, {
@@ -862,6 +880,9 @@ export default function MobileEquipmentsMap() {
       });
     } catch (e) {
       console.error("[MobileEquipmentsMap] Move position error:", e);
+      // Reload positions on error to restore correct state
+      const res = await api.mobileEquipment.maps.positionsAuto(selectedPlan, pageIndex);
+      setPositions(res.positions || []);
     }
   }, [selectedPlan, pageIndex]);
 
