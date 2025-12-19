@@ -257,58 +257,54 @@ const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedEls
 const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
   if (!position) return null;
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
-      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-4 text-white">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-white/20 rounded-lg">
-              <Zap size={20} />
+    <AnimatedCard className="absolute bottom-2 left-2 right-2 md:bottom-4 md:left-auto md:right-4 md:w-80 bg-white rounded-xl md:rounded-2xl shadow-2xl border overflow-hidden z-30">
+      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-3 md:p-4 text-white">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <div className="p-1.5 md:p-2 bg-white/20 rounded-lg flex-shrink-0">
+              <Zap size={18} />
             </div>
-            <div>
-              <h3 className="font-bold">{position.name || equipment?.name || "Equipement"}</h3>
-              <p className="text-cyan-100 text-sm">{equipment?.category || "-"}</p>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-bold text-sm md:text-base truncate">{position.name || equipment?.name || "Équipement"}</h3>
+              <p className="text-cyan-100 text-xs md:text-sm truncate">{equipment?.category || "-"}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
+          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
             <X size={18} />
           </button>
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Batiment</span>
-            <span className="font-semibold text-gray-900">{position.building || equipment?.building || "-"}</span>
+      <div className="p-3 md:p-4 space-y-2 md:space-y-3">
+        <div className="grid grid-cols-3 gap-1.5 md:gap-2 text-sm">
+          <div className="bg-gray-50 rounded-lg p-1.5 md:p-2 text-center">
+            <span className="text-gray-500 text-[10px] md:text-xs block">Bâtiment</span>
+            <span className="font-semibold text-gray-900 text-xs md:text-sm truncate block">{position.building || equipment?.building || "-"}</span>
           </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Etage</span>
-            <span className="font-semibold text-gray-900">{equipment?.floor || "-"}</span>
+          <div className="bg-gray-50 rounded-lg p-1.5 md:p-2 text-center">
+            <span className="text-gray-500 text-[10px] md:text-xs block">Étage</span>
+            <span className="font-semibold text-gray-900 text-xs md:text-sm">{equipment?.floor || "-"}</span>
           </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">N/S</span>
-            <span className="font-semibold text-gray-900 text-xs">{equipment?.serial_number || "-"}</span>
+          <div className="bg-gray-50 rounded-lg p-1.5 md:p-2 text-center">
+            <span className="text-gray-500 text-[10px] md:text-xs block">N/S</span>
+            <span className="font-semibold text-gray-900 text-[10px] md:text-xs truncate block">{equipment?.serial_number || "-"}</span>
           </div>
         </div>
 
-        <div className="text-xs text-gray-400 flex items-center gap-2">
-          <MapPin size={12} />
-          Position: {(position.x_frac * 100).toFixed(1)}%, {(position.y_frac * 100).toFixed(1)}%
-        </div>
-
-        <div className="flex gap-2 pt-2">
+        <div className="flex gap-2 pt-1 md:pt-2">
           <button
             onClick={() => onNavigate(position.equipment_id)}
-            className="flex-1 py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl font-medium hover:from-cyan-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2"
+            className="flex-1 py-2 md:py-2.5 px-3 md:px-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl font-medium hover:from-cyan-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2 text-sm"
           >
             <ExternalLink size={16} />
-            Ouvrir la fiche
+            <span className="hidden sm:inline">Ouvrir la fiche</span>
+            <span className="sm:hidden">Fiche</span>
           </button>
 
           <button
             onClick={() => onDelete?.(position)}
-            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
-            title="Detacher du plan"
+            className="py-2 md:py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
+            title="Détacher du plan"
           >
             <Trash2 size={16} />
           </button>
@@ -320,18 +316,18 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
 
 /* ----------------------------- Placement Mode Indicator ----------------------------- */
 const PlacementModeIndicator = ({ equipment, onCancel }) => (
-  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30">
-    <div className="bg-cyan-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
-      <div className="p-2 bg-white/20 rounded-lg">
-        <Crosshair size={20} className="animate-pulse" />
+  <div className="absolute top-2 md:top-4 left-2 right-2 md:left-1/2 md:right-auto md:transform md:-translate-x-1/2 z-30">
+    <div className="bg-cyan-600 text-white px-3 md:px-4 py-2 md:py-3 rounded-xl md:rounded-2xl shadow-xl flex items-center gap-2 md:gap-3 animate-slideUp">
+      <div className="p-1.5 md:p-2 bg-white/20 rounded-lg flex-shrink-0">
+        <Crosshair size={18} className="animate-pulse" />
       </div>
-      <div>
-        <p className="font-semibold">Mode placement actif</p>
-        <p className="text-cyan-200 text-sm">
-          Cliquez sur le plan pour placer <span className="font-semibold">{equipment.name || "l'equipement"}</span>
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm md:text-base">Mode placement</p>
+        <p className="text-cyan-200 text-xs md:text-sm truncate">
+          Touchez pour placer <span className="font-semibold">{equipment.name || "l'équipement"}</span>
         </p>
       </div>
-      <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+      <button onClick={onCancel} className="p-1.5 md:p-2 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
         <X size={18} />
       </button>
     </div>
@@ -593,11 +589,26 @@ export default function MobileEquipmentsMap() {
 
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // Start closed on mobile
   const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   const viewerRef = useRef(null);
   const creatingRef = useRef(false);
+
+  // Handle resize for mobile detection
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      // Auto-close sidebar on mobile
+      if (mobile && sidebarOpen) {
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [sidebarOpen]);
 
   // Derived
   const placedIds = useMemo(() => new Set(allPositions.map(p => p.equipment_id)), [allPositions]);
@@ -894,29 +905,41 @@ export default function MobileEquipmentsMap() {
   }
 
   return (
-    <div className="h-[calc(100vh-120px)] flex flex-col bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b px-4 py-3 flex items-center justify-between gap-4 flex-shrink-0">
-        <div className="flex items-center gap-3">
+    <div className="h-[100dvh] md:h-[calc(100vh-120px)] flex flex-col bg-gray-50">
+      {/* Inline styles for animations and safe areas */}
+      <style>{`
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
+        .safe-area-top { padding-top: env(safe-area-inset-top, 0); }
+        .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
+        .overscroll-contain { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+      `}</style>
+      {/* Header - Mobile optimized */}
+      <div className="bg-white border-b px-3 md:px-4 py-2 md:py-3 flex items-center justify-between gap-2 md:gap-4 flex-shrink-0 safe-area-top">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
           <button
             onClick={() => navigate("/app/mobile-equipments")}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
           >
             <ArrowLeft size={20} />
           </button>
-          <div>
-            <h1 className="font-bold text-gray-900 flex items-center gap-2">
-              <Zap size={20} className="text-cyan-500" />
-              Carte des Equipements Mobiles
+          <div className="min-w-0">
+            <h1 className="font-bold text-gray-900 flex items-center gap-2 text-sm md:text-base truncate">
+              <Zap size={18} className="text-cyan-500 flex-shrink-0" />
+              <span className="hidden sm:inline">Carte des Equipements Mobiles</span>
+              <span className="sm:hidden">Carte</span>
             </h1>
             <p className="text-xs text-gray-500">
-              {equipments.length} equipements • {placedIds.size} places
+              {placedIds.size}/{equipments.length} placés
             </p>
           </div>
         </div>
 
-        {/* Plan selector */}
-        <div className="flex items-center gap-2">
+        {/* Plan selector - Compact on mobile */}
+        <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
           <select
             value={selectedPlan?.logical_name || selectedPlan?.id || ""}
             onChange={(e) => {
@@ -924,7 +947,7 @@ export default function MobileEquipmentsMap() {
               setSelectedPlan(plan);
               setPageIndex(0);
             }}
-            className="border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+            className="border rounded-lg px-2 md:px-3 py-1.5 md:py-2 text-xs md:text-sm bg-white text-gray-900 max-w-[100px] md:max-w-none"
           >
             {plans.map((p) => (
               <option key={p.id} value={p.logical_name || p.id}>
@@ -934,30 +957,31 @@ export default function MobileEquipmentsMap() {
           </select>
 
           {pageCount > 1 && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5 md:gap-1">
               <button
                 onClick={() => setPageIndex(Math.max(0, pageIndex - 1))}
                 disabled={pageIndex === 0}
-                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                className="p-1.5 md:p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"
               >
                 <ChevronLeft size={16} />
               </button>
-              <span className="text-sm text-gray-600">
-                {pageIndex + 1} / {pageCount}
+              <span className="text-xs md:text-sm text-gray-600 min-w-[32px] text-center">
+                {pageIndex + 1}/{pageCount}
               </span>
               <button
                 onClick={() => setPageIndex(Math.min(pageCount - 1, pageIndex + 1))}
                 disabled={pageIndex >= pageCount - 1}
-                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                className="p-1.5 md:p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"
               >
                 <ChevronRight size={16} />
               </button>
             </div>
           )}
 
-<button
+          {/* Sidebar toggle - hidden on mobile, shown as FAB instead */}
+          <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className={`p-2 rounded-lg transition-colors ${sidebarOpen ? "bg-cyan-100 text-cyan-700" : "hover:bg-gray-100"}`}
+            className={`hidden md:flex p-2 rounded-lg transition-colors ${sidebarOpen ? "bg-cyan-100 text-cyan-700" : "hover:bg-gray-100"}`}
           >
             <Cpu size={20} />
           </button>
@@ -1023,16 +1047,16 @@ export default function MobileEquipmentsMap() {
             />
           )}
 
-          {/* Create mode indicator */}
+          {/* Create mode indicator - Mobile optimized */}
           {createMode && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-slideUp">
-              <div className="flex items-center gap-3 px-4 py-3 bg-cyan-600 text-white rounded-2xl shadow-xl">
-                <Crosshair size={20} className="animate-pulse" />
-                <div>
-                  <p className="font-semibold">Mode création actif</p>
-                  <p className="text-xs text-cyan-200">Cliquez sur le plan pour créer un nouvel équipement mobile</p>
+            <div className="absolute bottom-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 z-50 animate-slideUp">
+              <div className="flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-3 bg-cyan-600 text-white rounded-xl md:rounded-2xl shadow-xl">
+                <Crosshair size={18} className="animate-pulse flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm md:text-base">Mode création</p>
+                  <p className="text-xs text-cyan-200 truncate">Touchez le plan pour créer</p>
                 </div>
-                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+                <button onClick={() => setCreateMode(false)} className="p-1.5 md:p-2 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
                   <X size={18} />
                 </button>
               </div>
@@ -1051,8 +1075,8 @@ export default function MobileEquipmentsMap() {
           )}
         </div>
 
-        {/* Sidebar */}
-        {sidebarOpen && (
+        {/* Desktop Sidebar */}
+        {sidebarOpen && !isMobile && (
           <div className="w-80 bg-white border-l flex flex-col flex-shrink-0">
             <div className="p-3 border-b space-y-2">
               <div className="relative">
@@ -1102,11 +1126,120 @@ export default function MobileEquipmentsMap() {
             </div>
 
             <div className="p-3 border-t bg-gray-50 text-xs text-gray-500 text-center">
-              {placedIds.size} / {equipments.length} equipements places
+              {placedIds.size} / {equipments.length} équipements placés
             </div>
           </div>
         )}
       </div>
+
+      {/* Mobile FAB - List toggle */}
+      {isMobile && !sidebarOpen && !placementMode && !createMode && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="fixed bottom-6 right-4 z-40 w-14 h-14 bg-gradient-to-br from-cyan-500 to-teal-600 text-white rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+          style={{ touchAction: 'manipulation' }}
+        >
+          <Cpu size={24} />
+          {equipments.filter(e => !placedIds.has(e.id)).length > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+              {equipments.filter(e => !placedIds.has(e.id)).length}
+            </span>
+          )}
+        </button>
+      )}
+
+      {/* Mobile Drawer */}
+      {isMobile && sidebarOpen && (
+        <div className="fixed inset-0 z-50">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setSidebarOpen(false)}
+          />
+
+          {/* Drawer from bottom */}
+          <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl max-h-[80vh] flex flex-col animate-slideUp safe-area-bottom">
+            {/* Handle */}
+            <div className="flex justify-center pt-3 pb-2">
+              <div className="w-10 h-1 bg-gray-300 rounded-full" />
+            </div>
+
+            {/* Header */}
+            <div className="px-4 pb-3 flex items-center justify-between border-b">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                <Cpu size={20} className="text-cyan-500" />
+                Équipements ({equipments.length})
+              </h3>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Search & Filters */}
+            <div className="p-3 space-y-2 border-b">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm bg-white text-gray-900"
+                />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("all")}>
+                  Tous ({equipments.length})
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("unplaced")}>
+                  Non placés ({equipments.filter(e => !placedIds.has(e.id)).length})
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("placed")}>
+                  Placés ({placedIds.size})
+                </Btn>
+              </div>
+            </div>
+
+            {/* Equipment List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
+              {filteredEquipments.length === 0 ? (
+                <EmptyState
+                  icon={Cpu}
+                  title="Aucun équipement"
+                  description="Créez des équipements mobiles pour les voir ici"
+                />
+              ) : (
+                filteredEquipments.map((eq) => (
+                  <EquipmentCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={placedHereIds.has(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
+                    isSelected={selectedEquipment?.id === eq.id}
+                    onClick={() => {
+                      handleSelectEquipment(eq);
+                      setSidebarOpen(false);
+                    }}
+                    onPlace={(e) => {
+                      handleStartPlacement(e);
+                      setSidebarOpen(false);
+                    }}
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Footer stats */}
+            <div className="p-3 border-t bg-gray-50 text-xs text-gray-500 text-center">
+              {placedIds.size} / {equipments.length} équipements placés
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Context menu */}
       {contextMenu && (
@@ -1121,8 +1254,8 @@ export default function MobileEquipmentsMap() {
       {/* Confirm delete modal */}
       <ConfirmModal
         open={!!confirmDelete}
-        title="Detacher l'equipement"
-        message={`Voulez-vous detacher "${confirmDelete?.name || "cet equipement"}" du plan ?`}
+        title="Détacher l'équipement"
+        message={`Voulez-vous détacher "${confirmDelete?.name || "cet équipement"}" du plan ?`}
         danger
         onConfirm={() => handleDeletePosition(confirmDelete)}
         onCancel={() => setConfirmDelete(null)}
