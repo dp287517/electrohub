@@ -796,7 +796,8 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
 
   const loadPositions = useCallback(async (plan, pageIdx = 0) => {
     if (!plan) return [];
-    const key = plan.id || plan.logical_name || "";
+    // Always use logical_name for positions lookup (positions are stored by logical_name, not by UUID)
+    const key = plan.logical_name || plan.id || "";
     try {
       const r = await api.hvMaps.positions(key, pageIdx).catch(() => ({}));
       const list = Array.isArray(r?.positions)
