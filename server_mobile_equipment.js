@@ -905,11 +905,21 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
     if (model !== undefined) { fields.push(`model=$${i++}`); values.push(model); }
     if (power_rating !== undefined) { fields.push(`power_rating=$${i++}`); values.push(power_rating); }
     if (frequency !== undefined) { fields.push(`frequency=$${i++}`); values.push(frequency); }
-    values.push(req.params.id);
-    await pool.query(
-      `UPDATE me_equipments SET ${fields.join(", ")}, updated_at=now() WHERE id=$${i}`,
-      values
-    );
+
+    // Handle case where no fields are provided - just update timestamp
+    if (fields.length === 0) {
+      values.push(req.params.id);
+      await pool.query(
+        `UPDATE me_equipments SET updated_at=now() WHERE id=$1`,
+        values
+      );
+    } else {
+      values.push(req.params.id);
+      await pool.query(
+        `UPDATE me_equipments SET ${fields.join(", ")}, updated_at=now() WHERE id=$${i}`,
+        values
+      );
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
