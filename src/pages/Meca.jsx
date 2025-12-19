@@ -2051,7 +2051,8 @@ export default function Meca() {
       const planKey = details.plans[0];
       navigate(`/app/meca/map?meca=${eqId}&plan=${encodeURIComponent(planKey)}`);
     } else {
-      navigate('/app/meca/map');
+      // Pass equipment ID so user can position it on map
+      navigate(`/app/meca/map?meca=${eqId}`);
     }
   };
 

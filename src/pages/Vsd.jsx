@@ -1449,7 +1449,8 @@ export default function Vsd() {
       const planKey = details.plans[0];
       navigate(`/app/vsd/map?vsd=${eqId}&plan=${encodeURIComponent(planKey)}`);
     } else {
-      navigate('/app/vsd/map');
+      // Pass equipment ID so user can position it on map
+      navigate(`/app/vsd/map?vsd=${eqId}`);
     }
   };
 

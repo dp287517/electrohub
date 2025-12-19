@@ -1722,21 +1722,14 @@ export default function MobileEquipments() {
 
           {/* Stats - Desktop */}
           <div className="hidden md:flex items-center gap-2">
-            <Badge variant="default">{stats.total} total</Badge>
-            <Badge variant="success">{stats.aFaire} a faire</Badge>
-            <Badge variant="warning" className="blink-orange">{stats.enCours} sous 30j</Badge>
-            <Badge variant="danger" className="blink-red">{stats.enRetard} en retard</Badge>
+            <Badge variant="default">{stats.total} equipements</Badge>
+            <Badge variant="success">{stats.placed} localises</Badge>
           </div>
 
           {/* Stats - Mobile (condensed) */}
           <div className="flex md:hidden items-center gap-1.5">
             <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium">{stats.total}</span>
-            {stats.enRetard > 0 && (
-              <span className="px-2 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium blink-red">{stats.enRetard} !</span>
-            )}
-            {stats.enCours > 0 && (
-              <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-medium blink-orange">{stats.enCours}</span>
-            )}
+            <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium">{stats.placed} loc.</span>
           </div>
 
           {/* Actions */}

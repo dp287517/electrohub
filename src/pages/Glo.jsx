@@ -1753,7 +1753,8 @@ export default function Glo() {
     if (details?.plans?.length > 0) {
       navigate(`/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(details.plans[0])}`);
     } else {
-      navigate('/app/glo/map');
+      // Pass equipment ID so user can position it on map
+      navigate(`/app/glo/map?glo=${eqId}`);
     }
   };
 
