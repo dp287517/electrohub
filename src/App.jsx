@@ -18,6 +18,7 @@ import Obsolescence from './pages/Obsolescence.jsx';
 import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
 import SwitchboardControls from './pages/SwitchboardControls.jsx';
+import SwitchboardControlsMap from './pages/SwitchboardControls_map.jsx';
 import Oibt from './pages/Oibt.jsx';
 import Project from './pages/Project.jsx';
 import Comp from './pages/Comp.jsx';
@@ -92,6 +93,7 @@ export default function App() {
           <Route path="/app/hv/map" element={<ProtectedRoute><HighVoltageMap /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
           <Route path="/app/switchboard-controls" element={<ProtectedRoute><SwitchboardControls /></ProtectedRoute>} />
+          <Route path="/app/switchboard-controls/map" element={<ProtectedRoute><SwitchboardControlsMap /></ProtectedRoute>} />
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
           <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
