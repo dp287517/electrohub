@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
+import { Zap, Cpu, Wrench, Truck, Battery, Grid3X3, Package } from "lucide-react";
 
 // ============================================================
 // ANIMATIONS CSS
@@ -49,75 +50,94 @@ if (typeof document !== 'undefined' && !document.getElementById('control-styles'
 // ============================================================
 // HELPER: Get equipment display name and link
 // ============================================================
+const EQUIPMENT_ICONS = {
+  meca: { Icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-100' },
+  vsd: { Icon: Cpu, color: 'text-emerald-500', bg: 'bg-emerald-100' },
+  hv: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },
+  mobile: { Icon: Cpu, color: 'text-cyan-500', bg: 'bg-cyan-100' },
+  glo: { Icon: Battery, color: 'text-emerald-500', bg: 'bg-emerald-100' },
+  device: { Icon: Grid3X3, color: 'text-gray-500', bg: 'bg-gray-100' },
+  switchboard: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },
+  unknown: { Icon: Package, color: 'text-gray-500', bg: 'bg-gray-100' },
+};
+
 const getEquipmentDisplay = (item) => {
   // Determine equipment type and name
   if (item.meca_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.meca;
     return {
       name: item.meca_equipment_name || item.equipment_name || `Équip. méca #${item.meca_equipment_id}`,
       type: 'meca',
-      icon: '⚙️',
+      icon: <Icon size={16} className={color} />,
       link: `/app/meca?meca=${item.meca_equipment_id}`,
       category: item.meca_category || item.category || ''
     };
   }
   if (item.vsd_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.vsd;
     return {
       name: item.vsd_equipment_name || item.equipment_name || `Variateur #${item.vsd_equipment_id}`,
       type: 'vsd',
-      icon: '🔌',
+      icon: <Icon size={16} className={color} />,
       link: `/app/vsd?vsd=${item.vsd_equipment_id}`,
       category: ''
     };
   }
   if (item.hv_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.hv;
     return {
       name: item.hv_equipment_name || item.equipment_name || `Équip. HT #${item.hv_equipment_id}`,
       type: 'hv',
-      icon: '⚡',
+      icon: <Icon size={16} className={color} />,
       link: `/app/hv?equipment=${item.hv_equipment_id}`,
       category: item.hv_regime_neutral || ''
     };
   }
   if (item.mobile_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.mobile;
     return {
       name: item.mobile_equipment_name || item.equipment_name || `Équip. mobile #${item.mobile_equipment_id}`,
       type: 'mobile',
-      icon: '🚜',
+      icon: <Icon size={16} className={color} />,
       link: `/app/mobile-equipment?equip=${item.mobile_equipment_id}`,
       category: item.mobile_category || item.category || ''
     };
   }
   if (item.glo_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.glo;
     return {
       name: item.glo_equipment_name || item.equipment_name || `Équip. GLO #${item.glo_equipment_id}`,
       type: 'glo',
-      icon: '🔋',
+      icon: <Icon size={16} className={color} />,
       link: `/app/glo?glo=${item.glo_equipment_id}`,
       category: item.glo_category || item.category || ''
     };
   }
   if (item.device_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.device;
     return {
       name: `Disj. ${item.device_position || item.device_id}`,
       type: 'device',
-      icon: '🔲',
+      icon: <Icon size={16} className={color} />,
       link: item.switchboard_id ? `/app/switchboards?board=${item.switchboard_id}` : null,
       category: ''
     };
   }
   if (item.switchboard_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.switchboard;
     return {
       name: item.switchboard_code || item.switchboard_name || `Tableau #${item.switchboard_id}`,
       type: 'switchboard',
-      icon: '⚡',
+      icon: <Icon size={16} className={color} />,
       link: `/app/switchboards?board=${item.switchboard_id}`,
       category: ''
     };
   }
+  const { Icon, color } = EQUIPMENT_ICONS.unknown;
   return {
     name: item.equipment_name || 'Équipement inconnu',
     type: 'unknown',
-    icon: '📦',
+    icon: <Icon size={16} className={color} />,
     link: null,
     category: ''
   };

@@ -435,8 +435,10 @@ const GloLeafletViewer = forwardRef(({
 
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
-        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
-          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/>
+        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="6" width="18" height="12" rx="2"/>
+          <path d="M23 10v4"/>
+          <path d="M7 10v4M11 10v4"/>
         </svg>
       </div>`;
     return L.divIcon({
@@ -1104,7 +1106,8 @@ export default function GloMap() {
         x_frac: xFrac,
         y_frac: yFrac,
       });
-      await refreshPositions(selectedPlan, pageIndex);
+      const positions = await refreshPositions(selectedPlan, pageIndex);
+      setInitialPoints(positions || []);
       await refreshPlacedIds();
     } catch (err) {
       console.error("Erreur creation position:", err);
@@ -1148,7 +1151,8 @@ export default function GloMap() {
       });
       // Reload data
       await loadEquipments();
-      await refreshPositions(stableSelectedPlan, pageIndex);
+      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
+      setInitialPoints(positions || []);
       // Navigate to equipment detail
       navigate(`/app/glo?glo=${id}`);
     } catch (err) {

@@ -644,7 +644,6 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                           {floor}
                         </div>
                         {equipments.map(eq => {
-                          const statusConf = getStatusConfig(eq.status);
                           return (
                             <button
                               key={eq.id}
@@ -652,7 +651,7 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                               className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
                                 ${selectedEquipment?.id === eq.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                             >
-                              <Cpu size={14} className={`text-blue-500 ${statusConf.blink}`} />
+                              <Cpu size={14} className="text-cyan-500" />
                               <span className="text-sm truncate flex-1">{eq.name}</span>
                               {!isPlaced(eq.id) && (
                                 <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
@@ -790,10 +789,6 @@ const DetailPanel = ({
               {equipment.building} - {equipment.floor}
             </p>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <Badge variant={statusConf.variant} className={statusConf.blink}>
-                <Clock size={10} className="inline mr-1" />
-                {statusConf.label}
-              </Badge>
               {equipment.equipment_state && (
                 <Badge variant={stateVariant}>
                   {equipment.equipment_state === 'conforme' ? 'Conforme' : 'Non conforme'}
@@ -817,27 +812,6 @@ const DetailPanel = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <Calendar size={20} className="mx-auto text-blue-500 mb-1" />
-            <p className="text-sm font-bold text-gray-900">
-              {equipment.next_check_date ? dayjs(equipment.next_check_date).format('DD/MM/YY') : '-'}
-            </p>
-            <p className="text-xs text-gray-500">Prochain</p>
-          </div>
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <History size={20} className="mx-auto text-blue-500 mb-1" />
-            <p className="text-sm font-bold text-gray-900">{history.length}</p>
-            <p className="text-xs text-gray-500">Controles</p>
-          </div>
-          <div className="bg-gray-50 rounded-xl p-3 text-center">
-            <FileText size={20} className="mx-auto text-amber-500 mb-1" />
-            <p className="text-sm font-bold text-gray-900">{files.length}</p>
-            <p className="text-xs text-gray-500">Fichiers</p>
-          </div>
-        </div>
-
         {/* Control Status Section - Linked to switchboard-controls */}
         <div className="bg-gray-50 rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
@@ -1821,7 +1795,6 @@ export default function MobileEquipments() {
                                 {floor}
                               </div>
                               {equipmentList.map(eq => {
-                                const statusConf = getStatusConfig(eq.status);
                                 return (
                                   <button
                                     key={eq.id}
@@ -1829,7 +1802,7 @@ export default function MobileEquipments() {
                                     className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2
                                       ${selectedEquipment?.id === eq.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                                   >
-                                    <Cpu size={14} className={`text-blue-500 ${statusConf.blink}`} />
+                                    <Cpu size={14} className="text-cyan-500" />
                                     <span className="text-sm truncate flex-1">{eq.name}</span>
                                     {!isPlaced(eq.id) && (
                                       <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
@@ -1931,14 +1904,13 @@ export default function MobileEquipments() {
                               </div>
                               <div className="divide-y divide-gray-100">
                                 {equipmentList.map(eq => {
-                                  const statusConf = getStatusConfig(eq.status);
                                   return (
                                     <button
                                       key={eq.id}
                                       onClick={() => handleSelectEquipment(eq)}
                                       className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-blue-50 transition-colors"
                                     >
-                                      <Cpu size={16} className={`text-blue-500 ${statusConf.blink}`} />
+                                      <Cpu size={16} className="text-cyan-500" />
                                       <div className="flex-1 min-w-0">
                                         <span className="text-sm font-medium text-gray-900 block truncate">{eq.name}</span>
                                         <span className="text-xs text-gray-500 truncate block">
@@ -1951,9 +1923,6 @@ export default function MobileEquipments() {
                                             <MapPin size={10} />
                                           </span>
                                         )}
-                                        <Badge variant={statusConf.variant} className={statusConf.blink}>
-                                          {statusConf.label}
-                                        </Badge>
                                       </div>
                                       <ChevronRight size={16} className="text-gray-300" />
                                     </button>

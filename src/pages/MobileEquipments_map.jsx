@@ -458,7 +458,7 @@ const LeafletViewer = forwardRef(({
 
         // 🚀 JPEG compressé sur mobile, PNG sur desktop
         const dataUrl = getOptimalImageFormat(canvas);
-        const bounds = [[0, 0], [-vp.height, vp.width]];
+        const bounds = [[0, 0], [vp.height, vp.width]];
 
         if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);
         imageLayerRef.current = L.imageOverlay(dataUrl, bounds).addTo(map);
@@ -496,7 +496,7 @@ const LeafletViewer = forwardRef(({
 
     // Use initialPoints directly instead of pointsRef.current for proper reactivity
     initialPoints.forEach((pt) => {
-      const lat = -pt.y_frac * imgSize.h;
+      const lat = pt.y_frac * imgSize.h;
       const lng = pt.x_frac * imgSize.w;
       const isSel = pt.equipment_id === selectedId;
 
@@ -506,8 +506,10 @@ const LeafletViewer = forwardRef(({
           <div class="relative flex items-center justify-center ${isSel ? "animate-bounce" : ""}">
             <div class="absolute w-8 h-8 bg-cyan-500 rounded-full opacity-30 ${isSel ? "animate-ping" : ""}"></div>
             <div class="relative w-6 h-6 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs font-bold">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2"/>
+                <rect x="9" y="9" width="6" height="6"/>
+                <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
               </svg>
             </div>
           </div>
@@ -532,7 +534,7 @@ const LeafletViewer = forwardRef(({
       marker.on("dragend", () => {
         const pos = marker.getLatLng();
         const nx = clamp(pos.lng / imgSize.w, 0, 1);
-        const ny = clamp(-pos.lat / imgSize.h, 0, 1);
+        const ny = clamp(pos.lat / imgSize.h, 0, 1);
         onMovePoint?.(pt.equipment_id, nx, ny);
       });
 
@@ -551,7 +553,7 @@ const LeafletViewer = forwardRef(({
 
       const { lat, lng } = e.latlng;
       const x = clamp(lng / imgSize.w, 0, 1);
-      const y = clamp(-lat / imgSize.h, 0, 1);
+      const y = clamp(lat / imgSize.h, 0, 1);
 
       onCreatePoint?.(x, y);
     };
