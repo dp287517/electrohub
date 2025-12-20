@@ -82,6 +82,36 @@ function pdfDocOpts(url) {
   };
 }
 
+// Retry helper for PDF loading with exponential backoff
+async function loadPdfWithRetry(url, maxRetries = 3) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[HV-PDF] Loading PDF attempt ${attempt + 1}/${maxRetries + 1}:`, url);
+      const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
+      const pdf = await loadingTask.promise;
+      console.log("[HV-PDF] PDF loaded successfully, numPages:", pdf.numPages);
+      return { pdf, loadingTask };
+    } catch (err) {
+      lastError = err;
+      const errMsg = String(err?.message || err);
+      console.warn(`[HV-PDF] Load attempt ${attempt + 1} failed:`, errMsg);
+
+      // Don't retry if cancelled or worker destroyed
+      if (String(err?.name) === "RenderingCancelledException") throw err;
+      if (errMsg.includes("Worker was destroyed") || errMsg.includes("Worker was terminated")) throw err;
+
+      // Retry on network errors, 502, etc.
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+        console.log(`[HV-PDF] Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // UI Primitives
 // ─────────────────────────────────────────────────────────────────────
@@ -391,6 +421,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const ICON_PX = 24;
   const ICON_PX_SELECTED = 32;
@@ -589,14 +621,14 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     (async () => {
       try {
         console.log("[HV-PDF] Starting PDF load...");
+        setLoadError(null);
         await cleanupPdf();
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
-        console.log("[HV-PDF] Calling pdfjsLib.getDocument with URL:", fileUrl);
-        loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
-        const pdf = await loadingTaskRef.current.promise;
-        console.log("[HV-PDF] PDF loaded successfully, numPages:", pdf.numPages);
+        // Use retry logic for PDF loading to handle transient 502 errors
+        const { pdf, loadingTask } = await loadPdfWithRetry(fileUrl, 3);
+        loadingTaskRef.current = loadingTask;
         if (cancelled) return;
 
         const page = await pdf.getPage(Number(pageIndex) + 1);
@@ -700,6 +732,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         const msg = String(e?.message || "");
         if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
         console.error("HV Leaflet viewer error", e);
+        // Set error state to show error UI to user
+        setLoadError(msg || "Erreur lors du chargement du plan PDF");
       }
     })();
 
@@ -729,7 +763,7 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
       cleanupMap();
       cleanupPdf();
     };
-  }, [fileUrl, pageIndex, disabled, drawMarkers, onReady]);
+  }, [fileUrl, pageIndex, disabled, drawMarkers, onReady, retryCount]);
 
   useEffect(() => {
     pointsRef.current = initialPoints;
@@ -773,6 +807,37 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
       </div>
 
       <div ref={wrapRef} className="flex-1 w-full bg-gray-100" style={{ minHeight: 400 }} />
+
+      {/* Error overlay with retry button */}
+      {loadError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/95 z-30">
+          <div className="flex flex-col items-center gap-4 p-6 max-w-sm text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center">
+              <AlertCircle size={32} className="text-red-500" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900 mb-1">Erreur de chargement</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Le plan PDF n'a pas pu être chargé. Cela peut être dû à une erreur réseau temporaire.
+              </p>
+              <p className="text-xs text-gray-400 mb-4 font-mono bg-gray-100 p-2 rounded truncate">
+                {loadError}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setLoadError(null);
+                lastJob.current.key = "";
+                setRetryCount(c => c + 1);
+              }}
+              className="px-4 py-2 bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center gap-2"
+            >
+              <RefreshCw size={16} />
+              Réessayer
+            </button>
+          </div>
+        </div>
+      )}
 
       {picker && (
         <div

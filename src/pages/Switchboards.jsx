@@ -1794,6 +1794,18 @@ export default function Switchboards() {
                         {controlStatuses[board.id].pendingCount}
                       </span>
                     )}
+                    {/* Direct access to switchboard-controls */}
+                    <span
+                      className={`px-2 py-0.5 text-[10px] rounded-full flex items-center gap-1 cursor-pointer transition-colors ${
+                        selectedBoard?.id === board.id
+                          ? 'bg-white/20 text-white hover:bg-white/30'
+                          : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                      }`}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?switchboard=${board.id}`); }}
+                      title="Accès contrôles"
+                    >
+                      <ClipboardCheck size={10} />
+                    </span>
                     <span className={`text-lg font-mono font-bold ${selectedBoard?.id === board.id ? 'text-white' : 'text-gray-900'}`}>
                       {board.code}
                     </span>
