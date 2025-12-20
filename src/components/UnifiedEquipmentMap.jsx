@@ -58,6 +58,7 @@ const EQUIPMENT_TYPES = {
     label: "Tableaux",
     icon: Zap,
     color: "#f59e0b", // amber
+    gradient: "radial-gradient(circle at 30% 30%, #facc15, #f59e0b)", // amber gradient like Switchboard_map
     api: api.switchboardMaps,
     link: (id) => `/app/switchboards?board=${id}`,
     mapLink: (id, plan) => `/app/switchboards/map?board=${id}&plan=${plan}`,
@@ -66,6 +67,7 @@ const EQUIPMENT_TYPES = {
     label: "Variateurs",
     icon: Cpu,
     color: "#10b981", // emerald
+    gradient: "radial-gradient(circle at 30% 30%, #34d399, #059669)", // emerald gradient like Vsd_map
     api: api.vsdMaps,
     link: (id) => `/app/vsd?vsd=${id}`,
     mapLink: (id, plan) => `/app/vsd/map?vsd=${id}&plan=${plan}`,
@@ -74,6 +76,7 @@ const EQUIPMENT_TYPES = {
     label: "Méca",
     icon: Wrench,
     color: "#3b82f6", // blue
+    gradient: "radial-gradient(circle at 30% 30%, #fb923c, #ea580c)", // orange gradient like Meca_map
     api: api.mecaMaps,
     link: (id) => `/app/meca?meca=${id}`,
     mapLink: (id, plan) => `/app/meca/map?meca=${id}&plan=${plan}`,
@@ -81,7 +84,8 @@ const EQUIPMENT_TYPES = {
   mobile: {
     label: "Mobiles",
     icon: Truck,
-    color: "#8b5cf6", // purple
+    color: "#06b6d4", // cyan (like MobileEquipments_map from-cyan-400 to-blue-600)
+    gradient: "linear-gradient(to bottom right, #22d3ee, #2563eb)", // cyan-to-blue like MobileEquipments_map
     api: api.mobileEquipment?.maps,
     link: (id) => `/app/mobile-equipments?equip=${id}`,
     mapLink: (id, plan) => `/app/mobile-equipments/map?equip=${id}&plan=${plan}`,
@@ -90,6 +94,7 @@ const EQUIPMENT_TYPES = {
     label: "Haute Tension",
     icon: Zap,
     color: "#f59e0b", // amber (same as HV map default)
+    gradient: "radial-gradient(circle at 30% 30%, #f59e0b, #ea580c)", // amber/orange like High_voltage_map
     api: api.hvMaps,
     link: (id) => `/app/hv?equipment=${id}`,
     mapLink: (id, plan) => `/app/hv/map?equipment=${id}&plan=${plan}`,
@@ -97,20 +102,46 @@ const EQUIPMENT_TYPES = {
   glo: {
     label: "GLO",
     icon: Battery,
-    color: "#06b6d4", // cyan
+    color: "#34d399", // emerald (like Glo_map)
+    gradient: "radial-gradient(circle at 30% 30%, #34d399, #059669)", // emerald gradient like Glo_map
     api: api.gloMaps,
     link: (id) => `/app/glo?glo=${id}`,
     mapLink: (id, plan) => `/app/glo/map?glo=${id}&plan=${plan}`,
   },
 };
 
-// Control status colors
+// Control status colors with gradients matching individual map pages
 const STATUS_COLORS = {
-  overdue: { bg: "#ef4444", border: "#dc2626", pulse: true }, // Red - en retard
-  upcoming: { bg: "#f59e0b", border: "#d97706", pulse: false }, // Amber - à venir (30 days)
-  pending: { bg: "#3b82f6", border: "#2563eb", pulse: false }, // Blue - planifié
-  done: { bg: "#10b981", border: "#059669", pulse: false }, // Green - fait
-  none: { bg: "#6b7280", border: "#4b5563", pulse: false }, // Gray - pas de contrôle
+  overdue: {
+    bg: "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)",
+    border: "#dc2626",
+    pulse: true
+  }, // Red - en retard
+  upcoming: {
+    bg: "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)",
+    border: "#d97706",
+    pulse: false
+  }, // Amber - à venir (30 days)
+  pending: {
+    bg: "radial-gradient(circle at 30% 30%, #3b82f6, #2563eb)",
+    border: "#2563eb",
+    pulse: false
+  }, // Blue - planifié
+  done: {
+    bg: "radial-gradient(circle at 30% 30%, #10b981, #059669)",
+    border: "#059669",
+    pulse: false
+  }, // Green - fait
+  none: {
+    bg: "radial-gradient(circle at 30% 30%, #6b7280, #4b5563)",
+    border: "#4b5563",
+    pulse: false
+  }, // Gray - pas de contrôle
+  selected: {
+    bg: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)",
+    border: "white",
+    pulse: false
+  }, // Purple - sélectionné
 };
 
 /* ----------------------------- Helpers ----------------------------- */
@@ -333,19 +364,34 @@ const UnifiedLeafletViewer = forwardRef(({
     const typeConfig = EQUIPMENT_TYPES[equipmentType] || {};
     const statusConfig = STATUS_COLORS[controlStatus] || STATUS_COLORS.none;
 
-    // Use control status color if there's a control, otherwise use equipment type color
-    const bgColor = controlStatus !== "none" ? statusConfig.bg : (typeConfig.color || "#6b7280");
-    const borderColor = controlStatus !== "none" ? statusConfig.border : bgColor;
-    const shouldPulse = statusConfig.pulse;
+    // Determine background: selected > control status > equipment type default
+    let bgGradient;
+    let borderColor;
+    let shouldPulse = false;
+    let animClass = "";
 
-    const animClass = isSelected ? "unified-marker-selected" : (shouldPulse ? "unified-marker-overdue" : "");
+    if (isSelected) {
+      bgGradient = STATUS_COLORS.selected.bg;
+      borderColor = "white";
+      animClass = "unified-marker-selected";
+    } else if (controlStatus !== "none" && STATUS_COLORS[controlStatus]) {
+      bgGradient = statusConfig.bg;
+      borderColor = statusConfig.border;
+      shouldPulse = statusConfig.pulse;
+      if (shouldPulse) animClass = "unified-marker-overdue";
+    } else {
+      bgGradient = typeConfig.gradient || `radial-gradient(circle at 30% 30%, ${typeConfig.color}, ${typeConfig.color})`;
+      borderColor = "white";
+    }
 
     // Get icon SVG based on equipment type
     const iconSvg = getIconSvg(equipmentType);
+    // Switchboard uses 0.55 size, others use 0.5
+    const iconSize = equipmentType === "switchboard" ? s * 0.55 : s * 0.5;
 
     const html = `
-      <div class="${animClass}" style="width:${s}px;height:${s}px;background:${bgColor};border:2px solid ${isSelected ? 'white' : borderColor};border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
-        ${iconSvg(s * 0.5)}
+      <div class="${animClass}" style="width:${s}px;height:${s}px;background:${bgGradient};border:2px solid ${borderColor};border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+        ${iconSvg(iconSize)}
       </div>`;
 
     return L.divIcon({
@@ -1043,8 +1089,8 @@ export default function UnifiedEquipmentMap({
                     >
                       <div className="flex items-center gap-2">
                         <div
-                          className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
-                          style={{ background: typeConfig.color }}
+                          className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 border-2 border-white shadow-md"
+                          style={{ background: typeConfig.gradient || typeConfig.color }}
                         >
                           <Icon size={12} className="text-white" />
                         </div>
@@ -1211,7 +1257,7 @@ export default function UnifiedEquipmentMap({
                     className="p-2 rounded-xl border bg-white border-gray-200 cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: typeConfig.color }}>
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center border-2 border-white shadow-md" style={{ background: typeConfig.gradient || typeConfig.color }}>
                         <Icon size={12} className="text-white" />
                       </div>
                       <div className="flex-1 min-w-0">
