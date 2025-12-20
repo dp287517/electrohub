@@ -38,6 +38,8 @@ import MobileEquipmentsMap from './pages/MobileEquipments_map.jsx';
 import HighVoltageMap from './pages/High_voltage_map.jsx';
 import Glo from './pages/Glo.jsx';
 import GloMap from './pages/Glo_map.jsx';
+import Datahub from './pages/Datahub.jsx';
+import DatahubMap from './pages/Datahub_map.jsx';
 // Infrastructure is now unified under ATEX
 
 // Component to redirect authenticated users to dashboard
@@ -112,6 +114,8 @@ export default function App() {
           <Route path="/app/mobile-equipments/map" element={<ProtectedRoute><MobileEquipmentsMap /></ProtectedRoute>} />
           <Route path="/app/glo" element={<ProtectedRoute><Glo /></ProtectedRoute>} />
           <Route path="/app/glo/map" element={<ProtectedRoute><GloMap /></ProtectedRoute>} />
+          <Route path="/app/datahub" element={<ProtectedRoute><Datahub /></ProtectedRoute>} />
+          <Route path="/app/datahub/map" element={<ProtectedRoute><DatahubMap /></ProtectedRoute>} />
           {/* Infrastructure is now unified under ATEX - redirect */}
           <Route path="/app/infrastructure" element={<Navigate to="/app/atex?tab=plans" replace />} />
 

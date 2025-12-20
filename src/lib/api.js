@@ -2230,6 +2230,67 @@ export const api = {
     },
   },
 
+  // ========== DATAHUB (Custom categories with map markers) ==========
+  datahub: {
+    // Items CRUD
+    list: (params) => get("/api/datahub/items", params),
+    get: (id) => get(`/api/datahub/items/${encodeURIComponent(id)}`),
+    create: (payload) => post("/api/datahub/items", payload),
+    update: (id, payload) => put(`/api/datahub/items/${encodeURIComponent(id)}`, payload),
+    remove: (id) => del(`/api/datahub/items/${encodeURIComponent(id)}`),
+
+    // Photo
+    uploadPhoto: (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/datahub/items/${encodeURIComponent(id)}/photo`, fd);
+    },
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/datahub/items/${encodeURIComponent(id)}/photo?site=${currentSite()}`, bust),
+
+    // Files
+    listFiles: (id) => get(`/api/datahub/items/${encodeURIComponent(id)}/files`),
+    uploadFile: (id, file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/datahub/items/${encodeURIComponent(id)}/files`, fd);
+    },
+    deleteFile: (fileId) => del(`/api/datahub/files/${encodeURIComponent(fileId)}`),
+
+    // Categories
+    listCategories: () => get("/api/datahub/categories"),
+    createCategory: (payload) => post("/api/datahub/categories", payload),
+    updateCategory: (id, payload) => put(`/api/datahub/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) => del(`/api/datahub/categories/${encodeURIComponent(id)}`),
+
+    // Stats
+    stats: () => get("/api/datahub/stats"),
+
+    // Bulk operations
+    bulkRename: ({ field, from, to }) => post("/api/datahub/bulk/rename", { field, from, to }),
+
+    // Maps (uses VSD plans)
+    maps: {
+      listPlans: () => get("/api/datahub/maps/plans"),
+      planFileUrlAuto: (plan, { bust = true } = {}) => {
+        const site = currentSite();
+        const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+        const url = `${API_BASE}/api/datahub/maps/plan/${encodeURIComponent(key)}/file?site=${site}`;
+        return withBust(url, bust);
+      },
+      positionsAuto: (planOrKey, page_index = 0) => {
+        const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
+        if (isUuid(key) || isNumericId(key))
+          return get("/api/datahub/maps/positions", { id: key, page_index });
+        return get("/api/datahub/maps/positions", { logical_name: key, page_index });
+      },
+      setPosition: (itemId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+        put(`/api/datahub/maps/positions/${encodeURIComponent(itemId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
+      deletePosition: (positionId) => del(`/api/datahub/maps/positions/${encodeURIComponent(positionId)}`),
+      placedIds: () => get("/api/datahub/maps/placed-ids"),
+    },
+  },
+
   // ========== HIGH VOLTAGE (HV) ==========
   hv: {
     // Health check

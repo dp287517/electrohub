@@ -1,21 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Zap, Recycle, Puzzle, TrendingUp, AlertTriangle, RefreshCw,
   GitBranch, CreditCard, Cog, Flame, Wrench, Users, MessageCircle,
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
   Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase,
-  Shield, Globe, Crown, Star, RefreshCcw, Repeat, Battery
+  Shield, Globe, Crown, Star, RefreshCcw, Repeat, Battery, Database
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
+import { api } from '../lib/api';
 
 // Icon mapping for apps
 const iconMap = {
   '⚡': Zap, '♻️': Recycle, '🧩': Puzzle, '📈': TrendingUp, '⚠️': AlertTriangle,
   '🔄': RefreshCw, '📐': GitBranch, '💳': CreditCard, '⚙️': Cog, '🧯': Flame,
   '🛠️': Wrench, '🤝': Users, '💬': MessageCircle, '🚪': DoorOpen, '📊': BarChart3,
-  '📋': ClipboardCheck, '🔋': Battery,
+  '📋': ClipboardCheck, '🔋': Battery, '🗄️': Database, '🔌': Zap,
 };
 
 
@@ -33,6 +34,7 @@ const electricalApps = [
   { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
   { label: 'Mobile Equipments', to: '/app/mobile-equipments', description: 'Electrical controls for mobile equipment: drills, angle grinders...', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
   { label: 'Global Electrical Equipments', to: '/app/glo', description: 'UPS, compensation batteries & emergency lighting management', icon: '🔋', color: 'from-emerald-400 to-teal-500' },
+  { label: 'Datahub', to: '/app/datahub', description: 'Custom data management with category markers on VSD plans', icon: '🗄️', color: 'from-indigo-400 to-purple-500' },
 ];
 
 // Other apps
@@ -45,20 +47,21 @@ const otherApps = [
   { label: 'Formation ATEX', to: '/app/learn_ex', description: 'Formation ATEX Niveau 0', icon: '📊', color: 'from-amber-400 to-yellow-500' },
 ];
 
-// Enhanced App Card with staggered animation
-function AppCard({ label, to, description, icon, color, index }) {
+// Enhanced App Card with staggered animation and control status
+function AppCard({ label, to, description, icon, color, index, controlStats, navigate }) {
   const IconComponent = iconMap[icon] || Zap;
+  const hasOverdue = controlStats?.overdue > 0;
+  const hasPending = controlStats?.pending > 0;
 
   return (
-    <Link
-      to={to}
+    <div
       className="group relative bg-white rounded-2xl p-5 shadow-sm hover:shadow-2xl border border-gray-100 hover:border-transparent transition-all duration-500 hover:-translate-y-2 opacity-0 animate-slideUp"
       style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'forwards' }}
     >
       {/* Hover glow effect */}
       <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-2xl transition-opacity duration-500`} />
 
-      <div className="relative flex items-start gap-4">
+      <Link to={to} className="relative flex items-start gap-4">
         <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500`}>
           <IconComponent size={22} />
         </div>
@@ -71,8 +74,34 @@ function AppCard({ label, to, description, icon, color, index }) {
           </div>
           <p className="text-sm text-gray-500 mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
         </div>
-      </div>
-    </Link>
+      </Link>
+
+      {/* Control status badges */}
+      {(hasOverdue || hasPending) && (
+        <div className="absolute top-2 right-2 flex items-center gap-1">
+          {hasOverdue && (
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
+              className="px-2 py-1 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-1 hover:bg-red-200 transition-colors animate-pulse"
+              title={`${controlStats.overdue} contrôle(s) en retard`}
+            >
+              <AlertTriangle size={10} />
+              {controlStats.overdue}
+            </button>
+          )}
+          {hasPending && (
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=schedules'); }}
+              className="px-2 py-1 bg-blue-100 text-blue-700 text-[10px] rounded-full flex items-center gap-1 hover:bg-blue-200 transition-colors"
+              title={`${controlStats.pending} contrôle(s) planifié(s)`}
+            >
+              <ClipboardCheck size={10} />
+              {controlStats.pending}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -432,6 +461,7 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [user, setUser] = useState({});
   const [showElectrical, setShowElectrical] = useState(false);
   const [showOther, setShowOther] = useState(false);
@@ -440,6 +470,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
+  const [controlStats, setControlStats] = useState({ overdue: 0, pending: 0 });
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
@@ -472,6 +503,15 @@ export default function Dashboard() {
         console.log('[Dashboard] Refreshed user permissions from DB');
       }
     });
+
+    // Fetch control dashboard stats
+    api.switchboardControls.dashboard().then(res => {
+      if (res) {
+        const overdue = res.overdue_count || res.overdue?.length || 0;
+        const pending = res.pending_count || res.pending?.length || res.upcoming?.length || 0;
+        setControlStats({ overdue, pending });
+      }
+    }).catch(() => {});
   }, []);
 
   const site = user?.site || '';
@@ -752,7 +792,7 @@ export default function Dashboard() {
             <div className={`overflow-hidden transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {visibleOtherApps.map((app, index) => (
-                  <AppCard key={app.label} {...app} index={index} />
+                  <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
               </div>
             </div>
@@ -774,7 +814,7 @@ export default function Dashboard() {
             <div className={`overflow-hidden transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {visibleElectricalApps.map((app, index) => (
-                  <AppCard key={app.label} {...app} index={index} />
+                  <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
               </div>
             </div>
