@@ -216,7 +216,8 @@ app.use("/api/faultlevel",   mkProxy(flaTarget));
 app.use("/api/arcflash",     mkProxy(arcflashTarget));
 // ✅ OBSOLESCENCE: Ajout withRestream pour éviter les problèmes de body (service-year PUT)
 app.use("/api/obsolescence", mkProxy(obsolescenceTarget, { withRestream: true, timeoutMs: 30000 }));
-app.use("/api/hv",           mkProxy(hvTarget));
+// ✅ HV: Ajout withRestream pour éviter les problèmes de body (setPosition, etc.)
+app.use("/api/hv",           mkProxy(hvTarget, { withRestream: true, timeoutMs: 30000 }));
 app.use("/api/diagram",      mkProxy(diagramTarget));
 // Controls supprimé - switchboard-controls intégré à server_switchboard.js
 // app.use("/api/controls",     mkProxy(controlsTarget));
