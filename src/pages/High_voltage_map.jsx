@@ -1,4 +1,4 @@
-// src/pages/High_voltage_map.jsx - HV Equipment Map Page (following VSD pattern)
+// src/pages/High_voltage_map.jsx - HV Equipment Map Page (following VSD responsive pattern)
 import React, {
   useState,
   useEffect,
@@ -25,20 +25,20 @@ import {
   Zap,
   Eye,
   ExternalLink,
-  Info,
   Star,
   Shield,
-  Activity,
-  Factory,
+  CheckCircle,
+  AlertCircle,
+  Target,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { api, get } from "../lib/api";
+import { api } from "../lib/api";
 
 // ─────────────────────────────────────────────────────────────────────
-// PDF.js worker (bundlé localement pour éviter les problèmes CSP)
+// PDF.js worker
 // ─────────────────────────────────────────────────────────────────────
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -92,163 +92,145 @@ const AnimatedCard = ({ children, delay = 0, className = "" }) => (
   </div>
 );
 
-const Badge = ({ children, variant = "default", size = "md", className = "" }) => {
+const Badge = ({ children, variant = "default", className = "" }) => {
   const variants = {
-    default: "bg-gray-100 text-gray-700 border-gray-200",
-    success: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    warning: "bg-amber-50 text-amber-700 border-amber-200",
-    danger: "bg-red-50 text-red-700 border-red-200",
-    info: "bg-blue-50 text-blue-700 border-blue-200",
-    orange: "bg-orange-50 text-orange-700 border-orange-200",
+    default: "bg-gray-100 text-gray-700",
+    success: "bg-emerald-100 text-emerald-700",
+    warning: "bg-amber-100 text-amber-700",
+    danger: "bg-red-100 text-red-700",
+    info: "bg-blue-100 text-blue-700",
+    purple: "bg-purple-100 text-purple-700",
   };
-  const sizes = { sm: "px-2 py-0.5 text-[10px]", md: "px-2.5 py-1 text-xs" };
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full font-semibold border ${variants[variant]} ${sizes[size]} ${className}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>
       {children}
     </span>
   );
 };
 
 const EmptyState = ({ icon: Icon, title, description, action }) => (
-  <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-    <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
-      <Icon size={40} className="text-gray-400" />
+  <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
+      <Icon size={32} className="text-gray-400" />
     </div>
-    <h3 className="text-xl font-semibold text-gray-900 mb-2">{title}</h3>
-    <p className="text-gray-500 mb-6 max-w-sm">{description}</p>
-    {action}
+    <h3 className="text-lg font-medium text-gray-700">{title}</h3>
+    {description && <p className="text-gray-500 mt-1 max-w-sm">{description}</p>}
+    {action && <div className="mt-4">{action}</div>}
   </div>
 );
 
-const Input = ({ value, onChange, placeholder, className = "" }) => (
-  <input
-    type="text"
-    value={value}
-    onChange={(e) => onChange(e.target.value)}
-    placeholder={placeholder}
-    className={`w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400 transition-all ${className}`}
-  />
-);
+function Input({ value, onChange, className = "", ...p }) {
+  return (
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-amber-100 bg-white text-black placeholder-gray-400 ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange?.(e.target.value)}
+      {...p}
+    />
+  );
+}
 
-const Btn = ({ children, variant = "primary", className = "", ...props }) => {
-  const base = "px-4 py-2 rounded-xl font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50";
-  const variants = {
-    primary: "bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700",
-    subtle: "bg-amber-100 text-amber-700 hover:bg-amber-200",
-    ghost: "bg-gray-100 text-gray-700 hover:bg-gray-200",
-    danger: "bg-red-500 text-white hover:bg-red-600",
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary: "bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
+    ghost: "bg-white text-black border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed",
+    subtle: "bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed",
   };
   return (
-    <button className={`${base} ${variants[variant]} ${className}`} {...props}>
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
       {children}
     </button>
   );
-};
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Confirm Modal
 // ─────────────────────────────────────────────────────────────────────
-const ConfirmModal = ({ open, title, message, confirmText = "Confirmer", onConfirm, onCancel, danger = false }) => {
+function ConfirmModal({ open, title = "Confirmation", message, confirmText = "Confirmer", cancelText = "Annuler", onConfirm, onCancel, danger = false }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-scaleIn">
-        <div className={`p-6 ${danger ? "bg-red-50" : "bg-amber-50"}`}>
-          <h3 className={`text-xl font-bold ${danger ? "text-red-900" : "text-amber-900"}`}>{title}</h3>
+    <div className="fixed inset-0 z-[7000] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp">
+        <div className={`px-4 py-3 ${danger ? "bg-gradient-to-r from-rose-500 to-red-600 text-white" : "bg-gradient-to-r from-amber-500 to-orange-600 text-white"}`}>
+          <h3 className="font-semibold">{title}</h3>
         </div>
-        <div className="p-6">
-          <p className="text-gray-700">{message}</p>
-        </div>
-        <div className="flex gap-3 p-4 border-t bg-gray-50">
-          <button onClick={onCancel} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-100">
-            Annuler
-          </button>
-          <button
-            onClick={onConfirm}
-            className={`flex-1 py-3 px-4 rounded-xl font-medium text-white ${danger ? "bg-red-500 hover:bg-red-600" : "bg-amber-500 hover:bg-amber-600"}`}
-          >
-            {confirmText}
-          </button>
+        <div className="p-4 text-sm text-gray-700">{message}</div>
+        <div className="px-4 pb-4 flex gap-2 justify-end">
+          <Btn variant="ghost" onClick={onCancel}>{cancelText}</Btn>
+          <Btn variant={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmText}</Btn>
         </div>
       </div>
     </div>
   );
-};
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Context Menu
 // ─────────────────────────────────────────────────────────────────────
-const ContextMenu = ({ x, y, onDelete, onClose }) => {
+function ContextMenu({ x, y, onDelete, onClose }) {
   useEffect(() => {
     const handleClick = () => onClose();
+    const handleScroll = () => onClose();
     window.addEventListener("click", handleClick);
-    return () => window.removeEventListener("click", handleClick);
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
   }, [onClose]);
 
   return (
     <div
-      className="absolute bg-white rounded-xl shadow-xl border border-gray-200 py-2 z-[6000] min-w-[160px]"
-      style={{ left: Math.max(8, x - 80), top: Math.max(8, y - 8) }}
+      className="fixed bg-white rounded-xl shadow-2xl border py-1 z-[6000] min-w-[160px] animate-slideUp"
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
     >
-      <button onClick={onDelete} className="w-full px-4 py-2 text-left text-red-600 hover:bg-red-50 flex items-center gap-2">
+      <button
+        className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+      >
         <Trash2 size={16} />
         Détacher du plan
       </button>
     </div>
   );
-};
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // HV Equipment Card (Sidebar)
 // ─────────────────────────────────────────────────────────────────────
 const HvCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
-  const canPlace = !isPlacedSomewhere;
-
   return (
     <div
-      className={`group relative p-4 rounded-xl border-2 transition-all cursor-pointer ${
-        isSelected
-          ? "border-amber-400 bg-amber-50 shadow-lg"
-          : isPlacedHere
-          ? "border-emerald-300 bg-emerald-50"
-          : isPlacedElsewhere
-          ? "border-blue-200 bg-blue-50/50 opacity-60"
-          : "border-gray-100 bg-white hover:border-amber-200 hover:shadow-md"
-      }`}
-      onClick={isPlacedHere ? onClick : undefined}
+      className={`p-3 rounded-xl border transition-all cursor-pointer group
+        ${isSelected ? "bg-amber-50 border-amber-300 shadow-sm" : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}
+      onClick={onClick}
     >
-      <div className="flex items-start gap-3">
-        <div
-          className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-            isSelected
-              ? "bg-amber-500 text-white"
-              : isPlacedHere
-              ? "bg-emerald-500 text-white"
-              : equipment.is_principal
-              ? "bg-gradient-to-br from-amber-400 to-orange-500 text-white"
-              : "bg-amber-100 text-amber-600"
-          }`}
-        >
-          <Zap size={20} />
-        </div>
-
+      <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h4 className="font-semibold text-gray-900 truncate text-sm">{equipment.name}</h4>
+            <span className={`font-semibold text-sm ${isSelected ? "text-amber-700" : "text-gray-900"}`}>
+              {equipment.name || "HV"}
+            </span>
             {equipment.is_principal && (
-              <Badge variant="warning" size="sm">
-                <Star size={8} />
+              <Badge variant="warning">
+                <Star size={10} className="inline mr-0.5" />
                 Principal
               </Badge>
             )}
+            {isPlacedElsewhere && <Badge variant="purple">Placé ailleurs</Badge>}
           </div>
-
-          <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 flex-wrap">
-            {equipment.code && <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{equipment.code}</span>}
-            {equipment.voltage_kv && (
+          <p className={`text-xs truncate mt-0.5 ${isSelected ? "text-amber-600" : "text-gray-500"}`}>
+            {equipment.code} {equipment.voltage_kv ? `• ${equipment.voltage_kv} kV` : ""}
+          </p>
+          <div className="flex items-center gap-2 mt-1 text-xs text-gray-400 flex-wrap">
+            {equipment.building_code && (
               <span className="flex items-center gap-0.5">
-                <Zap size={10} />
-                {equipment.voltage_kv} kV
+                <MapPin size={10} />
+                {equipment.building_code}
               </span>
             )}
             {equipment.regime_neutral && (
@@ -258,137 +240,123 @@ const HvCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere,
               </span>
             )}
           </div>
+        </div>
 
-          {equipment.building_code && (
-            <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-              <MapPin size={10} />
-              {equipment.building_code}
-              {equipment.floor && ` / ${equipment.floor}`}
-              {equipment.room && ` / ${equipment.room}`}
-            </div>
+        <div className="flex flex-col items-end gap-1">
+          {isPlacedHere ? (
+            <span className="flex items-center gap-1 text-emerald-600 text-xs">
+              <CheckCircle size={14} />
+              Placé
+            </span>
+          ) : isPlacedSomewhere ? (
+            <span className="flex items-center gap-1 text-purple-600 text-xs">
+              <CheckCircle size={14} />
+              Ailleurs
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-amber-600 text-xs">
+              <AlertCircle size={14} />
+              Non placé
+            </span>
           )}
 
-          {/* Status badges */}
-          <div className="flex items-center gap-1 mt-2">
-            {isPlacedHere && (
-              <Badge variant="success" size="sm">
-                <MapPin size={10} />
-                Sur ce plan
-              </Badge>
-            )}
-            {isPlacedElsewhere && (
-              <Badge variant="info" size="sm">
-                <MapPin size={10} />
-                Autre plan
-              </Badge>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Place button */}
-      {canPlace && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onPlace(equipment);
-          }}
-          className="absolute top-2 right-2 p-2 bg-amber-100 text-amber-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-amber-200"
-          title="Placer sur le plan"
-        >
-          <MapPin size={16} />
-        </button>
-      )}
-    </div>
-  );
-};
-
-// ─────────────────────────────────────────────────────────────────────
-// Detail Panel (Bottom sheet) - Mobile optimized
-// ─────────────────────────────────────────────────────────────────────
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
-  return (
-    <div className="absolute bottom-0 left-0 right-0 z-50 animate-slideUp safe-area-inset-bottom">
-      <div className="bg-white rounded-t-3xl shadow-2xl border-t border-gray-200 max-h-[50vh] sm:max-h-[40vh] overflow-y-auto">
-        {/* Drag handle for mobile */}
-        <div className="flex justify-center pt-2 pb-1">
-          <div className="w-10 h-1 bg-gray-300 rounded-full" />
-        </div>
-
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 pb-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center text-white flex-shrink-0">
-              <Zap size={22} />
-            </div>
-            <div className="min-w-0">
-              <h3 className="font-bold text-gray-900 truncate">{position?.name || equipment?.name || "Équipement HV"}</h3>
-              <p className="text-sm text-gray-500 truncate">
-                {equipment?.code || position?.code || "—"} {equipment?.regime_neutral ? `• ${equipment.regime_neutral}` : ""}
-              </p>
-            </div>
-          </div>
           <button
-            onClick={onClose}
-            className="p-2.5 hover:bg-gray-100 rounded-xl flex-shrink-0 active:scale-95 transition-transform"
-            style={{ touchAction: 'manipulation' }}
+            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
+            className="px-2 py-1 bg-amber-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-amber-600 transition-colors"
+            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
           >
-            <X size={22} />
+            <Target size={12} />
+            {isPlacedSomewhere ? "Déplacer" : "Placer"}
           </button>
         </div>
-
-        <div className="p-4 space-y-4">
-          {/* Equipment info - responsive grid */}
-          {equipment && (
-            <div className="grid grid-cols-2 gap-2 sm:gap-3">
-              <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-[10px] sm:text-xs text-gray-500 uppercase">Localisation</span>
-                <p className="font-medium text-gray-900 text-sm sm:text-base truncate">
-                  {equipment.building_code || "—"} / {equipment.floor || "—"}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <span className="text-[10px] sm:text-xs text-gray-500 uppercase">Régime</span>
-                <p className="font-medium text-gray-900 text-sm sm:text-base">{equipment.regime_neutral || "—"}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Actions - touch optimized */}
-          <div className="flex gap-3">
-            <button
-              onClick={() => onNavigate(position?.equipment_id || equipment?.id)}
-              className="flex-1 py-3.5 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
-              style={{ touchAction: 'manipulation' }}
-            >
-              <Eye size={18} />
-              Voir détails
-            </button>
-            <button
-              onClick={() => onDelete(position)}
-              className="py-3.5 px-4 bg-red-100 text-red-600 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-red-200 active:scale-95 transition-transform"
-              style={{ touchAction: 'manipulation' }}
-            >
-              <Trash2 size={18} />
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────
-// Placement Mode Indicator - Mobile optimized
+// Detail Panel
+// ─────────────────────────────────────────────────────────────────────
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
+  if (!position) return null;
+  return (
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
+      <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 text-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-white/20 rounded-lg">
+              <Zap size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold">{position.name || equipment?.name || "HV"}</h3>
+              <p className="text-amber-100 text-sm">{position.code || equipment?.code || "-"}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Bâtiment</span>
+            <span className="font-semibold text-gray-900">{position.building_code || equipment?.building_code || "-"}</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Tension</span>
+            <span className="font-semibold text-gray-900">{equipment?.voltage_kv || "-"} kV</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Régime</span>
+            <span className="font-semibold text-gray-900 text-[10px]">{equipment?.regime_neutral || "-"}</span>
+          </div>
+        </div>
+
+        <div className="text-xs text-gray-400 flex items-center gap-2">
+          <MapPin size={12} />
+          Position: {((position.x_frac || 0) * 100).toFixed(1)}%, {((position.y_frac || 0) * 100).toFixed(1)}%
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={() => onNavigate(position.equipment_id)}
+            className="flex-1 py-2.5 px-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-700 transition-all flex items-center justify-center gap-2"
+          >
+            <ExternalLink size={16} />
+            Ouvrir la fiche
+          </button>
+
+          <button
+            onClick={() => onDelete?.(position)}
+            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
+            title="Détacher du plan"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+    </AnimatedCard>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────
+// Placement Mode Indicator
 // ─────────────────────────────────────────────────────────────────────
 const PlacementModeIndicator = ({ equipment, onCancel }) => (
-  <div className="absolute bottom-4 sm:bottom-6 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-slideUp">
-    <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 bg-amber-600 text-white rounded-2xl shadow-xl">
-      <Crosshair size={20} className="animate-pulse flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="font-semibold text-sm sm:text-base">Mode placement</p>
-        <p className="text-xs text-amber-200">Cliquez sur le plan pour placer "{equipment?.name}"</p>
+  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30 w-[calc(100%-2rem)] max-w-md">
+    <div className="bg-amber-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
+      <div className="p-2 bg-white/20 rounded-lg flex-shrink-0">
+        <Crosshair size={20} className="animate-pulse" />
       </div>
-      <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm">Mode placement actif</p>
+        <p className="text-amber-200 text-xs truncate">
+          Cliquez sur le plan pour placer "{equipment.name || "HV"}"
+        </p>
+      </div>
+      <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
         <X size={18} />
       </button>
     </div>
@@ -399,7 +367,7 @@ const PlacementModeIndicator = ({ equipment, onCancel }) => (
 // Leaflet Viewer Component
 // ─────────────────────────────────────────────────────────────────────
 const HvLeafletViewer = forwardRef(function HvLeafletViewer(
-  { fileUrl, pageIndex = 0, initialPoints = [], selectedId, onReady, onClickPoint, onMovePoint, onCreatePoint, onContextMenu, placementActive = false, disabled = false },
+  { fileUrl, pageIndex = 0, initialPoints = [], selectedId, controlStatuses = {}, onReady, onClickPoint, onMovePoint, onCreatePoint, onContextMenu, placementActive = false, disabled = false },
   ref
 ) {
   const wrapRef = useRef(null);
@@ -417,18 +385,69 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
   const aliveRef = useRef(true);
   const placementActiveRef = useRef(placementActive);
   const onCreatePointRef = useRef(onCreatePoint);
+  const selectedIdRef = useRef(selectedId);
+  const controlStatusesRef = useRef(controlStatuses);
   const longPressTimerRef = useRef(null);
   const longPressTriggeredRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
 
+  const ICON_PX = 24;
+  const ICON_PX_SELECTED = 32;
+
+  useEffect(() => { placementActiveRef.current = placementActive; }, [placementActive]);
+  useEffect(() => { onCreatePointRef.current = onCreatePoint; }, [onCreatePoint]);
   useEffect(() => {
-    placementActiveRef.current = placementActive;
-  }, [placementActive]);
+    selectedIdRef.current = selectedId;
+    if (mapRef.current && imgSize.w > 0) {
+      drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+    }
+  }, [selectedId]);
+
   useEffect(() => {
-    onCreatePointRef.current = onCreatePoint;
-  }, [onCreatePoint]);
+    controlStatusesRef.current = controlStatuses;
+    if (mapRef.current && imgSize.w > 0) {
+      drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
+    }
+  }, [controlStatuses]);
+
+  function makeHvIcon(isSelected = false, equipmentId = null) {
+    const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+    const controlStatus = equipmentId ? controlStatusesRef.current[equipmentId] : null;
+    const isOverdue = controlStatus?.status === 'overdue';
+    const isUpcoming = controlStatus?.status === 'upcoming';
+
+    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
+    let bg;
+    if (isSelected) {
+      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
+    } else if (isOverdue) {
+      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
+    } else if (isUpcoming) {
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
+    } else {
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);"; // Amber/Orange - normal
+    }
+
+    let animClass = "";
+    if (isSelected) animClass = "hv-marker-selected";
+    else if (isOverdue) animClass = "hv-marker-overdue";
+
+    const html = `
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+      </div>`;
+    return L.divIcon({
+      className: "hv-marker-inline",
+      html,
+      iconSize: [s, s],
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+      popupAnchor: [0, -Math.round(s / 2)],
+    });
+  }
 
   const drawMarkers = useCallback((list, canvasW, canvasH) => {
     const g = markersLayerRef.current;
@@ -439,27 +458,14 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     const map = mapRef.current;
     if (!map || canvasW <= 0 || canvasH <= 0) return;
 
+    pointsRef.current = list;
+
     (list || []).forEach((p) => {
       const lat = (p.y_frac ?? p.y ?? 0) * canvasH;
       const lng = (p.x_frac ?? p.x ?? 0) * canvasW;
-      const isSelected = p.equipment_id === selectedId;
+      const isSelected = p.equipment_id === selectedIdRef.current;
+      const icon = makeHvIcon(isSelected, p.equipment_id);
 
-      const html = `
-        <div style="
-          width:28px;height:28px;border-radius:50%;
-          background:${isSelected ? "radial-gradient(circle at 30% 30%, #fbbf24, #d97706)" : "radial-gradient(circle at 30% 30%, #f59e0b, #ea580c)"};
-          border:3px solid ${isSelected ? "#fef3c7" : "#fff"};
-          box-shadow:0 3px 8px rgba(0,0,0,0.35);
-          display:flex;align-items:center;justify-content:center;
-          font-size:12px;font-weight:700;color:#fff;
-          cursor:pointer;transition:transform .15s;
-        ">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-          </svg>
-        </div>`;
-
-      const icon = L.divIcon({ html, className: `hv-marker-inline ${isSelected ? "hv-marker-selected" : ""}`, iconSize: [28, 28], iconAnchor: [14, 14] });
       const mk = L.marker([lat, lng], { icon, draggable: !disabled });
       mk.__meta = { ...p, equipment_id: p.equipment_id };
 
@@ -469,6 +475,7 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
           longPressTriggeredRef.current = false;
           return;
         }
+        setPicker(null);
         onClickPoint?.(mk.__meta);
       });
 
@@ -520,7 +527,7 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         el.addEventListener("touchmove", cancelLongPress, { passive: true });
       }, 50);
     });
-  }, [onClickPoint, onMovePoint, onContextMenu, disabled, selectedId]);
+  }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
   const highlightMarker = useCallback((equipmentId) => {
     const mk = markersMapRef.current.get(equipmentId);
@@ -596,7 +603,6 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         await renderTaskRef.current.promise;
         if (cancelled) return;
 
-        // 🚀 JPEG compressé sur mobile, PNG sur desktop
         const dataUrl = getOptimalImageFormat(canvas);
         setImgSize({ w: canvas.width, h: canvas.height });
 
@@ -774,14 +780,18 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         </div>
       )}
 
-      <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white">
+      <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white flex-wrap">
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f59e0b, #ea580c)" }} />
-          Équipement HV
+          HV Normal
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fbbf24, #d97706)" }} />
-          Sélectionné
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)" }} />
+          En retard
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)" }} />
+          À venir
         </span>
       </div>
     </div>
@@ -797,7 +807,6 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
 
   const loadPositions = useCallback(async (plan, pageIdx = 0) => {
     if (!plan) return [];
-    // Always use logical_name for positions lookup (positions are stored by logical_name, not by UUID)
     const key = plan.logical_name || plan.id || "";
     try {
       const r = await api.hvMaps.positions(key, pageIdx).catch(() => ({}));
@@ -870,6 +879,9 @@ export default function HighVoltageMap() {
   const [loadingEquipments, setLoadingEquipments] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
 
+  // Control statuses
+  const [controlStatuses, setControlStatuses] = useState({});
+
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
@@ -878,6 +890,7 @@ export default function HighVoltageMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // Ref to prevent double creation
   const creatingRef = useRef(false);
@@ -901,10 +914,46 @@ export default function HighVoltageMap() {
 
   const selectedEquipmentId = useMemo(() => selectedPosition?.equipment_id || null, [selectedPosition]);
 
+  // Responsive handling
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth < 768) setShowSidebar(false);
+    };
+    window.addEventListener("resize", handleResize);
+    handleResize();
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   useEffect(() => {
     loadPlans();
     loadEquipments();
+    loadControlStatuses();
   }, []);
+
+  // Load control statuses
+  const loadControlStatuses = async () => {
+    try {
+      const dashboardRes = await api.switchboardControls.dashboard();
+      const statuses = {};
+
+      (dashboardRes?.overdue_list || []).forEach(item => {
+        if (item.hv_equipment_id) {
+          statuses[item.hv_equipment_id] = { status: 'overdue', template_name: item.template_name };
+        }
+      });
+
+      (dashboardRes?.upcoming || []).forEach(item => {
+        if (item.hv_equipment_id && !statuses[item.hv_equipment_id]) {
+          statuses[item.hv_equipment_id] = { status: 'upcoming', template_name: item.template_name };
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (err) {
+      console.error("Erreur chargement statuts contrôle:", err);
+    }
+  };
 
   // Restore plan from URL params or localStorage
   useEffect(() => {
@@ -1022,13 +1071,11 @@ export default function HighVoltageMap() {
 
     creatingRef.current = true;
     try {
-      // Create equipment with auto-generated name
       const timestamp = new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const created = await api.hv.createEquipment({ name: `Nouvel équipement HV ${timestamp}`, voltage_kv: 20, regime_neutral: 'TN-S' });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Échec création équipement HV");
 
-      // Set position on the plan
       await api.hvMaps.setPosition(id, {
         logical_name: stableSelectedPlan.logical_name,
         plan_id: stableSelectedPlan.id || null,
@@ -1037,13 +1084,11 @@ export default function HighVoltageMap() {
         y_frac: yFrac,
       });
 
-      // Reload data
       await loadEquipments();
       const positions = await refreshPositions(stableSelectedPlan, pageIndex);
       setInitialPoints(positions || []);
       await refreshPlacedIds();
 
-      // Open the equipment detail page
       navigate(`/app/hv?equipment=${id}`);
     } catch (err) {
       console.error("Erreur création équipement HV:", err);
@@ -1125,121 +1170,79 @@ export default function HighVoltageMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes scaleIn {
-          from { opacity: 0; transform: scale(0.95); }
-          to { opacity: 1; transform: scale(1); }
+        @keyframes flash-marker {
+          0%, 100% { transform: scale(1); filter: brightness(1); }
+          25% { transform: scale(1.3); filter: brightness(1.3); }
+          50% { transform: scale(1); filter: brightness(1); }
+          75% { transform: scale(1.3); filter: brightness(1.3); }
+        }
+        @keyframes pulse-selected {
+          0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
+          50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+        }
+        @keyframes blink-overdue {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.6; }
         }
         @keyframes slideRight {
           from { opacity: 0; transform: translateX(-100%); }
           to { opacity: 1; transform: translateX(0); }
         }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes flash-marker {
-          0%, 100% {
-            transform: scale(1);
-            filter: brightness(1);
-          }
-          25% {
-            transform: scale(1.3);
-            filter: brightness(1.3);
-          }
-          50% {
-            transform: scale(1);
-            filter: brightness(1);
-          }
-          75% {
-            transform: scale(1.3);
-            filter: brightness(1.3);
-          }
-        }
-        @keyframes pulse-selected {
-          0%, 100% {
-            transform: scale(1);
-            box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
-          }
-          50% {
-            transform: scale(1.15);
-            box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
-          }
-        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
-        .animate-scaleIn { animation: scaleIn .3s ease-out forwards; }
         .animate-slideRight { animation: slideRight .25s ease-out forwards; }
-        .animate-fadeIn { animation: fadeIn .2s ease-out forwards; }
-        .hv-marker-flash > div {
-          animation: flash-marker 2s ease-in-out;
-        }
-        .hv-marker-selected > div {
-          animation: pulse-selected 1.5s ease-in-out infinite;
-        }
+        .hv-marker-flash > div { animation: flash-marker 2s ease-in-out; }
+        .hv-marker-selected > div { animation: pulse-selected 1.5s ease-in-out infinite; }
+        .hv-marker-overdue > div { animation: blink-overdue 1s ease-in-out infinite; }
         .hv-marker-inline { background: transparent !important; border: none !important; }
-
-        /* Mobile safe area support */
-        .safe-area-inset-top { padding-top: env(safe-area-inset-top, 0); }
-        .safe-area-inset-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
-
-        /* Smooth scrolling for equipment list */
-        .overscroll-contain { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
       `}</style>
 
       {/* Header */}
       <div className="bg-white border-b shadow-sm z-20">
-        <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => navigate('/app/hv')}
-              className="p-2 rounded-lg hover:bg-gray-100 transition"
-              title="Retour HV"
-            >
-              <ArrowLeft size={18} />
+        <div className="px-3 sm:px-4 py-3 flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button onClick={() => navigate('/app/hv')} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
+              <ArrowLeft size={20} />
             </button>
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-amber-100 rounded-xl">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="p-2 bg-amber-100 rounded-xl flex-shrink-0">
                 <MapPin size={18} className="text-amber-600" />
               </div>
-              <div>
-                <h1 className="font-bold text-gray-900">Localisation HV</h1>
-                <p className="text-xs text-gray-500">Placez / déplacez les équipements sur les plans</p>
+              <div className="min-w-0">
+                <h1 className="font-bold text-gray-900 text-sm sm:text-base truncate">Plans HV</h1>
+                <p className="text-xs text-gray-500 hidden sm:block">Localisation haute tension</p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Stats badges */}
-            <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            <div className="hidden md:flex items-center gap-1 text-xs">
               <Badge variant="default">Total: {stats.total}</Badge>
-              <Badge variant="success">Localisés: {stats.placed}</Badge>
-              <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
+              <Badge variant="success">Placés: {stats.placed}</Badge>
+              <Badge variant="warning">Non placés: {stats.unplaced}</Badge>
             </div>
 
-            {/* Import button */}
             <button
               onClick={() => zipInputRef.current?.click()}
-              className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
-              title="Importer un ZIP"
+              className="p-2 sm:px-3 sm:py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
             >
-              <Upload size={14} />
+              <Upload size={16} />
               <span className="hidden sm:inline">Import</span>
             </button>
             <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
 
-            {/* Toggle sidebar */}
-            <Btn
-              variant="ghost"
-              onClick={() => setShowSidebar(!showSidebar)}
-              className="flex items-center gap-2"
-            >
-              <Zap size={16} />
-              {showSidebar ? "Masquer" : "Afficher"} liste
-            </Btn>
+            {!isMobile && (
+              <button
+                onClick={() => setShowSidebar(!showSidebar)}
+                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
+              >
+                {showSidebar ? "Masquer" : "Afficher"} liste
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Plan selector */}
-        <div className="px-4 pb-3 flex items-center gap-2">
+        {/* Plan selector - responsive */}
+        <div className="px-3 sm:px-4 pb-3 flex items-center gap-2">
           <select
             value={selectedPlan?.logical_name || ""}
             onChange={async (e) => {
@@ -1252,7 +1255,7 @@ export default function HighVoltageMap() {
                 setInitialPoints(positions || []);
               }
             }}
-            className="flex-1 min-w-0 px-3 py-2 border rounded-xl text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+            className="flex-1 min-w-0 px-3 py-2 border rounded-lg text-sm bg-white truncate"
           >
             {plans.length === 0 && <option value="">Aucun plan disponible</option>}
             {plans.map(p => (
@@ -1278,28 +1281,28 @@ export default function HighVoltageMap() {
 
       {/* Content */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar */}
-        {showSidebar && (
-          <div className="w-full max-w-[360px] bg-white border-r shadow-sm flex flex-col animate-slideRight z-10">
+        {/* Desktop Sidebar */}
+        {showSidebar && !isMobile && (
+          <div className="w-80 bg-white border-r shadow-sm flex flex-col z-10">
             <div className="p-3 border-b space-y-2">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <Input
                   value={searchQuery}
                   onChange={setSearchQuery}
-                  placeholder="Rechercher un équipement..."
-                  className="pl-8"
+                  placeholder="Rechercher..."
+                  className="pl-9"
                 />
               </div>
-              <div className="flex gap-2">
-                <Btn variant={filterMode === "all" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
                   Tous
                 </Btn>
-                <Btn variant={filterMode === "placed" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "subtle" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
                   Non placés
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés
                 </Btn>
               </div>
             </div>
@@ -1307,7 +1310,7 @@ export default function HighVoltageMap() {
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {loadingEquipments ? (
                 <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-amber-500" />
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
                 </div>
               ) : filteredEquipments.length === 0 ? (
                 <EmptyState icon={Zap} title="Aucun équipement" description="Créez des équipements HV pour les placer sur le plan" />
@@ -1368,6 +1371,7 @@ export default function HighVoltageMap() {
                 pageIndex={pageIndex}
                 initialPoints={initialPoints}
                 selectedId={selectedEquipmentId}
+                controlStatuses={controlStatuses}
                 onReady={() => setPdfReady(true)}
                 onMovePoint={async (equipmentId, xy) => {
                   if (!stableSelectedPlan) return;
@@ -1397,7 +1401,7 @@ export default function HighVoltageMap() {
                 placementActive={!!placementMode || createMode}
               />
 
-              {/* Floating toolbar inside Leaflet */}
+              {/* Floating toolbar */}
               <div className="absolute top-2 left-2 sm:top-3 sm:left-3 z-[5000] flex flex-col gap-2">
                 <button
                   onClick={() => {
@@ -1422,20 +1426,16 @@ export default function HighVoltageMap() {
             <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />
           )}
 
-          {/* Create mode indicator - Mobile optimized */}
+          {/* Create mode indicator */}
           {createMode && (
-            <div className="absolute bottom-4 sm:bottom-6 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-50 animate-slideUp">
-              <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 bg-blue-600 text-white rounded-2xl shadow-xl">
+            <div className="absolute bottom-6 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-auto z-50 animate-slideUp">
+              <div className="flex items-center gap-3 px-4 py-3 bg-blue-600 text-white rounded-2xl shadow-xl">
                 <Crosshair size={20} className="animate-pulse flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm sm:text-base">Mode création</p>
-                  <p className="text-xs text-blue-200 truncate">Touchez le plan pour créer un équipement</p>
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm">Mode création actif</p>
+                  <p className="text-xs text-blue-200 truncate">Cliquez sur le plan pour créer un nouvel équipement HV</p>
                 </div>
-                <button
-                  onClick={() => setCreateMode(false)}
-                  className="p-2.5 hover:bg-white/20 rounded-lg transition-colors active:scale-95"
-                  style={{ touchAction: 'manipulation' }}
-                >
+                <button onClick={() => setCreateMode(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
                   <X size={18} />
                 </button>
               </div>
@@ -1464,6 +1464,85 @@ export default function HighVoltageMap() {
           )}
         </div>
       </div>
+
+      {/* Mobile sidebar button */}
+      {isMobile && (
+        <button
+          onClick={() => setShowSidebar(!showSidebar)}
+          className="fixed bottom-4 right-4 z-30 w-14 h-14 bg-amber-600 text-white rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+          style={{ touchAction: 'manipulation' }}
+        >
+          <Zap size={24} />
+        </button>
+      )}
+
+      {/* Mobile sidebar drawer */}
+      {isMobile && showSidebar && (
+        <div className="fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSidebar(false)} />
+          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl flex flex-col animate-slideRight">
+            <div className="p-4 border-b bg-gradient-to-r from-amber-500 to-orange-600 text-white flex items-center justify-between">
+              <h2 className="font-bold">Équipements HV</h2>
+              <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-white/20 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+            {/* Search and filters */}
+            <div className="p-3 border-b space-y-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <Input
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="Rechercher..."
+                  className="pl-9"
+                />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés
+                </Btn>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {loadingEquipments ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : filteredEquipments.length === 0 ? (
+                <EmptyState icon={Zap} title="Aucun équipement" description="Créez des équipements HV" />
+              ) : (
+                filteredEquipments.map(eq => (
+                  <HvCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={isPlacedHere(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
+                    isSelected={selectedEquipmentId === eq.id}
+                    onClick={() => {
+                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        setSelectedPosition(pos);
+                        setSelectedEquipment(eq);
+                        viewerRef.current?.highlightMarker(eq.id);
+                      }
+                      setShowSidebar(false);
+                    }}
+                    onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirm modal */}
       <ConfirmModal
