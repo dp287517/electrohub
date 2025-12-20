@@ -53,7 +53,7 @@ if (typeof document !== 'undefined' && !document.getElementById('control-styles'
 // Icons matching UnifiedEquipmentMap markers
 const EQUIPMENT_ICONS = {
   meca: { Icon: Settings, color: 'text-orange-500', bg: 'bg-orange-100' },      // Gear icon like map marker
-  vsd: { Icon: PlusSquare, color: 'text-emerald-500', bg: 'bg-emerald-100' },   // Square with plus like map marker
+  vsd: { Icon: Cpu, color: 'text-emerald-500', bg: 'bg-emerald-100' },          // CPU/chip icon like map marker
   hv: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },               // Lightning bolt
   mobile: { Icon: Cpu, color: 'text-cyan-500', bg: 'bg-cyan-100' },             // CPU/chip icon
   glo: { Icon: Battery, color: 'text-emerald-500', bg: 'bg-emerald-100' },      // Battery icon
