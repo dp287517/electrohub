@@ -807,9 +807,8 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
 
   const loadPositions = useCallback(async (plan, pageIdx = 0) => {
     if (!plan) return [];
-    const key = plan.logical_name || plan.id || "";
     try {
-      const r = await api.hvMaps.positions(key, pageIdx).catch(() => ({}));
+      const r = await api.hvMaps.positionsAuto(plan, pageIdx).catch(() => ({}));
       const list = Array.isArray(r?.positions)
         ? r.positions.map((item) => ({
             id: item.id,
@@ -907,7 +906,7 @@ export default function HighVoltageMap() {
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
     if (!stableSelectedPlan) return null;
-    return api.hvMaps.planFileUrl(stableSelectedPlan, { bust: true });
+    return api.hvMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
   }, [stableSelectedPlan]);
 
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
