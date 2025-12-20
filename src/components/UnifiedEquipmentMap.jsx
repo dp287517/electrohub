@@ -407,8 +407,8 @@ const UnifiedLeafletViewer = forwardRef(({
     const svgs = {
       // Switchboard: filled lightning bolt (h7)
       switchboard: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>`,
-      // VSD: rectangle with cross (+)
-      vsd: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="white" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="4" width="16" height="16" rx="2" stroke="white" stroke-width="2" fill="none"/><line x1="8" y1="12" x2="16" y2="12" stroke="white" stroke-width="2"/><line x1="12" y1="8" x2="12" y2="16" stroke="white" stroke-width="2"/></svg>`,
+      // VSD: CPU/chip icon (electronic component - same as mobile)
+      vsd: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>`,
       // Meca: sun/gear with radiating lines
       meca: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="white" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="3" fill="white"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`,
       // Mobile: CPU/chip icon (electronic component)
