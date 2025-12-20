@@ -418,15 +418,16 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     const isOverdue = controlStatus?.status === 'overdue';
     const isUpcoming = controlStatus?.status === 'upcoming';
 
+    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
     let bg;
     if (isSelected) {
-      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
     } else if (isOverdue) {
-      bg = "background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);";
+      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
     } else if (isUpcoming) {
-      bg = "background: radial-gradient(circle at 30% 30%, #fbbf24, #d97706);";
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
     } else {
-      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);";
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);"; // Amber/Orange - normal
     }
 
     let animClass = "";
@@ -785,11 +786,11 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
           HV Normal
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)" }} />
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)" }} />
           En retard
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fbbf24, #d97706)" }} />
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)" }} />
           À venir
         </span>
       </div>
