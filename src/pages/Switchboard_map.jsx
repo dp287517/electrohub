@@ -605,11 +605,10 @@ const SwitchboardLeafletViewer = forwardRef(
         bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);"; // Amber - Switchboard default
       }
 
-      // Icon aligned with UnifiedEquipmentMap
       const html = `
         <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
-          <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" stroke="white" stroke-width="1.5">
-            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" xmlns="http://www.w3.org/2000/svg">
+            <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
           </svg>
         </div>`;
       return L.divIcon({
