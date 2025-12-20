@@ -585,22 +585,24 @@ const SwitchboardLeafletViewer = forwardRef(
       // Check control status for this switchboard
       const controlStatus = switchboardId ? controlStatusesRef.current[switchboardId] : null;
       const isOverdue = controlStatus?.status === 'overdue';
+      const isUpcoming = controlStatus?.status === 'upcoming';
 
+      // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
       let bg;
       let animClass = "";
 
       if (isSelected) {
-        // Violet/bleu pulsant pour la sélection
-        bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+        bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
         animClass = "sb-marker-selected";
       } else if (isOverdue) {
-        // ROUGE CLIGNOTANT pour contrôle en retard
-        bg = "background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);";
+        bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
         animClass = "sb-marker-overdue";
+      } else if (isUpcoming) {
+        bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
       } else if (isPrincipal) {
-        bg = "background: radial-gradient(circle at 30% 30%, #34d399, #0ea5a4);";
+        bg = "background: radial-gradient(circle at 30% 30%, #10b981, #059669);"; // Emerald - principal
       } else {
-        bg = "background: radial-gradient(circle at 30% 30%, #facc15, #f59e0b);";
+        bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);"; // Amber - Switchboard default
       }
 
       const html = `

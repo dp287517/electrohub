@@ -340,6 +340,7 @@ const LeafletViewer = forwardRef(({
   pageIndex = 0,
   initialPoints = [],
   selectedId = null,
+  controlStatuses = {},
   onReady,
   onMovePoint,
   onClickPoint,
@@ -353,6 +354,7 @@ const LeafletViewer = forwardRef(({
   const imageLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
   const markersMapRef = useRef(new Map());
+  const controlStatusesRef = useRef(controlStatuses);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
@@ -477,6 +479,11 @@ const LeafletViewer = forwardRef(({
     })();
   }, [fileUrl, pageIndex, onReady]);
 
+  // Update controlStatusesRef when prop changes
+  useEffect(() => {
+    controlStatusesRef.current = controlStatuses;
+  }, [controlStatuses]);
+
   // Update markers
   useEffect(() => {
     if (!mapRef.current || !markersLayerRef.current || imgSize.w === 0) return;
@@ -493,20 +500,41 @@ const LeafletViewer = forwardRef(({
       const lng = pt.x_frac * imgSize.w;
       const isSel = pt.equipment_id === selectedId;
 
+      // Get control status for this equipment
+      const controlStatus = controlStatusesRef.current[pt.equipment_id];
+      const isOverdue = controlStatus?.status === 'overdue';
+      const isUpcoming = controlStatus?.status === 'upcoming';
+
+      // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
+      let bgColor;
+      let animClass = "";
+      if (isSel) {
+        bgColor = "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)"; // Purple - selected
+        animClass = "mobile-marker-selected";
+      } else if (isOverdue) {
+        bgColor = "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)"; // Red - overdue
+        animClass = "mobile-marker-overdue";
+      } else if (isUpcoming) {
+        bgColor = "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)"; // Amber - upcoming
+      } else {
+        bgColor = "radial-gradient(circle at 30% 30%, #8b5cf6, #7c3aed)"; // Purple - Mobile default
+      }
+
+      // Truck icon (matching UnifiedEquipmentMap mobile icon)
       const icon = L.divIcon({
-        className: "",
+        className: "mobile-marker-inline",
         html: `
-          <div class="relative flex items-center justify-center ${isSel ? "animate-bounce" : ""}">
-            <div class="absolute w-8 h-8 bg-cyan-500 rounded-full opacity-30 ${isSel ? "animate-ping" : ""}"></div>
-            <div class="relative w-6 h-6 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs font-bold">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-              </svg>
-            </div>
+          <div class="${animClass}" style="width:24px;height:24px;background:${bgColor};border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="white" stroke-width="2" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="3" width="15" height="13" rx="2"/>
+              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/>
+              <circle cx="5.5" cy="18.5" r="2.5"/>
+              <circle cx="18.5" cy="18.5" r="2.5"/>
+            </svg>
           </div>
         `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16],
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
       });
 
       const marker = L.marker([lat, lng], { icon, draggable: !disabled });
@@ -532,7 +560,7 @@ const LeafletViewer = forwardRef(({
       marker.addTo(layer);
       markersMapRef.current.set(pt.equipment_id, marker);
     });
-  }, [initialPoints, selectedId, imgSize, disabled, onClickPoint, onMovePoint, onContextMenu]);
+  }, [initialPoints, selectedId, controlStatuses, imgSize, disabled, onClickPoint, onMovePoint, onContextMenu]);
 
   // Map click for placement
   useEffect(() => {
@@ -592,6 +620,7 @@ export default function MobileEquipmentsMap() {
   const [sidebarOpen, setSidebarOpen] = useState(false); // Start closed on mobile
   const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [controlStatuses, setControlStatuses] = useState({});
 
   const viewerRef = useRef(null);
   const creatingRef = useRef(false);
@@ -664,6 +693,30 @@ export default function MobileEquipmentsMap() {
     }
   }, [plans]);
 
+  // Load control statuses from dashboard API
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const dashboardRes = await api.switchboardControls.dashboard();
+      const statuses = {};
+
+      (dashboardRes?.overdue_list || []).forEach(item => {
+        if (item.mobile_equipment_id) {
+          statuses[item.mobile_equipment_id] = { status: 'overdue', template_name: item.template_name };
+        }
+      });
+
+      (dashboardRes?.upcoming || []).forEach(item => {
+        if (item.mobile_equipment_id && !statuses[item.mobile_equipment_id]) {
+          statuses[item.mobile_equipment_id] = { status: 'upcoming', template_name: item.template_name };
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (err) {
+      console.error("Erreur chargement statuts contrôle Mobile:", err);
+    }
+  }, []);
+
   // Load plans and equipments
   useEffect(() => {
     (async () => {
@@ -686,13 +739,16 @@ export default function MobileEquipmentsMap() {
           setSelectedPlan(found || plansRes.plans[0]);
           setPageIndex(found ? savedPage : 0);
         }
+
+        // Load control statuses
+        loadControlStatuses();
       } catch (e) {
         console.error("[MobileEquipmentsMap] Load error:", e);
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [loadControlStatuses]);
 
   // Load positions when plan changes
   useEffect(() => {
@@ -933,7 +989,18 @@ export default function MobileEquipmentsMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        @keyframes pulse-selected {
+          0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); }
+          50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(139, 92, 246, 0); }
+        }
+        @keyframes blink-overdue {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.6; }
+        }
         .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
+        .mobile-marker-inline { background: transparent !important; border: none !important; }
+        .mobile-marker-selected > div { animation: pulse-selected 1.5s ease-in-out infinite; }
+        .mobile-marker-overdue > div { animation: blink-overdue 1s ease-in-out infinite; }
         .safe-area-top { padding-top: env(safe-area-inset-top, 0); }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
         .overscroll-contain { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -1021,6 +1088,7 @@ export default function MobileEquipmentsMap() {
                 pageIndex={pageIndex}
                 initialPoints={positions}
                 selectedId={selectedEquipment?.id}
+                controlStatuses={controlStatuses}
                 placementActive={!!placementMode || createMode}
                 onClickPoint={handleSelectPosition}
                 onMovePoint={handleMovePosition}
