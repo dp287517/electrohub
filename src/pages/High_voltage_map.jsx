@@ -592,8 +592,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     const jobKey = `${fileUrl}::${pageIndex}`;
     console.log("[HV-PDF] Job key:", jobKey, "lastJob:", lastJob.current.key);
     if (lastJob.current.key === jobKey) {
-      console.log("[HV-PDF] Same job key, skipping load");
-      onReady?.();
+      console.log("[HV-PDF] Same job key, skipping load - PDF already loading/loaded");
+      // Don't call onReady here! The original async load will call it when done
       return;
     }
     lastJob.current.key = jobKey;
@@ -763,7 +763,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
       cleanupMap();
       cleanupPdf();
     };
-  }, [fileUrl, pageIndex, disabled, drawMarkers, onReady, retryCount]);
+  // Note: drawMarkers and onReady are accessed via refs to avoid re-triggering this effect
+  }, [fileUrl, pageIndex, disabled, retryCount]);
 
   useEffect(() => {
     pointsRef.current = initialPoints;
