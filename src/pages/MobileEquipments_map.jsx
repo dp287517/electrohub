@@ -500,41 +500,20 @@ const LeafletViewer = forwardRef(({
       const lng = pt.x_frac * imgSize.w;
       const isSel = pt.equipment_id === selectedId;
 
-      // Get control status for this equipment
-      const controlStatus = controlStatusesRef.current[pt.equipment_id];
-      const isOverdue = controlStatus?.status === 'overdue';
-      const isUpcoming = controlStatus?.status === 'upcoming';
-
-      // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
-      let bgColor;
-      let animClass = "";
-      if (isSel) {
-        bgColor = "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)"; // Purple - selected
-        animClass = "mobile-marker-selected";
-      } else if (isOverdue) {
-        bgColor = "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)"; // Red - overdue
-        animClass = "mobile-marker-overdue";
-      } else if (isUpcoming) {
-        bgColor = "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)"; // Amber - upcoming
-      } else {
-        bgColor = "radial-gradient(circle at 30% 30%, #8b5cf6, #7c3aed)"; // Purple - Mobile default
-      }
-
-      // Truck icon (matching UnifiedEquipmentMap mobile icon)
       const icon = L.divIcon({
-        className: "mobile-marker-inline",
+        className: "",
         html: `
-          <div class="${animClass}" style="width:24px;height:24px;background:${bgColor};border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="white" stroke-width="2" xmlns="http://www.w3.org/2000/svg">
-              <rect x="1" y="3" width="15" height="13" rx="2"/>
-              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/>
-              <circle cx="5.5" cy="18.5" r="2.5"/>
-              <circle cx="18.5" cy="18.5" r="2.5"/>
-            </svg>
+          <div class="relative flex items-center justify-center ${isSel ? "animate-bounce" : ""}">
+            <div class="absolute w-8 h-8 bg-cyan-500 rounded-full opacity-30 ${isSel ? "animate-ping" : ""}"></div>
+            <div class="relative w-6 h-6 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs font-bold">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+            </div>
           </div>
         `,
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
       });
 
       const marker = L.marker([lat, lng], { icon, draggable: !disabled });

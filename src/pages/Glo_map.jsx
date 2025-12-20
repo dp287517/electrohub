@@ -426,37 +426,17 @@ const GloLeafletViewer = forwardRef(({
     }
   }, [controlStatuses]);
 
-  function makeGloIcon(isSelected = false, equipmentId = null) {
+  function makeGloIcon(isSelected = false) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const controlStatus = equipmentId ? controlStatusesRef.current[equipmentId] : null;
-    const isOverdue = controlStatus?.status === 'overdue';
-    const isUpcoming = controlStatus?.status === 'upcoming';
+    const bg = isSelected
+      ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
+      : "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
+    const animClass = isSelected ? "glo-marker-selected" : "";
 
-    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
-    let bg;
-    if (isSelected) {
-      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
-    } else if (isOverdue) {
-      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
-    } else if (isUpcoming) {
-      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
-    } else {
-      bg = "background: radial-gradient(circle at 30% 30%, #06b6d4, #0891b2);"; // Cyan - GLO default
-    }
-
-    let animClass = "";
-    if (isSelected) animClass = "glo-marker-selected";
-    else if (isOverdue) animClass = "glo-marker-overdue";
-
-    // Battery icon (matching UnifiedEquipmentMap GLO icon)
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
-        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="none" stroke="white" stroke-width="2" xmlns="http://www.w3.org/2000/svg">
-          <rect x="1" y="6" width="18" height="12" rx="2"/>
-          <line x1="23" y1="13" x2="23" y2="11"/>
-          <line x1="11" y1="10" x2="11" y2="14"/>
-          <line x1="7" y1="10" x2="7" y2="14"/>
-          <line x1="15" y1="10" x2="15" y2="14"/>
+        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/>
         </svg>
       </div>`;
     return L.divIcon({
@@ -484,7 +464,7 @@ const GloLeafletViewer = forwardRef(({
 
       const latlng = L.latLng(y, x);
       const isSelected = p.equipment_id === selectedIdRef.current;
-      const icon = makeGloIcon(isSelected, p.equipment_id);
+      const icon = makeGloIcon(isSelected);
 
       const mk = L.marker(latlng, {
         icon,
