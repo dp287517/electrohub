@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
-import { Zap, Cpu, Wrench, Truck, Battery, Grid3X3, Package } from "lucide-react";
+import { Zap, Cpu, Settings, Truck, Battery, Grid3X3, Package, PlusSquare } from "lucide-react";
 
 // ============================================================
 // ANIMATIONS CSS
@@ -50,12 +50,13 @@ if (typeof document !== 'undefined' && !document.getElementById('control-styles'
 // ============================================================
 // HELPER: Get equipment display name and link
 // ============================================================
+// Icons matching UnifiedEquipmentMap markers
 const EQUIPMENT_ICONS = {
-  meca: { Icon: Wrench, color: 'text-orange-500', bg: 'bg-orange-100' },
-  vsd: { Icon: Cpu, color: 'text-emerald-500', bg: 'bg-emerald-100' },
-  hv: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },
-  mobile: { Icon: Cpu, color: 'text-cyan-500', bg: 'bg-cyan-100' },
-  glo: { Icon: Battery, color: 'text-emerald-500', bg: 'bg-emerald-100' },
+  meca: { Icon: Settings, color: 'text-orange-500', bg: 'bg-orange-100' },      // Gear icon like map marker
+  vsd: { Icon: PlusSquare, color: 'text-emerald-500', bg: 'bg-emerald-100' },   // Square with plus like map marker
+  hv: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },               // Lightning bolt
+  mobile: { Icon: Cpu, color: 'text-cyan-500', bg: 'bg-cyan-100' },             // CPU/chip icon
+  glo: { Icon: Battery, color: 'text-emerald-500', bg: 'bg-emerald-100' },      // Battery icon
   device: { Icon: Grid3X3, color: 'text-gray-500', bg: 'bg-gray-100' },
   switchboard: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },
   unknown: { Icon: Package, color: 'text-gray-500', bg: 'bg-gray-100' },
