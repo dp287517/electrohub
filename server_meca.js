@@ -13,6 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
+import PDFDocument from "pdfkit";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 
 dotenv.config();
@@ -1388,6 +1389,85 @@ app.delete("/api/meca/subcategories/:id", async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// -------------------------------------------------
+// REPORT PDF GENERATION
+// -------------------------------------------------
+app.get("/api/meca/report", async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || "Default";
+    const { building, floor, category_id, search, from_date, to_date } = req.query;
+
+    let where = "WHERE 1=1";
+    const params = [];
+    let idx = 1;
+
+    if (building) { where += ` AND e.building = $${idx++}`; params.push(building); }
+    if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
+    if (category_id) { where += ` AND e.category_id = $${idx++}`; params.push(category_id); }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
+    if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
+
+    const { rows: equipments } = await pool.query(`
+      SELECT e.*, c.name as category_name, s.name as subcategory_name
+        FROM meca_equipments e
+        LEFT JOIN meca_equipment_categories c ON c.id = e.category_id
+        LEFT JOIN meca_equipment_subcategories s ON s.id = e.subcategory_id
+        ${where}
+       ORDER BY e.building, e.floor, e.name
+    `, params);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_meca_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT ÉQUIPEMENTS MÉCANIQUES', 50, 50, { align: 'center' });
+    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+
+    let y = 100;
+    doc.rect(50, y, 495, 40).fill('#f3f4f6');
+    doc.fontSize(11).fillColor('#374151');
+    doc.text(`Total: ${equipments.length} équipements`, 60, y + 12);
+
+    y += 60;
+    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
+    y += 25;
+
+    doc.rect(50, y, 495, 20).fill('#e5e7eb');
+    doc.fontSize(9).fillColor('#374151');
+    doc.text('Nom', 55, y + 6);
+    doc.text('Catégorie', 180, y + 6);
+    doc.text('Bâtiment', 320, y + 6);
+    doc.text('Étage', 420, y + 6);
+    doc.text('Statut', 480, y + 6);
+    y += 20;
+
+    for (const eq of equipments) {
+      if (y > 750) { doc.addPage(); y = 50; }
+      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(50, y, 495, 18).fill(bgColor);
+      doc.fontSize(8).fillColor('#374151');
+      doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
+      doc.text((eq.category_name || '-').substring(0, 25), 180, y + 5, { width: 135 });
+      doc.text((eq.building || '-').substring(0, 15), 320, y + 5, { width: 95 });
+      doc.text(eq.floor || '-', 420, y + 5, { width: 55 });
+      doc.text(eq.status || '-', 480, y + 5);
+      y += 18;
+    }
+
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+    }
+    doc.end();
+  } catch (e) {
+    console.error('[MECA] Report error:', e);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 

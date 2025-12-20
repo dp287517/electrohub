@@ -2127,6 +2127,96 @@ app.get('/api/mobile-equipment/audit/stats', async (req, res) => {
   }
 });
 
+// -------------------------------------------------
+// REPORT PDF GENERATION
+// -------------------------------------------------
+app.get('/api/mobile-equipment/report', async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || "Default";
+    const { building, floor, category_id, search, from_date, to_date, status } = req.query;
+
+    let where = "WHERE 1=1";
+    const params = [];
+    let idx = 1;
+
+    if (building) { where += ` AND e.building = $${idx++}`; params.push(building); }
+    if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
+    if (category_id) { where += ` AND e.category_id = $${idx++}`; params.push(category_id); }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
+    if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
+
+    const { rows: equipments } = await pool.query(`
+      SELECT e.*, c.name as category_name,
+             (SELECT MAX(ch.created_at) FROM me_checks ch WHERE ch.equipment_id = e.id) as last_check,
+             (SELECT ch.status FROM me_checks ch WHERE ch.equipment_id = e.id ORDER BY ch.created_at DESC LIMIT 1) as last_status
+        FROM me_equipments e
+        LEFT JOIN me_categories c ON c.id = e.category_id
+        ${where}
+       ORDER BY e.building, e.floor, e.name
+    `, params);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_mobile_equipment_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT ÉQUIPEMENTS MOBILES', 50, 50, { align: 'center' });
+    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+
+    // Stats
+    const totalChecked = equipments.filter(e => e.last_check).length;
+    const conformes = equipments.filter(e => e.last_status === 'conforme').length;
+    const nonConformes = equipments.filter(e => e.last_status === 'non_conforme').length;
+
+    let y = 100;
+    doc.rect(50, y, 495, 50).fill('#f3f4f6');
+    doc.fontSize(11).fillColor('#374151');
+    doc.text(`Total: ${equipments.length}`, 60, y + 12);
+    doc.text(`Contrôlés: ${totalChecked}`, 160, y + 12);
+    doc.text(`Conformes: ${conformes}`, 280, y + 12);
+    doc.text(`Non conformes: ${nonConformes}`, 400, y + 12);
+
+    y += 70;
+    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
+    y += 25;
+
+    doc.rect(50, y, 495, 20).fill('#e5e7eb');
+    doc.fontSize(9).fillColor('#374151');
+    doc.text('Nom', 55, y + 6);
+    doc.text('Catégorie', 180, y + 6);
+    doc.text('Bâtiment', 300, y + 6);
+    doc.text('Dernier ctrl', 390, y + 6);
+    doc.text('Statut', 470, y + 6);
+    y += 20;
+
+    for (const eq of equipments) {
+      if (y > 750) { doc.addPage(); y = 50; }
+      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(50, y, 495, 18).fill(bgColor);
+      doc.fontSize(8).fillColor('#374151');
+      doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
+      doc.text((eq.category_name || '-').substring(0, 20), 180, y + 5, { width: 115 });
+      doc.text((eq.building || '-').substring(0, 15), 300, y + 5, { width: 85 });
+      doc.text(eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-', 390, y + 5, { width: 75 });
+
+      const statusColor = eq.last_status === 'conforme' ? '#059669' : eq.last_status === 'non_conforme' ? '#dc2626' : '#6b7280';
+      doc.fillColor(statusColor).text(eq.last_status || '-', 470, y + 5);
+      y += 18;
+    }
+
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+    }
+    doc.end();
+  } catch (e) {
+    console.error('[mobile-equipment] Report error:', e);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`[mobile-equipment] listening on ${HOST}:${PORT}`);
   console.log(
