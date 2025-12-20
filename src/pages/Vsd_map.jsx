@@ -1053,16 +1053,9 @@ export default function VsdMap() {
 
   const refreshPlacedIds = async () => {
     try {
-      const placed = new Set();
-      for (const plan of plans) {
-        try {
-          const positions = await api.vsdMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
-          (positions?.positions || []).forEach(p => {
-            if (p.equipment_id) placed.add(p.equipment_id);
-          });
-        } catch {}
-      }
-      setPlacedIds(placed);
+      const res = await api.vsdMaps.placedIds();
+      const ids = res?.placed_ids || res?.ids || [];
+      setPlacedIds(new Set(ids));
     } catch (e) {
       console.error("Erreur chargement placements VSD:", e);
     }

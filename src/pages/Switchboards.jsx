@@ -1028,6 +1028,14 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                                     <MapPin size={8} />
                                   </span>
                                 )}
+                                {/* Direct access to controls */}
+                                <span
+                                  className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5"
+                                  onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?switchboard=${board.id}`); onClose(); }}
+                                  title="Accès contrôles"
+                                >
+                                  <ClipboardCheck size={8} />
+                                </span>
                                 {(board.device_count || 0) > 0 && (
                                   <ProgressRing progress={getProgress(board)} size={20} strokeWidth={2} />
                                 )}
@@ -1731,6 +1739,14 @@ export default function Switchboards() {
                               <MapPin size={8} />
                             </span>
                           )}
+                          {/* Direct access to controls */}
+                          <span
+                            className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center"
+                            onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?switchboard=${board.id}`); }}
+                            title="Accès contrôles"
+                          >
+                            <ClipboardCheck size={8} />
+                          </span>
                           {(board.device_count || 0) > 0 && (
                             <ProgressRing progress={getProgress(board)} size={20} strokeWidth={2} />
                           )}
@@ -2487,10 +2503,22 @@ export default function Switchboards() {
                                       </span>
                                     )}
                                     {controlStatuses[board.id]?.overdueCount > 0 && (
-                                      <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-0.5 animate-pulse">
+                                      <span
+                                        className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-0.5 animate-pulse cursor-pointer"
+                                        onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?tab=overdue&switchboard=${board.id}`); }}
+                                        title={`${controlStatuses[board.id].overdueCount} contrôle(s) en retard`}
+                                      >
                                         <AlertTriangle size={10} />
                                       </span>
                                     )}
+                                    {/* Direct access to controls */}
+                                    <span
+                                      className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] rounded-full flex items-center gap-0.5 cursor-pointer hover:bg-amber-200"
+                                      onClick={(e) => { e.stopPropagation(); navigate(`/app/switchboard-controls?switchboard=${board.id}`); }}
+                                      title="Accès contrôles"
+                                    >
+                                      <ClipboardCheck size={10} />
+                                    </span>
                                     {(board.device_count || 0) > 0 && (
                                       <ProgressRing progress={getProgress(board)} size={28} strokeWidth={3} />
                                     )}
