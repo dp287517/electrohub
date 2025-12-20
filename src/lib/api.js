@@ -1270,6 +1270,13 @@ export const api = {
 
     bulkRename: ({ field, from, to }) =>
       post("/api/vsd/bulk/rename", { field, from, to }),
+
+    // Report PDF
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/vsd/report?${qs}`;
+    },
   },
 
   /** --- VSD MAPS --- */
@@ -1436,6 +1443,13 @@ export const api = {
       put(`/api/meca/subcategories/${encodeURIComponent(id)}`, payload),
     deleteSubcategory: (id) =>
       del(`/api/meca/subcategories/${encodeURIComponent(id)}`),
+
+    // Report PDF
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/meca/report?${qs}`;
+    },
   },
 
   /** --- MECA MAPS --- */
@@ -1611,6 +1625,13 @@ export const api = {
       put(`/api/glo/subcategories/${encodeURIComponent(id)}`, payload),
     deleteSubcategory: (id) =>
       del(`/api/glo/subcategories/${encodeURIComponent(id)}`),
+
+    // Report PDF
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/glo/report?${qs}`;
+    },
   },
 
   /** --- GLO MAPS --- */
@@ -2202,6 +2223,13 @@ export const api = {
     createCategory: (payload) => post("/api/mobile-equipment/categories", payload),
     updateCategory: (id, payload) => put(`/api/mobile-equipment/categories/${encodeURIComponent(id)}`, payload),
     deleteCategory: (id) => del(`/api/mobile-equipment/categories/${encodeURIComponent(id)}`),
+
+    // Report PDF
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/mobile-equipment/report?${qs}`;
+    },
 
     // Maps (uses VSD plans)
     maps: {

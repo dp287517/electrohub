@@ -13,6 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
+import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 import { getSiteFilter } from "./lib/tenant-filter.js";
 const require = createRequire(import.meta.url);
@@ -1043,6 +1044,111 @@ app.post("/api/vsd/extract", multerFiles.array("files"), async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+// -------------------------------------------------
+// REPORT PDF GENERATION
+// -------------------------------------------------
+app.get("/report", async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || "Default";
+    const { building, floor, search, from_date, to_date } = req.query;
+
+    // Build query with filters
+    let where = "WHERE 1=1";
+    const params = [];
+    let idx = 1;
+
+    if (building) { where += ` AND e.table_name = $${idx++}`; params.push(building); }
+    if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.inverter ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
+    if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
+
+    const { rows: equipments } = await pool.query(`
+      SELECT e.*,
+             (SELECT COUNT(*) FROM vsd_checks c WHERE c.equipment_id = e.id) as check_count,
+             (SELECT MAX(c.created_at) FROM vsd_checks c WHERE c.equipment_id = e.id) as last_check
+        FROM vsd_equipments e
+        ${where}
+       ORDER BY e.table_name, e.floor, e.name
+    `, params);
+
+    // Get stats
+    const totalCount = equipments.length;
+    const withChecks = equipments.filter(e => e.check_count > 0).length;
+
+    // Create PDF
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_vsd_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT VSD', 50, 50, { align: 'center' });
+    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+
+    // Filters applied
+    let y = 100;
+    doc.fontSize(12).fillColor('#374151').text('Filtres appliqués:', 50, y);
+    y += 20;
+    doc.fontSize(10);
+    if (building) doc.text(`• Tableau: ${building}`, 60, y); y += building ? 15 : 0;
+    if (floor) doc.text(`• Étage: ${floor}`, 60, y); y += floor ? 15 : 0;
+    if (from_date || to_date) doc.text(`• Période: ${from_date || '...'} - ${to_date || '...'}`, 60, y); y += (from_date || to_date) ? 15 : 0;
+    if (!building && !floor && !from_date && !to_date) { doc.text('• Aucun filtre', 60, y); y += 15; }
+
+    // Stats box
+    y += 10;
+    doc.rect(50, y, 495, 40).fill('#f3f4f6');
+    doc.fontSize(11).fillColor('#374151');
+    doc.text(`Total équipements: ${totalCount}`, 60, y + 12);
+    doc.text(`Avec contrôles: ${withChecks}`, 200, y + 12);
+    doc.text(`Sans contrôle: ${totalCount - withChecks}`, 350, y + 12);
+
+    // Equipment list
+    y += 60;
+    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
+    y += 25;
+
+    // Table header
+    doc.rect(50, y, 495, 20).fill('#e5e7eb');
+    doc.fontSize(9).fillColor('#374151');
+    doc.text('Nom', 55, y + 6);
+    doc.text('Variateur', 150, y + 6);
+    doc.text('Tableau', 280, y + 6);
+    doc.text('Étage', 380, y + 6);
+    doc.text('Dernier ctrl', 440, y + 6);
+    y += 20;
+
+    // Table rows
+    for (const eq of equipments) {
+      if (y > 750) { doc.addPage(); y = 50; }
+
+      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(50, y, 495, 18).fill(bgColor);
+      doc.fontSize(8).fillColor('#374151');
+      doc.text((eq.name || '-').substring(0, 25), 55, y + 5, { width: 90 });
+      doc.text((eq.inverter || '-').substring(0, 30), 150, y + 5, { width: 125 });
+      doc.text((eq.table_name || '-').substring(0, 20), 280, y + 5, { width: 95 });
+      doc.text(eq.floor || '-', 380, y + 5, { width: 55 });
+      doc.text(eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-', 440, y + 5);
+      y += 18;
+    }
+
+    // Footer on each page
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af');
+      doc.text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[VSD] Report error:', e);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // -------------------------------------------------
 await ensureSchema();
 app.listen(PORT, HOST, () => {
