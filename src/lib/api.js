@@ -2289,13 +2289,12 @@ export const api = {
       return withBust(url, bust);
     },
 
-    // Auto-detect ID vs logical_name for plan file URL
+    // For HV maps, always use logical_name (backend only supports logical_name parameter)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       const site = currentSite();
-      const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
-      const url = isUuid(key) || isNumericId(key)
-        ? `${API_BASE}/api/hv/maps/planFile?id=${encodeURIComponent(key)}&site=${site}`
-        : `${API_BASE}/api/hv/maps/planFile?logical_name=${encodeURIComponent(key)}&site=${site}`;
+      // HV plans are identified by logical_name, not by numeric ID
+      const key = typeof plan === "string" ? plan : plan?.logical_name || plan?.id || "";
+      const url = `${API_BASE}/api/hv/maps/planFile?logical_name=${encodeURIComponent(key)}&site=${site}`;
       return withBust(url, bust);
     },
 
@@ -2305,12 +2304,10 @@ export const api = {
       return get("/api/hv/maps/positions", { logical_name: key, page_index });
     },
 
-    // Auto-detect ID vs logical_name for positions
+    // For HV maps, always use logical_name (backend only supports logical_name parameter)
     positionsAuto: (planOrKey, page_index = 0) => {
-      const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
-      if (isUuid(key) || isNumericId(key)) {
-        return get("/api/hv/maps/positions", { id: key, page_index });
-      }
+      // HV positions are stored by logical_name, not by numeric ID
+      const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.logical_name || planOrKey?.id || "";
       return get("/api/hv/maps/positions", { logical_name: key, page_index });
     },
 
