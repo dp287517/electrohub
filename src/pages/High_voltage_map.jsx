@@ -73,13 +73,12 @@ function userHeaders() {
 }
 
 function pdfDocOpts(url) {
+  console.log("[HV-PDF] Building PDF options for URL:", url);
   return {
     url,
-    httpHeaders: {
-      Authorization: `Bearer ${getCookie("token") || localStorage.getItem("eh_token") || ""}`,
-      ...userHeaders(),
-    },
     withCredentials: true,
+    httpHeaders: userHeaders(),
+    standardFontDataUrl: "/standard_fonts/",
   };
 }
 
@@ -544,14 +543,24 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
   }, []);
 
   useEffect(() => {
-    if (disabled) return;
-    if (!fileUrl || !wrapRef.current) return;
+    console.log("[HV-PDF] useEffect triggered - disabled:", disabled, "fileUrl:", fileUrl, "wrapRef.current:", !!wrapRef.current);
+
+    if (disabled) {
+      console.log("[HV-PDF] Exiting early: disabled=true");
+      return;
+    }
+    if (!fileUrl || !wrapRef.current) {
+      console.log("[HV-PDF] Exiting early: fileUrl=", fileUrl, "wrapRef.current=", !!wrapRef.current);
+      return;
+    }
 
     let cancelled = false;
     aliveRef.current = true;
 
     const jobKey = `${fileUrl}::${pageIndex}`;
+    console.log("[HV-PDF] Job key:", jobKey, "lastJob:", lastJob.current.key);
     if (lastJob.current.key === jobKey) {
+      console.log("[HV-PDF] Same job key, skipping load");
       onReady?.();
       return;
     }
@@ -579,12 +588,15 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
 
     (async () => {
       try {
+        console.log("[HV-PDF] Starting PDF load...");
         await cleanupPdf();
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
+        console.log("[HV-PDF] Calling pdfjsLib.getDocument with URL:", fileUrl);
         loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
         const pdf = await loadingTaskRef.current.promise;
+        console.log("[HV-PDF] PDF loaded successfully, numPages:", pdf.numPages);
         if (cancelled) return;
 
         const page = await pdf.getPage(Number(pageIndex) + 1);
@@ -905,8 +917,13 @@ export default function HighVoltageMap() {
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
-    if (!stableSelectedPlan) return null;
-    return api.hvMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
+    if (!stableSelectedPlan) {
+      console.log("[HV-MAP] stableFileUrl: null (no plan selected)");
+      return null;
+    }
+    const url = api.hvMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
+    console.log("[HV-MAP] stableFileUrl generated:", url, "from plan:", stableSelectedPlan?.logical_name);
+    return url;
   }, [stableSelectedPlan]);
 
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
@@ -979,6 +996,7 @@ export default function HighVoltageMap() {
 
       if (!planToSelect) planToSelect = plans[0];
 
+      console.log("[HV-MAP] Selecting plan:", planToSelect?.logical_name, "full:", planToSelect);
       setSelectedPlan(planToSelect);
       setPageIndex(pageIdx);
 
@@ -1007,7 +1025,9 @@ export default function HighVoltageMap() {
     setLoadingPlans(true);
     try {
       const res = await api.hvMaps.listPlans();
-      setPlans(res?.plans || res || []);
+      const plansList = res?.plans || res || [];
+      console.log("[HV-MAP] Plans loaded:", plansList.length, "plans:", plansList.map(p => ({ logical_name: p.logical_name, id: p.id })));
+      setPlans(plansList);
     } catch (err) {
       console.error("Erreur chargement plans HV:", err);
     } finally {
