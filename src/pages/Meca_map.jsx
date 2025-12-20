@@ -434,16 +434,16 @@ const MecaLeafletViewer = forwardRef(({
     const isOverdue = controlStatus?.status === 'overdue';
     const isUpcoming = controlStatus?.status === 'upcoming';
 
-    // Color based on control status: red for overdue, amber for upcoming, orange for normal
+    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
     let bg;
     if (isSelected) {
-      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);";
+      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
     } else if (isOverdue) {
-      bg = "background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);";
+      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
     } else if (isUpcoming) {
-      bg = "background: radial-gradient(circle at 30% 30%, #fbbf24, #d97706);";
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
     } else {
-      bg = "background: radial-gradient(circle at 30% 30%, #fb923c, #ea580c);";
+      bg = "background: radial-gradient(circle at 30% 30%, #3b82f6, #2563eb);"; // Blue - Meca default
     }
 
     let animClass = "";
