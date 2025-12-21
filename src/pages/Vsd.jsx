@@ -7,7 +7,7 @@ import {
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
   Tag, Hash, Factory, Gauge, Thermometer, Network, Info,
-  ClipboardCheck, History
+  ClipboardCheck, History, FileText, Download
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -1231,6 +1231,11 @@ export default function Vsd() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Report modal state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportFilters, setReportFilters] = useState({ building: '', status: '', criticality: '' });
+  const [reportLoading, setReportLoading] = useState(false);
+
   // Control statuses (like Switchboards)
   const [controlStatuses, setControlStatuses] = useState({});
 
@@ -1482,6 +1487,28 @@ export default function Vsd() {
     unplaced: equipments.filter(e => !placedIds.has(e.id)).length,
   }), [equipments, placedIds]);
 
+  // Liste des bâtiments uniques pour le filtre du rapport
+  const buildings = useMemo(() => {
+    const set = new Set(equipments.map(e => e.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [equipments]);
+
+  // Fonction pour générer le rapport PDF
+  const generateReport = useCallback(() => {
+    setReportLoading(true);
+    try {
+      const url = api.vsd.reportUrl(reportFilters);
+      window.open(url, '_blank');
+    } catch (e) {
+      showToast('Erreur lors de la génération du rapport', 'error');
+    } finally {
+      setTimeout(() => {
+        setReportLoading(false);
+        setShowReportModal(false);
+      }, 500);
+    }
+  }, [reportFilters, showToast]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <style>{`
@@ -1526,6 +1553,15 @@ export default function Vsd() {
               <Badge variant="success">Localisés: {stats.placed}</Badge>
               <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
             </div>
+
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="px-3 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-100 flex items-center gap-2"
+              title="Générer un rapport PDF"
+            >
+              <FileText size={16} />
+              Rapport
+            </button>
 
             <button
               onClick={() => navigate('/app/vsd/map')}
@@ -1699,6 +1735,114 @@ export default function Vsd() {
         onClose={() => setShowShareModal(false)}
         equipment={selectedEquipment}
       />
+
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-slideUp">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl">
+                  <FileText size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">Rapport PDF</h2>
+                  <p className="text-amber-100 text-sm">Variateurs de fréquence</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content - Filtres */}
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
+              </p>
+
+              {/* Filtre Bâtiment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+                <select
+                  value={reportFilters.building}
+                  onChange={e => setReportFilters(f => ({ ...f, building: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Tous les bâtiments</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Statut */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
+                <select
+                  value={reportFilters.status}
+                  onChange={e => setReportFilters(f => ({ ...f, status: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Tous les statuts</option>
+                  <option value="en_service">En service</option>
+                  <option value="hors_service">Hors service</option>
+                  <option value="spare">Spare</option>
+                </select>
+              </div>
+
+              {/* Filtre Criticité */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Criticité</label>
+                <select
+                  value={reportFilters.criticality}
+                  onChange={e => setReportFilters(f => ({ ...f, criticality: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Toutes les criticités</option>
+                  <option value="critique">Critique</option>
+                  <option value="important">Important</option>
+                  <option value="standard">Standard</option>
+                </select>
+              </div>
+
+              {/* Résumé */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-sm text-amber-800">
+                  <span className="font-medium">Le rapport inclura :</span>{' '}
+                  {reportFilters.building || "Tous les bâtiments"}
+                  {" / "}
+                  {reportFilters.status === "en_service" ? "En service" :
+                   reportFilters.status === "hors_service" ? "Hors service" :
+                   reportFilters.status === "spare" ? "Spare" : "Tous les statuts"}
+                  {" / "}
+                  {reportFilters.criticality || "Toutes les criticités"}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="border-t p-4 flex gap-3">
+              <button
+                onClick={() => { setShowReportModal(false); setReportFilters({ building: '', status: '', criticality: '' }); }}
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={generateReport}
+                disabled={reportLoading}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-medium hover:from-amber-600 hover:to-orange-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {reportLoading ? (
+                  <RefreshCw size={18} className="animate-spin" />
+                ) : (
+                  <>
+                    <Download size={18} />
+                    Télécharger le PDF
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && (
