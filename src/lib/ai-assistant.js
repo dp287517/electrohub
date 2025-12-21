@@ -78,8 +78,8 @@ class AIAssistant {
       }
 
       if (context.dashboard) {
-        context.upcomingControls = context.dashboard.upcoming || 0;
-        context.overdueControls = context.dashboard.overdue || 0;
+        context.upcomingControls = context.dashboard.stats?.pending || 0;
+        context.overdueControls = context.dashboard.stats?.overdue || 0;
       }
 
       // Mettre en cache
