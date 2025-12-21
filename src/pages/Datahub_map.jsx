@@ -1,4 +1,4 @@
-// src/pages/Datahub_map.jsx - Map view for Datahub using VSD plans
+// src/pages/Datahub_map.jsx - Map view for Datahub using VSD plans (improved responsive)
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
@@ -6,7 +6,7 @@ import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Database, Search, ChevronLeft, ChevronRight, Building2, MapPin, X, RefreshCw, Trash2, ArrowLeft, Plus, Circle } from "lucide-react";
+import { Database, Search, ChevronLeft, ChevronRight, Building2, MapPin, X, RefreshCw, Trash2, ArrowLeft, Plus, Circle, Menu, CheckCircle, AlertCircle } from "lucide-react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -28,6 +28,27 @@ function pdfDocOpts(url) {
 
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
+// Badge component
+const Badge = ({ children, variant = 'default' }) => {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    warning: 'bg-amber-100 text-amber-700',
+  };
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]}`}>{children}</span>;
+};
+
+// Empty state component
+const EmptyState = ({ icon: Icon, title, description }) => (
+  <div className="flex-1 flex items-center justify-center p-8">
+    <div className="text-center">
+      <Icon size={48} className="mx-auto mb-4 text-gray-300" />
+      <h3 className="text-lg font-medium text-gray-600 mb-2">{title}</h3>
+      <p className="text-sm text-gray-400 max-w-xs mx-auto">{description}</p>
+    </div>
+  </div>
+);
+
 export default function DatahubMap() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -45,6 +66,7 @@ export default function DatahubMap() {
   const [isPlacing, setIsPlacing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
@@ -55,8 +77,13 @@ export default function DatahubMap() {
   const pdfDocRef = useRef(null);
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) setShowSidebar(false);
+    };
     window.addEventListener("resize", handleResize);
+    handleResize();
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
@@ -225,10 +252,26 @@ export default function DatahubMap() {
     }
   }, [focusItemId, items, positions]);
 
+  // Filter items
   const filteredItems = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    return items.filter(i => !q || i.name?.toLowerCase().includes(q) || i.code?.toLowerCase().includes(q));
-  }, [items, searchQuery]);
+    let list = items.filter(i => !q || i.name?.toLowerCase().includes(q) || i.code?.toLowerCase().includes(q));
+
+    if (filterMode === "placed") {
+      list = list.filter(i => placedIds.has(String(i.id)));
+    } else if (filterMode === "unplaced") {
+      list = list.filter(i => !placedIds.has(String(i.id)));
+    }
+
+    return list;
+  }, [items, searchQuery, filterMode, placedIds]);
+
+  // Stats
+  const stats = useMemo(() => ({
+    total: items.length,
+    placed: items.filter(i => placedIds.has(String(i.id))).length,
+    unplaced: items.filter(i => !placedIds.has(String(i.id))).length,
+  }), [items, placedIds]);
 
   const handleDeletePosition = async (posId) => {
     try {
@@ -242,117 +285,253 @@ export default function DatahubMap() {
   return (
     <div className="h-screen flex flex-col bg-gray-100">
       {/* Header */}
-      <div className="bg-white border-b shadow-sm z-20 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate("/app/datahub")} className="p-2 hover:bg-gray-100 rounded-lg"><ArrowLeft size={20} /></button>
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white">
-              <Database size={20} />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-gray-900">Datahub - Plans</h1>
-              <p className="text-xs text-gray-500">{selectedPlan?.display_name || selectedPlan?.logical_name || "Aucun plan"}</p>
+      <div className="bg-white border-b shadow-sm z-20">
+        {/* Top row */}
+        <div className="px-4 py-3 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate("/app/datahub")} className="p-2 hover:bg-gray-100 rounded-lg">
+              <ArrowLeft size={20} />
+            </button>
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white">
+                <Database size={20} />
+              </div>
+              <div className="hidden sm:block">
+                <h1 className="text-lg font-bold text-gray-900">Datahub - Plans</h1>
+                <p className="text-xs text-gray-500">{selectedPlan?.display_name || selectedPlan?.logical_name || "Aucun plan"}</p>
+              </div>
             </div>
           </div>
+
+          {/* Stats badges */}
+          <div className="hidden md:flex items-center gap-2">
+            <Badge variant="default">Total: {stats.total}</Badge>
+            <Badge variant="success">Localisés: {stats.placed}</Badge>
+            <Badge variant="warning">Non localisés: {stats.unplaced}</Badge>
+          </div>
+
+          {/* Toggle sidebar on mobile */}
+          <button
+            onClick={() => setShowSidebar(v => !v)}
+            className="p-2 hover:bg-gray-100 rounded-lg md:hidden relative"
+          >
+            <Menu size={20} />
+            {stats.unplaced > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[10px] rounded-full flex items-center justify-center">
+                {stats.unplaced}
+              </span>
+            )}
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <select value={selectedPlan?.logical_name || ""} onChange={e => {
-            const p = plans.find(p => p.logical_name === e.target.value);
-            if (p) { setSelectedPlan(p); setPageIndex(0); }
-          }} className="px-3 py-2 border border-gray-200 rounded-xl bg-white text-sm">
+        {/* Plan selector row */}
+        <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+          <select
+            value={selectedPlan?.logical_name || ""}
+            onChange={e => {
+              const p = plans.find(p => p.logical_name === e.target.value);
+              if (p) { setSelectedPlan(p); setPageIndex(0); }
+            }}
+            className="flex-1 min-w-[150px] px-3 py-2 border border-gray-200 rounded-xl bg-white text-sm"
+          >
+            {plans.length === 0 && <option value="">Aucun plan disponible</option>}
             {plans.map(p => <option key={p.logical_name || p.id} value={p.logical_name}>{p.display_name || p.logical_name}</option>)}
           </select>
 
           {numPages > 1 && (
             <div className="flex items-center gap-1 bg-gray-100 rounded-xl px-2 py-1">
-              <button onClick={() => setPageIndex(i => Math.max(0, i - 1))} disabled={pageIndex === 0} className="p-1 disabled:opacity-30"><ChevronLeft size={18} /></button>
-              <span className="text-sm px-2">{pageIndex + 1} / {numPages}</span>
-              <button onClick={() => setPageIndex(i => Math.min(numPages - 1, i + 1))} disabled={pageIndex >= numPages - 1} className="p-1 disabled:opacity-30"><ChevronRight size={18} /></button>
+              <button onClick={() => setPageIndex(i => Math.max(0, i - 1))} disabled={pageIndex === 0} className="p-1 disabled:opacity-30">
+                <ChevronLeft size={18} />
+              </button>
+              <span className="text-sm px-2">{pageIndex + 1}/{numPages}</span>
+              <button onClick={() => setPageIndex(i => Math.min(numPages - 1, i + 1))} disabled={pageIndex >= numPages - 1} className="p-1 disabled:opacity-30">
+                <ChevronRight size={18} />
+              </button>
             </div>
           )}
 
-          <button onClick={() => setShowSidebar(v => !v)} className="p-2 hover:bg-gray-100 rounded-lg lg:hidden">
-            {showSidebar ? <X size={20} /> : <Building2 size={20} />}
-          </button>
+          {!isMobile && (
+            <button
+              onClick={() => setShowSidebar(v => !v)}
+              className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
+            >
+              {showSidebar ? "Masquer la liste" : "Afficher la liste"}
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Content */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Map */}
-        <div className="flex-1 relative">
-          <div ref={mapContainerRef} className="absolute inset-0" />
-          {isLoading && (
-            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10">
-              <RefreshCw size={32} className="animate-spin text-indigo-500" />
-            </div>
-          )}
-          {isPlacing && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-4 py-2 rounded-xl shadow-lg z-20 flex items-center gap-2">
-              <MapPin size={18} />Cliquez pour placer "{selectedItem?.name}"
-              <button onClick={() => setIsPlacing(false)} className="p-1 hover:bg-white/20 rounded"><X size={16} /></button>
-            </div>
-          )}
-        </div>
-
         {/* Sidebar */}
-        {(showSidebar || !isMobile) && (
-          <div className={`${isMobile ? 'absolute inset-y-0 right-0 z-30' : ''} w-80 bg-white border-l shadow-lg flex flex-col`}>
-            <div className="p-4 border-b">
-              <div className="relative">
-                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Rechercher..." className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl" />
+        {showSidebar && (
+          <>
+            {/* Mobile backdrop */}
+            {isMobile && (
+              <div className="absolute inset-0 bg-black/50 z-20" onClick={() => setShowSidebar(false)} />
+            )}
+
+            <div className={`${isMobile ? 'absolute inset-y-0 right-0 z-30 w-[85vw] max-w-[320px]' : 'w-80'} bg-white border-l shadow-lg flex flex-col`}>
+              {/* Search and filter */}
+              <div className="p-3 border-b space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Items</span>
+                  {isMobile && (
+                    <button onClick={() => setShowSidebar(false)} className="p-1 hover:bg-gray-100 rounded">
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Rechercher..."
+                    className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-xl text-sm"
+                  />
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setFilterMode("all")}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${filterMode === 'all' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    Tous
+                  </button>
+                  <button
+                    onClick={() => setFilterMode("unplaced")}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${filterMode === 'unplaced' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    Non placés
+                  </button>
+                  <button
+                    onClick={() => setFilterMode("placed")}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${filterMode === 'placed' ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    Placés
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {filteredItems.map(item => {
-                const cat = categories.find(c => c.id === item.category_id);
-                const placed = placedIds.has(String(item.id));
-                const isSelected = selectedItem?.id === item.id;
+              {/* Items list */}
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {filteredItems.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Database size={32} className="mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">Aucun item</p>
+                  </div>
+                ) : filteredItems.map(item => {
+                  const cat = categories.find(c => c.id === item.category_id);
+                  const placed = placedIds.has(String(item.id));
+                  const isSelected = selectedItem?.id === item.id;
 
-                return (
-                  <button key={item.id} onClick={() => { setSelectedItem(item); setIsPlacing(false); }}
-                    className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all ${isSelected ? 'bg-indigo-100 border-indigo-300' : 'bg-gray-50 hover:bg-gray-100'} border`}>
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: cat?.color || '#6366F1' }}>
-                      <Circle size={14} className="text-white" />
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => { setSelectedItem(item); setIsPlacing(false); }}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all ${isSelected ? 'bg-indigo-100 border-indigo-300' : 'bg-gray-50 hover:bg-gray-100'} border`}
+                    >
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: cat?.color || '#6366F1' }}>
+                        <Circle size={14} className="text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate text-sm">{item.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{item.building || '-'} • {item.floor || '-'}</p>
+                      </div>
+                      {placed ? (
+                        <CheckCircle size={16} className="text-emerald-500 flex-shrink-0" />
+                      ) : (
+                        <AlertCircle size={16} className="text-amber-500 flex-shrink-0" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selected item actions */}
+              {selectedItem && (
+                <div className="border-t p-3 space-y-2 bg-gray-50">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: categories.find(c => c.id === selectedItem.category_id)?.color || '#6366F1' }}>
+                      <Circle size={12} className="text-white" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{item.name}</p>
-                      <p className="text-xs text-gray-500">{item.building} • {item.floor}</p>
+                      <p className="text-sm font-medium text-gray-900 truncate">{selectedItem.name}</p>
+                      <p className="text-xs text-gray-500">{selectedItem.code || '-'}</p>
                     </div>
-                    {placed ? (
-                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] rounded-full">Placé</span>
-                    ) : (
-                      <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] rounded-full">-</span>
-                    )}
-                  </button>
-                );
-              })}
+                  </div>
+                  {placedIds.has(String(selectedItem.id)) ? (
+                    <button
+                      onClick={() => {
+                        const pos = positions.find(p => p.item_id === selectedItem.id);
+                        if (pos) handleDeletePosition(pos.id);
+                      }}
+                      className="w-full py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100"
+                    >
+                      <Trash2 size={16} />Supprimer position
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setIsPlacing(true)}
+                      className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2 hover:from-indigo-600 hover:to-purple-700"
+                    >
+                      <Plus size={16} />Placer sur le plan
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-
-            {selectedItem && (
-              <div className="border-t p-4 space-y-2">
-                <div className="text-sm font-medium text-gray-900 truncate">{selectedItem.name}</div>
-                {placedIds.has(String(selectedItem.id)) ? (
-                  <button onClick={() => {
-                    const pos = positions.find(p => p.item_id === selectedItem.id);
-                    if (pos) handleDeletePosition(pos.id);
-                  }} className="w-full py-2 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2">
-                    <Trash2 size={16} />Supprimer position
-                  </button>
-                ) : (
-                  <button onClick={() => setIsPlacing(true)}
-                    className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2">
-                    <Plus size={16} />Placer sur le plan
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          </>
         )}
+
+        {/* Map */}
+        <div className="flex-1 relative">
+          {!selectedPlan || plans.length === 0 ? (
+            <EmptyState
+              icon={MapPin}
+              title="Aucun plan disponible"
+              description="Importez des plans PDF depuis la page VSD pour pouvoir localiser les items Datahub"
+            />
+          ) : (
+            <>
+              <div ref={mapContainerRef} className="absolute inset-0" />
+              {isLoading && (
+                <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw size={32} className="animate-spin text-indigo-500" />
+                    <span className="text-sm text-gray-600">Chargement du plan...</span>
+                  </div>
+                </div>
+              )}
+              {isPlacing && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-4 py-2 rounded-xl shadow-lg z-20 flex items-center gap-2 max-w-[90vw]">
+                  <MapPin size={18} className="flex-shrink-0" />
+                  <span className="truncate">Cliquez pour placer "{selectedItem?.name}"</span>
+                  <button onClick={() => setIsPlacing(false)} className="p-1 hover:bg-white/20 rounded flex-shrink-0">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
+
+      {/* Mobile FAB to open sidebar */}
+      {isMobile && !showSidebar && (
+        <button
+          onClick={() => setShowSidebar(true)}
+          className="absolute bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
+        >
+          <Database size={24} />
+          {stats.unplaced > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+              {stats.unplaced}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 }

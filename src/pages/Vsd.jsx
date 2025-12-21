@@ -1257,7 +1257,8 @@ export default function Vsd() {
   const loadPlacements = useCallback(async () => {
     try {
       const response = await api.vsdMaps.placedIds();
-      const ids = (response?.placed_ids || []).map(Number);
+      // IDs may be UUIDs (strings) - don't convert to numbers
+      const ids = response?.placed_ids || [];
       setPlacedIds(new Set(ids));
       setPlacedDetails(response?.placed_details || {});
     } catch (e) {
