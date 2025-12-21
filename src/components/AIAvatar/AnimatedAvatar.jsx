@@ -1,64 +1,59 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 
-// Avatars modernes style Apple Memoji - propres et réalistes
+// Avatars modernes et propres - style iconique
 const AVATAR_STYLES = {
-  lucas: {
-    name: 'Lucas',
-    description: 'Assistant principal',
-    skinTone: '#FFDBB4',
-    hairColor: '#4A3728',
-    eyeColor: '#4A90D9',
-    shirtColor: '#3B82F6',
-    gender: 'male'
+  electro: {
+    name: 'Electro',
+    description: 'Assistant ElectroHub',
+    primaryColor: '#3B82F6',
+    secondaryColor: '#1D4ED8',
+    accentColor: '#60A5FA',
+    icon: 'bolt'
   },
-  emma: {
-    name: 'Emma',
-    description: 'Experte technique',
-    skinTone: '#F5D0C5',
-    hairColor: '#2C1810',
-    eyeColor: '#634E34',
-    shirtColor: '#8B5CF6',
-    gender: 'female'
+  nova: {
+    name: 'Nova',
+    description: 'Intelligence avancée',
+    primaryColor: '#8B5CF6',
+    secondaryColor: '#6D28D9',
+    accentColor: '#A78BFA',
+    icon: 'star'
   },
-  noah: {
-    name: 'Noah',
-    description: 'Spécialiste conformité',
-    skinTone: '#8D5524',
-    hairColor: '#1A1A1A',
-    eyeColor: '#3D2314',
-    shirtColor: '#10B981',
-    gender: 'male'
+  eco: {
+    name: 'Eco',
+    description: 'Expert conformité',
+    primaryColor: '#10B981',
+    secondaryColor: '#059669',
+    accentColor: '#34D399',
+    icon: 'leaf'
   },
-  sofia: {
-    name: 'Sofia',
-    description: 'Analyste données',
-    skinTone: '#C68642',
-    hairColor: '#1C1C1C',
-    eyeColor: '#2E5A1C',
-    shirtColor: '#F59E0B',
-    gender: 'female'
+  spark: {
+    name: 'Spark',
+    description: 'Analyste technique',
+    primaryColor: '#F59E0B',
+    secondaryColor: '#D97706',
+    accentColor: '#FBBF24',
+    icon: 'zap'
   },
-  alex: {
-    name: 'Alex',
-    description: 'Ingénieur système',
-    skinTone: '#FFE0BD',
-    hairColor: '#8B7355',
-    eyeColor: '#6B8E23',
-    shirtColor: '#EC4899',
-    gender: 'neutral'
+  pulse: {
+    name: 'Pulse',
+    description: 'Assistant dynamique',
+    primaryColor: '#EC4899',
+    secondaryColor: '#DB2777',
+    accentColor: '#F472B6',
+    icon: 'heart'
   }
 };
 
 const AnimatedAvatar = forwardRef(({
-  style = 'lucas',
+  style = 'electro',
   size = 'md',
   speaking = false,
   emotion = 'neutral',
   onClick,
   className = ''
 }, ref) => {
-  const [mouthOpen, setMouthOpen] = useState(0);
-  const [blinkState, setBlinkState] = useState(false);
+  const [pulsePhase, setPulsePhase] = useState(0);
+  const [waveOffset, setWaveOffset] = useState(0);
   const animationRef = useRef(null);
   const speakingRef = useRef(speaking);
 
@@ -67,44 +62,96 @@ const AnimatedAvatar = forwardRef(({
     stopSpeaking: () => speakingRef.current = false,
   }));
 
-  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.lucas;
-
+  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.electro;
   const sizes = { xs: 32, sm: 40, md: 56, lg: 80, xl: 120 };
   const s = sizes[size] || sizes.md;
 
-  // Clignement naturel
+  // Animation de pulsation
   useEffect(() => {
-    const blink = () => {
-      setBlinkState(true);
-      setTimeout(() => setBlinkState(false), 150);
-    };
-    const interval = setInterval(blink, 3000 + Math.random() * 2000);
+    const interval = setInterval(() => {
+      setPulsePhase(p => (p + 1) % 360);
+    }, 50);
     return () => clearInterval(interval);
   }, []);
 
-  // Lip-sync animation
+  // Animation de parole
   useEffect(() => {
     speakingRef.current = speaking;
     if (speaking) {
       const animate = () => {
         if (speakingRef.current) {
-          const time = Date.now() / 80;
-          setMouthOpen(Math.abs(Math.sin(time * 2.5) * Math.sin(time * 1.3)) * 100);
+          setWaveOffset(Date.now() / 100);
           animationRef.current = requestAnimationFrame(animate);
         }
       };
       animationRef.current = requestAnimationFrame(animate);
     } else {
-      setMouthOpen(0);
+      setWaveOffset(0);
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     }
     return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
   }, [speaking]);
 
-  const skinDark = adjustColor(avatar.skinTone, -25);
-  const skinLight = adjustColor(avatar.skinTone, 15);
-  const hairDark = adjustColor(avatar.hairColor, -20);
-  const mouthHeight = 1 + (mouthOpen / 100) * 6;
+  const glowIntensity = speaking ? 0.6 : 0.3 + Math.sin(pulsePhase * 0.05) * 0.1;
+
+  // Générer les barres audio
+  const audioBars = speaking ? [0, 1, 2, 3, 4].map(i => ({
+    height: 8 + Math.abs(Math.sin(waveOffset + i * 0.8)) * 16,
+    delay: i * 0.1
+  })) : [];
+
+  const renderIcon = () => {
+    const iconSize = s * 0.35;
+    const cx = 50;
+    const cy = 45;
+
+    switch (avatar.icon) {
+      case 'bolt':
+        return (
+          <path
+            d="M52 25 L42 48 L48 48 L46 65 L58 42 L52 42 L52 25"
+            fill="white"
+            stroke="white"
+            strokeWidth="1"
+            strokeLinejoin="round"
+          />
+        );
+      case 'star':
+        return (
+          <path
+            d="M50 25 L53 40 L68 40 L56 50 L60 65 L50 55 L40 65 L44 50 L32 40 L47 40 Z"
+            fill="white"
+          />
+        );
+      case 'leaf':
+        return (
+          <path
+            d="M50 65 C50 65 35 50 35 38 C35 28 42 25 50 25 C58 25 65 28 65 38 C65 50 50 65 50 65 M50 65 L50 45 M45 50 L50 45 L55 50"
+            fill="none"
+            stroke="white"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'zap':
+        return (
+          <path
+            d="M55 25 L40 47 L48 47 L45 65 L60 43 L52 43 L55 25"
+            fill="white"
+          />
+        );
+      case 'heart':
+        return (
+          <path
+            d="M50 60 C35 48 30 38 30 33 C30 27 35 24 40 24 C45 24 48 27 50 30 C52 27 55 24 60 24 C65 24 70 27 70 33 C70 38 65 48 50 60"
+            fill="white"
+          />
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <div
@@ -112,143 +159,103 @@ const AnimatedAvatar = forwardRef(({
       className={`relative cursor-pointer transition-transform hover:scale-105 ${className}`}
       style={{ width: s, height: s }}
     >
-      {speaking && (
-        <div
-          className="absolute inset-0 rounded-full animate-pulse opacity-40"
-          style={{ background: `radial-gradient(circle, ${avatar.shirtColor} 0%, transparent 70%)`, transform: 'scale(1.3)' }}
-        />
-      )}
+      {/* Glow effect */}
+      <div
+        className="absolute inset-0 rounded-full blur-md transition-opacity duration-300"
+        style={{
+          background: avatar.primaryColor,
+          opacity: glowIntensity,
+          transform: 'scale(1.1)',
+        }}
+      />
 
-      <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-lg">
+      <svg viewBox="0 0 100 100" className="relative w-full h-full">
         <defs>
-          <radialGradient id={`skin-${style}`} cx="35%" cy="30%">
-            <stop offset="0%" stopColor={skinLight} />
-            <stop offset="60%" stopColor={avatar.skinTone} />
-            <stop offset="100%" stopColor={skinDark} />
-          </radialGradient>
-          <linearGradient id={`shirt-${style}`} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor={avatar.shirtColor} />
-            <stop offset="100%" stopColor={adjustColor(avatar.shirtColor, -40)} />
+          <linearGradient id={`grad-${style}`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={avatar.primaryColor} />
+            <stop offset="100%" stopColor={avatar.secondaryColor} />
           </linearGradient>
-          <linearGradient id={`hair-${style}`} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor={avatar.hairColor} />
-            <stop offset="100%" stopColor={hairDark} />
-          </linearGradient>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.3" />
+          </filter>
         </defs>
 
-        {/* Cou */}
-        <ellipse cx="50" cy="85" rx="10" ry="6" fill={`url(#skin-${style})`} />
-
-        {/* Corps/Épaules */}
-        <path d="M25 100 Q25 88 40 85 L60 85 Q75 88 75 100" fill={`url(#shirt-${style})`} />
-
-        {/* Tête - forme ovale naturelle */}
-        <ellipse cx="50" cy="48" rx="28" ry="32" fill={`url(#skin-${style})`} />
-
-        {/* Oreilles */}
-        <ellipse cx="22" cy="50" rx="4" ry="6" fill={`url(#skin-${style})`} />
-        <ellipse cx="78" cy="50" rx="4" ry="6" fill={`url(#skin-${style})`} />
-        <ellipse cx="22" cy="50" rx="2" ry="3" fill={skinDark} opacity="0.2" />
-        <ellipse cx="78" cy="50" rx="2" ry="3" fill={skinDark} opacity="0.2" />
-
-        {/* Cheveux - style propre et moderne */}
-        {avatar.gender === 'female' ? (
-          <>
-            {/* Cheveux longs féminins */}
-            <ellipse cx="50" cy="28" rx="30" ry="18" fill={`url(#hair-${style})`} />
-            <path d="M20 35 Q15 55 22 80" stroke={avatar.hairColor} strokeWidth="8" fill="none" strokeLinecap="round" />
-            <path d="M80 35 Q85 55 78 80" stroke={avatar.hairColor} strokeWidth="8" fill="none" strokeLinecap="round" />
-            <ellipse cx="50" cy="24" rx="26" ry="14" fill={hairDark} opacity="0.6" />
-          </>
-        ) : avatar.gender === 'male' ? (
-          <>
-            {/* Cheveux courts masculins */}
-            <ellipse cx="50" cy="26" rx="27" ry="15" fill={`url(#hair-${style})`} />
-            <ellipse cx="50" cy="23" rx="24" ry="12" fill={hairDark} opacity="0.4" />
-          </>
-        ) : (
-          <>
-            {/* Style neutre/court moderne */}
-            <ellipse cx="50" cy="27" rx="26" ry="14" fill={`url(#hair-${style})`} />
-            <path d="M30 22 Q50 15 70 22" stroke={avatar.hairColor} strokeWidth="4" fill="none" />
-          </>
-        )}
-
-        {/* Sourcils expressifs */}
-        <path
-          d={emotion === 'thinking' ? "M32 38 Q38 35 44 38" : emotion === 'alert' ? "M32 36 Q38 40 44 36" : "M32 37 Q38 35 44 37"}
-          stroke={avatar.hairColor} strokeWidth="2" fill="none" strokeLinecap="round"
-        />
-        <path
-          d={emotion === 'thinking' ? "M56 38 Q62 35 68 38" : emotion === 'alert' ? "M56 36 Q62 40 68 36" : "M56 37 Q62 35 68 37"}
-          stroke={avatar.hairColor} strokeWidth="2" fill="none" strokeLinecap="round"
+        {/* Cercle principal */}
+        <circle
+          cx="50"
+          cy="50"
+          r="42"
+          fill={`url(#grad-${style})`}
+          filter="url(#shadow)"
         />
 
-        {/* Yeux */}
-        <g>
-          {/* Oeil gauche */}
-          <ellipse cx="38" cy="46" rx="6" ry={blinkState ? 0.5 : 5} fill="white" />
-          {!blinkState && (
-            <>
-              <circle cx="38" cy="46" r="3.5" fill={avatar.eyeColor} />
-              <circle cx="38" cy="46" r="2" fill="#1a1a1a" />
-              <circle cx="36.5" cy="44.5" r="1" fill="white" opacity="0.8" />
-            </>
-          )}
+        {/* Anneau externe animé */}
+        <circle
+          cx="50"
+          cy="50"
+          r="46"
+          fill="none"
+          stroke={avatar.accentColor}
+          strokeWidth="2"
+          opacity={speaking ? 0.8 : 0.4}
+          strokeDasharray={speaking ? "10 5" : "0"}
+          style={{
+            transform: speaking ? `rotate(${pulsePhase}deg)` : 'none',
+            transformOrigin: 'center',
+            transition: 'all 0.3s ease'
+          }}
+        />
 
-          {/* Oeil droit */}
-          <ellipse cx="62" cy="46" rx="6" ry={blinkState ? 0.5 : 5} fill="white" />
-          {!blinkState && (
-            <>
-              <circle cx="62" cy="46" r="3.5" fill={avatar.eyeColor} />
-              <circle cx="62" cy="46" r="2" fill="#1a1a1a" />
-              <circle cx="60.5" cy="44.5" r="1" fill="white" opacity="0.8" />
-            </>
-          )}
+        {/* Icône centrale */}
+        <g opacity="0.95">
+          {renderIcon()}
         </g>
 
-        {/* Nez subtil */}
-        <path d="M50 50 L48 58 Q50 60 52 58 L50 50" fill={skinDark} opacity="0.15" />
-
-        {/* Joues rosées */}
-        <ellipse cx="30" cy="55" rx="5" ry="3" fill="#FFB6C1" opacity="0.25" />
-        <ellipse cx="70" cy="55" rx="5" ry="3" fill="#FFB6C1" opacity="0.25" />
-
-        {/* Bouche avec lip-sync */}
-        {speaking ? (
+        {/* Barres audio quand parle */}
+        {speaking && (
           <g>
-            <ellipse cx="50" cy="66" rx="6" ry={mouthHeight} fill="#8B4513" />
-            {mouthHeight > 3 && <ellipse cx="50" cy="64" rx="4" ry="1.5" fill="white" />}
-            {mouthHeight > 4 && <ellipse cx="50" cy={66 + mouthHeight * 0.4} rx="3" ry="2" fill="#CD5C5C" />}
+            {audioBars.map((bar, i) => (
+              <rect
+                key={i}
+                x={32 + i * 9}
+                y={75 - bar.height / 2}
+                width="5"
+                height={bar.height}
+                rx="2"
+                fill="white"
+                opacity="0.9"
+              />
+            ))}
           </g>
-        ) : (
-          <path d="M44 66 Q50 70 56 66" stroke="#CD8B8B" strokeWidth="2" fill="none" strokeLinecap="round" />
+        )}
+
+        {/* Indicateur de statut */}
+        {!speaking && (
+          <circle
+            cx="50"
+            cy="75"
+            r="4"
+            fill={avatar.accentColor}
+            opacity={0.6 + Math.sin(pulsePhase * 0.1) * 0.4}
+          />
         )}
       </svg>
 
       {/* Indicateurs d'état */}
       {emotion === 'thinking' && (
-        <div className="absolute -top-1 -right-1 w-3 h-3">
+        <div className="absolute -top-1 -right-1 w-4 h-4">
           <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500" />
+          <span className="relative inline-flex rounded-full h-4 w-4 bg-blue-500" />
         </div>
       )}
       {emotion === 'alert' && (
-        <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full flex items-center justify-center animate-bounce">
+        <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center animate-bounce">
           <span className="text-white text-[8px] font-bold">!</span>
         </div>
       )}
     </div>
   );
 });
-
-function adjustColor(hex, amount) {
-  const num = parseInt(hex.replace('#', ''), 16);
-  const r = Math.min(255, Math.max(0, (num >> 16) + amount));
-  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amount));
-  const b = Math.min(255, Math.max(0, (num & 0x0000FF) + amount));
-  return `#${(1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1)}`;
-}
 
 AnimatedAvatar.displayName = 'AnimatedAvatar';
 
