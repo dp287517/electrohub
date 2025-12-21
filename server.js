@@ -119,26 +119,47 @@ Structure TOUJOURS ainsi:
 - Si tu proposes une action, GÉNÈRE le JSON pour permettre l'exécution
 - Réponds en français, format markdown, avec emojis pour l'importance`;
 
-// Helper: Query database for AI context
+// Helper: Query database for AI context - COMPREHENSIVE VERSION
 async function getAIContext(site) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const in7days = new Date(today); in7days.setDate(in7days.getDate() + 7);
+  const in30days = new Date(today); in30days.setDate(in30days.getDate() + 30);
+  const in90days = new Date(today); in90days.setDate(in90days.getDate() + 90);
+
   const context = {
     site,
-    timestamp: new Date().toISOString(),
+    timestamp: now.toISOString(),
+    dateRanges: {
+      today: today.toISOString().split('T')[0],
+      in7days: in7days.toISOString().split('T')[0],
+      in30days: in30days.toISOString().split('T')[0],
+      in90days: in90days.toISOString().split('T')[0]
+    },
     switchboards: { count: 0, list: [] },
-    controls: { upcoming: 0, overdue: 0, total: 0, overdueList: [], upcomingList: [] },
+    controls: {
+      scheduled: 0,
+      overdue: 0,
+      thisWeek: 0,
+      thisMonth: 0,
+      next90days: 0,
+      overdueList: [],
+      thisWeekList: [],
+      thisMonthList: [],
+      allScheduled: []
+    },
     vsd: { count: 0, list: [] },
     meca: { count: 0, list: [] },
-    atex: { ncCount: 0, equipmentCount: 0, ncList: [] },
+    atex: { totalEquipments: 0, ncCount: 0, conformeCount: 0, ncList: [], equipmentsByZone: {} },
     buildings: {},
-    dailyPlan: [],
     urgentItems: [],
-    statistics: {}
+    summary: {}
   };
 
   try {
-    // Get switchboards with details (NO status column!)
+    // ========== SWITCHBOARDS ==========
     const sbRes = await pool.query(
-      `SELECT id, name, code, building_code, floor, room FROM switchboards WHERE site = $1 ORDER BY code`,
+      `SELECT id, name, code, building_code, floor, room FROM switchboards WHERE site = $1 ORDER BY building_code, floor, code`,
       [site]
     );
     context.switchboards.count = sbRes.rows.length;
@@ -152,181 +173,213 @@ async function getAIContext(site) {
       }
       context.buildings[bldg].equipmentCount++;
       if (sb.floor) context.buildings[bldg].floors.add(sb.floor);
-      context.buildings[bldg].equipments.push({ id: sb.id, name: sb.name, code: sb.code, floor: sb.floor });
+      context.buildings[bldg].equipments.push({ id: sb.id, name: sb.name, code: sb.code, floor: sb.floor, room: sb.room });
     });
 
-    // Convert Sets to arrays for JSON
+    // Convert Sets to arrays
     Object.keys(context.buildings).forEach(b => {
-      context.buildings[b].floors = Array.from(context.buildings[b].floors);
+      context.buildings[b].floors = Array.from(context.buildings[b].floors).sort();
     });
 
-    // Get control schedules with FULL DETAILS for planning
+    // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
       const ctrlRes = await pool.query(`
-        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.status,
+        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.status, cs.last_control_date,
                ct.name as template_name, ct.id as template_id, ct.frequency_months,
                s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
         WHERE cs.site = $1
-        ORDER BY cs.next_due_date
+        ORDER BY cs.next_due_date NULLS LAST
       `, [site]);
 
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-      const nextWeek = new Date(today); nextWeek.setDate(nextWeek.getDate() + 7);
+      context.controls.scheduled = ctrlRes.rows.length;
 
       ctrlRes.rows.forEach(ctrl => {
-        context.controls.total++;
         const dueDate = ctrl.next_due_date ? new Date(ctrl.next_due_date) : null;
+        const dueDateStr = dueDate ? dueDate.toISOString().split('T')[0] : null;
+        const lastControlStr = ctrl.last_control_date ? new Date(ctrl.last_control_date).toISOString().split('T')[0] : 'Jamais';
 
         const controlItem = {
           id: ctrl.id,
           switchboardId: ctrl.switchboard_id,
-          switchboard: ctrl.switchboard_name,
-          switchboardCode: ctrl.switchboard_code,
-          building: ctrl.building_code,
-          floor: ctrl.floor,
-          room: ctrl.room,
-          template: ctrl.template_name,
+          switchboard: ctrl.switchboard_name || 'N/A',
+          switchboardCode: ctrl.switchboard_code || 'N/A',
+          building: ctrl.building_code || 'N/A',
+          floor: ctrl.floor || 'N/A',
+          room: ctrl.room || '',
+          template: ctrl.template_name || 'Contrôle standard',
           templateId: ctrl.template_id,
-          dueDate: ctrl.next_due_date,
-          frequencyMonths: ctrl.frequency_months,
-          status: ctrl.status,
-          estimatedDuration: 30
+          dueDate: dueDateStr,
+          dueDateFormatted: dueDate ? dueDate.toLocaleDateString('fr-FR') : 'Non planifié',
+          lastControl: lastControlStr,
+          frequencyMonths: ctrl.frequency_months || 12,
+          status: ctrl.status || 'pending'
         };
+
+        // Store all scheduled controls
+        context.controls.allScheduled.push(controlItem);
 
         if (dueDate) {
           if (dueDate < today) {
-            // OVERDUE - URGENT
-            context.controls.overdue++;
+            // OVERDUE
             const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
             controlItem.daysOverdue = daysOverdue;
-            controlItem.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
+            controlItem.urgency = daysOverdue > 30 ? 'CRITIQUE' : daysOverdue > 7 ? 'URGENT' : 'ATTENTION';
+            context.controls.overdue++;
             context.controls.overdueList.push(controlItem);
-            context.urgentItems.push({ type: 'control_overdue', ...controlItem });
-          } else if (dueDate <= tomorrow) {
-            // Due today or tomorrow
-            controlItem.dueToday = dueDate.toDateString() === today.toDateString();
-            context.dailyPlan.push(controlItem);
-            context.controls.upcoming++;
-            context.controls.upcomingList.push(controlItem);
-          } else if (dueDate <= nextWeek) {
-            // Due this week
+            context.urgentItems.push({ type: 'control_overdue', urgency: controlItem.urgency, ...controlItem });
+          } else if (dueDate <= in7days) {
+            // This week
             controlItem.daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-            context.controls.upcoming++;
-            context.controls.upcomingList.push(controlItem);
-          } else {
-            context.controls.upcoming++;
+            context.controls.thisWeek++;
+            context.controls.thisWeekList.push(controlItem);
+          } else if (dueDate <= in30days) {
+            // This month
+            controlItem.daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+            context.controls.thisMonth++;
+            context.controls.thisMonthList.push(controlItem);
+          } else if (dueDate <= in90days) {
+            // Next 90 days
+            context.controls.next90days++;
           }
         }
       });
 
-      // Sort overdue by urgency
+      // Sort overdue by days (most overdue first)
       context.controls.overdueList.sort((a, b) => b.daysOverdue - a.daysOverdue);
     } catch (e) {
       console.error('[AI] Control schedules error:', e.message);
     }
 
-    // Get VSD equipments
+    // ========== VSD EQUIPMENTS ==========
     try {
       const vsdRes = await pool.query(`
-        SELECT id, name, building, floor, location, manufacturer, model
-        FROM vsd_equipments WHERE site = $1 ORDER BY name LIMIT 30
+        SELECT id, name, building, floor, location, manufacturer, model, power, last_control_date
+        FROM vsd_equipments WHERE site = $1 ORDER BY building, name LIMIT 50
       `, [site]);
       context.vsd.count = vsdRes.rows.length;
-      context.vsd.list = vsdRes.rows;
+      context.vsd.list = vsdRes.rows.map(v => ({
+        ...v,
+        lastControlFormatted: v.last_control_date ? new Date(v.last_control_date).toLocaleDateString('fr-FR') : 'Jamais'
+      }));
     } catch (e) {
       console.error('[AI] VSD error:', e.message);
     }
 
-    // Get MECA count via sites join
+    // ========== MECA EQUIPMENTS ==========
     try {
       const mecaRes = await pool.query(`
-        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer
+        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.type, e.last_control_date
         FROM meca_equipments e
         INNER JOIN sites s ON s.id = e.site_id
-        WHERE s.name = $1 ORDER BY e.name LIMIT 30
+        WHERE s.name = $1 ORDER BY e.building, e.name LIMIT 50
       `, [site]);
       context.meca.count = mecaRes.rows.length;
-      context.meca.list = mecaRes.rows;
+      context.meca.list = mecaRes.rows.map(m => ({
+        ...m,
+        lastControlFormatted: m.last_control_date ? new Date(m.last_control_date).toLocaleDateString('fr-FR') : 'Jamais'
+      }));
     } catch (e) {
       console.error('[AI] MECA error:', e.message);
     }
 
-    // Get ATEX equipments with last_result = 'non_conforme' as NC
-    // ATEX uses company_id not site directly - we need to find site by name
+    // ========== ATEX - WITH FULL NC DETAILS ==========
     try {
-      // First get site_id from sites table
       const siteRes = await pool.query(`SELECT id FROM sites WHERE name = $1 LIMIT 1`, [site]);
       const siteId = siteRes.rows[0]?.id;
 
       if (siteId) {
-        // Get ATEX equipments with their last control result from atex_checks table
+        // Get ATEX equipments with their last check result AND details
         const atexRes = await pool.query(`
           SELECT
-            e.id, e.name, e.building, e.zone, e.equipment, e.type,
-            (SELECT c.result FROM atex_checks c WHERE c.equipment_id = e.id ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result
+            e.id, e.name, e.building, e.zone, e.equipment, e.type, e.brand, e.model,
+            c.result as last_result,
+            c.date as last_check_date,
+            c.items as check_items,
+            c.user_name as checked_by
           FROM atex_equipments e
+          LEFT JOIN LATERAL (
+            SELECT result, date, items, user_name
+            FROM atex_checks
+            WHERE equipment_id = e.id
+            ORDER BY date DESC NULLS LAST
+            LIMIT 1
+          ) c ON true
           WHERE e.site_id = $1
-          ORDER BY e.building, e.name
+          ORDER BY e.building, e.zone, e.name
         `, [siteId]);
 
-        context.atex.equipmentCount = atexRes.rows.length;
+        context.atex.totalEquipments = atexRes.rows.length;
 
-        // Filter non-conformes
-        const nonConformes = atexRes.rows.filter(eq => eq.last_result === 'non_conforme');
-        context.atex.ncCount = nonConformes.length;
-        context.atex.ncList = nonConformes.map(eq => ({
-          id: eq.id,
-          equipment_name: eq.name,
-          building: eq.building,
-          zone: eq.zone,
-          type: eq.type,
-          severity: 'high', // NC ATEX are always high priority
-          last_result: eq.last_result
-        }));
+        atexRes.rows.forEach(eq => {
+          // Count by zone
+          const zone = eq.zone || 'Non définie';
+          if (!context.atex.equipmentsByZone[zone]) {
+            context.atex.equipmentsByZone[zone] = 0;
+          }
+          context.atex.equipmentsByZone[zone]++;
 
-        // Add NC to urgent items
-        nonConformes.forEach(nc => {
-          context.urgentItems.push({
-            type: 'atex_nc',
-            id: nc.id,
-            equipment_name: nc.name,
-            building: nc.building,
-            zone: nc.zone,
-            severity: 'high'
-          });
+          if (eq.last_result === 'non_conforme') {
+            context.atex.ncCount++;
+
+            // Extract NC details from check_items if available
+            let ncDetails = [];
+            if (eq.check_items && Array.isArray(eq.check_items)) {
+              ncDetails = eq.check_items
+                .filter(item => item.result === 'non_conforme' || item.result === 'ko' || item.result === false)
+                .map(item => item.label || item.name || item.question)
+                .filter(Boolean);
+            }
+
+            context.atex.ncList.push({
+              id: eq.id,
+              name: eq.name,
+              building: eq.building || 'N/A',
+              zone: eq.zone || 'N/A',
+              type: eq.type || eq.equipment || 'N/A',
+              brand: eq.brand || '',
+              model: eq.model || '',
+              lastCheckDate: eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : 'N/A',
+              checkedBy: eq.checked_by || 'N/A',
+              ncDetails: ncDetails.length > 0 ? ncDetails : ['Vérification complète requise'],
+              severity: 'HIGH'
+            });
+
+            context.urgentItems.push({
+              type: 'atex_nc',
+              name: eq.name,
+              building: eq.building,
+              zone: eq.zone,
+              severity: 'HIGH'
+            });
+          } else if (eq.last_result === 'conforme') {
+            context.atex.conformeCount++;
+          }
         });
       }
     } catch (e) {
       console.error('[AI] ATEX error:', e.message);
-      // Fallback: try with site column directly
-      try {
-        const atexCountRes = await pool.query(`SELECT COUNT(*)::int as count FROM atex_equipments WHERE site = $1`, [site]);
-        context.atex.equipmentCount = atexCountRes.rows[0]?.count || 0;
-      } catch (e2) { /* ignore */ }
     }
 
-    // Calculate statistics
-    context.statistics = {
-      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.equipmentCount,
+    // ========== BUILD SUMMARY ==========
+    context.summary = {
+      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.totalEquipments,
       totalBuildings: Object.keys(context.buildings).length,
-      controlsThisWeek: context.controls.upcomingList.filter(c => c.daysUntil && c.daysUntil <= 7).length,
-      overdueRate: context.controls.total > 0
-        ? Math.round((context.controls.overdue / context.controls.total) * 100)
-        : 0,
-      criticalIssues: context.urgentItems.filter(i => i.urgency === 'critical' || i.severity === 'critical').length,
-      atexNC: context.atex.ncCount
+      urgentActions: context.urgentItems.length,
+      controlsOverdue: context.controls.overdue,
+      controlsThisWeek: context.controls.thisWeek,
+      controlsThisMonth: context.controls.thisMonth,
+      controlsNext90days: context.controls.next90days,
+      atexNcCount: context.atex.ncCount,
+      atexConformityRate: context.atex.totalEquipments > 0
+        ? Math.round((context.atex.conformeCount / context.atex.totalEquipments) * 100)
+        : 100
     };
 
-    // Optimize daily plan by building/floor
-    context.dailyPlan = optimizeDailyPlan(context.dailyPlan, context.controls.overdueList.slice(0, 5));
-
   } catch (e) {
-    console.error('[AI] Context fetch error:', e.message);
+    console.error('[AI] Context error:', e.message);
   }
 
   return context;
@@ -370,54 +423,82 @@ function optimizeDailyPlan(todayControls, urgentOverdue) {
   return plan;
 }
 
-// Format context for AI prompt - SUPER DETAILED
+// Format context for AI prompt - COMPREHENSIVE VERSION
 function formatContextForAI(ctx) {
+  const now = new Date();
+
+  // Buildings list (top 10 by equipment count)
   const buildingsList = Object.entries(ctx.buildings)
-    .map(([name, data]) => `  • ${name}: ${data.equipmentCount} équipements, étages: ${data.floors.join(', ') || 'N/A'}`)
+    .sort((a, b) => b[1].equipmentCount - a[1].equipmentCount)
+    .slice(0, 10)
+    .map(([name, data]) => `  • Bât. ${name}: ${data.equipmentCount} équip. (étages: ${data.floors.join(', ') || 'RDC'})`)
     .join('\n');
 
+  // Overdue controls with full details
   const overdueListText = ctx.controls.overdueList.slice(0, 10).map(c =>
-    `  - [${c.urgency?.toUpperCase()}] ${c.switchboard} (${c.switchboardCode}): ${c.template} - ${c.daysOverdue}j de retard - Bât. ${c.building || '?'}, étage ${c.floor || '?'}`
+    `  - [${c.urgency}] ${c.switchboard} (${c.switchboardCode}) - ${c.template}\n` +
+    `    📍 Bât. ${c.building}, étage ${c.floor} | ⏰ ${c.daysOverdue}j de retard | Prévu: ${c.dueDateFormatted}`
   ).join('\n');
 
-  const todayPlanText = ctx.dailyPlan.slice(0, 10).map((c, i) =>
-    `  ${i + 1}. ${c.groupInfo ? c.groupInfo + '\n     ' : ''}${c.switchboard}: ${c.template} (~${c.estimatedDuration}min) - ${c.reason}`
+  // This week controls
+  const thisWeekText = ctx.controls.thisWeekList.slice(0, 5).map(c =>
+    `  - ${c.switchboard} (${c.switchboardCode}) - ${c.template}\n` +
+    `    📍 Bât. ${c.building}, étage ${c.floor} | 📅 ${c.dueDateFormatted} (dans ${c.daysUntil}j)`
   ).join('\n');
 
-  const atexNcText = ctx.atex.ncList.slice(0, 5).map(nc =>
-    `  - [${nc.severity?.toUpperCase()}] ${nc.equipment_name}: ${nc.description?.substring(0, 60)}...`
+  // This month controls
+  const thisMonthText = ctx.controls.thisMonthList.slice(0, 5).map(c =>
+    `  - ${c.switchboard} - ${c.template} | 📅 ${c.dueDateFormatted} (dans ${c.daysUntil}j)`
   ).join('\n');
 
-  return `## 📊 Données temps réel - Site "${ctx.site}" (${new Date().toLocaleDateString('fr-FR')} ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})
+  // ATEX NC with FULL details
+  const atexNcText = ctx.atex.ncList.slice(0, 10).map(nc =>
+    `  - **${nc.name}** (${nc.type})\n` +
+    `    📍 Bât. ${nc.building}, Zone ${nc.zone}\n` +
+    `    ⚠️ Points NC: ${nc.ncDetails.slice(0, 3).join(', ')}\n` +
+    `    📋 Dernier contrôle: ${nc.lastCheckDate} par ${nc.checkedBy}`
+  ).join('\n');
 
-### 🔢 Statistiques globales
-- **${ctx.switchboards.count}** armoires électriques
-- **${ctx.vsd.count}** variateurs VSD
-- **${ctx.meca.count}** équipements mécaniques
-- **${ctx.atex.equipmentCount}** équipements ATEX (${ctx.atex.ncCount} NC actives)
-- **${ctx.statistics.totalBuildings}** bâtiments équipés
-- **Taux de retard:** ${ctx.statistics.overdueRate}%
+  // ATEX zones summary
+  const atexZones = Object.entries(ctx.atex.equipmentsByZone)
+    .map(([zone, count]) => `Zone ${zone}: ${count} équip.`)
+    .join(' | ');
 
-### 🚨 Alertes urgentes (${ctx.urgentItems.length})
-${ctx.urgentItems.length > 0 ? ctx.urgentItems.slice(0, 5).map(i =>
-  `- ${i.type === 'control_overdue' ? '⏰ Contrôle' : '⚠️ NC ATEX'}: ${i.switchboard || i.equipment_name} - ${i.urgency || i.severity}`
-).join('\n') : '✅ Aucune alerte urgente'}
+  return `## 📊 DONNÉES TEMPS RÉEL - Site "${ctx.site}"
+📅 ${now.toLocaleDateString('fr-FR')} ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
 
-### ⏰ Contrôles en retard (${ctx.controls.overdue})
-${overdueListText || '✅ Aucun contrôle en retard!'}
+### 🔢 RÉSUMÉ GLOBAL
+- **${ctx.summary.totalEquipments}** équipements au total
+- **${ctx.switchboards.count}** armoires électriques | **${ctx.vsd.count}** VSD | **${ctx.meca.count}** mécaniques
+- **${ctx.atex.totalEquipments}** équipements ATEX (${atexZones || 'aucune zone définie'})
+- **${ctx.summary.totalBuildings}** bâtiments équipés
 
-### 📋 Plan du jour optimisé (${ctx.dailyPlan.length} tâches)
-${todayPlanText || 'Aucune tâche planifiée aujourd\'hui'}
+### 📅 CONTRÔLES PLANIFIÉS
+- **${ctx.controls.scheduled}** contrôles programmés au total
+- 🚨 **${ctx.controls.overdue}** en RETARD
+- 📆 **${ctx.controls.thisWeek}** cette semaine (7 prochains jours)
+- 📆 **${ctx.controls.thisMonth}** ce mois (30 prochains jours)
+- 📆 **${ctx.controls.next90days}** dans les 90 prochains jours
 
-### 📅 Contrôles à venir
-- **${ctx.controls.upcomingList.filter(c => c.daysUntil <= 7).length}** cette semaine
-- **${ctx.controls.upcoming}** total planifiés
+${ctx.controls.overdue > 0 ? `### 🚨 CONTRÔLES EN RETARD (${ctx.controls.overdue}) - PRIORITAIRES!
+${overdueListText}` : '### ✅ Aucun contrôle en retard - Félicitations!'}
 
-### 🔥 Non-conformités ATEX actives (${ctx.atex.ncCount})
-${atexNcText || '✅ Aucune NC active'}
+${ctx.controls.thisWeek > 0 ? `### 📅 CONTRÔLES CETTE SEMAINE (${ctx.controls.thisWeek})
+${thisWeekText}` : '### 📅 Aucun contrôle prévu cette semaine'}
 
-### 🏢 Répartition par bâtiment
+${ctx.controls.thisMonth > 0 ? `### 📅 CONTRÔLES CE MOIS (${ctx.controls.thisMonth})
+${thisMonthText}` : ''}
+
+### 🔥 NON-CONFORMITÉS ATEX (${ctx.atex.ncCount})
+${ctx.atex.ncCount > 0 ? atexNcText : '✅ Aucune non-conformité ATEX active - Taux de conformité: ' + ctx.summary.atexConformityRate + '%'}
+
+### 🏢 RÉPARTITION PAR BÂTIMENT
 ${buildingsList || 'Aucune donnée de bâtiment'}
+
+### ⚡ ACTIONS URGENTES REQUISES: ${ctx.urgentItems.length}
+${ctx.urgentItems.length > 0 ? ctx.urgentItems.slice(0, 5).map(i =>
+  `- ${i.type === 'control_overdue' ? '⏰' : '⚠️'} ${i.switchboard || i.name} (${i.urgency || i.severity})`
+).join('\n') : '✅ Aucune action urgente'}
 `;
 }
 
@@ -1141,8 +1222,12 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
 // Auto-generate chart from context data
 function autoGenerateChart(ctx, type = 'overview') {
   const buildings = ctx.buildings || {};
-  const buildingNames = Object.keys(buildings).slice(0, 10);
-  const buildingCounts = buildingNames.map(b => buildings[b]?.equipmentCount || 0);
+  // Sort buildings by equipment count descending
+  const sortedBuildings = Object.entries(buildings)
+    .sort((a, b) => b[1].equipmentCount - a[1].equipmentCount)
+    .slice(0, 10);
+  const buildingNames = sortedBuildings.map(([name]) => `Bât. ${name}`);
+  const buildingCounts = sortedBuildings.map(([_, data]) => data.equipmentCount);
 
   switch (type) {
     case 'buildings':
@@ -1160,34 +1245,47 @@ function autoGenerateChart(ctx, type = 'overview') {
       return {
         type: 'doughnut',
         title: 'Types d\'équipements',
-        labels: ['Armoires', 'VSD', 'Mécanique', 'ATEX'],
+        labels: ['Armoires élec.', 'Variateurs VSD', 'Mécaniques', 'ATEX'],
         data: [
           ctx.switchboards?.count || 0,
           ctx.vsd?.count || 0,
           ctx.meca?.count || 0,
-          ctx.atex?.equipmentCount || 0
+          ctx.atex?.totalEquipments || ctx.atex?.equipmentCount || 0
         ]
       };
 
     case 'controls':
       return {
         type: 'doughnut',
-        title: 'État des contrôles',
-        labels: ['En retard', 'À venir', 'Planifiés'],
+        title: 'État des contrôles planifiés',
+        labels: ['En retard', 'Cette semaine', 'Ce mois', '3 prochains mois'],
         data: [
           ctx.controls?.overdue || 0,
-          ctx.controls?.upcoming || 0,
-          Math.max(0, (ctx.controls?.total || 0) - (ctx.controls?.overdue || 0) - (ctx.controls?.upcoming || 0))
+          ctx.controls?.thisWeek || 0,
+          ctx.controls?.thisMonth || 0,
+          ctx.controls?.next90days || 0
+        ]
+      };
+
+    case 'atex':
+      return {
+        type: 'doughnut',
+        title: 'Conformité ATEX',
+        labels: ['Conformes', 'Non-conformes', 'Non contrôlés'],
+        data: [
+          ctx.atex?.conformeCount || 0,
+          ctx.atex?.ncCount || 0,
+          Math.max(0, (ctx.atex?.totalEquipments || 0) - (ctx.atex?.conformeCount || 0) - (ctx.atex?.ncCount || 0))
         ]
       };
 
     case 'overview':
     default:
-      // Combined overview chart
+      // Combined overview chart - buildings if available, otherwise equipment types
       if (buildingNames.length > 0) {
         return {
           type: 'bar',
-          title: 'Répartition des équipements',
+          title: 'Répartition des équipements par bâtiment',
           labels: buildingNames.slice(0, 8),
           data: buildingCounts.slice(0, 8)
         };
@@ -1195,12 +1293,12 @@ function autoGenerateChart(ctx, type = 'overview') {
       return {
         type: 'doughnut',
         title: 'Types d\'équipements',
-        labels: ['Armoires', 'VSD', 'Mécanique', 'ATEX'],
+        labels: ['Armoires élec.', 'Variateurs VSD', 'Mécaniques', 'ATEX'],
         data: [
           ctx.switchboards?.count || 0,
           ctx.vsd?.count || 0,
           ctx.meca?.count || 0,
-          ctx.atex?.equipmentCount || 0
+          ctx.atex?.totalEquipments || ctx.atex?.equipmentCount || 0
         ]
       };
   }
@@ -1210,38 +1308,55 @@ function autoGenerateChart(ctx, type = 'overview') {
 // Generate intelligent fallback response based on DB context
 function generateIntelligentFallback(message, ctx) {
   const msg = (message || '').toLowerCase();
+  const summary = ctx.summary || {};
 
   // Build response based on actual data
-  if (msg.includes('contrôle') || msg.includes('retard') || msg.includes('overdue')) {
+  if (msg.includes('contrôle') || msg.includes('retard') || msg.includes('overdue') || msg.includes('planning') || msg.includes('semaine') || msg.includes('mois')) {
     const overdueCount = ctx.controls?.overdue || 0;
     const overdueList = ctx.controls?.overdueList || [];
+    const thisWeekList = ctx.controls?.thisWeekList || [];
+    const thisMonthList = ctx.controls?.thisMonthList || [];
+
+    let response = '';
 
     if (overdueCount > 0) {
-      return {
-        message: `⚠️ **${overdueCount} contrôle(s) en retard** sur le site ${ctx.site || 'actuel'}!\n\n` +
-          (overdueList.length > 0 ?
-            `**À traiter en priorité:**\n${overdueList.slice(0, 5).map(c =>
-              `• **${c.switchboard || 'Équipement'}** — ${c.template || 'Contrôle'} (prévu le ${new Date(c.dueDate).toLocaleDateString('fr-FR')})`
-            ).join('\n')}\n\n` : '') +
-          `**Prochaines étapes:**\n• Planifiez ces contrôles rapidement\n• Accédez à **Switchboard Controls** pour les détails`,
-        actions: [
-          { label: "Voir tous les contrôles", prompt: "Montre-moi le planning complet des contrôles" },
-          { label: "Comment planifier", prompt: "Comment planifier un contrôle ?" }
-        ],
-        provider: "fallback"
-      };
-    } else {
-      return {
-        message: `✅ **Aucun contrôle en retard** sur le site ${ctx.site || 'actuel'}!\n\n` +
-          `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n` +
-          `• **${ctx.controls?.total || 0}** contrôles planifiés au total\n\n` +
-          `Bonne gestion ! Continuez à maintenir vos équipements à jour.`,
-        actions: [
-          { label: "Voir les contrôles à venir", prompt: "Quels sont les prochains contrôles ?" }
-        ],
-        provider: "fallback"
-      };
+      response += `🚨 **${overdueCount} contrôle(s) en retard!**\n\n`;
+      if (overdueList.length > 0) {
+        response += overdueList.slice(0, 5).map(c =>
+          `• **${c.switchboard}** (${c.switchboardCode})\n  📍 Bât. ${c.building}, ét. ${c.floor} | ⏰ ${c.daysOverdue}j de retard`
+        ).join('\n') + '\n\n';
+      }
     }
+
+    if (thisWeekList.length > 0) {
+      response += `📅 **Cette semaine (${thisWeekList.length}):**\n`;
+      response += thisWeekList.slice(0, 5).map(c =>
+        `• ${c.switchboard} — ${c.dueDateFormatted} (dans ${c.daysUntil}j)`
+      ).join('\n') + '\n\n';
+    }
+
+    if (thisMonthList.length > 0) {
+      response += `📆 **Ce mois (${thisMonthList.length}):**\n`;
+      response += thisMonthList.slice(0, 3).map(c =>
+        `• ${c.switchboard} — ${c.dueDateFormatted}`
+      ).join('\n') + '\n';
+    }
+
+    if (!response) {
+      response = `✅ **Aucun contrôle planifié** pour les prochaines semaines.\n\n` +
+        `📊 ${ctx.controls?.scheduled || 0} contrôles programmés au total.\n` +
+        `🏢 ${ctx.switchboards?.count || 0} armoires électriques sur ${summary.totalBuildings || 0} bâtiments.`;
+    }
+
+    return {
+      message: response,
+      actions: [
+        { label: "Voir par bâtiment", prompt: "Répartition par bâtiment" },
+        { label: "ATEX", prompt: "Situation ATEX" }
+      ],
+      chart: autoGenerateChart(ctx, 'controls'),
+      provider: "fallback"
+    };
   }
 
   if (msg.includes('bâtiment') || msg.includes('building') || msg.includes('étage') || msg.includes('floor') || msg.includes('carte') || msg.includes('map') || msg.includes('répartition')) {
@@ -1249,16 +1364,16 @@ function generateIntelligentFallback(message, ctx) {
     const buildingList = Object.entries(buildings)
       .sort((a, b) => b[1].equipmentCount - a[1].equipmentCount)
       .slice(0, 10)
-      .map(([name, data]) => `• **Bât. ${name}**: ${data.equipmentCount} équipements sur ${data.floors?.length || 0} étage(s)`)
+      .map(([name, data]) => `• **Bât. ${name}**: ${data.equipmentCount} équip. (étages: ${data.floors?.join(', ') || 'RDC'})`)
       .join('\n');
 
     return {
-      message: `📍 **Répartition par bâtiment** (site ${ctx.site || 'actuel'})\n\n` +
-        (buildingList || '• Aucune donnée de bâtiment disponible') +
+      message: `📍 **Répartition par bâtiment** — Site ${ctx.site || 'actuel'}\n\n` +
+        (buildingList || '• Aucune donnée de bâtiment') +
         `\n\n**Total:** ${ctx.switchboards?.count || 0} armoires sur **${Object.keys(buildings).length} bâtiments**`,
       actions: Object.keys(buildings).slice(0, 3).map(b => ({
-        label: `Détails bât. ${b}`,
-        prompt: `Montre-moi les équipements du bâtiment ${b}`
+        label: `Bât. ${b}`,
+        prompt: `Détails du bâtiment ${b}`
       })),
       chart: autoGenerateChart(ctx, 'buildings'),
       provider: "fallback"
@@ -1266,37 +1381,49 @@ function generateIntelligentFallback(message, ctx) {
   }
 
   if (msg.includes('atex') || msg.includes('nc') || msg.includes('non-conformité') || msg.includes('conformité')) {
+    const ncList = ctx.atex?.ncList || [];
+    let ncDetails = '';
+
+    if (ncList.length > 0) {
+      ncDetails = ncList.slice(0, 5).map(nc =>
+        `• **${nc.name}** (${nc.type})\n` +
+        `  📍 Bât. ${nc.building}, Zone ${nc.zone}\n` +
+        `  ⚠️ ${nc.ncDetails?.slice(0, 2).join(', ') || 'Vérification requise'}`
+      ).join('\n\n');
+    }
+
     return {
-      message: `🔥 **Équipements ATEX** (site ${ctx.site || 'actuel'}):\n\n` +
-        `• **${ctx.atex?.equipmentCount || 0}** équipements en zones ATEX\n` +
-        `• **${ctx.atex?.ncCount || 0}** non-conformités actives\n\n` +
-        (ctx.atex?.ncCount > 0 ?
-          `⚠️ **Action requise:** Traitez les NC en priorité pour la conformité réglementaire.` :
-          `✅ Aucune non-conformité active. Bon travail !`),
+      message: `🔥 **Situation ATEX** — Site ${ctx.site || 'actuel'}\n\n` +
+        `• **${ctx.atex?.totalEquipments || 0}** équipements ATEX\n` +
+        `• **${ctx.atex?.conformeCount || 0}** conformes\n` +
+        `• **${ctx.atex?.ncCount || 0}** non-conformes\n` +
+        `• **Taux de conformité:** ${summary.atexConformityRate || 100}%\n\n` +
+        (ncDetails ? `**Non-conformités:**\n\n${ncDetails}` : '✅ Toutes les conformités OK!'),
       actions: [
-        { label: "Voir les équipements ATEX", prompt: "Liste des équipements ATEX" },
-        { label: "Non-conformités détaillées", prompt: "Détail des non-conformités ATEX" }
+        { label: "Planning contrôles", prompt: "Contrôles à venir" },
+        { label: "Par bâtiment", prompt: "Répartition par bâtiment" }
       ],
+      chart: autoGenerateChart(ctx, 'atex'),
       provider: "fallback"
     };
   }
 
   if (msg.includes('résumé') || msg.includes('summary') || msg.includes('situation') || msg.includes('global') || msg.includes('analyse') || msg.includes('statistique')) {
     return {
-      message: `📊 **Vue globale du site ${ctx.site || 'actuel'}**\n\n` +
-        `**Équipements:**\n` +
-        `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
-        `• **${ctx.vsd?.count || 0}** variateurs VSD\n` +
-        `• **${ctx.meca?.count || 0}** équipements mécaniques\n` +
-        `• **${ctx.atex?.equipmentCount || 0}** équipements ATEX\n\n` +
-        `**Contrôles:**\n` +
-        (ctx.controls?.overdue > 0 ?
-          `• 🚨 **${ctx.controls.overdue}** en RETARD\n` : '• ✅ Aucun retard\n') +
-        `• **${ctx.controls?.upcoming || 0}** à venir\n` +
-        `• **${ctx.controls?.total || 0}** planifiés au total\n\n` +
-        `**${Object.keys(ctx.buildings || {}).length} bâtiments** équipés`,
+      message: `📊 **Vue globale** — Site ${ctx.site || 'actuel'}\n\n` +
+        `**Équipements (${summary.totalEquipments || 0} total):**\n` +
+        `• ${ctx.switchboards?.count || 0} armoires électriques\n` +
+        `• ${ctx.vsd?.count || 0} variateurs VSD\n` +
+        `• ${ctx.meca?.count || 0} équipements mécaniques\n` +
+        `• ${ctx.atex?.totalEquipments || 0} ATEX (${summary.atexConformityRate || 100}% conformes)\n\n` +
+        `**Contrôles planifiés:**\n` +
+        (ctx.controls?.overdue > 0 ? `• 🚨 ${ctx.controls.overdue} en RETARD\n` : '• ✅ Aucun retard\n') +
+        `• ${ctx.controls?.thisWeek || 0} cette semaine\n` +
+        `• ${ctx.controls?.thisMonth || 0} ce mois\n` +
+        `• ${ctx.controls?.scheduled || 0} au total\n\n` +
+        `**${summary.totalBuildings || 0} bâtiments** équipés`,
       actions: [
-        { label: "Contrôles en retard", prompt: "Montre-moi les contrôles en retard" },
+        { label: "Contrôles", prompt: "Planning des contrôles" },
         { label: "Par bâtiment", prompt: "Répartition par bâtiment" },
         { label: "ATEX", prompt: "Situation ATEX" }
       ],
@@ -1307,18 +1434,17 @@ function generateIntelligentFallback(message, ctx) {
 
   // Default: show summary with chart
   return {
-    message: `👋 Je suis **Electro**, votre assistant ElectroHub.\n\n` +
-      `📊 **Site ${ctx.site || 'actuel'} - Vue rapide:**\n` +
-      `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
-      `• **${ctx.vsd?.count || 0}** variateurs VSD\n` +
-      `• **${ctx.meca?.count || 0}** équipements mécaniques\n` +
-      (ctx.controls?.overdue > 0 ? `• 🚨 **${ctx.controls.overdue}** contrôles en retard\n` : '') +
-      `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n\n` +
-      `Comment puis-je vous aider ?`,
+    message: `👋 **Electro** — Assistant ElectroHub\n\n` +
+      `📊 **Site ${ctx.site || 'actuel'}:**\n` +
+      `• ${summary.totalEquipments || 0} équipements sur ${summary.totalBuildings || 0} bâtiments\n` +
+      (ctx.controls?.overdue > 0 ? `• 🚨 ${ctx.controls.overdue} contrôles en retard\n` : '') +
+      `• ${ctx.controls?.thisWeek || 0} contrôles cette semaine\n` +
+      (ctx.atex?.ncCount > 0 ? `• ⚠️ ${ctx.atex.ncCount} NC ATEX actives\n` : '') +
+      `\nComment puis-je vous aider ?`,
     actions: [
-      { label: "Analyse complète", prompt: "Donne-moi une analyse globale de la situation" },
-      { label: "Mon planning", prompt: "Quel est mon planning de la semaine ?" },
-      { label: "Par bâtiment", prompt: "Montre-moi la répartition par bâtiment" }
+      { label: "Analyse complète", prompt: "Analyse globale de la situation" },
+      { label: "Planning", prompt: "Contrôles à venir" },
+      { label: "ATEX", prompt: "Situation ATEX" }
     ],
     chart: autoGenerateChart(ctx, 'equipment'),
     provider: "fallback"
