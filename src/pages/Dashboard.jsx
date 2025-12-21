@@ -52,6 +52,7 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
   const IconComponent = iconMap[icon] || Zap;
   const hasOverdue = controlStats?.overdue > 0;
   const hasPending = controlStats?.pending > 0;
+  const hasBadges = hasOverdue || hasPending;
 
   return (
     <div
@@ -61,24 +62,9 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
       {/* Hover glow effect */}
       <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-2xl transition-opacity duration-500`} />
 
-      <Link to={to} className="relative flex items-start gap-4">
-        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500`}>
-          <IconComponent size={22} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-gray-900 group-hover:text-brand-600 transition-colors truncate">
-              {label}
-            </h3>
-            <ChevronRight size={18} className="text-gray-400 group-hover:text-brand-500 group-hover:translate-x-2 transition-all duration-300 flex-shrink-0" />
-          </div>
-          <p className="text-sm text-gray-500 mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
-        </div>
-      </Link>
-
-      {/* Control status badges */}
-      {(hasOverdue || hasPending) && (
-        <div className="absolute top-2 right-2 flex items-center gap-1">
+      {/* Control status badges - positioned at top right, inside card padding */}
+      {hasBadges && (
+        <div className="flex items-center justify-end gap-1 mb-2">
           {hasOverdue && (
             <button
               onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
@@ -101,6 +87,21 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
           )}
         </div>
       )}
+
+      <Link to={to} className="relative flex items-start gap-4">
+        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 flex-shrink-0`}>
+          <IconComponent size={22} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-semibold text-gray-900 group-hover:text-brand-600 transition-colors truncate">
+              {label}
+            </h3>
+            <ChevronRight size={18} className="text-gray-400 group-hover:text-brand-500 group-hover:translate-x-2 transition-all duration-300 flex-shrink-0" />
+          </div>
+          <p className="text-sm text-gray-500 mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
+        </div>
+      </Link>
     </div>
   );
 }
