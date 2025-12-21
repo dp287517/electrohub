@@ -520,9 +520,9 @@ app.delete("/files/:id", async (req, res) => {
 // Get plans from VSD (shared plans)
 app.get("/maps/plans", async (_req, res) => {
   try {
-    // Fetch plans from VSD service
+    // Fetch plans from VSD service - VSD uses /api/vsd/maps/listPlans endpoint
     const vsdUrl = process.env.VSD_BASE_URL || "http://127.0.0.1:3020";
-    const resp = await fetch(`${vsdUrl}/maps/listPlans`);
+    const resp = await fetch(`${vsdUrl}/api/vsd/maps/listPlans`);
     if (!resp.ok) throw new Error("VSD service unavailable");
     const data = await resp.json();
     res.json({ ok: true, plans: data.plans || [] });
@@ -538,12 +538,12 @@ app.get("/maps/plan/:id/file", async (req, res) => {
     const { id } = req.params;
     const vsdUrl = process.env.VSD_BASE_URL || "http://127.0.0.1:3020";
 
-    // Try by id first, then by logical_name
-    let url = `${vsdUrl}/maps/planFile?id=${encodeURIComponent(id)}`;
+    // Try by id first, then by logical_name - VSD uses /api/vsd/maps/planFile endpoint
+    let url = `${vsdUrl}/api/vsd/maps/planFile?id=${encodeURIComponent(id)}`;
     let resp = await fetch(url);
 
     if (!resp.ok) {
-      url = `${vsdUrl}/maps/planFile?logical_name=${encodeURIComponent(id)}`;
+      url = `${vsdUrl}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(id)}`;
       resp = await fetch(url);
     }
 

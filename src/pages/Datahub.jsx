@@ -102,27 +102,37 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
         className="w-full px-4 py-2.5 border border-gray-300 rounded-xl" placeholder="Nom *" autoFocus />
       <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
         className="w-full px-4 py-2.5 border border-gray-300 rounded-xl" placeholder="Description" />
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm text-gray-600">Couleur:</span>
         {COLOR_PRESETS.map(c => (
           <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
-            className={`w-6 h-6 rounded-full border-2 ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
+            className={`w-6 h-6 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
             style={{ backgroundColor: c }} />
         ))}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm text-gray-600">Icône:</span>
+        {ICON_PRESETS.map(({ id, label, icon: Icon }) => (
+          <button key={id} onClick={() => setForm(f => ({ ...f, icon: id }))}
+            className={`p-2 rounded-lg border-2 transition-all ${form.icon === id ? 'border-purple-600 bg-purple-100' : 'border-gray-200 hover:border-purple-300'}`}
+            title={label}>
+            <Icon size={18} className={form.icon === id ? 'text-purple-600' : 'text-gray-500'} />
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm text-gray-600">Taille:</span>
         {[24, 32, 40, 48].map(s => (
           <button key={s} onClick={() => setForm(f => ({ ...f, marker_size: s }))}
-            className={`px-2 py-1 rounded text-xs ${form.marker_size === s ? 'bg-purple-600 text-white' : 'bg-gray-100'}`}>
+            className={`px-2 py-1 rounded text-xs ${form.marker_size === s ? 'bg-purple-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
             {s}px
           </button>
         ))}
       </div>
       <div className="flex gap-2">
-        <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm">Annuler</button>
+        <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
         <button onClick={onSave} disabled={isLoading}
-          className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1">
+          className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-purple-700">
           {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
         </button>
       </div>

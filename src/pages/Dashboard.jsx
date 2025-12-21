@@ -790,8 +790,8 @@ export default function Dashboard() {
               color="from-teal-500 to-cyan-600"
             />
 
-            <div className={`overflow-hidden transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className={`transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-2">
                 {visibleOtherApps.map((app, index) => (
                   <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
@@ -812,8 +812,8 @@ export default function Dashboard() {
               color="from-amber-500 to-orange-600"
             />
 
-            <div className={`overflow-hidden transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0'}`}>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className={`transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-2">
                 {visibleElectricalApps.map((app, index) => (
                   <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
