@@ -12,6 +12,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import StreamZip from 'node-stream-zip';
+import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -975,6 +976,89 @@ app.get('/api/hv/maps/placed-ids', async (req, res) => {
   } catch (e) {
     console.error('[HV MAPS] Get placed IDs error:', e.message);
     res.status(500).json({ error: 'Get placed IDs failed', details: e.message });
+  }
+});
+
+// =============================================
+// REPORT PDF
+// =============================================
+app.get('/api/hv/report', async (req, res) => {
+  try {
+    const { building, voltage_class, device_type } = req.query;
+    const { where: siteWhere, params: siteParams, siteName } = getSiteFilter(req, { tableAlias: 'e' });
+    if (!siteName) return res.status(400).json({ error: 'Missing site header' });
+
+    // Build WHERE clause
+    const conditions = [];
+    const params = [...siteParams];
+    let paramIdx = siteParams.length;
+
+    if (siteWhere) conditions.push(siteWhere);
+    if (building) { paramIdx++; conditions.push(`e.building = $${paramIdx}`); params.push(building); }
+    if (voltage_class) { paramIdx++; conditions.push(`e.voltage_kv = $${paramIdx}`); params.push(voltage_class); }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Get equipments
+    const { rows: equipments } = await pool.query(`
+      SELECT e.*,
+             (SELECT COUNT(*) FROM hv_devices d WHERE d.equipment_id = e.id) as device_count
+      FROM hv_equipments e
+      ${whereClause}
+      ORDER BY e.building, e.code
+    `, params);
+
+    // Filter by device_type if needed (at device level)
+    let devicesFilter = '';
+    if (device_type) {
+      devicesFilter = ` AND d.device_type = '${device_type.replace(/'/g, "''")}'`;
+    }
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_hv_${siteName}_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).fillColor('#4a1d96').text('Rapport Haute Tension', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(12).fillColor('#666').text(`Site: ${siteName}`, { align: 'center' });
+    doc.text(`Généré le: ${new Date().toLocaleDateString('fr-FR')}`, { align: 'center' });
+    doc.moveDown();
+
+    // Filters applied
+    const filtersText = [];
+    if (building) filtersText.push(`Bâtiment: ${building}`);
+    if (voltage_class) filtersText.push(`Tension: ${voltage_class} kV`);
+    if (device_type) filtersText.push(`Type: ${device_type}`);
+    if (filtersText.length > 0) {
+      doc.fontSize(10).fillColor('#888').text(`Filtres: ${filtersText.join(' | ')}`, { align: 'center' });
+    }
+    doc.moveDown();
+
+    // Summary
+    doc.fontSize(14).fillColor('#333').text(`Total équipements: ${equipments.length}`);
+    doc.moveDown();
+
+    // Equipment list
+    for (const eq of equipments) {
+      doc.fontSize(12).fillColor('#4a1d96').text(`${eq.code || eq.name}`, { continued: true });
+      doc.fillColor('#666').text(` - ${eq.building || 'N/A'}`);
+      doc.fontSize(10).fillColor('#333');
+      doc.text(`  Tension: ${eq.voltage_kv || 'N/A'} kV | Régime: ${eq.regime_neutral || 'N/A'} | Icc: ${eq.short_circuit_ka || 'N/A'} kA`);
+      if (eq.notes) doc.text(`  Notes: ${eq.notes}`);
+      doc.moveDown(0.5);
+
+      if (doc.y > 700) {
+        doc.addPage();
+      }
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[HV] Report error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

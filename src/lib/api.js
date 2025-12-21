@@ -2152,6 +2152,13 @@ export const api = {
 
     /** Health check du service */
     health: () => get("/api/switchboard/health"),
+
+    /** Report PDF URL */
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/switchboard/report?${qs}`;
+    },
   },
 
   /** --- 🔵 BUBBLE AUTH --- */
@@ -2352,6 +2359,13 @@ export const api = {
 
     // AI specs extraction
     analyzeSpecs: (payload) => post("/api/hv/ai/specs", payload),
+
+    // Report PDF URL
+    reportUrl: (params = {}) => {
+      const site = currentSite();
+      const qs = new URLSearchParams({ site, ...params }).toString();
+      return `${API_BASE}/api/hv/report?${qs}`;
+    },
   },
 
   // ========== HV MAPS (Plans) ==========

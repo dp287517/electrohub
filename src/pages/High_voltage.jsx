@@ -1098,6 +1098,11 @@ export default function HighVoltage() {
   const [shareModal, setShareModal] = useState({ open: false, equipment: null });
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Report modal state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportFilters, setReportFilters] = useState({ building: '', voltage_class: '', device_type: '' });
+  const [reportLoading, setReportLoading] = useState(false);
+
   const showToast = (message, type = 'success') => setToast({ message, type });
 
   // Stats
@@ -1106,6 +1111,28 @@ export default function HighVoltage() {
     placed: equipments.filter(e => placedIds.has(e.id)).length,
     unplaced: equipments.filter(e => !placedIds.has(e.id)).length,
   }), [equipments, placedIds]);
+
+  // Liste des bâtiments uniques pour le filtre du rapport
+  const buildings = useMemo(() => {
+    const set = new Set(equipments.map(e => e.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [equipments]);
+
+  // Fonction pour générer le rapport PDF
+  const generateReport = useCallback(() => {
+    setReportLoading(true);
+    try {
+      const url = api.hv.reportUrl ? api.hv.reportUrl(reportFilters) : '#';
+      window.open(url, '_blank');
+    } catch (e) {
+      showToast('Erreur lors de la génération du rapport', 'error');
+    } finally {
+      setTimeout(() => {
+        setReportLoading(false);
+        setShowReportModal(false);
+      }, 500);
+    }
+  }, [reportFilters]);
 
   // Load equipments
   const loadEquipments = useCallback(async () => {
@@ -1402,6 +1429,14 @@ export default function HighVoltage() {
           {/* Actions */}
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowReportModal(true)}
+              className="px-3 py-2 bg-purple-50 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-100 flex items-center gap-2"
+              title="Générer un rapport PDF"
+            >
+              <FileText size={16} />
+              <span className="hidden sm:inline">Rapport</span>
+            </button>
+            <button
               onClick={() => navigate('/app/hv/map')}
               className="px-3 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-100 flex items-center gap-2"
             >
@@ -1595,6 +1630,108 @@ export default function HighVoltage() {
         onClose={() => setShareModal({ open: false, equipment: null })}
         equipment={shareModal.equipment}
       />
+
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-slideUp">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 p-6 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl">
+                  <FileText size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">Rapport PDF</h2>
+                  <p className="text-purple-100 text-sm">Équipements haute tension</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content - Filtres */}
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
+              </p>
+
+              {/* Filtre Bâtiment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+                <select
+                  value={reportFilters.building}
+                  onChange={e => setReportFilters(f => ({ ...f, building: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Tous les bâtiments</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Tension */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Classe de tension (kV)</label>
+                <select
+                  value={reportFilters.voltage_class}
+                  onChange={e => setReportFilters(f => ({ ...f, voltage_class: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Toutes les tensions</option>
+                  {VOLTAGE_CLASSES.map(v => <option key={v} value={v}>{v} kV</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type d'équipement</label>
+                <select
+                  value={reportFilters.device_type}
+                  onChange={e => setReportFilters(f => ({ ...f, device_type: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Tous les types</option>
+                  {HV_DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
+              {/* Résumé */}
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                <p className="text-sm text-purple-800">
+                  <span className="font-medium">Le rapport inclura :</span>{' '}
+                  {reportFilters.building || "Tous les bâtiments"}
+                  {" / "}
+                  {reportFilters.voltage_class ? `${reportFilters.voltage_class} kV` : "Toutes tensions"}
+                  {" / "}
+                  {reportFilters.device_type || "Tous les types"}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="border-t p-4 flex gap-3">
+              <button
+                onClick={() => { setShowReportModal(false); setReportFilters({ building: '', voltage_class: '', device_type: '' }); }}
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={generateReport}
+                disabled={reportLoading}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium hover:from-purple-600 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {reportLoading ? (
+                  <RefreshCw size={18} className="animate-spin" />
+                ) : (
+                  <>
+                    <Download size={18} />
+                    Télécharger le PDF
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

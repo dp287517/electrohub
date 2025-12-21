@@ -1119,6 +1119,11 @@ export default function Switchboards() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
 
+  // Report modal state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportFilters, setReportFilters] = useState({ building: '', floor: '', type: '' });
+  const [reportLoading, setReportLoading] = useState(false);
+
   // Import result
   const [showImportResult, setShowImportResult] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -1685,6 +1690,34 @@ export default function Switchboards() {
   const isBoardPlacedOnMap = useCallback((board) => {
     return placedBoardIds.has(board.id);
   }, [placedBoardIds]);
+
+  // Liste des bâtiments uniques pour le filtre du rapport
+  const buildings = useMemo(() => {
+    const set = new Set(boards.map(b => b.meta?.building_code).filter(Boolean));
+    return Array.from(set).sort();
+  }, [boards]);
+
+  // Liste des étages uniques
+  const floors = useMemo(() => {
+    const set = new Set(boards.map(b => b.meta?.floor).filter(Boolean));
+    return Array.from(set).sort();
+  }, [boards]);
+
+  // Fonction pour générer le rapport PDF
+  const generateReport = useCallback(() => {
+    setReportLoading(true);
+    try {
+      const url = api.switchboard.reportUrl ? api.switchboard.reportUrl(reportFilters) : '#';
+      window.open(url, '_blank');
+    } catch (e) {
+      showToast('Erreur lors de la génération du rapport', 'error');
+    } finally {
+      setTimeout(() => {
+        setReportLoading(false);
+        setShowReportModal(false);
+      }, 500);
+    }
+  }, [reportFilters, showToast]);
 
   // FIXED: Photo URL with stable cache busting
   const getBoardPhotoUrl = useCallback((boardId) => {
@@ -2279,6 +2312,14 @@ export default function Switchboards() {
                     {upcomingControls.length}
                   </span>
                 )}
+              </button>
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="px-3 py-2 bg-purple-50 text-purple-700 rounded-xl font-medium hover:bg-purple-100 flex items-center gap-1.5"
+                title="Générer un rapport PDF"
+              >
+                <FileText size={18} />
+                <span className="hidden sm:inline">Rapport</span>
               </button>
               <button
                 onClick={() => navigate('/app/switchboards/map')}
@@ -2953,6 +2994,110 @@ export default function Switchboards() {
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}
+
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-slideUp">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 p-6 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl">
+                  <FileText size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">Rapport PDF</h2>
+                  <p className="text-purple-100 text-sm">Tableaux électriques</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content - Filtres */}
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
+              </p>
+
+              {/* Filtre Bâtiment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+                <select
+                  value={reportFilters.building}
+                  onChange={e => setReportFilters(f => ({ ...f, building: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Tous les bâtiments</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Étage */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Étage</label>
+                <select
+                  value={reportFilters.floor}
+                  onChange={e => setReportFilters(f => ({ ...f, floor: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Tous les étages</option>
+                  {floors.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type de tableau</label>
+                <select
+                  value={reportFilters.type}
+                  onChange={e => setReportFilters(f => ({ ...f, type: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                >
+                  <option value="">Tous les types</option>
+                  <option value="principal">Principal</option>
+                  <option value="divisionnaire">Divisionnaire</option>
+                  <option value="terminal">Terminal</option>
+                </select>
+              </div>
+
+              {/* Résumé */}
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                <p className="text-sm text-purple-800">
+                  <span className="font-medium">Le rapport inclura :</span>{' '}
+                  {reportFilters.building || "Tous les bâtiments"}
+                  {" / "}
+                  {reportFilters.floor || "Tous les étages"}
+                  {" / "}
+                  {reportFilters.type || "Tous les types"}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="border-t p-4 flex gap-3">
+              <button
+                onClick={() => { setShowReportModal(false); setReportFilters({ building: '', floor: '', type: '' }); }}
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={generateReport}
+                disabled={reportLoading}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium hover:from-purple-600 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {reportLoading ? (
+                  <RefreshCw size={18} className="animate-spin" />
+                ) : (
+                  <>
+                    <Download size={18} />
+                    Télécharger le PDF
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
