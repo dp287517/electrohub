@@ -1668,6 +1668,11 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       const loadDevicesForBoards = async () => {
         const newDevicesMap = { ...devicesBySwitchboard };
         for (const boardId of selectedSwitchboardsForDevices) {
+          // Skip invalid board IDs to prevent /api/switchboard/boards/undefined calls
+          if (!boardId || boardId === 'undefined' || boardId === null) {
+            console.warn('Skipping invalid boardId:', boardId);
+            continue;
+          }
           if (!newDevicesMap[boardId]) {
             try {
               const res = await api.switchboard.listDevices(boardId);

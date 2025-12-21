@@ -1151,8 +1151,10 @@ export default function Switchboards() {
   // URL params handling
   useEffect(() => {
     const boardId = searchParams.get('board');
-    if (boardId && (!selectedBoard || selectedBoard.id !== Number(boardId))) {
-      api.switchboard.getBoard(boardId)
+    // Validate boardId is a valid number to prevent /api/switchboard/boards/undefined calls
+    const numericBoardId = boardId ? Number(boardId) : null;
+    if (boardId && numericBoardId && !isNaN(numericBoardId) && (!selectedBoard || selectedBoard.id !== numericBoardId)) {
+      api.switchboard.getBoard(numericBoardId)
         .then(board => {
           if (board) {
             setSelectedBoard(board);

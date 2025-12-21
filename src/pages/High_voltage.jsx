@@ -957,6 +957,35 @@ const DetailPanel = ({
               </button>
             </div>
           </div>
+
+          {/* Pending Controls Section */}
+          {controlStatuses?.[equipment.id]?.controls?.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              {controlStatuses[equipment.id].controls.map((ctrl, idx) => (
+                <div
+                  key={idx}
+                  onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule_id=${ctrl.schedule_id}`)}
+                  className={`flex items-center justify-between p-2 rounded-lg text-sm cursor-pointer transition-all ${
+                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200 hover:bg-red-100' : 'bg-blue-50 border border-blue-200 hover:bg-blue-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {ctrl.status === 'overdue' ? (
+                      <AlertTriangle size={14} className="text-red-600" />
+                    ) : (
+                      <Clock size={14} className="text-blue-600" />
+                    )}
+                    <span className={ctrl.status === 'overdue' ? 'text-red-700' : 'text-blue-700'}>
+                      {ctrl.template_name}
+                    </span>
+                  </div>
+                  <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-500' : 'text-blue-500'}`}>
+                    {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Devices Section */}
@@ -1179,7 +1208,8 @@ export default function HighVoltage() {
           statuses[s.hv_equipment_id].controls.push({
             template_name: s.template_name,
             next_due: s.next_due_date,
-            status: isOverdue ? 'overdue' : 'pending'
+            status: isOverdue ? 'overdue' : 'pending',
+            schedule_id: s.id
           });
 
           if (isOverdue) {
