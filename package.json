@@ -13,6 +13,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.679.0",
     "@aws-sdk/s3-request-presigner": "^3.679.0",
+    "@google/generative-ai": "^0.24.1",
     "@projectstorm/react-diagrams": "^7.0.4",
     "@projectstorm/react-diagrams-defaults": "^7.0.4",
     "@projectstorm/react-diagrams-routing": "^7.0.4",

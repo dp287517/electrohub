@@ -11,39 +11,72 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
 // ============================================================
-// OPENAI SETUP FOR POWERFUL AI ASSISTANT
+// AI SETUP - OpenAI + Gemini (fallback)
 // ============================================================
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const gemini = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
+const geminiModel = gemini ? gemini.getGenerativeModel({ model: "gemini-1.5-flash" }) : null;
+
+console.log(`[AI] OpenAI: ${openai ? '✅' : '❌'} | Gemini: ${gemini ? '✅' : '❌'}`);
 
 // System prompt for ElectroHub AI Assistant
-const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA expert pour ElectroHub, la plateforme de gestion d'équipements électriques et de conformité.
+const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA surpuissant pour ElectroHub, la plateforme de gestion d'équipements électriques industriels.
 
-## Ton rôle
-Tu es un expert en installations électriques industrielles. Tu aides les techniciens et ingénieurs à:
-- Gérer leurs équipements (armoires électriques, variateurs VSD, moteurs, équipements ATEX)
-- Planifier et suivre les contrôles réglementaires
-- Identifier et résoudre les non-conformités
-- Optimiser la maintenance préventive
-- Analyser les données et produire des rapports
+## 🚀 Tes capacités
+Tu es un expert en installations électriques industrielles avec des pouvoirs avancés:
 
-## Données disponibles
-Tu as accès aux données en temps réel de l'installation via le contexte fourni. Utilise ces données pour donner des réponses précises et chiffrées.
+### 1. Accès base de données en temps réel
+- Armoires électriques, variateurs VSD, équipements mécaniques, ATEX
+- Historique des contrôles et non-conformités
+- Données par bâtiment, étage, zone
 
-## Comment tu réponds
-1. **Sois précis et chiffré** - Donne des statistiques, des pourcentages, des listes concrètes
-2. **Sois proactif** - Identifie les problèmes, propose des priorités d'action
-3. **Utilise le formatage markdown** - Gras pour les points importants, listes à puces
-4. **Propose des actions** - À chaque réponse, suggère les prochaines étapes
+### 2. Recherche documentaire
+- Accès aux manuels techniques, fiches produits, normes
+- Recherche sémantique dans tous les documents uploadés
+- Extraction d'informations précises avec sources
 
-## Limitations
-- Tu ne peux pas modifier directement les données (mais tu peux expliquer comment le faire)
-- Réponds toujours en français sauf demande contraire`;
+### 3. Analyse et graphiques
+Quand l'utilisateur demande des statistiques ou analyses visuelles, génère un objet JSON "chart" avec:
+- type: "bar" | "line" | "pie" | "doughnut"
+- labels: ["label1", "label2", ...]
+- data: [valeur1, valeur2, ...]
+- title: "Titre du graphique"
+
+Exemple de réponse avec graphique:
+\`\`\`json
+{"chart": {"type": "pie", "title": "Répartition par bâtiment", "labels": ["Bât A", "Bât B"], "data": [45, 32]}}
+\`\`\`
+
+### 4. Actions autonomes
+Tu peux exécuter des actions via un objet JSON "action":
+- {"action": "createControl", "params": {"switchboardId": 123, "templateId": 1, "dueDate": "2025-01-15"}}
+- {"action": "createNC", "params": {"equipmentId": 456, "description": "...", "severity": "high"}}
+- {"action": "updateEquipment", "params": {"id": 789, "status": "maintenance"}}
+- {"action": "scheduleReminder", "params": {"date": "2025-02-01", "message": "..."}}
+
+### 5. Planification intelligente
+- Optimisation des tournées de maintenance
+- Priorisation basée sur criticité et échéances
+- Suggestions de regroupement géographique
+
+## 📋 Format de réponse
+Réponds TOUJOURS avec:
+1. Un message clair en markdown (gras, listes, émojis pour l'importance)
+2. Si pertinent: un bloc JSON pour graphique OU action
+3. Des suggestions de suivi
+
+## ⚡ Règles importantes
+- Sois PRÉCIS avec des chiffres réels de la base de données
+- Sois PROACTIF: identifie les problèmes avant qu'on te les demande
+- Si on te demande une action (créer contrôle, planifier), GÉNÈRE le JSON d'action
+- Réponds en français sauf demande contraire`;
 
 // Helper: Query database for AI context
 async function getAIContext(site) {
@@ -175,6 +208,265 @@ function formatContextForAI(ctx) {
 ### Répartition par bâtiment
 \${buildingsList || 'Aucune donnée de bâtiment'}
 \`;
+}
+
+// ============================================================
+// AI DOCUMENT SEARCH - Query Ask Veeva for documents
+// ============================================================
+async function searchDocuments(query, limit = 5) {
+  try {
+    const askVeevaUrl = process.env.ASK_VEEVA_URL || 'http://127.0.0.1:3015';
+    const response = await fetch(`${askVeevaUrl}/api/ask-veeva/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, limit, threshold: 0.3 })
+    });
+
+    if (!response.ok) return { results: [], error: 'Document search unavailable' };
+
+    const data = await response.json();
+    return {
+      results: (data.results || []).map(r => ({
+        title: r.filename || r.title,
+        excerpt: r.text?.substring(0, 300) + '...',
+        score: r.score,
+        page: r.page
+      })),
+      count: data.results?.length || 0
+    };
+  } catch (e) {
+    console.error('[AI] Document search error:', e.message);
+    return { results: [], error: e.message };
+  }
+}
+
+// ============================================================
+// AI ACTION EXECUTION - Execute autonomous actions
+// ============================================================
+async function executeAIAction(action, params, site) {
+  console.log(`[AI] Executing action: ${action}`, params);
+
+  try {
+    switch (action) {
+      case 'createControl': {
+        const { switchboardId, templateId, dueDate, frequency } = params;
+        const result = await pool.query(`
+          INSERT INTO control_schedules (switchboard_id, template_id, next_due_date, frequency, site, created_at)
+          VALUES ($1, $2, $3, $4, $5, NOW())
+          RETURNING id
+        `, [switchboardId, templateId || 1, dueDate, frequency || 'annual', site]);
+        return { success: true, message: `✅ Contrôle créé (ID: ${result.rows[0]?.id})`, id: result.rows[0]?.id };
+      }
+
+      case 'createNC': {
+        const { equipmentId, description, severity, equipmentType } = params;
+        const table = equipmentType === 'atex' ? 'atex_nonconformities' : 'nonconformities';
+        const result = await pool.query(`
+          INSERT INTO ${table} (equipment_id, description, severity, status, site, created_at)
+          VALUES ($1, $2, $3, 'open', $4, NOW())
+          RETURNING id
+        `, [equipmentId, description, severity || 'medium', site]);
+        return { success: true, message: `✅ Non-conformité créée (ID: ${result.rows[0]?.id})`, id: result.rows[0]?.id };
+      }
+
+      case 'updateEquipment': {
+        const { id, status, equipmentType } = params;
+        const tables = {
+          switchboard: 'switchboards',
+          vsd: 'vsd_equipments',
+          meca: 'meca_equipments',
+          atex: 'atex_equipments'
+        };
+        const table = tables[equipmentType] || 'switchboards';
+        await pool.query(`UPDATE ${table} SET status = $1, updated_at = NOW() WHERE id = $2`, [status, id]);
+        return { success: true, message: `✅ Équipement ${id} mis à jour: ${status}` };
+      }
+
+      case 'scheduleReminder': {
+        const { date, message, userId } = params;
+        // Store reminder in a notifications table (create if needed)
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS ai_reminders (
+            id SERIAL PRIMARY KEY,
+            reminder_date DATE NOT NULL,
+            message TEXT NOT NULL,
+            site TEXT,
+            user_id INTEGER,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            is_sent BOOLEAN DEFAULT FALSE
+          )
+        `);
+        const result = await pool.query(`
+          INSERT INTO ai_reminders (reminder_date, message, site, user_id)
+          VALUES ($1, $2, $3, $4)
+          RETURNING id
+        `, [date, message, site, userId]);
+        return { success: true, message: `✅ Rappel programmé pour le ${date}`, id: result.rows[0]?.id };
+      }
+
+      case 'searchEquipment': {
+        const { query, type, building, floor } = params;
+        let sql = 'SELECT id, name, code, building_code, floor FROM switchboards WHERE site = $1';
+        const queryParams = [site];
+
+        if (building) {
+          sql += ' AND building_code ILIKE $' + (queryParams.length + 1);
+          queryParams.push(`%${building}%`);
+        }
+        if (floor) {
+          sql += ' AND floor = $' + (queryParams.length + 1);
+          queryParams.push(floor);
+        }
+        if (query) {
+          sql += ' AND (name ILIKE $' + (queryParams.length + 1) + ' OR code ILIKE $' + (queryParams.length + 1) + ')';
+          queryParams.push(`%${query}%`);
+        }
+        sql += ' LIMIT 20';
+
+        const result = await pool.query(sql, queryParams);
+        return { success: true, results: result.rows, count: result.rows.length };
+      }
+
+      case 'getControlHistory': {
+        const { switchboardId, limit } = params;
+        const result = await pool.query(`
+          SELECT cr.*, ct.name as template_name
+          FROM control_reports cr
+          LEFT JOIN control_templates ct ON cr.template_id = ct.id
+          WHERE cr.switchboard_id = $1
+          ORDER BY cr.control_date DESC
+          LIMIT $2
+        `, [switchboardId, limit || 10]);
+        return { success: true, history: result.rows };
+      }
+
+      default:
+        return { success: false, message: `Action inconnue: ${action}` };
+    }
+  } catch (e) {
+    console.error(`[AI] Action error (${action}):`, e.message);
+    return { success: false, message: `Erreur: ${e.message}` };
+  }
+}
+
+// ============================================================
+// AI RESPONSE PARSER - Extract charts and actions from response
+// ============================================================
+function parseAIResponse(responseText) {
+  const result = {
+    message: responseText,
+    chart: null,
+    action: null,
+    actionParams: null
+  };
+
+  // Extract JSON blocks for chart
+  const chartMatch = responseText.match(/```json\s*(\{[^`]*"chart"[^`]*\})\s*```/s);
+  if (chartMatch) {
+    try {
+      const parsed = JSON.parse(chartMatch[1]);
+      if (parsed.chart) {
+        result.chart = parsed.chart;
+        result.message = responseText.replace(chartMatch[0], '').trim();
+      }
+    } catch (e) { /* ignore parse errors */ }
+  }
+
+  // Also try inline chart JSON
+  const inlineChartMatch = responseText.match(/\{"chart"\s*:\s*\{[^}]+\}\}/);
+  if (!result.chart && inlineChartMatch) {
+    try {
+      const parsed = JSON.parse(inlineChartMatch[0]);
+      if (parsed.chart) {
+        result.chart = parsed.chart;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Extract action JSON
+  const actionMatch = responseText.match(/```json\s*(\{[^`]*"action"[^`]*\})\s*```/s);
+  if (actionMatch) {
+    try {
+      const parsed = JSON.parse(actionMatch[1]);
+      if (parsed.action) {
+        result.action = parsed.action;
+        result.actionParams = parsed.params || {};
+        result.message = responseText.replace(actionMatch[0], '').trim();
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Inline action JSON
+  const inlineActionMatch = responseText.match(/\{"action"\s*:\s*"[^"]+"\s*,\s*"params"\s*:\s*\{[^}]+\}\}/);
+  if (!result.action && inlineActionMatch) {
+    try {
+      const parsed = JSON.parse(inlineActionMatch[0]);
+      if (parsed.action) {
+        result.action = parsed.action;
+        result.actionParams = parsed.params || {};
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  return result;
+}
+
+// ============================================================
+// AI CALL WITH FALLBACK - OpenAI -> Gemini -> Local
+// ============================================================
+async function callAI(messages, options = {}) {
+  const { maxTokens = 2000, temperature = 0.7 } = options;
+
+  // Try OpenAI first
+  if (openai) {
+    try {
+      console.log('[AI] Calling OpenAI...');
+      const completion = await openai.chat.completions.create({
+        model: process.env.AI_MODEL || "gpt-4o-mini",
+        messages,
+        temperature,
+        max_tokens: maxTokens
+      });
+      return {
+        content: completion.choices[0]?.message?.content || '',
+        provider: 'openai',
+        model: process.env.AI_MODEL || 'gpt-4o-mini'
+      };
+    } catch (e) {
+      console.error('[AI] OpenAI error:', e.message);
+    }
+  }
+
+  // Fallback to Gemini
+  if (geminiModel) {
+    try {
+      console.log('[AI] Falling back to Gemini...');
+      // Convert messages to Gemini format
+      const systemPrompt = messages.find(m => m.role === 'system')?.content || '';
+      const userMessages = messages.filter(m => m.role !== 'system');
+
+      const prompt = systemPrompt + '\n\n' + userMessages.map(m =>
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
+      ).join('\n\n');
+
+      const result = await geminiModel.generateContent(prompt);
+      const response = await result.response;
+      return {
+        content: response.text(),
+        provider: 'gemini',
+        model: 'gemini-1.5-flash'
+      };
+    } catch (e) {
+      console.error('[AI] Gemini error:', e.message);
+    }
+  }
+
+  // No AI available
+  return {
+    content: null,
+    provider: 'none',
+    error: 'Aucun service IA disponible'
+  };
 }
 
 // ============================================================
@@ -422,60 +714,114 @@ app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
 // >>> AI Assistant - Powerful AI with OpenAI + Database access
 app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
   try {
-    const { message, context: clientContext, conversationHistory = [] } = req.body;
+    const { message, context: clientContext, conversationHistory = [], executeAction = false } = req.body;
     const site = req.header('X-Site') || clientContext?.user?.site || process.env.DEFAULT_SITE || 'Nyon';
 
     if (!message) {
       return res.status(400).json({ error: "Message requis" });
     }
 
+    console.log(`[AI] 🚀 Processing: "${message.substring(0, 50)}..." for site ${site}`);
+
     // Get real-time context from database
     const dbContext = await getAIContext(site);
     const contextPrompt = formatContextForAI(dbContext);
 
-    // Check if OpenAI is available
-    if (!openai) {
-      console.log('[AI] OpenAI not configured, using intelligent fallback');
-      return res.json(generateIntelligentFallback(message, dbContext));
+    // Check if user wants document search
+    const needsDocs = /document|manuel|fiche|norme|pdf|technique|spécification|datasheet/i.test(message);
+    let docContext = '';
+    let docSources = [];
+
+    if (needsDocs) {
+      console.log('[AI] 📄 Searching documents...');
+      const docResults = await searchDocuments(message, 5);
+      if (docResults.results.length > 0) {
+        docContext = `\n\n## Documents trouvés\n${docResults.results.map((d, i) =>
+          `${i + 1}. **${d.title}** (pertinence: ${Math.round((d.score || 0) * 100)}%)\n   ${d.excerpt}`
+        ).join('\n\n')}`;
+        docSources = docResults.results.map(d => ({ title: d.title, page: d.page }));
+      }
     }
 
-    // Build messages for OpenAI
+    // Build full context
+    const fullContext = contextPrompt + docContext;
+
+    // Build messages for AI
     const messages = [
-      { role: "system", content: AI_SYSTEM_PROMPT + "\n\n" + contextPrompt },
-      ...conversationHistory.slice(-6).map(m => ({ role: m.role, content: m.content })),
+      { role: "system", content: AI_SYSTEM_PROMPT + "\n\n" + fullContext },
+      ...conversationHistory.slice(-8).map(m => ({ role: m.role, content: m.content })),
       { role: "user", content: message }
     ];
 
-    console.log(`[AI] Processing: "${message.substring(0, 50)}..." for site ${site}`);
+    // Call AI (OpenAI -> Gemini fallback)
+    const aiResult = await callAI(messages, { maxTokens: 2000 });
 
-    // Call OpenAI
-    const completion = await openai.chat.completions.create({
-      model: process.env.AI_MODEL || "gpt-4o-mini",
-      messages,
-      temperature: 0.7,
-      max_tokens: 1500
-    });
+    if (!aiResult.content) {
+      // Ultimate fallback
+      console.log('[AI] ⚠️ No AI available, using intelligent fallback');
+      return res.json(generateIntelligentFallback(message, dbContext));
+    }
 
-    const aiMessage = completion.choices[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
+    // Parse response for charts and actions
+    const parsed = parseAIResponse(aiResult.content);
 
-    // Extract suggested actions from response
-    const actions = extractActionsFromResponse(aiMessage, message);
+    // Execute action if requested and action found
+    let actionResult = null;
+    if (executeAction && parsed.action) {
+      console.log(`[AI] ⚡ Executing action: ${parsed.action}`);
+      actionResult = await executeAIAction(parsed.action, parsed.actionParams, site);
 
-    res.json({
-      message: aiMessage,
-      actions,
-      sources: [],
-      provider: "openai",
+      // Append action result to message
+      if (actionResult.success) {
+        parsed.message += `\n\n---\n**Action exécutée:** ${actionResult.message}`;
+      } else {
+        parsed.message += `\n\n---\n**Erreur d'exécution:** ${actionResult.message}`;
+      }
+    }
+
+    // Extract suggested follow-up actions
+    const suggestedActions = extractActionsFromResponse(parsed.message, message);
+
+    // Build response
+    const response = {
+      message: parsed.message,
+      actions: suggestedActions,
+      sources: docSources,
+      provider: aiResult.provider,
+      model: aiResult.model,
       context: {
         site,
         switchboards: dbContext.switchboards.count,
         controls: dbContext.controls,
         timestamp: dbContext.timestamp
       }
-    });
+    };
+
+    // Add chart if present
+    if (parsed.chart) {
+      response.chart = parsed.chart;
+      console.log('[AI] 📊 Chart generated:', parsed.chart.type, parsed.chart.title);
+    }
+
+    // Add pending action if not executed
+    if (parsed.action && !executeAction) {
+      response.pendingAction = {
+        action: parsed.action,
+        params: parsed.actionParams,
+        description: `Action proposée: ${parsed.action}`
+      };
+      console.log('[AI] 🔧 Action proposed:', parsed.action);
+    }
+
+    // Add action result if executed
+    if (actionResult) {
+      response.actionResult = actionResult;
+    }
+
+    res.json(response);
 
   } catch (error) {
-    console.error('[AI] Error:', error.message);
+    console.error('[AI] ❌ Error:', error.message);
 
     // Fallback on error
     const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
@@ -627,12 +973,46 @@ function extractActionsFromResponse(response, originalMessage) {
   return actions.slice(0, 3);
 }
 
+// Execute AI action endpoint
+app.post("/api/ai-assistant/execute-action", express.json(), async (req, res) => {
+  try {
+    const { action, params } = req.body;
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+    if (!action) {
+      return res.status(400).json({ success: false, message: 'Action requise' });
+    }
+
+    console.log(`[AI] ⚡ Executing action: ${action}`);
+    const result = await executeAIAction(action, params || {}, site);
+
+    res.json(result);
+  } catch (error) {
+    console.error('[AI] Execute action error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Health check for AI assistant
 app.get("/api/ai-assistant/health", (req, res) => {
+  const providers = [];
+  if (openai) providers.push('openai');
+  if (geminiModel) providers.push('gemini');
+
   res.json({
-    status: openai ? "active" : "fallback",
-    provider: openai ? "openai" : "local",
-    message: openai ? "AI service running with OpenAI" : "AI service running in fallback mode"
+    status: providers.length > 0 ? "active" : "fallback",
+    providers,
+    primaryProvider: openai ? "openai" : (geminiModel ? "gemini" : "local"),
+    capabilities: {
+      chat: true,
+      documentSearch: true,
+      chartGeneration: true,
+      autonomousActions: true,
+      databaseAccess: true
+    },
+    message: providers.length > 0
+      ? `🚀 AI surpuissant actif (${providers.join(' + ')})`
+      : "Mode fallback intelligent avec données DB"
   });
 });
 
