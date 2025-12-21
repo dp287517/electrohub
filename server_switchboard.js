@@ -3253,12 +3253,12 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'vsd' || type === 'all') {
       try {
         const vsdRes = await quickQuery(`
-          SELECT id, name, building, floor, room, serial_number, brand
+          SELECT id, name, building, floor, location as room, serial_number, brand
           FROM vsd_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.vsd = vsdRes.rows;
       } catch (e) {
-        // Table might not exist
+        // Table might not exist or columns differ - silently ignore
         results.vsd = [];
       }
     }
@@ -3267,11 +3267,12 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'meca' || type === 'all') {
       try {
         const mecaRes = await quickQuery(`
-          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand, category
-          FROM meca_equipments WHERE site_id = $1 ORDER BY name
+          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand
+          FROM meca_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.meca = mecaRes.rows;
       } catch (e) {
+        // Table might not exist - silently ignore
         results.meca = [];
       }
     }
@@ -3280,11 +3281,12 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'mobile_equipment' || type === 'all') {
       try {
         const mobileRes = await quickQuery(`
-          SELECT id, name, building, floor, serial_number, category
+          SELECT id, name, building, floor, serial_number
           FROM me_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.mobile_equipment = mobileRes.rows;
       } catch (e) {
+        // Table might not exist - silently ignore
         results.mobile_equipment = [];
       }
     }
@@ -3293,11 +3295,12 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'hv' || type === 'all') {
       try {
         const hvRes = await quickQuery(`
-          SELECT id, name, code, building_code, floor, room, regime_neutral, is_principal
+          SELECT id, name, code, building_code, floor, regime_neutral, is_principal
           FROM hv_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.hv = hvRes.rows;
       } catch (e) {
+        // Table might not exist - silently ignore
         results.hv = [];
       }
     }
@@ -3306,11 +3309,12 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     if (!type || type === 'glo' || type === 'all') {
       try {
         const gloRes = await quickQuery(`
-          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand, category
-          FROM glo_equipments WHERE site_id = $1 ORDER BY name
+          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand
+          FROM glo_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.glo = gloRes.rows;
       } catch (e) {
+        // Table might not exist - silently ignore
         results.glo = [];
       }
     }
