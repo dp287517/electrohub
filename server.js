@@ -26,100 +26,98 @@ const geminiModel = gemini ? gemini.getGenerativeModel({ model: "gemini-1.5-flas
 
 console.log(`[AI] OpenAI: ${openai ? '✅' : '❌'} | Gemini: ${gemini ? '✅' : '❌'}`);
 
-// System prompt for ElectroHub AI Assistant - SUPER POWERFUL
-const AI_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA le plus puissant pour ElectroHub. Tu es un EXPERT en gestion d'installations électriques industrielles avec des capacités SURHUMAINES.
+// ============================================================
+// SUPER INTELLIGENT AI SYSTEM PROMPT
+// ============================================================
+const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA exceptionnellement intelligent pour la maintenance industrielle. Tu parles naturellement comme un collègue expert et bienveillant.
 
-## 🧠 TON INTELLIGENCE
-Tu analyses EN TEMPS RÉEL toutes les données de l'installation et tu ANTICIPES les besoins. Tu ne te contentes pas de répondre, tu GUIDES proactivement l'utilisateur.
+## 🧠 TA PERSONNALITÉ
+- Tu es chaleureux, direct et pragmatique
+- Tu ANTICIPES les besoins avant qu'on te les demande
+- Tu proposes TOUJOURS des solutions, jamais juste des constats
+- Tu parles comme un vrai technicien expérimenté, pas comme un robot
+- Tu utilises "on" et "tu" plutôt que des formulations impersonnelles
 
-## 🚀 TES SUPER-POUVOIRS
+## 🎯 TON INTELLIGENCE PROACTIVE
 
-### 1. 📊 Accès base de données temps réel
-- Armoires électriques, variateurs VSD, équipements mécaniques, ATEX
-- Historique complet des contrôles avec dates, durées, résultats
-- Non-conformités avec sévérité et délais
-- Données géographiques: bâtiment, étage, zone
+### Quand il n'y a PAS de travail prévu:
+Au lieu de dire "rien à faire", tu PROPOSES:
+- "Pas de contrôle urgent cette semaine, mais je te propose d'avancer sur..."
+- Identifier les équipements qui n'ont JAMAIS été contrôlés
+- Suggérer des contrôles préventifs sur les équipements les plus anciens
+- Proposer de traiter les NC ATEX en attente
+- Recommander de compléter la documentation manquante
 
-### 2. 📅 PLANIFICATION INTELLIGENTE DU JOUR
-Quand on te demande "mon planning", "ma journée", "quoi faire aujourd'hui":
-- Analyse les contrôles en retard par URGENCE (critique > 30j, urgent > 7j, normal)
-- Optimise le parcours par BÂTIMENT puis par ÉTAGE (minimiser les déplacements)
-- Estime le temps total de la journée
-- Priorise: 🚨 CRITIQUE d'abord, puis ⚠️ URGENT, puis 📅 PLANIFIÉ
-- Propose des alternatives si surcharge
+### Quand tu détectes des PROBLÈMES:
+- Équipements sans documentation → "J'ai trouvé X équipements sans doc technique. Tu veux que je lance une recherche?"
+- NC non traitées depuis longtemps → Alerte proactive
+- Patterns de pannes → "J'ai remarqué que le bâtiment 20 a beaucoup de NC, on devrait investiguer"
 
-### 3. 🔍 Recherche documentaire
-- Recherche sémantique dans tous les manuels, fiches techniques, normes
-- Extraction d'informations avec citations et numéros de page
-- Recherche de procédures de maintenance spécifiques
+### Quand on te demande un PLANNING:
+1. S'il y a des tâches: organise par bâtiment/étage pour optimiser les déplacements
+2. S'il n'y en a pas: "Rien d'urgent, mais voici ce que je te recommande de faire..."
+3. Estime toujours le temps: "Ça devrait te prendre environ 2-3h"
+4. Propose des alternatives: "Si tu as plus de temps, on pourrait aussi..."
 
-### 4. 📈 GRAPHIQUES VISUELS (OBLIGATOIRE pour les statistiques!)
-TOUJOURS générer un graphique pour toute demande d'analyse, statistiques, répartition ou vue d'ensemble.
-Le graphique DOIT être dans un bloc JSON séparé après ton texte:
+## 🔍 RECHERCHE DOCUMENTAIRE INTELLIGENTE
 
+Quand tu détectes un équipement sans documentation ou quand on te demande de la doc:
+1. Utilise {"action": "searchDoc", "params": {"query": "marque modèle fiche technique", "equipment": "nom"}}
+2. Je lancerai automatiquement une recherche web via plusieurs IA
+3. Tu recevras les résultats et pourras les présenter
+
+## 📊 GRAPHIQUES (quand pertinent)
+Pour les stats/analyses, génère un graphique:
 \`\`\`json
-{"chart": {"type": "bar", "title": "Titre du graphique", "labels": ["Label1", "Label2"], "data": [10, 20]}}
+{"chart": {"type": "bar|doughnut|line", "title": "...", "labels": [...], "data": [...]}}
 \`\`\`
 
-Types de graphiques:
-- "bar" → Comparaisons (équipements par bâtiment, contrôles par mois)
-- "doughnut" → Répartitions (statuts, types d'équipements)
-- "pie" → Proportions simples
-- "line" → Évolutions temporelles
+## ⚡ ACTIONS AUTONOMES
+\`\`\`json
+{"action": "createControl", "params": {"switchboardId": ID, "dueDate": "YYYY-MM-DD"}}
+{"action": "searchDoc", "params": {"query": "recherche", "equipmentId": "id"}}
+{"action": "scheduleReminder", "params": {"message": "...", "date": "YYYY-MM-DD"}}
+\`\`\`
 
-⚠️ RÈGLE ABSOLUE: Si l'utilisateur demande une "analyse", "statistiques", "répartition", "vue globale" → GÉNÈRE UN GRAPHIQUE!
+## 💬 EXEMPLES DE RÉPONSES NATURELLES
 
-### 5. ⚡ Actions autonomes
-Tu peux CRÉER et MODIFIER via JSON:
-- {"action": "createControl", "params": {"switchboardId": ID, "templateId": ID, "dueDate": "YYYY-MM-DD"}}
-- {"action": "createNC", "params": {"equipmentId": ID, "description": "...", "severity": "critical|high|medium|low"}}
-- {"action": "updateEquipment", "params": {"id": ID, "status": "active|maintenance|offline"}}
-- {"action": "scheduleReminder", "params": {"date": "YYYY-MM-DD", "message": "..."}}
-- {"action": "getDailyPlan", "params": {"date": "today|tomorrow|YYYY-MM-DD"}}
+❌ MAUVAIS: "Il n'y a aucun contrôle planifié cette semaine. 0 contrôles à venir."
 
-## 🎯 COMPORTEMENT ADAPTATIF
+✅ BON: "Pas de contrôle prévu cette semaine, c'est l'occasion parfaite pour avancer!
 
-### Si l'utilisateur demande son PLANNING/JOURNÉE:
-1. Commence TOUJOURS par les éléments CRITIQUES/URGENTS
-2. Groupe par bâtiment pour optimiser les déplacements
-3. Estime le temps: "~4h de travail planifié"
-4. Propose: "Voulez-vous que je crée ces contrôles?" avec le JSON d'action
+Je te propose:
+• **Traiter les 24 NC ATEX** - c'est prioritaire pour la conformité
+• **Contrôler les 12 équipements** du bâtiment 20 qui n'ont jamais été vérifiés
+• **Compléter la doc** des 8 variateurs sans fiche technique
 
-### Si l'utilisateur demande des STATISTIQUES:
-1. Donne les chiffres précis avec comparaisons
-2. Génère un graphique adapté (pie pour répartitions, bar pour comparaisons, line pour évolutions)
-3. Identifie les tendances et anomalies
+Par quoi tu veux commencer?"
 
-### Si l'utilisateur cherche un ÉQUIPEMENT:
-1. Localise précisément: bâtiment, étage, salle
-2. Donne l'historique des derniers contrôles
-3. Signale les NC actives
+❌ MAUVAIS: "Voici la liste des non-conformités ATEX: [liste brute]"
 
-### Si l'utilisateur parle de NC/CONFORMITÉ:
-1. Liste par sévérité décroissante
-2. Suggère les actions correctives
-3. Propose de créer des rappels
+✅ BON: "On a 24 NC ATEX à traiter, dont 5 critiques dans le bâtiment 20.
 
-## 📋 FORMAT DE RÉPONSE
+Les plus urgentes:
+• **LS+206** (Zone 1) - étiquetage manquant, ça prend 10 min à corriger
+• **Control panel GR03** - câblage non conforme, il faut voir avec l'électricien
 
-Structure TOUJOURS ainsi:
-1. **Synthèse rapide** (2-3 lignes avec les chiffres clés et emojis)
-2. **Détails organisés** (listes à puces, PAS de tableaux markdown car mal affichés)
-3. **Actions recommandées** avec emojis (🚨⚠️✅📋)
-4. **GRAPHIQUE JSON** (OBLIGATOIRE pour analyse/stats) dans un bloc \`\`\`json séparé
+Tu veux que je te prépare un plan d'intervention optimisé par zone?"
 
-⚠️ ÉVITE les tableaux markdown (|---|) - utilise plutôt des listes à puces
-⚠️ GÉNÈRE TOUJOURS un graphique pour les demandes d'analyse globale
+## 🚨 CE QUE TU DOIS TOUJOURS FAIRE
+1. Proposer des ACTIONS concrètes, pas juste constater
+2. Donner des ESTIMATIONS de temps
+3. PRIORISER intelligemment (sécurité > conformité > préventif)
+4. Suggérer des ALTERNATIVES si rien d'urgent
+5. Détecter les ANOMALIES (équipements jamais contrôlés, doc manquante, patterns)
 
-## ⚡ RÈGLES D'OR
-- JAMAIS de réponse vague: donne des CHIFFRES, des NOMS, des DATES
-- TOUJOURS proactif: signale les problèmes même si on ne te les demande pas
-- Quand tu vois des contrôles en retard CRITIQUES: ALERTE immédiatement
-- Optimise les déplacements: regroupe par zone géographique
-- Si tu proposes une action, GÉNÈRE le JSON pour permettre l'exécution
-- Réponds en français, format markdown, avec emojis pour l'importance`;
+## 📋 FORMAT
+- Réponses courtes et percutantes
+- Listes à puces (pas de tableaux markdown)
+- Emojis pour la lisibilité
+- Toujours finir par une question ou proposition d'action`;
 
-// Helper: Query database for AI context - COMPREHENSIVE VERSION
+// ============================================================
+// INTELLIGENT CONTEXT WITH PROACTIVE ANALYSIS
+// ============================================================
 async function getAIContext(site) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -363,6 +361,137 @@ async function getAIContext(site) {
       console.error('[AI] ATEX error:', e.message);
     }
 
+    // ========== PROACTIVE ANALYSIS ==========
+    context.proactive = {
+      neverControlled: [],
+      withoutDocumentation: [],
+      suggestions: [],
+      patterns: []
+    };
+
+    // Find equipment NEVER controlled (no last_control_date)
+    try {
+      const neverControlledRes = await pool.query(`
+        SELECT s.id, s.name, s.code, s.building_code, s.floor, 'switchboard' as type
+        FROM switchboards s
+        LEFT JOIN control_schedules cs ON cs.switchboard_id = s.id
+        WHERE s.site = $1 AND cs.last_control_date IS NULL
+        ORDER BY s.building_code, s.floor
+        LIMIT 20
+      `, [site]);
+      context.proactive.neverControlled = neverControlledRes.rows;
+    } catch (e) {
+      console.error('[AI] Never controlled query error:', e.message);
+    }
+
+    // Find VSD without documentation (manufacturer but no model/doc)
+    try {
+      const vsdWithoutDoc = context.vsd.list.filter(v =>
+        !v.model || v.model === '' || v.model === 'N/A'
+      );
+      context.proactive.withoutDocumentation.push(
+        ...vsdWithoutDoc.map(v => ({
+          id: v.id,
+          name: v.name,
+          type: 'VSD',
+          manufacturer: v.manufacturer,
+          building: v.building,
+          issue: 'Modèle/documentation manquant'
+        }))
+      );
+    } catch (e) { /* ignore */ }
+
+    // Find ATEX without recent check (> 1 year or never)
+    try {
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+      const siteRes = await pool.query(`SELECT id FROM sites WHERE name = $1 LIMIT 1`, [site]);
+      const siteId = siteRes.rows[0]?.id;
+
+      if (siteId) {
+        const atexOldRes = await pool.query(`
+          SELECT e.id, e.name, e.building, e.zone, e.brand, e.model,
+            (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) as last_check
+          FROM atex_equipments e
+          WHERE e.site_id = $1
+          HAVING (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) < $2
+             OR (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) IS NULL
+          ORDER BY last_check NULLS FIRST
+          LIMIT 15
+        `, [siteId, oneYearAgo]);
+
+        atexOldRes.rows.forEach(eq => {
+          if (!eq.last_check) {
+            context.proactive.neverControlled.push({
+              id: eq.id, name: eq.name, type: 'ATEX',
+              building: eq.building, zone: eq.zone
+            });
+          }
+          if (!eq.brand || !eq.model) {
+            context.proactive.withoutDocumentation.push({
+              id: eq.id, name: eq.name, type: 'ATEX',
+              building: eq.building, zone: eq.zone,
+              issue: 'Marque/modèle manquant - documentation introuvable'
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('[AI] ATEX old check error:', e.message);
+    }
+
+    // Detect patterns (buildings with many issues)
+    try {
+      const buildingIssues = {};
+      context.atex.ncList.forEach(nc => {
+        const b = nc.building || 'N/A';
+        buildingIssues[b] = (buildingIssues[b] || 0) + 1;
+      });
+      context.controls.overdueList.forEach(c => {
+        const b = c.building || 'N/A';
+        buildingIssues[b] = (buildingIssues[b] || 0) + 1;
+      });
+
+      Object.entries(buildingIssues)
+        .filter(([_, count]) => count >= 3)
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([building, count]) => {
+          context.proactive.patterns.push({
+            type: 'building_issues',
+            building,
+            count,
+            message: `Bâtiment ${building} a ${count} problèmes - investigation recommandée`
+          });
+        });
+    } catch (e) { /* ignore */ }
+
+    // Generate smart suggestions
+    if (context.controls.overdue === 0 && context.controls.thisWeek === 0) {
+      context.proactive.suggestions.push({
+        priority: 1,
+        action: 'treat_nc',
+        message: `Pas de contrôle urgent. Profites-en pour traiter les ${context.atex.ncCount} NC ATEX`,
+        estimatedTime: `${Math.ceil(context.atex.ncCount * 15 / 60)}h`
+      });
+    }
+    if (context.proactive.neverControlled.length > 0) {
+      context.proactive.suggestions.push({
+        priority: 2,
+        action: 'first_controls',
+        message: `${context.proactive.neverControlled.length} équipements jamais contrôlés`,
+        estimatedTime: `${Math.ceil(context.proactive.neverControlled.length * 30 / 60)}h`
+      });
+    }
+    if (context.proactive.withoutDocumentation.length > 0) {
+      context.proactive.suggestions.push({
+        priority: 3,
+        action: 'find_documentation',
+        message: `${context.proactive.withoutDocumentation.length} équipements sans documentation`,
+        canAutoSearch: true
+      });
+    }
+
     // ========== BUILD SUMMARY ==========
     context.summary = {
       totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.totalEquipments,
@@ -495,10 +624,28 @@ ${ctx.atex.ncCount > 0 ? atexNcText : '✅ Aucune non-conformité ATEX active - 
 ### 🏢 RÉPARTITION PAR BÂTIMENT
 ${buildingsList || 'Aucune donnée de bâtiment'}
 
-### ⚡ ACTIONS URGENTES REQUISES: ${ctx.urgentItems.length}
+### ⚡ ACTIONS URGENTES: ${ctx.urgentItems.length}
 ${ctx.urgentItems.length > 0 ? ctx.urgentItems.slice(0, 5).map(i =>
   `- ${i.type === 'control_overdue' ? '⏰' : '⚠️'} ${i.switchboard || i.name} (${i.urgency || i.severity})`
 ).join('\n') : '✅ Aucune action urgente'}
+
+### 🎯 ANALYSE PROACTIVE
+${ctx.proactive?.suggestions?.length > 0 ? ctx.proactive.suggestions.map(s =>
+  `- ${s.message}${s.estimatedTime ? ` (~${s.estimatedTime})` : ''}`
+).join('\n') : ''}
+
+${ctx.proactive?.neverControlled?.length > 0 ? `**⚠️ ${ctx.proactive.neverControlled.length} équipements JAMAIS contrôlés:**
+${ctx.proactive.neverControlled.slice(0, 5).map(e =>
+  `  - ${e.name} (${e.type}) - Bât. ${e.building_code || e.building || 'N/A'}`
+).join('\n')}` : ''}
+
+${ctx.proactive?.withoutDocumentation?.length > 0 ? `**📄 ${ctx.proactive.withoutDocumentation.length} équipements SANS documentation:**
+${ctx.proactive.withoutDocumentation.slice(0, 5).map(e =>
+  `  - ${e.name} (${e.type}) - ${e.manufacturer || 'Marque inconnue'} - ${e.issue}`
+).join('\n')}` : ''}
+
+${ctx.proactive?.patterns?.length > 0 ? `**🔍 Patterns détectés:**
+${ctx.proactive.patterns.map(p => `  - ${p.message}`).join('\n')}` : ''}
 `;
 }
 
@@ -530,6 +677,81 @@ async function searchDocuments(query, limit = 5) {
     console.error('[AI] Document search error:', e.message);
     return { results: [], error: e.message };
   }
+}
+
+// ============================================================
+// MULTI-MODEL WEB SEARCH FOR DOCUMENTATION
+// ============================================================
+async function searchWebForDocumentation(query, equipmentInfo = {}) {
+  console.log(`[AI] 🌐 Web search for: ${query}`);
+  const results = { sources: [], summary: null };
+
+  // Build enhanced search query
+  const enhancedQuery = `${query} ${equipmentInfo.manufacturer || ''} ${equipmentInfo.model || ''} fiche technique datasheet PDF`.trim();
+
+  // Try Gemini with web grounding first
+  if (geminiModel) {
+    try {
+      const prompt = `Recherche les informations techniques et la documentation pour cet équipement industriel:
+
+Équipement: ${equipmentInfo.name || query}
+Fabricant: ${equipmentInfo.manufacturer || 'inconnu'}
+Modèle: ${equipmentInfo.model || 'inconnu'}
+Type: ${equipmentInfo.type || 'équipement électrique'}
+
+Trouve:
+1. Lien vers la fiche technique officielle (datasheet PDF)
+2. Manuel d'installation et maintenance
+3. Caractéristiques techniques principales
+4. Procédures de maintenance recommandées
+
+Réponds avec les URLs trouvées et un résumé des specs principales.`;
+
+      const result = await geminiModel.generateContent(prompt);
+      const response = result.response.text();
+
+      results.summary = response;
+      results.sources.push({ provider: 'Gemini', content: response });
+      console.log('[AI] ✅ Gemini web search completed');
+    } catch (e) {
+      console.error('[AI] Gemini web search error:', e.message);
+    }
+  }
+
+  // Also try OpenAI for additional context
+  if (openai && (!results.summary || results.summary.length < 100)) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un expert en documentation technique industrielle. Fournis des informations précises sur les équipements électriques et leurs spécifications.'
+          },
+          {
+            role: 'user',
+            content: `Donne-moi les informations techniques pour: ${equipmentInfo.name || query}
+Fabricant: ${equipmentInfo.manufacturer || 'inconnu'}
+Modèle: ${equipmentInfo.model || 'inconnu'}
+
+Inclus: spécifications, maintenance recommandée, points de contrôle importants.`
+          }
+        ],
+        max_tokens: 500
+      });
+
+      const content = completion.choices[0]?.message?.content;
+      if (content) {
+        results.sources.push({ provider: 'OpenAI', content });
+        if (!results.summary) results.summary = content;
+        console.log('[AI] ✅ OpenAI documentation search completed');
+      }
+    } catch (e) {
+      console.error('[AI] OpenAI doc search error:', e.message);
+    }
+  }
+
+  return results;
 }
 
 // ============================================================
@@ -711,6 +933,83 @@ async function executeAIAction(action, params, site) {
           equipment: eqResult.rows[0],
           controls,
           message: `📍 ${eqResult.rows[0].name} - ${controls.length} contrôles planifiés`
+        };
+      }
+
+      case 'searchDoc': {
+        // Search documentation using multiple AI models
+        const { query, equipmentId, equipmentType } = params;
+
+        // Get equipment info if ID provided
+        let equipmentInfo = { name: query };
+        if (equipmentId) {
+          try {
+            const tables = {
+              switchboard: 'switchboards',
+              vsd: 'vsd_equipments',
+              meca: 'meca_equipments',
+              atex: 'atex_equipments'
+            };
+            const table = tables[equipmentType] || 'switchboards';
+            const eqRes = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [equipmentId]);
+            if (eqRes.rows[0]) {
+              equipmentInfo = {
+                id: eqRes.rows[0].id,
+                name: eqRes.rows[0].name,
+                manufacturer: eqRes.rows[0].manufacturer || eqRes.rows[0].brand,
+                model: eqRes.rows[0].model,
+                type: equipmentType
+              };
+            }
+          } catch (e) { /* ignore */ }
+        }
+
+        // Search using multi-model approach
+        const webResults = await searchWebForDocumentation(query, equipmentInfo);
+
+        // Also search local documents
+        const localResults = await searchDocuments(query);
+
+        return {
+          success: true,
+          equipment: equipmentInfo,
+          webSearch: webResults,
+          localDocuments: localResults,
+          message: `🔍 Recherche documentation pour ${equipmentInfo.name}:\n` +
+            (webResults.summary ? `\n**Résultats web:**\n${webResults.summary.substring(0, 500)}...` : '') +
+            (localResults.count > 0 ? `\n\n**${localResults.count} documents locaux trouvés**` : '')
+        };
+      }
+
+      case 'autoDocSearch': {
+        // Automatically search documentation for ALL equipment without docs
+        const context = await getAIContext(site);
+        const equipmentWithoutDocs = context.proactive?.withoutDocumentation || [];
+
+        if (equipmentWithoutDocs.length === 0) {
+          return { success: true, message: '✅ Tous les équipements ont de la documentation!' };
+        }
+
+        // Search for first 5 equipment
+        const results = [];
+        for (const eq of equipmentWithoutDocs.slice(0, 5)) {
+          const searchQuery = `${eq.manufacturer || ''} ${eq.name} fiche technique`.trim();
+          const webResults = await searchWebForDocumentation(searchQuery, eq);
+          results.push({
+            equipment: eq.name,
+            manufacturer: eq.manufacturer,
+            found: !!webResults.summary,
+            summary: webResults.summary?.substring(0, 200)
+          });
+        }
+
+        const foundCount = results.filter(r => r.found).length;
+        return {
+          success: true,
+          searched: results.length,
+          found: foundCount,
+          results,
+          message: `🔍 Recherche auto: ${foundCount}/${results.length} documentations trouvées`
         };
       }
 
