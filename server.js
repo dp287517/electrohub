@@ -10,10 +10,172 @@ import pg from "pg";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
+import OpenAI from "openai";
 
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// ============================================================
+// OPENAI SETUP FOR POWERFUL AI ASSISTANT
+// ============================================================
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+// System prompt for ElectroHub AI Assistant
+const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA expert pour ElectroHub, la plateforme de gestion d'équipements électriques et de conformité.
+
+## Ton rôle
+Tu es un expert en installations électriques industrielles. Tu aides les techniciens et ingénieurs à:
+- Gérer leurs équipements (armoires électriques, variateurs VSD, moteurs, équipements ATEX)
+- Planifier et suivre les contrôles réglementaires
+- Identifier et résoudre les non-conformités
+- Optimiser la maintenance préventive
+- Analyser les données et produire des rapports
+
+## Données disponibles
+Tu as accès aux données en temps réel de l'installation via le contexte fourni. Utilise ces données pour donner des réponses précises et chiffrées.
+
+## Comment tu réponds
+1. **Sois précis et chiffré** - Donne des statistiques, des pourcentages, des listes concrètes
+2. **Sois proactif** - Identifie les problèmes, propose des priorités d'action
+3. **Utilise le formatage markdown** - Gras pour les points importants, listes à puces
+4. **Propose des actions** - À chaque réponse, suggère les prochaines étapes
+
+## Limitations
+- Tu ne peux pas modifier directement les données (mais tu peux expliquer comment le faire)
+- Réponds toujours en français sauf demande contraire`;
+
+// Helper: Query database for AI context
+async function getAIContext(site) {
+  const context = {
+    site,
+    timestamp: new Date().toISOString(),
+    switchboards: { count: 0, list: [] },
+    controls: { upcoming: 0, overdue: 0, total: 0, overdueList: [] },
+    vsd: { count: 0 },
+    meca: { count: 0 },
+    atex: { ncCount: 0, equipmentCount: 0 },
+    buildings: {}
+  };
+
+  try {
+    // Get switchboards
+    const sbRes = await pool.query(
+      \`SELECT id, name, code, building_code, floor, room FROM switchboards WHERE site = $1 ORDER BY code\`,
+      [site]
+    );
+    context.switchboards.count = sbRes.rows.length;
+    context.switchboards.list = sbRes.rows.slice(0, 20); // Top 20
+
+    // Aggregate by building
+    sbRes.rows.forEach(sb => {
+      const bldg = sb.building_code || 'Non assigné';
+      if (!context.buildings[bldg]) {
+        context.buildings[bldg] = { floors: new Set(), equipmentCount: 0 };
+      }
+      context.buildings[bldg].equipmentCount++;
+      if (sb.floor) context.buildings[bldg].floors.add(sb.floor);
+    });
+
+    // Convert Sets to arrays for JSON
+    Object.keys(context.buildings).forEach(b => {
+      context.buildings[b].floors = Array.from(context.buildings[b].floors);
+    });
+
+    // Get control schedules
+    const ctrlRes = await pool.query(\`
+      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency, ct.name as template_name, s.name as switchboard_name
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+      WHERE cs.site = $1
+      ORDER BY cs.next_due_date
+    \`, [site]);
+
+    const now = new Date();
+    ctrlRes.rows.forEach(ctrl => {
+      context.controls.total++;
+      if (ctrl.next_due_date) {
+        if (new Date(ctrl.next_due_date) < now) {
+          context.controls.overdue++;
+          context.controls.overdueList.push({
+            id: ctrl.id,
+            switchboard: ctrl.switchboard_name,
+            template: ctrl.template_name,
+            dueDate: ctrl.next_due_date
+          });
+        } else {
+          context.controls.upcoming++;
+        }
+      }
+    });
+
+    // Get VSD count
+    try {
+      const vsdRes = await pool.query(\`SELECT COUNT(*) FROM vsd_equipments WHERE site = $1\`, [site]);
+      context.vsd.count = parseInt(vsdRes.rows[0]?.count || 0);
+    } catch (e) { /* ignore */ }
+
+    // Get MECA count via sites join
+    try {
+      const mecaRes = await pool.query(\`
+        SELECT COUNT(*) FROM meca_equipments e
+        INNER JOIN sites s ON s.id = e.site_id
+        WHERE s.name = $1
+      \`, [site]);
+      context.meca.count = parseInt(mecaRes.rows[0]?.count || 0);
+    } catch (e) { /* ignore */ }
+
+    // Get ATEX non-conformities
+    try {
+      const atexRes = await pool.query(\`
+        SELECT
+          COUNT(*) FILTER (WHERE status IN ('open', 'in_progress')) as nc_count,
+          COUNT(DISTINCT equipment_id) as eq_with_nc
+        FROM atex_nonconformities
+        WHERE site = $1
+      \`, [site]);
+      context.atex.ncCount = parseInt(atexRes.rows[0]?.nc_count || 0);
+    } catch (e) { /* ignore */ }
+
+    try {
+      const atexEqRes = await pool.query(\`SELECT COUNT(*) FROM atex_equipments WHERE site = $1\`, [site]);
+      context.atex.equipmentCount = parseInt(atexEqRes.rows[0]?.count || 0);
+    } catch (e) { /* ignore */ }
+
+  } catch (e) {
+    console.error('[AI] Context fetch error:', e.message);
+  }
+
+  return context;
+}
+
+// Format context for AI prompt
+function formatContextForAI(ctx) {
+  const buildingsList = Object.entries(ctx.buildings)
+    .map(([name, data]) => \`  • \${name}: \${data.equipmentCount} équipements, étages: \${data.floors.join(', ') || 'N/A'}\`)
+    .join('\\n');
+
+  return \`## Données actuelles du site "\${ctx.site}" (au \${new Date().toLocaleDateString('fr-FR')})
+
+### Résumé
+- **\${ctx.switchboards.count}** armoires électriques
+- **\${ctx.vsd.count}** variateurs VSD
+- **\${ctx.meca.count}** équipements mécaniques
+- **\${ctx.atex.equipmentCount}** équipements ATEX (\${ctx.atex.ncCount} NC actives)
+
+### Contrôles
+- **\${ctx.controls.overdue}** contrôles en RETARD ⚠️
+- **\${ctx.controls.upcoming}** contrôles à venir
+- **\${ctx.controls.total}** contrôles planifiés au total
+
+\${ctx.controls.overdueList.length > 0 ? \`### Contrôles en retard (urgent)
+\${ctx.controls.overdueList.slice(0, 5).map(c => \`- \${c.switchboard || 'N/A'}: \${c.template || 'Contrôle'} (prévu le \${new Date(c.dueDate).toLocaleDateString('fr-FR')})\`).join('\\n')}\` : ''}
+
+### Répartition par bâtiment
+\${buildingsList || 'Aucune donnée de bâtiment'}
+\`;
+}
 
 // ============================================================
 // AUTH AUDIT LOG - Traçage des connexions/déconnexions
@@ -257,45 +419,221 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 // >>> Datahub (Custom categories with map markers) : re-stream pour uploads
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
 
-// >>> AI Assistant - Direct fallback handler (microservice removed for stability)
-// The client-side ai-assistant.js has its own fallback logic
-app.post("/api/ai-assistant/chat", express.json(), (req, res) => {
-  // Return intelligent fallback response based on message content
-  const message = (req.body?.message || '').toLowerCase();
+// >>> AI Assistant - Powerful AI with OpenAI + Database access
+app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
+  try {
+    const { message, context: clientContext, conversationHistory = [] } = req.body;
+    const site = req.header('X-Site') || clientContext?.user?.site || process.env.DEFAULT_SITE || 'Nyon';
 
-  let response = {
-    message: "Je suis **Electro**, votre assistant ElectroHub.\n\nJe suis actuellement en mode simplifié, mais je peux vous guider :\n\n• **Dashboard** — Vue d'ensemble de vos contrôles\n• **Équipements** — Liste complète par catégorie\n• **Contrôles** — Planification et suivi\n\nQue souhaitez-vous consulter ?",
-    actions: [
-      { label: "Voir le dashboard", prompt: "Montre-moi le dashboard" },
-      { label: "Liste des équipements", prompt: "Montre-moi les équipements" },
-      { label: "Contrôles à venir", prompt: "Quels sont les contrôles à venir ?" }
-    ],
-    sources: [],
-    provider: "fallback"
-  };
+    if (!message) {
+      return res.status(400).json({ error: "Message requis" });
+    }
 
-  // Contextual responses
-  if (message.includes('contrôle') || message.includes('control')) {
-    response.message = "Pour gérer vos **contrôles électriques** :\n\n• Accédez à **Switchboard Controls** dans le menu\n• Consultez le calendrier des contrôles à venir\n• Vérifiez les contrôles en retard en rouge\n\nVoulez-vous plus de détails ?";
-    response.actions = [
-      { label: "Contrôles en retard", prompt: "Montre-moi les contrôles en retard" },
-      { label: "Planifier un contrôle", prompt: "Comment planifier un nouveau contrôle ?" }
+    // Get real-time context from database
+    const dbContext = await getAIContext(site);
+    const contextPrompt = formatContextForAI(dbContext);
+
+    // Check if OpenAI is available
+    if (!openai) {
+      console.log('[AI] OpenAI not configured, using intelligent fallback');
+      return res.json(generateIntelligentFallback(message, dbContext));
+    }
+
+    // Build messages for OpenAI
+    const messages = [
+      { role: "system", content: AI_SYSTEM_PROMPT + "\n\n" + contextPrompt },
+      ...conversationHistory.slice(-6).map(m => ({ role: m.role, content: m.content })),
+      { role: "user", content: message }
     ];
-  } else if (message.includes('bâtiment') || message.includes('building') || message.includes('étage')) {
-    response.message = "Pour voir vos équipements **par bâtiment** :\n\n• Utilisez les filtres dans chaque module\n• La vue carte montre la répartition géographique\n• Chaque équipement affiche son emplacement (bâtiment/étage/local)\n\nQuel bâtiment vous intéresse ?";
-  } else if (message.includes('non-conformité') || message.includes('nc') || message.includes('atex')) {
-    response.message = "Pour les **non-conformités ATEX** :\n\n• Accédez au module **ATEX** dans le menu\n• Les NC sont signalées en rouge\n• Chaque NC a un plan d'action associé\n\nVoulez-vous voir les NC actives ?";
-    response.actions = [
-      { label: "Voir les NC ATEX", prompt: "Liste des non-conformités ATEX" }
-    ];
+
+    console.log(`[AI] Processing: "${message.substring(0, 50)}..." for site ${site}`);
+
+    // Call OpenAI
+    const completion = await openai.chat.completions.create({
+      model: process.env.AI_MODEL || "gpt-4o-mini",
+      messages,
+      temperature: 0.7,
+      max_tokens: 1500
+    });
+
+    const aiMessage = completion.choices[0]?.message?.content || "Désolé, je n'ai pas pu générer de réponse.";
+
+    // Extract suggested actions from response
+    const actions = extractActionsFromResponse(aiMessage, message);
+
+    res.json({
+      message: aiMessage,
+      actions,
+      sources: [],
+      provider: "openai",
+      context: {
+        site,
+        switchboards: dbContext.switchboards.count,
+        controls: dbContext.controls,
+        timestamp: dbContext.timestamp
+      }
+    });
+
+  } catch (error) {
+    console.error('[AI] Error:', error.message);
+
+    // Fallback on error
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+    const dbContext = await getAIContext(site).catch(() => ({}));
+
+    res.json(generateIntelligentFallback(req.body?.message || '', dbContext));
+  }
+});
+
+// Generate intelligent fallback response based on DB context
+function generateIntelligentFallback(message, ctx) {
+  const msg = (message || '').toLowerCase();
+
+  // Build response based on actual data
+  if (msg.includes('contrôle') || msg.includes('retard') || msg.includes('overdue')) {
+    const overdueCount = ctx.controls?.overdue || 0;
+    const overdueList = ctx.controls?.overdueList || [];
+
+    if (overdueCount > 0) {
+      return {
+        message: `⚠️ **${overdueCount} contrôle(s) en retard** sur le site ${ctx.site || 'actuel'}!\n\n` +
+          (overdueList.length > 0 ?
+            `**À traiter en priorité:**\n${overdueList.slice(0, 5).map(c =>
+              `• **${c.switchboard || 'Équipement'}** — ${c.template || 'Contrôle'} (prévu le ${new Date(c.dueDate).toLocaleDateString('fr-FR')})`
+            ).join('\n')}\n\n` : '') +
+          `**Prochaines étapes:**\n• Planifiez ces contrôles rapidement\n• Accédez à **Switchboard Controls** pour les détails`,
+        actions: [
+          { label: "Voir tous les contrôles", prompt: "Montre-moi le planning complet des contrôles" },
+          { label: "Comment planifier", prompt: "Comment planifier un contrôle ?" }
+        ],
+        provider: "fallback"
+      };
+    } else {
+      return {
+        message: `✅ **Aucun contrôle en retard** sur le site ${ctx.site || 'actuel'}!\n\n` +
+          `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n` +
+          `• **${ctx.controls?.total || 0}** contrôles planifiés au total\n\n` +
+          `Bonne gestion ! Continuez à maintenir vos équipements à jour.`,
+        actions: [
+          { label: "Voir les contrôles à venir", prompt: "Quels sont les prochains contrôles ?" }
+        ],
+        provider: "fallback"
+      };
+    }
   }
 
-  res.json(response);
-});
+  if (msg.includes('bâtiment') || msg.includes('building') || msg.includes('étage') || msg.includes('floor')) {
+    const buildings = ctx.buildings || {};
+    const buildingList = Object.entries(buildings)
+      .map(([name, data]) => `• **${name}**: ${data.equipmentCount} équipements (${data.floors?.length || 0} étages)`)
+      .join('\n');
+
+    return {
+      message: `📍 **Répartition par bâtiment** (site ${ctx.site || 'actuel'}):\n\n` +
+        (buildingList || '• Aucune donnée de bâtiment disponible') +
+        `\n\n**Total:** ${ctx.switchboards?.count || 0} armoires électriques`,
+      actions: Object.keys(buildings).slice(0, 3).map(b => ({
+        label: `Détails ${b}`,
+        prompt: `Montre-moi les équipements du bâtiment ${b}`
+      })),
+      provider: "fallback"
+    };
+  }
+
+  if (msg.includes('atex') || msg.includes('nc') || msg.includes('non-conformité') || msg.includes('conformité')) {
+    return {
+      message: `🔥 **Équipements ATEX** (site ${ctx.site || 'actuel'}):\n\n` +
+        `• **${ctx.atex?.equipmentCount || 0}** équipements en zones ATEX\n` +
+        `• **${ctx.atex?.ncCount || 0}** non-conformités actives\n\n` +
+        (ctx.atex?.ncCount > 0 ?
+          `⚠️ **Action requise:** Traitez les NC en priorité pour la conformité réglementaire.` :
+          `✅ Aucune non-conformité active. Bon travail !`),
+      actions: [
+        { label: "Voir les équipements ATEX", prompt: "Liste des équipements ATEX" },
+        { label: "Non-conformités détaillées", prompt: "Détail des non-conformités ATEX" }
+      ],
+      provider: "fallback"
+    };
+  }
+
+  if (msg.includes('résumé') || msg.includes('summary') || msg.includes('situation') || msg.includes('global')) {
+    return {
+      message: `📊 **Résumé du site ${ctx.site || 'actuel'}**\n\n` +
+        `### Équipements\n` +
+        `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
+        `• **${ctx.vsd?.count || 0}** variateurs VSD\n` +
+        `• **${ctx.meca?.count || 0}** équipements mécaniques\n` +
+        `• **${ctx.atex?.equipmentCount || 0}** équipements ATEX\n\n` +
+        `### Contrôles\n` +
+        (ctx.controls?.overdue > 0 ?
+          `• ⚠️ **${ctx.controls.overdue}** contrôles en RETARD\n` : '') +
+        `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n` +
+        `• **${ctx.controls?.total || 0}** contrôles planifiés\n\n` +
+        `### Bâtiments\n` +
+        `• **${Object.keys(ctx.buildings || {}).length}** bâtiments équipés`,
+      actions: [
+        { label: "Contrôles en retard", prompt: "Montre-moi les contrôles en retard" },
+        { label: "Par bâtiment", prompt: "Répartition par bâtiment" },
+        { label: "ATEX", prompt: "Situation ATEX" }
+      ],
+      provider: "fallback"
+    };
+  }
+
+  // Default: show summary
+  return {
+    message: `Bonjour ! Je suis **Electro**, votre assistant ElectroHub.\n\n` +
+      `📊 **Site ${ctx.site || 'actuel'} en un coup d'œil:**\n` +
+      `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
+      `• **${ctx.controls?.overdue || 0}** contrôles en retard${ctx.controls?.overdue > 0 ? ' ⚠️' : ''}\n` +
+      `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n\n` +
+      `Comment puis-je vous aider ?`,
+    actions: [
+      { label: "Résumé complet", prompt: "Donne-moi un résumé complet de la situation" },
+      { label: "Contrôles en retard", prompt: "Quels sont les contrôles en retard ?" },
+      { label: "Par bâtiment", prompt: "Montre-moi les équipements par bâtiment" }
+    ],
+    provider: "fallback"
+  };
+}
+
+// Extract action suggestions from AI response
+function extractActionsFromResponse(response, originalMessage) {
+  const actions = [];
+
+  // If talking about controls, suggest control actions
+  if (response.toLowerCase().includes('contrôle') || originalMessage.toLowerCase().includes('contrôle')) {
+    actions.push({ label: "Planifier un contrôle", prompt: "Comment planifier un nouveau contrôle ?" });
+  }
+
+  // If talking about buildings, suggest building exploration
+  if (response.toLowerCase().includes('bâtiment') || originalMessage.toLowerCase().includes('bâtiment')) {
+    actions.push({ label: "Voir la carte", prompt: "Montre-moi la vue carte des équipements" });
+  }
+
+  // If talking about NC, suggest NC actions
+  if (response.toLowerCase().includes('non-conformité') || response.toLowerCase().includes(' nc ')) {
+    actions.push({ label: "Traiter les NC", prompt: "Comment traiter une non-conformité ?" });
+  }
+
+  // Always suggest a follow-up
+  if (actions.length === 0) {
+    actions.push(
+      { label: "Résumé situation", prompt: "Donne-moi un résumé de la situation" },
+      { label: "Autre question", prompt: "J'ai une autre question" }
+    );
+  }
+
+  return actions.slice(0, 3);
+}
 
 // Health check for AI assistant
 app.get("/api/ai-assistant/health", (req, res) => {
-  res.json({ status: "fallback", message: "AI service running in fallback mode" });
+  res.json({
+    status: openai ? "active" : "fallback",
+    provider: openai ? "openai" : "local",
+    message: openai ? "AI service running with OpenAI" : "AI service running in fallback mode"
+  });
 });
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF

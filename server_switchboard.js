@@ -3277,15 +3277,13 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
       }
     }
 
-    // Mobile Equipment - try site first, fallback to site_id join
+    // Mobile Equipment - no site column, return all equipments
     if (!type || type === 'mobile_equipment' || type === 'all') {
       try {
         const mobileRes = await quickQuery(`
-          SELECT e.id, e.name, e.building, e.floor, e.serial_number
-          FROM me_equipments e
-          INNER JOIN sites s ON s.id = e.site_id
-          WHERE s.name = $1 ORDER BY e.name
-        `, [site]);
+          SELECT id, name, building, floor, serial_number, brand, model
+          FROM me_equipments ORDER BY name LIMIT 100
+        `, []);
         results.mobile_equipment = mobileRes.rows;
       } catch (e) {
         results.mobile_equipment = [];
