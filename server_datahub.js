@@ -94,6 +94,7 @@ const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.NEON_DATABASE_URL || process.env.DATABASE_URL,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
+  max: 10,
 });
 
 async function ensureSchema() {
@@ -178,7 +179,28 @@ async function ensureSchema() {
     );
   `);
 
-  console.log("[Datahub] Schema ready");
+  // VSD Plans tables (fallback creation - normally created by server_vsd.js)
+  // This ensures datahub can work even if VSD microservice hasn't run yet
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vsd_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      logical_name TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      filename TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      page_count INTEGER DEFAULT 1,
+      content BYTEA NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_vsd_plans_logical ON vsd_plans(logical_name);
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vsd_plan_names (
+      logical_name TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL
+    );
+  `);
+
+  console.log("[Datahub] Schema ready (including VSD plans tables)");
 }
 ensureSchema();
 
