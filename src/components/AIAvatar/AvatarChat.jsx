@@ -45,7 +45,7 @@ const QUICK_ACTIONS = [
 export default function AvatarChat({
   isOpen,
   onClose,
-  avatarStyle = 'robot',
+  avatarStyle = 'alex',
   onChangeAvatar
 }) {
   const [messages, setMessages] = useState([]);

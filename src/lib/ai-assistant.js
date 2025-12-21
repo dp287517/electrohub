@@ -6,7 +6,7 @@
  * pour des réponses personnalisées et pertinentes.
  */
 
-import api from './api';
+import { get, post } from './api';
 
 // Cache du contexte global
 let contextCache = null;
@@ -102,10 +102,10 @@ class AIAssistant {
    */
   async fetchSwitchboardContext() {
     try {
-      const response = await api.get('/api/switchboard/controls/equipment');
+      const data = await get('/api/switchboard/controls/equipment');
       return {
-        equipments: response.data || [],
-        count: response.data?.length || 0
+        equipments: data || [],
+        count: data?.length || 0
       };
     } catch (error) {
       console.error('Erreur switchboard:', error);
@@ -118,10 +118,10 @@ class AIAssistant {
    */
   async fetchVSDContext() {
     try {
-      const response = await api.get('/api/vsd/plans');
+      const data = await get('/api/vsd/plans');
       return {
-        plans: response.data?.plans || response.data || [],
-        count: response.data?.plans?.length || response.data?.length || 0
+        plans: data?.plans || data || [],
+        count: data?.plans?.length || data?.length || 0
       };
     } catch (error) {
       console.error('Erreur VSD:', error);
@@ -134,10 +134,10 @@ class AIAssistant {
    */
   async fetchMecaContext() {
     try {
-      const response = await api.get('/api/meca/equipments');
+      const data = await get('/api/meca/equipments');
       return {
-        equipments: response.data || [],
-        count: response.data?.length || 0
+        equipments: data || [],
+        count: data?.length || 0
       };
     } catch (error) {
       console.error('Erreur Meca:', error);
@@ -150,8 +150,8 @@ class AIAssistant {
    */
   async fetchControlsDashboard() {
     try {
-      const response = await api.get('/api/switchboard/controls/dashboard');
-      return response.data;
+      const data = await get('/api/switchboard/controls/dashboard');
+      return data;
     } catch (error) {
       console.error('Erreur dashboard:', error);
       return null;
@@ -224,7 +224,7 @@ class AIAssistant {
       // Construire le contexte pour l'IA
       const fullContext = context || await this.getGlobalContext();
 
-      const response = await api.post(`${this.baseUrl}/chat`, {
+      const data = await post(`${this.baseUrl}/chat`, {
         message,
         context: this.prepareContextForAI(fullContext),
         provider,
@@ -237,10 +237,10 @@ class AIAssistant {
       });
 
       return {
-        message: response.data.message,
-        actions: response.data.actions || [],
-        sources: response.data.sources || [],
-        provider: response.data.provider
+        message: data.message,
+        actions: data.actions || [],
+        sources: data.sources || [],
+        provider: data.provider
       };
     } catch (error) {
       console.error('Erreur chat IA:', error);
@@ -356,11 +356,11 @@ Comment puis-je vous aider plus précisément ?`,
    */
   async searchDocumentation(query) {
     try {
-      const response = await api.post(`${this.baseUrl}/web-search`, {
+      const data = await post(`${this.baseUrl}/web-search`, {
         query,
         type: 'documentation'
       });
-      return response.data;
+      return data;
     } catch (error) {
       console.error('Erreur recherche web:', error);
       return {
@@ -377,13 +377,13 @@ Comment puis-je vous aider plus précisément ?`,
     const context = await this.getGlobalContext();
 
     try {
-      const response = await api.post(`${this.baseUrl}/action-plan`, {
+      const data = await post(`${this.baseUrl}/action-plan`, {
         context: this.prepareContextForAI(context),
         timeframe: options.timeframe || '7days',
         priority: options.priority || 'all',
         user: this.getCurrentUser()
       });
-      return response.data;
+      return data;
     } catch (error) {
       console.error('Erreur génération plan:', error);
       return this.generateFallbackPlan(context);

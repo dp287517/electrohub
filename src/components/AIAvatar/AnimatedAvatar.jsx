@@ -1,100 +1,91 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 
-// Collection d'avatars stylisés avec animations
+// Avatars style Memoji Apple - réalistes et modernes
 const AVATAR_STYLES = {
-  // Robot amical
-  robot: {
-    name: 'NOVA',
-    description: 'Assistant robotique',
-    colors: {
-      primary: '#3B82F6',
-      secondary: '#1D4ED8',
-      accent: '#60A5FA',
-      glow: '#93C5FD'
-    }
+  alex: {
+    name: 'Alex',
+    description: 'Expert technique',
+    skin: '#F5D0C5',
+    hair: '#4A3728',
+    hairStyle: 'short',
+    eyes: '#5D8AA8',
+    shirt: '#3B82F6',
+    accessories: []
   },
-  // Humanoïde futuriste
-  cyber: {
-    name: 'ARIA',
-    description: 'Intelligence cyber',
-    colors: {
-      primary: '#8B5CF6',
-      secondary: '#6D28D9',
-      accent: '#A78BFA',
-      glow: '#C4B5FD'
-    }
+  maya: {
+    name: 'Maya',
+    description: 'Ingénieure senior',
+    skin: '#8D5524',
+    hair: '#1C1C1C',
+    hairStyle: 'long',
+    eyes: '#3D2314',
+    shirt: '#8B5CF6',
+    accessories: []
   },
-  // Style minimaliste
-  minimal: {
-    name: 'ZEN',
-    description: 'Assistant épuré',
-    colors: {
-      primary: '#10B981',
-      secondary: '#059669',
-      accent: '#34D399',
-      glow: '#6EE7B7'
-    }
+  sam: {
+    name: 'Sam',
+    description: 'Spécialiste ATEX',
+    skin: '#FFDBAC',
+    hair: '#B55239',
+    hairStyle: 'wavy',
+    eyes: '#2E8B57',
+    shirt: '#10B981',
+    accessories: ['glasses']
   },
-  // Style tech/circuit
-  circuit: {
-    name: 'SPARK',
-    description: 'Expert électrique',
-    colors: {
-      primary: '#F59E0B',
-      secondary: '#D97706',
-      accent: '#FBBF24',
-      glow: '#FCD34D'
-    }
+  jordan: {
+    name: 'Jordan',
+    description: 'Analyste données',
+    skin: '#C68642',
+    hair: '#2C1810',
+    hairStyle: 'curly',
+    eyes: '#634E34',
+    shirt: '#F59E0B',
+    accessories: []
   },
-  // Style orbe énergie
-  orb: {
-    name: 'PULSE',
-    description: 'Énergie pure',
-    colors: {
-      primary: '#EC4899',
-      secondary: '#DB2777',
-      accent: '#F472B6',
-      glow: '#F9A8D4'
-    }
+  robin: {
+    name: 'Robin',
+    description: 'Technicien expert',
+    skin: '#FFE0BD',
+    hair: '#8B7355',
+    hairStyle: 'buzz',
+    eyes: '#6B8E23',
+    shirt: '#EC4899',
+    accessories: ['headphones']
   }
 };
 
-// Composant Avatar animé avec lip-sync
+// Composant Avatar Memoji animé avec lip-sync
 const AnimatedAvatar = forwardRef(({
-  style = 'robot',
+  style = 'alex',
   size = 'md',
   speaking = false,
-  emotion = 'neutral', // neutral, happy, thinking, alert
+  emotion = 'neutral',
   onClick,
   className = ''
 }, ref) => {
   const [mouthOpen, setMouthOpen] = useState(0);
   const [blinkState, setBlinkState] = useState(false);
-  const [pulsePhase, setPulsePhase] = useState(0);
+  const [eyePosition, setEyePosition] = useState({ x: 0, y: 0 });
   const animationRef = useRef(null);
   const speakingRef = useRef(speaking);
 
-  // Exposer les méthodes pour contrôler l'avatar depuis l'extérieur
   useImperativeHandle(ref, () => ({
     speak: () => speakingRef.current = true,
     stopSpeaking: () => speakingRef.current = false,
-    setEmotion: (e) => {}, // Pour extension future
   }));
 
-  const avatarStyle = AVATAR_STYLES[style] || AVATAR_STYLES.robot;
-  const { colors } = avatarStyle;
+  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.alex;
 
-  // Tailles
   const sizes = {
-    xs: { container: 32, eye: 4, mouth: 8 },
-    sm: { container: 40, eye: 5, mouth: 10 },
-    md: { container: 56, eye: 7, mouth: 14 },
-    lg: { container: 80, eye: 10, mouth: 20 },
-    xl: { container: 120, eye: 14, mouth: 28 }
+    xs: 32,
+    sm: 40,
+    md: 56,
+    lg: 80,
+    xl: 120
   };
   const s = sizes[size] || sizes.md;
 
-  // Animation de clignement des yeux
+  // Animation de clignement
   useEffect(() => {
     const blinkInterval = setInterval(() => {
       setBlinkState(true);
@@ -103,16 +94,26 @@ const AnimatedAvatar = forwardRef(({
     return () => clearInterval(blinkInterval);
   }, []);
 
-  // Animation lip-sync quand speaking est true
+  // Mouvement subtil des yeux
+  useEffect(() => {
+    const eyeInterval = setInterval(() => {
+      setEyePosition({
+        x: (Math.random() - 0.5) * 2,
+        y: (Math.random() - 0.5) * 1
+      });
+    }, 2000 + Math.random() * 1000);
+    return () => clearInterval(eyeInterval);
+  }, []);
+
+  // Animation lip-sync
   useEffect(() => {
     speakingRef.current = speaking;
 
     if (speaking) {
       const animate = () => {
         if (speakingRef.current) {
-          // Simulation réaliste de mouvement de lèvres
           const time = Date.now() / 100;
-          const openAmount = Math.abs(Math.sin(time * 2.5) * Math.sin(time * 1.7)) * 100;
+          const openAmount = Math.abs(Math.sin(time * 3) * Math.sin(time * 1.7)) * 100;
           setMouthOpen(openAmount);
           animationRef.current = requestAnimationFrame(animate);
         }
@@ -132,517 +133,319 @@ const AnimatedAvatar = forwardRef(({
     };
   }, [speaking]);
 
-  // Animation pulse
-  useEffect(() => {
-    const pulseInterval = setInterval(() => {
-      setPulsePhase(p => (p + 1) % 360);
-    }, 50);
-    return () => clearInterval(pulseInterval);
-  }, []);
+  // Couleurs dérivées
+  const skinDark = adjustColor(avatar.skin, -20);
+  const skinLight = adjustColor(avatar.skin, 20);
+  const hairDark = adjustColor(avatar.hair, -30);
 
-  // Rendu selon le style
-  const renderAvatar = () => {
-    const eyeY = blinkState ? s.container * 0.38 : s.container * 0.35;
-    const eyeHeight = blinkState ? s.eye * 0.2 : s.eye;
-    const mouthHeight = (mouthOpen / 100) * s.mouth * 0.6;
-
-    switch (style) {
-      case 'robot':
+  const renderHair = () => {
+    switch (avatar.hairStyle) {
+      case 'long':
         return (
-          <svg viewBox={`0 0 ${s.container} ${s.container}`} className="w-full h-full">
-            <defs>
-              <linearGradient id={`robotGrad-${size}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={colors.primary} />
-                <stop offset="100%" stopColor={colors.secondary} />
-              </linearGradient>
-              <filter id="glow">
-                <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-                <feMerge>
-                  <feMergeNode in="coloredBlur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-
-            {/* Corps principal */}
-            <rect
-              x={s.container * 0.1}
-              y={s.container * 0.15}
-              width={s.container * 0.8}
-              height={s.container * 0.7}
-              rx={s.container * 0.15}
-              fill={`url(#robotGrad-${size})`}
-            />
-
-            {/* Antenne */}
-            <circle
-              cx={s.container * 0.5}
-              cy={s.container * 0.08}
-              r={s.container * 0.05}
-              fill={colors.accent}
-              filter="url(#glow)"
-              style={{
-                opacity: 0.6 + Math.sin(pulsePhase * 0.1) * 0.4
-              }}
-            />
-            <line
-              x1={s.container * 0.5}
-              y1={s.container * 0.13}
-              x2={s.container * 0.5}
-              y2={s.container * 0.18}
-              stroke={colors.accent}
-              strokeWidth="2"
-            />
-
-            {/* Visière/écran */}
-            <rect
-              x={s.container * 0.18}
-              y={s.container * 0.25}
-              width={s.container * 0.64}
-              height={s.container * 0.25}
-              rx={s.container * 0.05}
-              fill="#1E293B"
-            />
-
-            {/* Yeux LED */}
-            <ellipse
-              cx={s.container * 0.35}
-              cy={eyeY}
-              rx={s.eye}
-              ry={eyeHeight}
-              fill={colors.glow}
-              filter="url(#glow)"
-            />
-            <ellipse
-              cx={s.container * 0.65}
-              cy={eyeY}
-              rx={s.eye}
-              ry={eyeHeight}
-              fill={colors.glow}
-              filter="url(#glow)"
-            />
-
-            {/* Bouche LED */}
-            <rect
-              x={s.container * 0.35}
-              y={s.container * 0.58}
-              width={s.container * 0.3}
-              height={Math.max(2, mouthHeight)}
-              rx={2}
-              fill={colors.glow}
-              filter="url(#glow)"
-              style={{ transition: 'height 0.05s ease-out' }}
-            />
-
-            {/* Lignes déco */}
-            <line
-              x1={s.container * 0.2}
-              y1={s.container * 0.75}
-              x2={s.container * 0.4}
-              y2={s.container * 0.75}
-              stroke={colors.accent}
-              strokeWidth="2"
-              opacity="0.5"
-            />
-            <line
-              x1={s.container * 0.6}
-              y1={s.container * 0.75}
-              x2={s.container * 0.8}
-              y2={s.container * 0.75}
-              stroke={colors.accent}
-              strokeWidth="2"
-              opacity="0.5"
-            />
-          </svg>
+          <>
+            <ellipse cx="50" cy="25" rx="38" ry="20" fill={avatar.hair} />
+            <path d={`M 12 40 Q 8 70 15 95`} stroke={avatar.hair} strokeWidth="12" fill="none" strokeLinecap="round" />
+            <path d={`M 88 40 Q 92 70 85 95`} stroke={avatar.hair} strokeWidth="12" fill="none" strokeLinecap="round" />
+            <ellipse cx="50" cy="22" rx="35" ry="18" fill={hairDark} />
+          </>
         );
-
-      case 'cyber':
+      case 'wavy':
         return (
-          <svg viewBox={`0 0 ${s.container} ${s.container}`} className="w-full h-full">
-            <defs>
-              <linearGradient id={`cyberGrad-${size}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={colors.primary} />
-                <stop offset="100%" stopColor={colors.secondary} />
-              </linearGradient>
-              <filter id="cyberGlow">
-                <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
-                <feMerge>
-                  <feMergeNode in="coloredBlur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-
-            {/* Forme hexagonale */}
-            <polygon
-              points={`
-                ${s.container * 0.5},${s.container * 0.05}
-                ${s.container * 0.9},${s.container * 0.25}
-                ${s.container * 0.9},${s.container * 0.75}
-                ${s.container * 0.5},${s.container * 0.95}
-                ${s.container * 0.1},${s.container * 0.75}
-                ${s.container * 0.1},${s.container * 0.25}
-              `}
-              fill={`url(#cyberGrad-${size})`}
-            />
-
-            {/* Face interne */}
-            <polygon
-              points={`
-                ${s.container * 0.5},${s.container * 0.15}
-                ${s.container * 0.8},${s.container * 0.3}
-                ${s.container * 0.8},${s.container * 0.7}
-                ${s.container * 0.5},${s.container * 0.85}
-                ${s.container * 0.2},${s.container * 0.7}
-                ${s.container * 0.2},${s.container * 0.3}
-              `}
-              fill="#1E1B4B"
-            />
-
-            {/* Yeux triangulaires */}
-            <polygon
-              points={`
-                ${s.container * 0.28},${eyeY}
-                ${s.container * 0.38},${eyeY - s.eye}
-                ${s.container * 0.38},${eyeY + (blinkState ? 0 : s.eye)}
-              `}
-              fill={colors.glow}
-              filter="url(#cyberGlow)"
-            />
-            <polygon
-              points={`
-                ${s.container * 0.72},${eyeY}
-                ${s.container * 0.62},${eyeY - s.eye}
-                ${s.container * 0.62},${eyeY + (blinkState ? 0 : s.eye)}
-              `}
-              fill={colors.glow}
-              filter="url(#cyberGlow)"
-            />
-
-            {/* Bouche - ligne qui s'anime */}
-            <path
-              d={`M ${s.container * 0.35} ${s.container * 0.6}
-                  Q ${s.container * 0.5} ${s.container * 0.6 + mouthHeight * 0.3} ${s.container * 0.65} ${s.container * 0.6}`}
-              stroke={colors.glow}
-              strokeWidth="3"
-              fill="none"
-              filter="url(#cyberGlow)"
-            />
-
-            {/* Circuits décoratifs */}
-            <circle cx={s.container * 0.5} cy={s.container * 0.2} r="2" fill={colors.accent} opacity="0.7" />
-            <line x1={s.container * 0.5} y1={s.container * 0.22} x2={s.container * 0.5} y2={s.container * 0.28} stroke={colors.accent} strokeWidth="1" opacity="0.5" />
-          </svg>
+          <>
+            <ellipse cx="50" cy="26" rx="36" ry="22" fill={avatar.hair} />
+            <path d="M 18 35 Q 10 45 18 60 Q 25 50 20 40" fill={avatar.hair} />
+            <path d="M 82 35 Q 90 45 82 60 Q 75 50 80 40" fill={avatar.hair} />
+            <ellipse cx="50" cy="24" rx="33" ry="18" fill={hairDark} />
+          </>
         );
-
-      case 'minimal':
+      case 'curly':
         return (
-          <svg viewBox={`0 0 ${s.container} ${s.container}`} className="w-full h-full">
-            <defs>
-              <linearGradient id={`minGrad-${size}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={colors.primary} />
-                <stop offset="100%" stopColor={colors.secondary} />
-              </linearGradient>
-            </defs>
-
-            {/* Cercle principal */}
-            <circle
-              cx={s.container * 0.5}
-              cy={s.container * 0.5}
-              r={s.container * 0.45}
-              fill={`url(#minGrad-${size})`}
-            />
-
-            {/* Yeux simples */}
-            <circle
-              cx={s.container * 0.35}
-              cy={eyeY + s.container * 0.05}
-              r={blinkState ? 1 : s.eye * 0.7}
-              fill="white"
-            />
-            <circle
-              cx={s.container * 0.65}
-              cy={eyeY + s.container * 0.05}
-              r={blinkState ? 1 : s.eye * 0.7}
-              fill="white"
-            />
-
-            {/* Bouche - arc animé */}
-            <path
-              d={speaking
-                ? `M ${s.container * 0.35} ${s.container * 0.62}
-                   Q ${s.container * 0.5} ${s.container * 0.62 + mouthHeight * 0.4} ${s.container * 0.65} ${s.container * 0.62}
-                   Q ${s.container * 0.5} ${s.container * 0.62 + mouthHeight * 0.2} ${s.container * 0.35} ${s.container * 0.62}`
-                : `M ${s.container * 0.38} ${s.container * 0.62}
-                   Q ${s.container * 0.5} ${s.container * 0.68} ${s.container * 0.62} ${s.container * 0.62}`
-              }
-              stroke="white"
-              strokeWidth="2.5"
-              fill={speaking ? "white" : "none"}
-              strokeLinecap="round"
-            />
-          </svg>
+          <>
+            <ellipse cx="50" cy="28" rx="38" ry="25" fill={avatar.hair} />
+            {[...Array(8)].map((_, i) => (
+              <circle
+                key={i}
+                cx={20 + i * 9}
+                cy={18 + Math.sin(i) * 5}
+                r={6 + Math.random() * 3}
+                fill={i % 2 === 0 ? avatar.hair : hairDark}
+              />
+            ))}
+          </>
         );
-
-      case 'circuit':
+      case 'buzz':
         return (
-          <svg viewBox={`0 0 ${s.container} ${s.container}`} className="w-full h-full">
-            <defs>
-              <linearGradient id={`circGrad-${size}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={colors.primary} />
-                <stop offset="100%" stopColor={colors.secondary} />
-              </linearGradient>
-              <filter id="circuitGlow">
-                <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-                <feMerge>
-                  <feMergeNode in="coloredBlur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-
-            {/* Fond carré arrondi */}
-            <rect
-              x={s.container * 0.08}
-              y={s.container * 0.08}
-              width={s.container * 0.84}
-              height={s.container * 0.84}
-              rx={s.container * 0.12}
-              fill="#1C1917"
-              stroke={colors.primary}
-              strokeWidth="2"
-            />
-
-            {/* Lignes de circuit */}
-            <path
-              d={`M ${s.container * 0.15} ${s.container * 0.3}
-                  L ${s.container * 0.25} ${s.container * 0.3}
-                  L ${s.container * 0.25} ${s.container * 0.2}
-                  L ${s.container * 0.4} ${s.container * 0.2}`}
-              stroke={colors.accent}
-              strokeWidth="1.5"
-              fill="none"
-              opacity={0.5 + Math.sin(pulsePhase * 0.05) * 0.3}
-            />
-            <path
-              d={`M ${s.container * 0.85} ${s.container * 0.3}
-                  L ${s.container * 0.75} ${s.container * 0.3}
-                  L ${s.container * 0.75} ${s.container * 0.2}
-                  L ${s.container * 0.6} ${s.container * 0.2}`}
-              stroke={colors.accent}
-              strokeWidth="1.5"
-              fill="none"
-              opacity={0.5 + Math.sin(pulsePhase * 0.05 + 1) * 0.3}
-            />
-
-            {/* Points de connexion */}
-            <circle cx={s.container * 0.4} cy={s.container * 0.2} r="3" fill={colors.glow} filter="url(#circuitGlow)" />
-            <circle cx={s.container * 0.6} cy={s.container * 0.2} r="3" fill={colors.glow} filter="url(#circuitGlow)" />
-
-            {/* Yeux - écrans */}
-            <rect
-              x={s.container * 0.22}
-              y={eyeY - s.eye * 0.5}
-              width={s.eye * 2}
-              height={blinkState ? 2 : s.eye * 1.2}
-              rx="2"
-              fill={colors.glow}
-              filter="url(#circuitGlow)"
-            />
-            <rect
-              x={s.container * 0.78 - s.eye * 2}
-              y={eyeY - s.eye * 0.5}
-              width={s.eye * 2}
-              height={blinkState ? 2 : s.eye * 1.2}
-              rx="2"
-              fill={colors.glow}
-              filter="url(#circuitGlow)"
-            />
-
-            {/* Bouche - barre de niveau */}
-            <rect
-              x={s.container * 0.3}
-              y={s.container * 0.6}
-              width={s.container * 0.4}
-              height={s.container * 0.08}
-              rx="2"
-              fill="#292524"
-            />
-            <rect
-              x={s.container * 0.32}
-              y={s.container * 0.62}
-              width={(s.container * 0.36) * (speaking ? (mouthOpen / 100) : 0.3)}
-              height={s.container * 0.04}
-              rx="1"
-              fill={colors.glow}
-              filter="url(#circuitGlow)"
-              style={{ transition: 'width 0.05s ease-out' }}
-            />
-
-            {/* Lignes du bas */}
-            <path
-              d={`M ${s.container * 0.2} ${s.container * 0.75}
-                  L ${s.container * 0.2} ${s.container * 0.8}
-                  L ${s.container * 0.35} ${s.container * 0.8}`}
-              stroke={colors.accent}
-              strokeWidth="1.5"
-              fill="none"
-              opacity="0.4"
-            />
-            <path
-              d={`M ${s.container * 0.8} ${s.container * 0.75}
-                  L ${s.container * 0.8} ${s.container * 0.8}
-                  L ${s.container * 0.65} ${s.container * 0.8}`}
-              stroke={colors.accent}
-              strokeWidth="1.5"
-              fill="none"
-              opacity="0.4"
-            />
-          </svg>
+          <ellipse cx="50" cy="32" rx="32" ry="18" fill={avatar.hair} opacity="0.8" />
         );
-
-      case 'orb':
-        const orbPulse = 0.85 + Math.sin(pulsePhase * 0.08) * 0.1;
+      default: // short
         return (
-          <svg viewBox={`0 0 ${s.container} ${s.container}`} className="w-full h-full">
-            <defs>
-              <radialGradient id={`orbGrad-${size}`} cx="30%" cy="30%">
-                <stop offset="0%" stopColor={colors.glow} />
-                <stop offset="50%" stopColor={colors.primary} />
-                <stop offset="100%" stopColor={colors.secondary} />
-              </radialGradient>
-              <filter id="orbGlow">
-                <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-                <feMerge>
-                  <feMergeNode in="coloredBlur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-
-            {/* Aura externe */}
-            <circle
-              cx={s.container * 0.5}
-              cy={s.container * 0.5}
-              r={s.container * 0.48 * orbPulse}
-              fill="none"
-              stroke={colors.glow}
-              strokeWidth="1"
-              opacity="0.3"
-            />
-
-            {/* Orbe principal */}
-            <circle
-              cx={s.container * 0.5}
-              cy={s.container * 0.5}
-              r={s.container * 0.4}
-              fill={`url(#orbGrad-${size})`}
-              filter="url(#orbGlow)"
-            />
-
-            {/* Reflet */}
-            <ellipse
-              cx={s.container * 0.38}
-              cy={s.container * 0.35}
-              rx={s.container * 0.12}
-              ry={s.container * 0.08}
-              fill="white"
-              opacity="0.3"
-            />
-
-            {/* Yeux - points lumineux */}
-            <circle
-              cx={s.container * 0.38}
-              cy={s.container * 0.45}
-              r={blinkState ? 1 : s.eye * 0.6}
-              fill="white"
-              filter="url(#orbGlow)"
-            />
-            <circle
-              cx={s.container * 0.62}
-              cy={s.container * 0.45}
-              r={blinkState ? 1 : s.eye * 0.6}
-              fill="white"
-              filter="url(#orbGlow)"
-            />
-
-            {/* Bouche - arc lumineux */}
-            <path
-              d={speaking
-                ? `M ${s.container * 0.38} ${s.container * 0.58}
-                   Q ${s.container * 0.5} ${s.container * 0.58 + mouthHeight * 0.3} ${s.container * 0.62} ${s.container * 0.58}
-                   Q ${s.container * 0.5} ${s.container * 0.58 + mouthHeight * 0.15} ${s.container * 0.38} ${s.container * 0.58}`
-                : `M ${s.container * 0.4} ${s.container * 0.58}
-                   Q ${s.container * 0.5} ${s.container * 0.63} ${s.container * 0.6} ${s.container * 0.58}`
-              }
-              stroke="white"
-              strokeWidth="2"
-              fill={speaking ? "rgba(255,255,255,0.5)" : "none"}
-              strokeLinecap="round"
-              filter="url(#orbGlow)"
-            />
-
-            {/* Particules orbitales */}
-            <circle
-              cx={s.container * 0.5 + Math.cos(pulsePhase * 0.03) * s.container * 0.35}
-              cy={s.container * 0.5 + Math.sin(pulsePhase * 0.03) * s.container * 0.35}
-              r="2"
-              fill="white"
-              opacity="0.6"
-            />
-            <circle
-              cx={s.container * 0.5 + Math.cos(pulsePhase * 0.03 + 2) * s.container * 0.35}
-              cy={s.container * 0.5 + Math.sin(pulsePhase * 0.03 + 2) * s.container * 0.35}
-              r="1.5"
-              fill="white"
-              opacity="0.4"
-            />
-          </svg>
+          <>
+            <ellipse cx="50" cy="28" rx="34" ry="20" fill={avatar.hair} />
+            <ellipse cx="50" cy="26" rx="30" ry="16" fill={hairDark} />
+          </>
         );
-
-      default:
-        return null;
     }
   };
+
+  const renderAccessories = () => {
+    return avatar.accessories.map((acc, i) => {
+      if (acc === 'glasses') {
+        return (
+          <g key={i}>
+            <circle cx="35" cy="48" r="10" fill="none" stroke="#1F2937" strokeWidth="2" />
+            <circle cx="65" cy="48" r="10" fill="none" stroke="#1F2937" strokeWidth="2" />
+            <line x1="45" y1="48" x2="55" y2="48" stroke="#1F2937" strokeWidth="2" />
+            <line x1="25" y1="48" x2="18" y2="45" stroke="#1F2937" strokeWidth="2" />
+            <line x1="75" y1="48" x2="82" y2="45" stroke="#1F2937" strokeWidth="2" />
+          </g>
+        );
+      }
+      if (acc === 'headphones') {
+        return (
+          <g key={i}>
+            <path d="M 15 50 Q 15 25 50 20 Q 85 25 85 50" fill="none" stroke="#374151" strokeWidth="4" />
+            <ellipse cx="15" cy="55" rx="6" ry="10" fill="#374151" />
+            <ellipse cx="85" cy="55" rx="6" ry="10" fill="#374151" />
+            <ellipse cx="15" cy="55" rx="4" ry="7" fill="#6B7280" />
+            <ellipse cx="85" cy="55" rx="4" ry="7" fill="#6B7280" />
+          </g>
+        );
+      }
+      return null;
+    });
+  };
+
+  const eyeOpenHeight = blinkState ? 1 : 8;
+  const mouthOpenHeight = 2 + (mouthOpen / 100) * 8;
 
   return (
     <div
       onClick={onClick}
       className={`relative cursor-pointer transition-transform hover:scale-105 ${className}`}
-      style={{
-        width: s.container,
-        height: s.container,
-      }}
+      style={{ width: s, height: s }}
     >
-      {/* Effet de lueur quand parle */}
+      {/* Glow effect when speaking */}
       {speaking && (
         <div
           className="absolute inset-0 rounded-full animate-pulse"
           style={{
-            background: `radial-gradient(circle, ${colors.glow}40 0%, transparent 70%)`,
-            transform: 'scale(1.3)',
+            background: `radial-gradient(circle, ${avatar.shirt}40 0%, transparent 70%)`,
+            transform: 'scale(1.2)',
           }}
         />
       )}
 
-      {renderAvatar()}
+      <svg viewBox="0 0 100 100" className="w-full h-full">
+        <defs>
+          {/* Gradients for 3D effect */}
+          <radialGradient id={`skinGrad-${style}`} cx="40%" cy="30%">
+            <stop offset="0%" stopColor={skinLight} />
+            <stop offset="70%" stopColor={avatar.skin} />
+            <stop offset="100%" stopColor={skinDark} />
+          </radialGradient>
 
-      {/* Indicateur d'état */}
-      {emotion === 'thinking' && (
-        <div
-          className="absolute -top-1 -right-1 w-3 h-3 rounded-full animate-pulse"
-          style={{ backgroundColor: colors.accent }}
+          <radialGradient id={`eyeGrad-${style}`} cx="30%" cy="30%">
+            <stop offset="0%" stopColor="#FFFFFF" />
+            <stop offset="100%" stopColor="#F0F0F0" />
+          </radialGradient>
+
+          <linearGradient id={`shirtGrad-${style}`} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={avatar.shirt} />
+            <stop offset="100%" stopColor={adjustColor(avatar.shirt, -30)} />
+          </linearGradient>
+
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity="0.15" />
+          </filter>
+        </defs>
+
+        {/* Neck */}
+        <ellipse cx="50" cy="88" rx="12" ry="8" fill={`url(#skinGrad-${style})`} />
+
+        {/* Shirt/Body */}
+        <ellipse cx="50" cy="98" rx="30" ry="15" fill={`url(#shirtGrad-${style})`} />
+
+        {/* Ears */}
+        <ellipse cx="16" cy="52" rx="5" ry="8" fill={`url(#skinGrad-${style})`} />
+        <ellipse cx="84" cy="52" rx="5" ry="8" fill={`url(#skinGrad-${style})`} />
+        <ellipse cx="16" cy="52" rx="3" ry="5" fill={skinDark} opacity="0.3" />
+        <ellipse cx="84" cy="52" rx="3" ry="5" fill={skinDark} opacity="0.3" />
+
+        {/* Head */}
+        <ellipse
+          cx="50" cy="50"
+          rx="34" ry="38"
+          fill={`url(#skinGrad-${style})`}
+          filter="url(#shadow)"
         />
+
+        {/* Hair */}
+        {renderHair()}
+
+        {/* Eyebrows */}
+        <path
+          d={emotion === 'thinking'
+            ? "M 28 38 Q 35 34 42 37"
+            : emotion === 'alert'
+            ? "M 28 34 Q 35 38 42 34"
+            : "M 28 36 Q 35 34 42 36"
+          }
+          stroke={avatar.hair}
+          strokeWidth="2.5"
+          fill="none"
+          strokeLinecap="round"
+        />
+        <path
+          d={emotion === 'thinking'
+            ? "M 58 37 Q 65 34 72 38"
+            : emotion === 'alert'
+            ? "M 58 34 Q 65 38 72 34"
+            : "M 58 36 Q 65 34 72 36"
+          }
+          stroke={avatar.hair}
+          strokeWidth="2.5"
+          fill="none"
+          strokeLinecap="round"
+        />
+
+        {/* Eyes */}
+        <g>
+          {/* Left eye */}
+          <ellipse cx="35" cy="48" rx="8" ry={eyeOpenHeight} fill={`url(#eyeGrad-${style})`} />
+          {!blinkState && (
+            <>
+              <circle
+                cx={35 + eyePosition.x}
+                cy={48 + eyePosition.y}
+                r="5"
+                fill={avatar.eyes}
+              />
+              <circle
+                cx={35 + eyePosition.x}
+                cy={48 + eyePosition.y}
+                r="3"
+                fill="#000000"
+              />
+              <circle
+                cx={33 + eyePosition.x}
+                cy={46 + eyePosition.y}
+                r="1.5"
+                fill="#FFFFFF"
+              />
+            </>
+          )}
+
+          {/* Right eye */}
+          <ellipse cx="65" cy="48" rx="8" ry={eyeOpenHeight} fill={`url(#eyeGrad-${style})`} />
+          {!blinkState && (
+            <>
+              <circle
+                cx={65 + eyePosition.x}
+                cy={48 + eyePosition.y}
+                r="5"
+                fill={avatar.eyes}
+              />
+              <circle
+                cx={65 + eyePosition.x}
+                cy={48 + eyePosition.y}
+                r="3"
+                fill="#000000"
+              />
+              <circle
+                cx={63 + eyePosition.x}
+                cy={46 + eyePosition.y}
+                r="1.5"
+                fill="#FFFFFF"
+              />
+            </>
+          )}
+        </g>
+
+        {/* Nose */}
+        <path
+          d="M 50 52 L 48 60 Q 50 62 52 60 L 50 52"
+          fill={skinDark}
+          opacity="0.3"
+        />
+
+        {/* Cheeks (subtle blush) */}
+        <ellipse cx="28" cy="58" rx="6" ry="4" fill="#FFB6C1" opacity="0.3" />
+        <ellipse cx="72" cy="58" rx="6" ry="4" fill="#FFB6C1" opacity="0.3" />
+
+        {/* Mouth with lip-sync */}
+        <g>
+          {/* Upper lip */}
+          <path
+            d={`M 40 68 Q 45 ${66 - mouthOpenHeight * 0.3} 50 ${66 - mouthOpenHeight * 0.3} Q 55 ${66 - mouthOpenHeight * 0.3} 60 68`}
+            fill="#C9A0A0"
+          />
+
+          {/* Mouth opening */}
+          {speaking ? (
+            <>
+              <ellipse
+                cx="50"
+                cy="68"
+                rx="8"
+                ry={mouthOpenHeight}
+                fill="#4A1515"
+              />
+              {/* Teeth */}
+              {mouthOpenHeight > 4 && (
+                <rect x="44" y="66" width="12" height="3" rx="1" fill="#FFFFFF" />
+              )}
+              {/* Tongue */}
+              {mouthOpenHeight > 5 && (
+                <ellipse cx="50" cy={69 + mouthOpenHeight * 0.3} rx="5" ry="3" fill="#D46A6A" />
+              )}
+            </>
+          ) : (
+            /* Closed smile */
+            <path
+              d="M 42 68 Q 50 74 58 68"
+              stroke="#9A6B6B"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+            />
+          )}
+
+          {/* Lower lip */}
+          <path
+            d={`M 40 68 Q 45 ${70 + mouthOpenHeight * 0.5} 50 ${71 + mouthOpenHeight * 0.5} Q 55 ${70 + mouthOpenHeight * 0.5} 60 68`}
+            fill="#C9A0A0"
+            opacity={speaking ? 1 : 0}
+          />
+        </g>
+
+        {/* Accessories */}
+        {renderAccessories()}
+      </svg>
+
+      {/* Status indicators */}
+      {emotion === 'thinking' && (
+        <div className="absolute -top-1 -right-1 w-4 h-4">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
+          <span className="relative inline-flex rounded-full h-4 w-4 bg-blue-500" />
+        </div>
       )}
       {emotion === 'alert' && (
-        <div
-          className="absolute -top-1 -right-1 w-3 h-3 rounded-full animate-bounce"
-          style={{ backgroundColor: '#EF4444' }}
-        />
+        <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center animate-bounce">
+          <span className="text-white text-xs font-bold">!</span>
+        </div>
       )}
     </div>
   );
 });
+
+// Helper function to adjust color brightness
+function adjustColor(hex, amount) {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = Math.min(255, Math.max(0, (num >> 16) + amount));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amount));
+  const b = Math.min(255, Math.max(0, (num & 0x0000FF) + amount));
+  return `#${(1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1)}`;
+}
 
 AnimatedAvatar.displayName = 'AnimatedAvatar';
 
