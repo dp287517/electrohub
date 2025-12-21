@@ -45,7 +45,7 @@ const QUICK_ACTIONS = [
 export default function AvatarChat({
   isOpen,
   onClose,
-  avatarStyle = 'alex',
+  avatarStyle = 'lucas',
   onChangeAvatar
 }) {
   const [messages, setMessages] = useState([]);
@@ -55,13 +55,12 @@ export default function AvatarChat({
   const [isListening, setIsListening] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const [context, setContext] = useState(null);
-  const [aiProvider, setAiProvider] = useState('openai'); // openai ou gemini
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
 
   // Fallback si le style n'existe plus (migration des anciens styles)
-  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'alex';
+  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'lucas';
   const avatar = AVATAR_STYLES[safeAvatarStyle];
 
   // Scroll vers le bas quand nouveaux messages
@@ -199,7 +198,6 @@ Comment puis-je vous aider aujourd'hui ?`,
     try {
       const response = await aiAssistant.chat(messageText, {
         context,
-        provider: aiProvider,
         conversationHistory: messages.slice(-10) // Derniers 10 messages pour contexte
       });
 
@@ -269,23 +267,12 @@ Comment puis-je vous aider aujourd'hui ?`,
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Toggle AI Provider */}
-            <button
-              onClick={() => setAiProvider(p => p === 'openai' ? 'gemini' : 'openai')}
-              className="px-2 py-1 text-xs bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-              title={`Utilise ${aiProvider === 'openai' ? 'OpenAI' : 'Gemini'}`}
-            >
-              {aiProvider === 'openai' ? '🤖 GPT' : '✨ Gemini'}
-            </button>
-
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5 text-white" />
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-white" />
+          </button>
         </div>
 
         {/* Messages */}
