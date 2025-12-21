@@ -76,6 +76,9 @@ Pour les stats/analyses, génère un graphique:
 \`\`\`json
 {"action": "createControl", "params": {"switchboardId": ID, "dueDate": "YYYY-MM-DD"}}
 {"action": "searchDoc", "params": {"query": "recherche", "equipmentId": "id"}}
+{"action": "rescheduleControl", "params": {"controlId": ID, "newDate": "YYYY-MM-DD", "reason": "..."}}
+{"action": "batchReschedule", "params": {"controls": [...], "daysToAdd": 7}}
+{"action": "getUnfinishedTasks", "params": {}}
 {"action": "scheduleReminder", "params": {"message": "...", "date": "YYYY-MM-DD"}}
 \`\`\`
 
@@ -102,12 +105,42 @@ Les plus urgentes:
 
 Tu veux que je te prépare un plan d'intervention optimisé par zone?"
 
+## 🔄 GESTION DU TEMPS ET REPROGRAMMATION
+
+### Quand l'utilisateur dit qu'il n'a pas fini / pas eu le temps:
+Tu dois être COMPRÉHENSIF et PROACTIF:
+
+1. **Rassurer** - "Pas de souci, ça arrive! L'important c'est de reprioriser."
+2. **Demander ce qui a été fait** - "Tu as pu avancer sur quoi exactement?"
+3. **Identifier le reste** - "OK, il reste donc X et Y à faire"
+4. **Reproposer un planning adapté**:
+   - Reporter les non-urgents à demain/semaine prochaine
+   - Garder les critiques en priorité
+   - Estimer le nouveau temps nécessaire
+5. **Proposer de créer les reports** - "Tu veux que je décale les échéances?"
+
+Exemple de réponse:
+"Pas de problème, ça arrive à tout le monde!
+
+Tu as pu faire quoi aujourd'hui? Dis-moi et je réorganise le reste:
+• Les tâches **critiques** (NC ATEX) → on les garde pour demain matin
+• Les contrôles **préventifs** → je peux les reporter à la semaine prochaine
+• Les contrôles **standards** → on verra selon ta charge
+
+Qu'est-ce qui te semble faisable pour demain?"
+
+### Quand l'utilisateur demande de reporter/décaler:
+1. Confirmer les nouvelles dates
+2. Proposer un JSON d'action pour modifier les échéances
+3. Alerter si certaines tâches deviennent critiques avec le report
+
 ## 🚨 CE QUE TU DOIS TOUJOURS FAIRE
 1. Proposer des ACTIONS concrètes, pas juste constater
 2. Donner des ESTIMATIONS de temps
 3. PRIORISER intelligemment (sécurité > conformité > préventif)
 4. Suggérer des ALTERNATIVES si rien d'urgent
 5. Détecter les ANOMALIES (équipements jamais contrôlés, doc manquante, patterns)
+6. Être FLEXIBLE et COMPRÉHENSIF quand l'utilisateur n'a pas pu tout faire
 
 ## 📋 FORMAT
 - Réponses courtes et percutantes
@@ -1010,6 +1043,86 @@ async function executeAIAction(action, params, site) {
           found: foundCount,
           results,
           message: `🔍 Recherche auto: ${foundCount}/${results.length} documentations trouvées`
+        };
+      }
+
+      case 'rescheduleControl': {
+        // Reschedule a control to a new date
+        const { controlId, newDate, reason } = params;
+        const result = await pool.query(`
+          UPDATE control_schedules
+          SET next_due_date = $1, updated_at = NOW()
+          WHERE id = $2
+          RETURNING id, switchboard_id, next_due_date
+        `, [newDate, controlId]);
+
+        if (result.rows.length === 0) {
+          return { success: false, message: `❌ Contrôle ${controlId} non trouvé` };
+        }
+
+        // Log the reschedule for tracking
+        console.log(`[AI] Rescheduled control ${controlId} to ${newDate}. Reason: ${reason || 'User request'}`);
+
+        return {
+          success: true,
+          controlId,
+          newDate,
+          message: `📅 Contrôle reporté au ${new Date(newDate).toLocaleDateString('fr-FR')}`
+        };
+      }
+
+      case 'batchReschedule': {
+        // Reschedule multiple controls at once
+        const { controls, daysToAdd, reason } = params;
+        const results = [];
+
+        for (const ctrl of controls) {
+          try {
+            const newDate = new Date(ctrl.currentDate);
+            newDate.setDate(newDate.getDate() + (daysToAdd || 7));
+
+            await pool.query(`
+              UPDATE control_schedules
+              SET next_due_date = $1, updated_at = NOW()
+              WHERE id = $2
+            `, [newDate.toISOString().split('T')[0], ctrl.id]);
+
+            results.push({
+              id: ctrl.id,
+              success: true,
+              newDate: newDate.toISOString().split('T')[0]
+            });
+          } catch (e) {
+            results.push({ id: ctrl.id, success: false, error: e.message });
+          }
+        }
+
+        const successCount = results.filter(r => r.success).length;
+        return {
+          success: successCount > 0,
+          message: `📅 ${successCount}/${controls.length} contrôles reportés de ${daysToAdd || 7} jours`,
+          results
+        };
+      }
+
+      case 'getUnfinishedTasks': {
+        // Get tasks that were scheduled for today but not completed
+        const context = await getAIContext(site);
+        const today = new Date().toISOString().split('T')[0];
+
+        // Tasks due today or overdue
+        const unfinished = [
+          ...context.controls.overdueList,
+          ...context.controls.thisWeekList.filter(c => c.dueDate === today)
+        ];
+
+        return {
+          success: true,
+          unfinished,
+          count: unfinished.length,
+          message: unfinished.length > 0
+            ? `📋 ${unfinished.length} tâches en attente - je peux t'aider à les réorganiser!`
+            : `✅ Tout est à jour!`
         };
       }
 
