@@ -18,7 +18,14 @@ export default function Navbar() {
 
   // AI Avatar states
   const [avatarStyle, setAvatarStyle] = useState(() => {
-    return localStorage.getItem('eh_avatar_style') || 'alex';
+    const saved = localStorage.getItem('eh_avatar_style');
+    // Migration des anciens styles vers les nouveaux
+    const validStyles = ['alex', 'maya', 'sam', 'jordan', 'robin'];
+    if (saved && !validStyles.includes(saved)) {
+      localStorage.setItem('eh_avatar_style', 'alex');
+      return 'alex';
+    }
+    return saved || 'alex';
   });
   const [showChat, setShowChat] = useState(false);
   const [showAvatarSelector, setShowAvatarSelector] = useState(false);
