@@ -816,15 +816,123 @@ export default function Datahub() {
             <EditForm item={selectedItem} categories={categories} onSave={handleSaveItem} showToast={showToast}
               onCancel={() => { if (selectedItem?.id) setViewMode('detail'); else { setSelectedItem(null); setSearchParams({}); } }} />
           ) : (
-            <div className="flex-1 flex items-center justify-center bg-gray-50">
-              <div className="text-center">
-                <Database size={48} className="mx-auto mb-4 text-gray-300" />
-                <h3 className="text-lg font-medium text-gray-600 mb-2">Datahub</h3>
-                <p className="text-gray-500 text-sm max-w-xs mx-auto">Selectionnez un item ou creez-en un nouveau</p>
-                <button onClick={handleNewItem} className="mt-4 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium flex items-center gap-2 mx-auto">
-                  <Plus size={18} />Nouvel item
-                </button>
+            /* Tree View - Arborescence principale */
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+              {/* Search bar for mobile */}
+              {isMobile && (
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Rechercher..." className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl bg-white" />
+                  </div>
+                </div>
+              )}
+
+              {/* Stats rapides */}
+              <div className="flex flex-wrap gap-2 text-sm mb-4">
+                <span className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-full font-medium">
+                  {stats.total} item{stats.total > 1 ? 's' : ''}
+                </span>
+                <span className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">
+                  {stats.placed} localisé{stats.placed > 1 ? 's' : ''}
+                </span>
+                <span className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-full font-medium">
+                  {Object.keys(tree).length} bâtiment{Object.keys(tree).length > 1 ? 's' : ''}
+                </span>
               </div>
+
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw size={32} className="animate-spin text-indigo-500" />
+                </div>
+              ) : Object.keys(tree).length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <Database size={48} className="mx-auto mb-4 opacity-30" />
+                  <p className="font-medium">Aucun item</p>
+                  <p className="text-sm mt-2">Créez votre premier item dans le Datahub</p>
+                  <button onClick={handleNewItem} className="mt-4 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium flex items-center gap-2 mx-auto">
+                    <Plus size={18} />Nouvel item
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {Object.entries(tree).map(([building, floors]) => {
+                    const buildingItemCount = Object.values(floors).flat().length;
+                    return (
+                      <details key={building} className="group border rounded-2xl bg-white shadow-sm overflow-hidden">
+                        <summary className="flex items-center justify-between px-4 py-3 cursor-pointer bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 transition-all">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-indigo-100 rounded-lg">
+                              <Building2 size={18} className="text-indigo-600" />
+                            </div>
+                            <span className="font-semibold text-gray-800">{building}</span>
+                          </div>
+                          <span className="px-2.5 py-1 bg-indigo-500 text-white rounded-full text-xs font-medium">
+                            {buildingItemCount} item{buildingItemCount > 1 ? 's' : ''}
+                          </span>
+                        </summary>
+                        <div className="p-3 space-y-2 bg-gray-50/50">
+                          {Object.entries(floors).map(([floor, floorItems]) => (
+                            <details key={floor} className="ml-2 pl-3 border-l-2 border-indigo-200">
+                              <summary className="cursor-pointer py-2 text-sm text-gray-700 hover:text-indigo-700 font-medium transition-colors flex items-center gap-2">
+                                <span className="p-1 bg-purple-100 rounded"><Layers size={12} className="text-purple-600" /></span>
+                                {floor}
+                                <span className="px-2 py-0.5 bg-gray-200 text-gray-600 rounded-full text-xs">
+                                  {floorItems.length}
+                                </span>
+                              </summary>
+                              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pb-2">
+                                {floorItems.map(item => {
+                                  const cat = categories.find(c => c.id === item.category_id);
+                                  const IconComp = ICON_MAP[cat?.icon] || Circle;
+                                  const placed = isPlaced(item.id);
+                                  return (
+                                    <div key={item.id} className="bg-white border rounded-xl p-3 shadow-sm hover:shadow-md transition-all">
+                                      <div className="flex items-start gap-3">
+                                        <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm"
+                                          style={{ backgroundColor: cat?.color || '#6366F1' }}>
+                                          <IconComp size={16} className="text-white" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <button className="text-indigo-600 font-semibold hover:underline text-left truncate w-full text-sm"
+                                            onClick={() => handleSelectItem(item)}>
+                                            {item.name || 'Sans nom'}
+                                          </button>
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {cat && <Badge variant="default">{cat.name}</Badge>}
+                                            {placed ? (
+                                              <Badge variant="success"><MapPin size={10} className="mr-1" />Localisé</Badge>
+                                            ) : (
+                                              <Badge variant="warning"><AlertCircle size={10} className="mr-1" />Non localisé</Badge>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-col gap-1 flex-shrink-0">
+                                          <button onClick={() => handleSelectItem(item)}
+                                            className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 text-xs" title="Voir">
+                                            <Eye size={14} />
+                                          </button>
+                                          {placed && (
+                                            <button onClick={() => navigate('/app/datahub/map?item=' + item.id)}
+                                              className="p-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs" title="Voir sur plan">
+                                              <MapPin size={14} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
