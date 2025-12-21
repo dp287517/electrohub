@@ -4,7 +4,8 @@ import {
   X, Send, Mic, MicOff, Settings, Sparkles,
   AlertTriangle, Calendar, Search, FileText,
   Building, Wrench, Zap, RefreshCw, ChevronDown,
-  ExternalLink, CheckCircle, Clock, TrendingUp
+  ExternalLink, CheckCircle, Clock, TrendingUp,
+  Volume2, VolumeX
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 
@@ -45,7 +46,7 @@ const QUICK_ACTIONS = [
 export default function AvatarChat({
   isOpen,
   onClose,
-  avatarStyle = 'lucas',
+  avatarStyle = 'electro',
   onChangeAvatar
 }) {
   const [messages, setMessages] = useState([]);
@@ -55,12 +56,15 @@ export default function AvatarChat({
   const [isListening, setIsListening] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const [context, setContext] = useState(null);
+  const [isMuted, setIsMuted] = useState(() => {
+    return localStorage.getItem('eh_avatar_muted') === 'true';
+  });
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
 
   // Fallback si le style n'existe plus (migration des anciens styles)
-  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'lucas';
+  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'electro';
   const avatar = AVATAR_STYLES[safeAvatarStyle];
 
   // Scroll vers le bas quand nouveaux messages
@@ -110,8 +114,20 @@ Comment puis-je vous aider aujourd'hui ?`,
     }
   };
 
+  // Toggle mute
+  const toggleMute = () => {
+    const newMuted = !isMuted;
+    setIsMuted(newMuted);
+    localStorage.setItem('eh_avatar_muted', newMuted.toString());
+    if (newMuted) {
+      stopSpeaking();
+    }
+  };
+
   // Synthèse vocale
   const speak = useCallback((text) => {
+    if (isMuted) return; // Ne pas parler si mute
+
     if ('speechSynthesis' in window) {
       // Annuler toute parole en cours
       window.speechSynthesis.cancel();
@@ -135,7 +151,7 @@ Comment puis-je vous aider aujourd'hui ?`,
       speechSynthRef.current = utterance;
       window.speechSynthesis.speak(utterance);
     }
-  }, []);
+  }, [isMuted]);
 
   // Arrêter la parole
   const stopSpeaking = () => {
@@ -267,12 +283,29 @@ Comment puis-je vous aider aujourd'hui ?`,
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-white" />
-          </button>
+          <div className="flex items-center gap-1">
+            {/* Mute Button */}
+            <button
+              onClick={toggleMute}
+              className={`p-2 rounded-lg transition-colors ${
+                isMuted ? 'bg-red-500/20 hover:bg-red-500/30' : 'hover:bg-white/10'
+              }`}
+              title={isMuted ? 'Activer le son' : 'Couper le son'}
+            >
+              {isMuted ? (
+                <VolumeX className="w-5 h-5 text-red-300" />
+              ) : (
+                <Volume2 className="w-5 h-5 text-white" />
+              )}
+            </button>
+
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-white" />
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
