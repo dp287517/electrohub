@@ -3,7 +3,9 @@ import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 import { Check, X } from 'lucide-react';
 
 export default function AvatarSelector({ currentStyle, onSelect, onClose }) {
-  const [selectedStyle, setSelectedStyle] = useState(currentStyle || 'alex');
+  // Fallback si le style n'existe plus
+  const safeCurrentStyle = AVATAR_STYLES[currentStyle] ? currentStyle : 'alex';
+  const [selectedStyle, setSelectedStyle] = useState(safeCurrentStyle);
   const [previewSpeaking, setPreviewSpeaking] = useState(null);
 
   const handleSelect = () => {

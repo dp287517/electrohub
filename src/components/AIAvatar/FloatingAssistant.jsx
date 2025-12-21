@@ -13,7 +13,13 @@ export default function FloatingAssistant() {
   const token = localStorage.getItem('eh_token');
 
   const [avatarStyle, setAvatarStyle] = useState(() => {
-    return localStorage.getItem('eh_avatar_style') || 'alex';
+    const saved = localStorage.getItem('eh_avatar_style');
+    // Migration des anciens styles vers les nouveaux
+    if (saved && !AVATAR_STYLES[saved]) {
+      localStorage.setItem('eh_avatar_style', 'alex');
+      return 'alex';
+    }
+    return saved || 'alex';
   });
   const [showChat, setShowChat] = useState(false);
   const [showSelector, setShowSelector] = useState(false);
@@ -84,7 +90,7 @@ export default function FloatingAssistant() {
   // Ne pas afficher si pas connecté
   if (!token) return null;
 
-  const avatar = AVATAR_STYLES[avatarStyle];
+  const avatar = AVATAR_STYLES[avatarStyle] || AVATAR_STYLES.alex;
 
   const handleNotificationClick = () => {
     setHasSeenNotification(true);

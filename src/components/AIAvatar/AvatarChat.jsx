@@ -60,7 +60,9 @@ export default function AvatarChat({
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
 
-  const avatar = AVATAR_STYLES[avatarStyle];
+  // Fallback si le style n'existe plus (migration des anciens styles)
+  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'alex';
+  const avatar = AVATAR_STYLES[safeAvatarStyle];
 
   // Scroll vers le bas quand nouveaux messages
   useEffect(() => {
