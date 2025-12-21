@@ -861,8 +861,9 @@ const DetailPanel = ({
               {controlStatuses[equipment.id].controls.slice(0, 3).map((ctrl, idx) => (
                 <div
                   key={idx}
-                  className={`flex items-center justify-between p-2 rounded-lg text-sm ${
-                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                  onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule_id=${ctrl.schedule_id}`)}
+                  className={`flex items-center justify-between p-2 rounded-lg text-sm cursor-pointer transition-all ${
+                    ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200 hover:bg-red-100' : 'bg-blue-50 border border-blue-200 hover:bg-blue-100'
                   }`}
                 >
                   <div className="flex items-center gap-2">
@@ -873,9 +874,12 @@ const DetailPanel = ({
                     )}
                     <span className="font-medium">{ctrl.template_name}</span>
                   </div>
-                  <span className={ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}>
-                    {ctrl.next_due ? dayjs(ctrl.next_due).format('DD/MM/YY') : '-'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}>
+                      {ctrl.next_due ? dayjs(ctrl.next_due).format('DD/MM/YY') : '-'}
+                    </span>
+                    <ChevronRight size={14} className={ctrl.status === 'overdue' ? 'text-red-400' : 'text-blue-400'} />
+                  </div>
                 </div>
               ))}
             </div>
