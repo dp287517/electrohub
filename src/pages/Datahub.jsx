@@ -20,6 +20,21 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 
+// Icon mapping for dynamic category icons
+const ICON_MAP = {
+  circle: Circle, square: Square, triangle: Triangle, star: Star, heart: Heart,
+  target: Target, mappin: MapPin, pin: Pin, crosshair: Crosshair, compass: Compass,
+  navigation: Navigation, flag: Flag, database: Database, server: Server,
+  harddrive: HardDrive, cpu: Cpu, wifi: Wifi, monitor: Monitor, zap: Zap,
+  power: Power, battery: Battery, plug: Plug, flame: Flame, thermometer: Thermometer,
+  gauge: Gauge, wrench: Wrench, hammer: Hammer, factory: Factory, cable: Cable,
+  droplet: Droplet, wind: Wind, sun: Sun, cloud: Cloud, check: Check,
+  alertcircle: AlertCircle, info: Info, shield: Shield, lock: Lock, eye: Eye,
+  tag: Tag, bookmark: Bookmark, award: Award, user: User, users: Users,
+  building: Building, home: Home, box: Box, package: Package, folder: Folder,
+  file: File, clock: Clock, calendar: Calendar, bell: Bell
+};
+
 // Toast Component
 const Toast = ({ message, type = 'success', onClose }) => {
   useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
@@ -292,10 +307,61 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
   );
 };
 
-// Detail Panel
-const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlaced, categories }) => {
+// Detail Panel with photo and files support
+const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlaced, categories, onPhotoUpload, onRefresh }) => {
   if (!item) return null;
   const cat = categories?.find(c => c.id === item.category_id);
+  const IconComp = ICON_MAP[cat?.icon] || Database;
+  const photoInputRef = React.useRef(null);
+  const fileInputRef = React.useRef(null);
+  const [files, setFiles] = React.useState([]);
+  const [isLoadingFiles, setIsLoadingFiles] = React.useState(false);
+  const [photoKey, setPhotoKey] = React.useState(Date.now());
+
+  // Load files
+  React.useEffect(() => {
+    if (item?.id) {
+      setIsLoadingFiles(true);
+      api.datahub.listFiles(item.id)
+        .then(res => setFiles(res?.files || []))
+        .catch(() => setFiles([]))
+        .finally(() => setIsLoadingFiles(false));
+    }
+  }, [item?.id]);
+
+  const handlePhotoChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.datahub.uploadPhoto(item.id, file);
+      setPhotoKey(Date.now());
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error("Photo upload error:", err);
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.datahub.uploadFile(item.id, file);
+      const res = await api.datahub.listFiles(item.id);
+      setFiles(res?.files || []);
+    } catch (err) {
+      console.error("File upload error:", err);
+    }
+  };
+
+  const handleDeleteFile = async (fileId) => {
+    if (!window.confirm("Supprimer ce fichier ?")) return;
+    try {
+      await api.datahub.deleteFile(fileId);
+      setFiles(prev => prev.filter(f => f.id !== fileId));
+    } catch (err) {
+      console.error("File delete error:", err);
+    }
+  };
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -305,13 +371,37 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
           <button onClick={() => onEdit(item)} className="p-2 hover:bg-white/20 rounded-lg"><Edit3 size={18} /></button>
         </div>
         <div className="flex items-start gap-4">
-          <div className="w-16 h-16 rounded-xl flex items-center justify-center" style={{ backgroundColor: cat?.color || '#6366F1' }}>
-            <Database size={28} className="text-white" />
+          {/* Photo with icon fallback */}
+          <div
+            className="w-20 h-20 rounded-xl flex items-center justify-center overflow-hidden cursor-pointer relative group"
+            style={{ backgroundColor: cat?.color || '#6366F1' }}
+            onClick={() => photoInputRef.current?.click()}
+          >
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handlePhotoChange}
+            />
+            {item.photo_url ? (
+              <img
+                src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { e.target.style.display = 'none'; }}
+              />
+            ) : (
+              <IconComp size={32} className="text-white" />
+            )}
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+              <Camera size={20} className="text-white" />
+            </div>
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-xl font-bold truncate">{item.name}</h2>
             <p className="text-indigo-100 text-sm">{item.building} - {item.floor}</p>
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
               {cat && <Badge variant="default" style={{ backgroundColor: cat.color + '20', color: cat.color }}>{cat.name}</Badge>}
               {isPlaced ? <Badge variant="success"><MapPin size={10} className="inline mr-1" />Localise</Badge>
                 : <Badge variant="warning"><MapPin size={10} className="inline mr-1" />Non localise</Badge>}
@@ -320,7 +410,7 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="bg-gray-50 rounded-xl p-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3"><Database size={16} className="text-indigo-500" />Informations</h3>
           <div className="grid grid-cols-2 gap-3 text-sm">
@@ -338,6 +428,55 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
             <div><span className="text-gray-500">Etage</span><p className="font-medium">{item.floor || '-'}</p></div>
             <div className="col-span-2"><span className="text-gray-500">Emplacement</span><p className="font-medium">{item.location || '-'}</p></div>
           </div>
+        </div>
+
+        {/* Files/Reports section */}
+        <div className="bg-gray-50 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <FileText size={16} className="text-indigo-500" />Fichiers & Rapports
+            </h3>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg hover:bg-indigo-200"
+            >
+              <Plus size={16} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
+          {isLoadingFiles ? (
+            <div className="text-center py-4"><RefreshCw size={20} className="animate-spin mx-auto text-gray-400" /></div>
+          ) : files.length === 0 ? (
+            <p className="text-sm text-gray-500 text-center py-2">Aucun fichier</p>
+          ) : (
+            <div className="space-y-2">
+              {files.map(file => (
+                <div key={file.id} className="flex items-center gap-2 p-2 bg-white rounded-lg border">
+                  <FileText size={16} className="text-gray-400 flex-shrink-0" />
+                  <span className="text-sm truncate flex-1">{file.filename}</span>
+                  <a
+                    href={`${api.datahub.fileUrl ? api.datahub.fileUrl(file.id) : `/api/datahub/files/${file.id}/download`}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1 hover:bg-gray-100 rounded text-gray-500"
+                  >
+                    <Download size={14} />
+                  </a>
+                  <button
+                    onClick={() => handleDeleteFile(file.id)}
+                    className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -642,10 +781,13 @@ export default function Datahub() {
                           <div className="px-3 py-1.5 text-xs font-medium text-gray-500 flex items-center gap-1"><Layers size={12} />{floor}</div>
                           {floorItems.map(item => {
                             const cat = categories.find(c => c.id === item.category_id);
+                            const IconComp = ICON_MAP[cat?.icon] || Circle;
                             return (
                               <button key={item.id} onClick={() => handleSelectItem(item)}
                                 className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg ml-2 ${selectedItem?.id === item.id ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
-                                <div className="w-4 h-4 rounded-full" style={{ backgroundColor: cat?.color || '#6366F1' }} />
+                                <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: cat?.color || '#6366F1' }}>
+                                  <IconComp size={10} className="text-white" />
+                                </div>
                                 <span className="text-sm truncate flex-1">{item.name}</span>
                                 {!isPlaced(item.id) && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full"><MapPin size={8} /></span>}
                               </button>
