@@ -297,6 +297,22 @@ export default function SwitchboardControls() {
     }
   }, [searchParams, switchboards, setSearchParams]);
 
+  // Handle schedule_id URL param - auto-open control modal for specific schedule
+  useEffect(() => {
+    const scheduleId = searchParams.get('schedule_id');
+    if (scheduleId && schedules.length > 0 && !loading) {
+      const found = schedules.find(s => s.id === Number(scheduleId));
+      if (found) {
+        setSelectedSchedule(found);
+        setShowControlModal(true);
+        // Clear the URL param
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete('schedule_id');
+        setSearchParams(newParams, { replace: true });
+      }
+    }
+  }, [searchParams, schedules, loading, setSearchParams]);
+
   // Stats from dashboard API - structure: { stats: { pending, overdue, completed_30d, templates }, upcoming, overdue_list }
   const overdueCount = dashboard?.stats?.overdue || 0;
   const pendingCount = dashboard?.stats?.pending || 0;
