@@ -1581,6 +1581,14 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [searchQuery, setSearchQuery] = useState("");
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
+  // Smart distribution for initial controls
+  const [useSmartDistribution, setUseSmartDistribution] = useState(false);
+  const [controlsPerMonth, setControlsPerMonth] = useState(15);
+  const [startMonth, setStartMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear() + 1}-01`; // Default: January next year
+  });
+
   // Equipment lists from different sources
   const [vsdEquipments, setVsdEquipments] = useState([]);
   const [mecaEquipments, setMecaEquipments] = useState([]);
@@ -1658,6 +1666,67 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     }
   };
 
+  // Calculate smart distribution dates grouped by building
+  const calculateSmartDistribution = () => {
+    if (targetType !== 'switchboard' || !useSmartDistribution) return null;
+
+    const equipmentList = getCurrentEquipmentList();
+    const selectedEquipment = equipmentList.filter(eq => selectedIds.has(eq.id));
+
+    // Group by building (and floor if available)
+    const groups = {};
+    selectedEquipment.forEach(eq => {
+      const building = eq.building || eq.building_code || 'Sans bâtiment';
+      const floor = eq.floor || eq.meta?.floor || '';
+      const groupKey = floor ? `${building}|${floor}` : building;
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          building,
+          floor,
+          items: []
+        };
+      }
+      groups[groupKey].items.push(eq);
+    });
+
+    // Sort groups by building name then floor
+    const sortedGroups = Object.values(groups).sort((a, b) => {
+      if (a.building !== b.building) return a.building.localeCompare(b.building);
+      return (a.floor || '').localeCompare(b.floor || '');
+    });
+
+    // Calculate dates - distribute groups across months
+    const [year, month] = startMonth.split('-').map(Number);
+    const dateMapping = {};
+    let currentMonthOffset = 0;
+    let controlsInCurrentMonth = 0;
+
+    sortedGroups.forEach(group => {
+      // Check if adding this group would exceed the monthly limit
+      if (controlsInCurrentMonth > 0 && controlsInCurrentMonth + group.items.length > controlsPerMonth) {
+        currentMonthOffset++;
+        controlsInCurrentMonth = 0;
+      }
+
+      // Calculate the date for this group (15th of the month for stability)
+      const groupDate = new Date(year, month - 1 + currentMonthOffset, 15);
+      const dateStr = groupDate.toISOString().split('T')[0];
+
+      // Assign the same date to all items in the group
+      group.items.forEach(eq => {
+        dateMapping[eq.id] = dateStr;
+      });
+
+      controlsInCurrentMonth += group.items.length;
+    });
+
+    return { dateMapping, groups: sortedGroups, monthsNeeded: currentMonthOffset + 1 };
+  };
+
+  // Get distribution preview for UI
+  const distributionPreview = useSmartDistribution ? calculateSmartDistribution() : null;
+
   const handleSave = async () => {
     if (!templateId) return alert("Sélectionnez un modèle");
     if (selectedIds.size === 0) return alert(`Sélectionnez au moins un ${getTypeLabel()}`);
@@ -1669,12 +1738,20 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       const ids = Array.from(selectedIds);
       let successCount = 0;
 
+      // Get smart distribution mapping if enabled
+      const distribution = useSmartDistribution && targetType === 'switchboard'
+        ? calculateSmartDistribution()
+        : null;
+
       // Create schedules for all selected items
       for (let i = 0; i < ids.length; i++) {
         try {
+          // Use distributed date or default date
+          const itemDate = distribution?.dateMapping?.[ids[i]] || nextDueDate;
+
           const payload = {
             template_id: Number(templateId),
-            next_due_date: nextDueDate,
+            next_due_date: itemDate,
             equipment_type: targetType,
           };
 
@@ -1819,15 +1896,87 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium mb-1">Date du premier contrôle</label>
-            <input
-              type="date"
-              value={nextDueDate}
-              onChange={(e) => setNextDueDate(e.target.value)}
-              className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
-            />
-          </div>
+          {/* Smart Distribution Option - Only for switchboards with 10+ selections */}
+          {targetType === 'switchboard' && selectedIds.size >= 10 && (
+            <div className="border rounded-xl p-4 bg-gradient-to-r from-amber-50 to-orange-50">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useSmartDistribution}
+                  onChange={(e) => setUseSmartDistribution(e.target.checked)}
+                  className="w-5 h-5 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                />
+                <div>
+                  <span className="font-medium text-gray-900">Répartition intelligente</span>
+                  <p className="text-xs text-gray-600">Étaler les contrôles sur l'année, groupés par bâtiment</p>
+                </div>
+              </label>
+
+              {useSmartDistribution && (
+                <div className="mt-4 space-y-3 pt-3 border-t border-amber-200">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Contrôles/mois</label>
+                      <input
+                        type="number"
+                        min="5"
+                        max="50"
+                        value={controlsPerMonth}
+                        onChange={(e) => setControlsPerMonth(Math.max(5, Math.min(50, parseInt(e.target.value) || 15)))}
+                        className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Mois de début</label>
+                      <input
+                        type="month"
+                        value={startMonth}
+                        onChange={(e) => setStartMonth(e.target.value)}
+                        className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Distribution Preview */}
+                  {distributionPreview && (
+                    <div className="bg-white rounded-lg p-3 text-sm">
+                      <p className="font-medium text-amber-800 mb-2">
+                        Répartition sur {distributionPreview.monthsNeeded} mois :
+                      </p>
+                      <div className="max-h-32 overflow-y-auto space-y-1">
+                        {distributionPreview.groups.map((group, idx) => {
+                          const date = distributionPreview.dateMapping[group.items[0].id];
+                          const monthName = new Date(date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+                          return (
+                            <div key={idx} className="flex justify-between text-xs">
+                              <span className="text-gray-600 truncate flex-1">
+                                {group.building}{group.floor ? ` (${group.floor})` : ''}
+                              </span>
+                              <span className="text-gray-500 ml-2">{group.items.length} tab.</span>
+                              <span className="text-amber-700 font-medium ml-2 w-24 text-right">{monthName}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Standard date picker - hidden when smart distribution is enabled */}
+          {!useSmartDistribution && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Date du premier contrôle</label>
+              <input
+                type="date"
+                value={nextDueDate}
+                onChange={(e) => setNextDueDate(e.target.value)}
+                className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
+              />
+            </div>
+          )}
         </div>
 
         {/* Progress bar when saving */}
