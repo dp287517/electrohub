@@ -995,13 +995,17 @@ app.post("/api/vsd/maps/setPosition", async (req, res) => {
 // GET /api/vsd/maps/placed-ids - Get all equipment IDs that have placements
 app.get("/api/vsd/maps/placed-ids", async (req, res) => {
   try {
+    const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'e' });
+    if (role === 'site' && !siteName) return res.status(400).json({ ok: false, error: 'Missing site (X-Site header)' });
+
     const { rows } = await pool.query(`
       SELECT DISTINCT pos.equipment_id,
              array_agg(DISTINCT pos.logical_name) as plans
         FROM vsd_positions pos
         JOIN vsd_equipments e ON e.id = pos.equipment_id
+       ${siteWhere ? `WHERE ${siteWhere}` : ''}
        GROUP BY pos.equipment_id
-    `);
+    `, siteParams);
 
     const placed_ids = rows.map(r => r.equipment_id);
     const placed_details = {};

@@ -507,8 +507,8 @@ export default function Dashboard() {
     // Fetch control dashboard stats
     api.switchboardControls.dashboard().then(res => {
       if (res) {
-        const overdue = res.overdue_count || res.overdue?.length || 0;
-        const pending = res.pending_count || res.pending?.length || res.upcoming?.length || 0;
+        const overdue = res.stats?.overdue || res.overdue_count || res.overdue?.length || res.overdue_list?.length || 0;
+        const pending = res.stats?.pending || res.pending_count || res.pending?.length || res.upcoming?.length || 0;
         setControlStats({ overdue, pending });
       }
     }).catch(() => {});

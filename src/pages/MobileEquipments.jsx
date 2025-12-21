@@ -1350,6 +1350,11 @@ export default function MobileEquipments() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Report modal state
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportFilters, setReportFilters] = useState({ building: '', status: '', category: '' });
+  const [reportLoading, setReportLoading] = useState(false);
+
   // Load equipments
   const loadEquipments = useCallback(async () => {
     setIsLoading(true);
@@ -1666,6 +1671,34 @@ export default function MobileEquipments() {
 
   const isPlaced = (id) => placedIds.has(String(id));
 
+  // Liste des bâtiments uniques pour le filtre du rapport
+  const buildings = useMemo(() => {
+    const set = new Set(equipments.map(e => e.building).filter(Boolean));
+    return Array.from(set).sort();
+  }, [equipments]);
+
+  // Liste des catégories uniques
+  const meCategories = useMemo(() => {
+    const set = new Set(equipments.map(e => e.category).filter(Boolean));
+    return Array.from(set).sort();
+  }, [equipments]);
+
+  // Fonction pour générer le rapport PDF
+  const generateReport = useCallback(() => {
+    setReportLoading(true);
+    try {
+      const url = api.mobileEquipment.reportUrl(reportFilters);
+      window.open(url, '_blank');
+    } catch (e) {
+      showToast('Erreur lors de la génération du rapport', 'error');
+    } finally {
+      setTimeout(() => {
+        setReportLoading(false);
+        setShowReportModal(false);
+      }, 500);
+    }
+  }, [reportFilters, showToast]);
+
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       <InlineStyles />
@@ -1721,6 +1754,14 @@ export default function MobileEquipments() {
               title="Gerer les categories"
             >
               <Tag size={20} />
+            </button>
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="px-4 py-2 rounded-xl bg-amber-100 text-amber-700 font-medium hover:bg-amber-200 flex items-center gap-2"
+              title="Générer un rapport PDF"
+            >
+              <FileText size={18} />
+              <span className="hidden sm:inline">Rapport</span>
             </button>
             <button
               onClick={() => navigate('/app/mobile-equipments/map')}
@@ -2006,6 +2047,114 @@ export default function MobileEquipments() {
           }
         }}
       />
+
+      {/* Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-slideUp">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl">
+                  <FileText size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">Rapport PDF</h2>
+                  <p className="text-amber-100 text-sm">Équipements mobiles</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content - Filtres */}
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
+              </p>
+
+              {/* Filtre Bâtiment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Bâtiment</label>
+                <select
+                  value={reportFilters.building}
+                  onChange={e => setReportFilters(f => ({ ...f, building: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Tous les bâtiments</option>
+                  {buildings.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Catégorie */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
+                <select
+                  value={reportFilters.category}
+                  onChange={e => setReportFilters(f => ({ ...f, category: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Toutes les catégories</option>
+                  {meCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              {/* Filtre Statut */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
+                <select
+                  value={reportFilters.status}
+                  onChange={e => setReportFilters(f => ({ ...f, status: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                >
+                  <option value="">Tous les statuts</option>
+                  <option value="a_faire">À faire</option>
+                  <option value="en_cours">En cours</option>
+                  <option value="en_retard">En retard</option>
+                  <option value="fait">Fait</option>
+                </select>
+              </div>
+
+              {/* Résumé */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-sm text-amber-800">
+                  <span className="font-medium">Le rapport inclura :</span>{' '}
+                  {reportFilters.building || "Tous les bâtiments"}
+                  {" / "}
+                  {reportFilters.category || "Toutes les catégories"}
+                  {" / "}
+                  {reportFilters.status === "a_faire" ? "À faire" :
+                   reportFilters.status === "en_cours" ? "En cours" :
+                   reportFilters.status === "en_retard" ? "En retard" :
+                   reportFilters.status === "fait" ? "Fait" : "Tous les statuts"}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="border-t p-4 flex gap-3">
+              <button
+                onClick={() => { setShowReportModal(false); setReportFilters({ building: '', status: '', category: '' }); }}
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={generateReport}
+                disabled={reportLoading}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-medium hover:from-amber-600 hover:to-orange-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {reportLoading ? (
+                  <RefreshCw size={18} className="animate-spin" />
+                ) : (
+                  <>
+                    <Download size={18} />
+                    Télécharger le PDF
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && (
