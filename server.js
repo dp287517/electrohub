@@ -148,6 +148,8 @@ const mobileEquipTarget = process.env.MOBILE_EQUIP_BASE_URL || "http://127.0.0.1
 const gloTarget = process.env.GLO_BASE_URL || "http://127.0.0.1:3023";
 // 🔵 Datahub (Custom categories with map markers) — microservice sur 3024
 const datahubTarget = process.env.DATAHUB_BASE_URL || "http://127.0.0.1:3024";
+// 🤖 AI Assistant (avatar intelligent avec OpenAI/Gemini) — microservice sur 3025
+const aiAssistantTarget = process.env.AI_ASSISTANT_BASE_URL || "http://127.0.0.1:3025";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 // 🔵 Infrastructure (plans électriques multi-zones) — intégré dans server_atex.js (port 3001)
@@ -254,6 +256,9 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 
 // >>> Datahub (Custom categories with map markers) : re-stream pour uploads
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
+
+// >>> AI Assistant (avatar intelligent avec OpenAI/Gemini)
+app.use("/api/ai-assistant", mkProxy(aiAssistantTarget, { withRestream: false }));
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
 app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));

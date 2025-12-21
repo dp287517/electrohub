@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Zap, Shield } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Zap, Shield, Sparkles } from 'lucide-react';
 import { ADMIN_EMAILS } from '../lib/permissions';
+import { AnimatedAvatar } from './AIAvatar/AnimatedAvatar';
+import AvatarChat from './AIAvatar/AvatarChat';
+import AvatarSelector from './AIAvatar/AvatarSelector';
 
 export default function Navbar() {
   const { pathname } = useLocation();
@@ -13,11 +16,24 @@ export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
+  // AI Avatar states
+  const [avatarStyle, setAvatarStyle] = useState(() => {
+    return localStorage.getItem('eh_avatar_style') || 'robot';
+  });
+  const [showChat, setShowChat] = useState(false);
+  const [showAvatarSelector, setShowAvatarSelector] = useState(false);
+  const [avatarHovered, setAvatarHovered] = useState(false);
+
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 10);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Sauvegarder les préférences d'avatar
+  useEffect(() => {
+    localStorage.setItem('eh_avatar_style', avatarStyle);
+  }, [avatarStyle]);
 
   const logout = () => {
     localStorage.removeItem('eh_token');
@@ -27,9 +43,9 @@ export default function Navbar() {
     navigate('/');
   };
 
-  const getInitials = (name) => {
-    if (!name) return '?';
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  const handleAvatarSelect = (style) => {
+    setAvatarStyle(style);
+    setShowAvatarSelector(false);
   };
 
   const NavLink = ({ to, children, icon: Icon, onClick }) => {
@@ -88,7 +104,7 @@ export default function Navbar() {
             <div className="hidden md:flex items-center gap-3">
               {token ? (
                 <>
-                  {/* User Info */}
+                  {/* User Info + AI Avatar */}
                   <div className="flex items-center gap-3 pl-3 border-l border-gray-200">
                     <div className="text-right">
                       <p className="text-sm font-medium text-gray-900 leading-tight">
@@ -98,8 +114,38 @@ export default function Navbar() {
                         {user?.site || 'No site'}
                       </p>
                     </div>
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white font-semibold text-sm shadow-md shadow-brand-500/20">
-                      {getInitials(user?.name)}
+
+                    {/* AI Avatar Button */}
+                    <div
+                      className="relative"
+                      onMouseEnter={() => setAvatarHovered(true)}
+                      onMouseLeave={() => setAvatarHovered(false)}
+                    >
+                      <button
+                        onClick={() => setShowChat(true)}
+                        className="relative group"
+                        title="Parler à votre assistant IA"
+                      >
+                        <AnimatedAvatar
+                          style={avatarStyle}
+                          size="sm"
+                          speaking={avatarHovered}
+                          className="transition-transform group-hover:scale-110"
+                        />
+                        {/* Indicator badge */}
+                        <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-white rounded-full" />
+                      </button>
+
+                      {/* Tooltip on hover */}
+                      {avatarHovered && (
+                        <div className="absolute top-full right-0 mt-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg whitespace-nowrap z-50">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="w-3 h-3" />
+                            <span>Cliquez pour parler à l'assistant</span>
+                          </div>
+                          <div className="absolute -top-1 right-4 w-2 h-2 bg-gray-900 rotate-45" />
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -153,12 +199,34 @@ export default function Navbar() {
         <div className="p-4 space-y-2">
           {token && user?.name && (
             <div className="flex items-center gap-3 p-4 bg-gradient-to-r from-brand-50 to-blue-50 rounded-2xl mb-4">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white font-semibold shadow-md">
-                {getInitials(user?.name)}
-              </div>
-              <div>
+              {/* AI Avatar in mobile */}
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setShowChat(true);
+                }}
+                className="relative"
+              >
+                <AnimatedAvatar
+                  style={avatarStyle}
+                  size="md"
+                  speaking={false}
+                />
+                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-white rounded-full" />
+              </button>
+              <div className="flex-1">
                 <p className="font-semibold text-gray-900">{user?.name}</p>
                 <p className="text-sm text-gray-500">{user?.site || 'No site'} • {user?.department || 'No dept'}</p>
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setShowChat(true);
+                  }}
+                  className="mt-1 text-xs text-brand-600 flex items-center gap-1 hover:underline"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  Parler à l'assistant
+                </button>
               </div>
             </div>
           )}
@@ -197,6 +265,26 @@ export default function Navbar() {
           </div>
         </div>
       </div>
+
+      {/* AI Avatar Chat Modal */}
+      <AvatarChat
+        isOpen={showChat}
+        onClose={() => setShowChat(false)}
+        avatarStyle={avatarStyle}
+        onChangeAvatar={() => {
+          setShowChat(false);
+          setShowAvatarSelector(true);
+        }}
+      />
+
+      {/* Avatar Selector Modal */}
+      {showAvatarSelector && (
+        <AvatarSelector
+          currentStyle={avatarStyle}
+          onSelect={handleAvatarSelect}
+          onClose={() => setShowAvatarSelector(false)}
+        />
+      )}
     </>
   );
 }
