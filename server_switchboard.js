@@ -3249,49 +3249,50 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
       results.switchboards = sbRes.rows;
     }
 
-    // VSD Equipment
+    // VSD Equipment - has 'site' column (text), 'manufacturer' (not brand), 'location'
     if (!type || type === 'vsd' || type === 'all') {
       try {
         const vsdRes = await quickQuery(`
-          SELECT id, name, building, floor, location as room, serial_number, brand
+          SELECT id, name, building, floor, location, serial_number, manufacturer
           FROM vsd_equipments WHERE site = $1 ORDER BY name
         `, [site]);
         results.vsd = vsdRes.rows;
       } catch (e) {
-        // Table might not exist or columns differ - silently ignore
         results.vsd = [];
       }
     }
 
-    // MECA Equipment
+    // MECA Equipment - uses site_id (integer), need to join with sites table
     if (!type || type === 'meca' || type === 'all') {
       try {
         const mecaRes = await quickQuery(`
-          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand
-          FROM meca_equipments WHERE site = $1 ORDER BY name
+          SELECT e.id, e.name, e.building, e.floor, e.location, e.serial_number, e.manufacturer
+          FROM meca_equipments e
+          INNER JOIN sites s ON s.id = e.site_id
+          WHERE s.name = $1 ORDER BY e.name
         `, [site]);
         results.meca = mecaRes.rows;
       } catch (e) {
-        // Table might not exist - silently ignore
         results.meca = [];
       }
     }
 
-    // Mobile Equipment
+    // Mobile Equipment - try site first, fallback to site_id join
     if (!type || type === 'mobile_equipment' || type === 'all') {
       try {
         const mobileRes = await quickQuery(`
-          SELECT id, name, building, floor, serial_number
-          FROM me_equipments WHERE site = $1 ORDER BY name
+          SELECT e.id, e.name, e.building, e.floor, e.serial_number
+          FROM me_equipments e
+          INNER JOIN sites s ON s.id = e.site_id
+          WHERE s.name = $1 ORDER BY e.name
         `, [site]);
         results.mobile_equipment = mobileRes.rows;
       } catch (e) {
-        // Table might not exist - silently ignore
         results.mobile_equipment = [];
       }
     }
 
-    // HV Equipment
+    // HV Equipment - has 'site' column
     if (!type || type === 'hv' || type === 'all') {
       try {
         const hvRes = await quickQuery(`
@@ -3300,21 +3301,21 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
         `, [site]);
         results.hv = hvRes.rows;
       } catch (e) {
-        // Table might not exist - silently ignore
         results.hv = [];
       }
     }
 
-    // GLO Equipment (UPS, Batteries, Emergency lighting)
+    // GLO Equipment - uses site_id (integer), join with sites
     if (!type || type === 'glo' || type === 'all') {
       try {
         const gloRes = await quickQuery(`
-          SELECT id, name, building, floor, location as room, serial_number, manufacturer as brand
-          FROM glo_equipments WHERE site = $1 ORDER BY name
+          SELECT e.id, e.name, e.building, e.floor, e.location, e.serial_number, e.manufacturer
+          FROM glo_equipments e
+          INNER JOIN sites s ON s.id = e.site_id
+          WHERE s.name = $1 ORDER BY e.name
         `, [site]);
         results.glo = gloRes.rows;
       } catch (e) {
-        // Table might not exist - silently ignore
         results.glo = [];
       }
     }

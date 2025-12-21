@@ -257,51 +257,45 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 // >>> Datahub (Custom categories with map markers) : re-stream pour uploads
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
 
-// >>> AI Assistant (avatar intelligent avec OpenAI/Gemini)
-// Direct handler with fallback when microservice is unavailable
-app.use("/api/ai-assistant", (req, res, next) => {
-  // Short timeout for AI assistant (5s) - fallback to client-side if unavailable
-  const proxyMiddleware = mkProxy(aiAssistantTarget, { withRestream: false, timeoutMs: 5000 });
+// >>> AI Assistant - Direct fallback handler (microservice removed for stability)
+// The client-side ai-assistant.js has its own fallback logic
+app.post("/api/ai-assistant/chat", express.json(), (req, res) => {
+  // Return intelligent fallback response based on message content
+  const message = (req.body?.message || '').toLowerCase();
 
-  // If proxy fails, return a fallback response
-  const originalEnd = res.end;
-  let responseSent = false;
-
-  res.end = function(...args) {
-    responseSent = true;
-    return originalEnd.apply(this, args);
+  let response = {
+    message: "Je suis **Electro**, votre assistant ElectroHub.\n\nJe suis actuellement en mode simplifié, mais je peux vous guider :\n\n• **Dashboard** — Vue d'ensemble de vos contrôles\n• **Équipements** — Liste complète par catégorie\n• **Contrôles** — Planification et suivi\n\nQue souhaitez-vous consulter ?",
+    actions: [
+      { label: "Voir le dashboard", prompt: "Montre-moi le dashboard" },
+      { label: "Liste des équipements", prompt: "Montre-moi les équipements" },
+      { label: "Contrôles à venir", prompt: "Quels sont les contrôles à venir ?" }
+    ],
+    sources: [],
+    provider: "fallback"
   };
 
-  // Set a timeout to provide fallback if proxy takes too long
-  const fallbackTimeout = setTimeout(() => {
-    if (!responseSent && !res.headersSent) {
-      console.log('[AI-ASSISTANT] Proxy timeout, returning fallback');
-      res.json({
-        message: "Je suis actuellement en mode hors-ligne. Voici ce que je peux vous dire :\n\n• Consultez le **dashboard** pour voir vos contrôles à venir\n• Accédez aux **équipements** pour les détails techniques\n• Utilisez les **filtres par bâtiment** pour organiser vos données\n\nComment puis-je vous aider autrement ?",
-        actions: [
-          { label: "Voir le dashboard", prompt: "Redirige-moi vers le dashboard" },
-          { label: "Liste des équipements", prompt: "Montre-moi les équipements" }
-        ],
-        sources: [],
-        provider: "fallback",
-        offline: true
-      });
-    }
-  }, 6000);
+  // Contextual responses
+  if (message.includes('contrôle') || message.includes('control')) {
+    response.message = "Pour gérer vos **contrôles électriques** :\n\n• Accédez à **Switchboard Controls** dans le menu\n• Consultez le calendrier des contrôles à venir\n• Vérifiez les contrôles en retard en rouge\n\nVoulez-vous plus de détails ?";
+    response.actions = [
+      { label: "Contrôles en retard", prompt: "Montre-moi les contrôles en retard" },
+      { label: "Planifier un contrôle", prompt: "Comment planifier un nouveau contrôle ?" }
+    ];
+  } else if (message.includes('bâtiment') || message.includes('building') || message.includes('étage')) {
+    response.message = "Pour voir vos équipements **par bâtiment** :\n\n• Utilisez les filtres dans chaque module\n• La vue carte montre la répartition géographique\n• Chaque équipement affiche son emplacement (bâtiment/étage/local)\n\nQuel bâtiment vous intéresse ?";
+  } else if (message.includes('non-conformité') || message.includes('nc') || message.includes('atex')) {
+    response.message = "Pour les **non-conformités ATEX** :\n\n• Accédez au module **ATEX** dans le menu\n• Les NC sont signalées en rouge\n• Chaque NC a un plan d'action associé\n\nVoulez-vous voir les NC actives ?";
+    response.actions = [
+      { label: "Voir les NC ATEX", prompt: "Liste des non-conformités ATEX" }
+    ];
+  }
 
-  proxyMiddleware(req, res, (err) => {
-    clearTimeout(fallbackTimeout);
-    if (err && !responseSent && !res.headersSent) {
-      console.log('[AI-ASSISTANT] Proxy error, returning fallback');
-      res.json({
-        message: "Je suis actuellement en mode hors-ligne. Le service IA sera bientôt disponible.\n\nEn attendant, vous pouvez naviguer dans l'application pour consulter vos équipements et contrôles.",
-        actions: [],
-        sources: [],
-        provider: "fallback",
-        offline: true
-      });
-    }
-  });
+  res.json(response);
+});
+
+// Health check for AI assistant
+app.get("/api/ai-assistant/health", (req, res) => {
+  res.json({ status: "fallback", message: "AI service running in fallback mode" });
 });
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
