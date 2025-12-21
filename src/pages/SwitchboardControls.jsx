@@ -1597,6 +1597,12 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [gloEquipments, setGloEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
 
+  // Device-specific states
+  const [switchboardSchedules, setSwitchboardSchedules] = useState({}); // { switchboardId: { next_due_date, template_name } }
+  const [devicesBySwitchboard, setDevicesBySwitchboard] = useState({}); // { switchboardId: [devices] }
+  const [selectedSwitchboardsForDevices, setSelectedSwitchboardsForDevices] = useState(new Set());
+  const [loadingDevices, setLoadingDevices] = useState(false);
+
   // Load equipment when target type changes
   useEffect(() => {
     if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo') {
@@ -1613,6 +1619,54 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
         .finally(() => setLoadingEquipments(false));
     }
   }, [targetType]);
+
+  // Load switchboard schedules when device type is selected
+  useEffect(() => {
+    if (targetType === 'device') {
+      setLoadingDevices(true);
+      // Load existing schedules for switchboards
+      api.switchboardControls.listSchedules({ equipment_type: 'switchboard' })
+        .then(res => {
+          const scheduleMap = {};
+          (res.schedules || res || []).forEach(s => {
+            if (s.switchboard_id && s.next_due_date) {
+              // Keep the earliest upcoming date if multiple schedules exist
+              if (!scheduleMap[s.switchboard_id] || s.next_due_date < scheduleMap[s.switchboard_id].next_due_date) {
+                scheduleMap[s.switchboard_id] = {
+                  next_due_date: s.next_due_date,
+                  template_name: s.template_name || 'Contrôle planifié'
+                };
+              }
+            }
+          });
+          setSwitchboardSchedules(scheduleMap);
+        })
+        .catch(e => console.warn('Load schedules error:', e))
+        .finally(() => setLoadingDevices(false));
+    }
+  }, [targetType]);
+
+  // Load devices when switchboards are selected for device control
+  useEffect(() => {
+    if (targetType === 'device' && selectedSwitchboardsForDevices.size > 0) {
+      const loadDevicesForBoards = async () => {
+        const newDevicesMap = { ...devicesBySwitchboard };
+        for (const boardId of selectedSwitchboardsForDevices) {
+          if (!newDevicesMap[boardId]) {
+            try {
+              const res = await api.switchboard.listDevices(boardId);
+              newDevicesMap[boardId] = res.data || [];
+            } catch (e) {
+              console.warn(`Failed to load devices for board ${boardId}:`, e);
+              newDevicesMap[boardId] = [];
+            }
+          }
+        }
+        setDevicesBySwitchboard(newDevicesMap);
+      };
+      loadDevicesForBoards();
+    }
+  }, [targetType, selectedSwitchboardsForDevices]);
 
   const filteredTemplates = (templates || []).filter((t) => t.target_type === targetType);
 
@@ -1652,6 +1706,40 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     } else {
       setSelectedIds(new Set(filteredEquipment.map(eq => eq.id)));
     }
+  };
+
+  // Device-specific: toggle switchboard selection
+  const toggleSwitchboardForDevices = (boardId) => {
+    const newSet = new Set(selectedSwitchboardsForDevices);
+    if (newSet.has(boardId)) {
+      newSet.delete(boardId);
+    } else {
+      newSet.add(boardId);
+    }
+    setSelectedSwitchboardsForDevices(newSet);
+  };
+
+  // Device-specific: filter switchboards that have scheduled controls
+  const switchboardsWithSchedules = (switchboards || []).filter(sb =>
+    switchboardSchedules[sb.id]?.next_due_date
+  );
+
+  // Device-specific: filter by search
+  const filteredSwitchboardsForDevices = switchboardsWithSchedules.filter(sb => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (sb.code || '').toLowerCase().includes(q) ||
+           (sb.name || '').toLowerCase().includes(q) ||
+           (sb.building || sb.building_code || '').toLowerCase().includes(q);
+  });
+
+  // Device-specific: count total devices from selected switchboards
+  const getTotalDevicesCount = () => {
+    let count = 0;
+    for (const boardId of selectedSwitchboardsForDevices) {
+      count += (devicesBySwitchboard[boardId] || []).length;
+    }
+    return count;
   };
 
   // Get equipment type label
@@ -1729,6 +1817,56 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
 
   const handleSave = async () => {
     if (!templateId) return alert("Sélectionnez un modèle");
+
+    // Special handling for devices - check switchboard selection
+    if (targetType === 'device') {
+      if (selectedSwitchboardsForDevices.size === 0) return alert("Sélectionnez au moins un tableau");
+      const totalDevices = getTotalDevicesCount();
+      if (totalDevices === 0) return alert("Aucun disjoncteur trouvé dans les tableaux sélectionnés");
+
+      setSaving(true);
+      setProgress({ current: 0, total: totalDevices });
+
+      try {
+        let successCount = 0;
+        let currentIndex = 0;
+
+        // Iterate through selected switchboards and their devices
+        for (const boardId of selectedSwitchboardsForDevices) {
+          const devices = devicesBySwitchboard[boardId] || [];
+          const schedule = switchboardSchedules[boardId];
+          const deviceDate = schedule?.next_due_date || nextDueDate;
+
+          for (const device of devices) {
+            try {
+              const payload = {
+                template_id: Number(templateId),
+                next_due_date: deviceDate,
+                equipment_type: 'device',
+                device_id: Number(device.id),
+              };
+
+              const isLast = currentIndex === totalDevices - 1;
+              await onSave(payload, isLast);
+              successCount++;
+            } catch (e) {
+              console.warn(`Failed to create schedule for device ${device.id}:`, e);
+            }
+            currentIndex++;
+            setProgress({ current: currentIndex, total: totalDevices });
+          }
+        }
+
+        if (successCount > 0) {
+          alert(`✅ ${successCount} contrôle(s) de disjoncteurs planifié(s) avec succès!`);
+        }
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // Standard handling for other equipment types
     if (selectedIds.size === 0) return alert(`Sélectionnez au moins un ${getTypeLabel()}`);
 
     setSaving(true);
@@ -1896,6 +2034,96 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
             </div>
           )}
 
+          {/* Device selection - linked to switchboard schedules */}
+          {targetType === "device" && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Tableaux avec contrôles planifiés</label>
+              <p className="text-xs text-gray-500 mb-2">
+                Les disjoncteurs hériteront de la date de contrôle de leur tableau
+              </p>
+
+              {/* Search */}
+              <div className="mb-2">
+                <input
+                  type="text"
+                  placeholder="🔍 Rechercher un tableau..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+                />
+              </div>
+
+              {/* Loading state */}
+              {loadingDevices && (
+                <div className="border rounded-xl p-4 text-center text-gray-500">
+                  <div className="w-6 h-6 border-2 border-blue-200 rounded-full animate-spin border-t-blue-600 mx-auto mb-2" />
+                  Chargement des planifications...
+                </div>
+              )}
+
+              {/* Switchboard list with their scheduled dates */}
+              {!loadingDevices && (
+                <div className="border rounded-xl max-h-56 overflow-y-auto divide-y">
+                  {filteredSwitchboardsForDevices.map((sb) => {
+                    const schedule = switchboardSchedules[sb.id];
+                    const devices = devicesBySwitchboard[sb.id] || [];
+                    const isSelected = selectedSwitchboardsForDevices.has(sb.id);
+                    const dateFormatted = schedule?.next_due_date
+                      ? new Date(schedule.next_due_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })
+                      : '';
+
+                    return (
+                      <label
+                        key={sb.id}
+                        className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                          isSelected ? 'bg-blue-50' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSwitchboardForDevices(sb.id)}
+                          className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900 truncate">{sb.code}</p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {sb.name} {sb.building || sb.building_code ? `• ${sb.building || sb.building_code}` : ''}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-medium text-blue-700">{dateFormatted}</p>
+                          {isSelected && devices.length > 0 && (
+                            <p className="text-xs text-gray-500">{devices.length} disj.</p>
+                          )}
+                        </div>
+                        {isSelected && <span className="text-blue-600">✓</span>}
+                      </label>
+                    );
+                  })}
+                  {filteredSwitchboardsForDevices.length === 0 && !loadingDevices && (
+                    <div className="p-4 text-center text-gray-500 text-sm">
+                      <p>Aucun tableau avec contrôle planifié</p>
+                      <p className="text-xs mt-1">Planifiez d'abord des contrôles sur les tableaux</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Summary of selected devices */}
+              {selectedSwitchboardsForDevices.size > 0 && (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <span className="font-medium">{selectedSwitchboardsForDevices.size}</span> tableau(x) sélectionné(s)
+                    {getTotalDevicesCount() > 0 && (
+                      <span> → <span className="font-medium">{getTotalDevicesCount()}</span> disjoncteur(s) à contrôler</span>
+                    )}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Smart Distribution Option - Only for switchboards with 10+ selections */}
           {targetType === 'switchboard' && selectedIds.size >= 10 && (
             <div className="border rounded-xl p-4 bg-gradient-to-r from-amber-50 to-orange-50">
@@ -1965,8 +2193,8 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
             </div>
           )}
 
-          {/* Standard date picker - hidden when smart distribution is enabled */}
-          {!useSmartDistribution && (
+          {/* Standard date picker - hidden when smart distribution is enabled or for devices */}
+          {!useSmartDistribution && targetType !== 'device' && (
             <div>
               <label className="block text-sm font-medium mb-1">Date du premier contrôle</label>
               <input
@@ -2001,10 +2229,15 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || selectedIds.size === 0}
+            disabled={saving || (targetType === 'device' ? selectedSwitchboardsForDevices.size === 0 : selectedIds.size === 0)}
             className="flex-1 px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-50"
           >
-            {saving ? `⏳ ${progress.current}/${progress.total}...` : `✓ Planifier (${selectedIds.size})`}
+            {saving
+              ? `⏳ ${progress.current}/${progress.total}...`
+              : targetType === 'device'
+                ? `✓ Planifier (${getTotalDevicesCount()} disj.)`
+                : `✓ Planifier (${selectedIds.size})`
+            }
           </button>
         </div>
       </div>
