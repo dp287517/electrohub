@@ -467,7 +467,12 @@ const UnifiedLeafletViewer = forwardRef(({
       mk.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
         setPicker(null);
-        onClickPoint?.(mk.__meta);
+        // Get fresh control status at click time (not stale from marker creation)
+        const freshStatus = controlStatusesRef.current[`${p.equipment_type}_${p.equipment_id}`] || "none";
+        onClickPoint?.({
+          ...mk.__meta,
+          control_status: freshStatus
+        });
       });
 
       mk.addTo(g);
@@ -886,12 +891,42 @@ export default function UnifiedEquipmentMap({
   }, [allPositions, controlStatuses]);
 
   const handleNavigate = (position) => {
+    if (!position) {
+      console.warn('Cannot navigate: position is null/undefined');
+      return;
+    }
+
     const typeConfig = EQUIPMENT_TYPES[position.equipment_type];
+
     // Guard against undefined equipment_id to prevent navigation to /undefined pages
     if (typeConfig?.link && position.equipment_id != null) {
-      navigate(typeConfig.link(position.equipment_id));
+      const url = typeConfig.link(position.equipment_id);
+      console.log('Navigating to:', url, 'position:', position);
+      navigate(url);
     } else {
-      console.warn('Cannot navigate: missing equipment_id or type config', position);
+      console.warn('Cannot navigate: missing equipment_id or type config', {
+        equipment_type: position.equipment_type,
+        equipment_id: position.equipment_id,
+        hasTypeConfig: !!typeConfig,
+        hasLink: !!typeConfig?.link,
+        position
+      });
+      // Fallback: try to navigate based on available data
+      if (position.equipment_type && position.equipment_id) {
+        const fallbackUrls = {
+          switchboard: `/app/switchboards?board=${position.equipment_id}`,
+          vsd: `/app/vsd?vsd=${position.equipment_id}`,
+          meca: `/app/meca?meca=${position.equipment_id}`,
+          mobile: `/app/mobile-equipments?equipment=${position.equipment_id}`,
+          hv: `/app/hv?equipment=${position.equipment_id}`,
+          glo: `/app/glo?glo=${position.equipment_id}`,
+        };
+        const fallbackUrl = fallbackUrls[position.equipment_type];
+        if (fallbackUrl) {
+          console.log('Using fallback navigation:', fallbackUrl);
+          navigate(fallbackUrl);
+        }
+      }
     }
   };
 
