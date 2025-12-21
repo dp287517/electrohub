@@ -3807,6 +3807,89 @@ app.get('/api/switchboard/audit/stats', async (req, res) => {
 });
 
 // ============================================================
+// REPORT PDF
+// ============================================================
+app.get('/api/switchboard/report', async (req, res) => {
+  try {
+    const { building, floor, type } = req.query;
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    // Build WHERE clause
+    const conditions = ['site = $1'];
+    const params = [site];
+    let paramIdx = 1;
+
+    if (building) { paramIdx++; conditions.push(`meta->>'building_code' = $${paramIdx}`); params.push(building); }
+    if (floor) { paramIdx++; conditions.push(`meta->>'floor' = $${paramIdx}`); params.push(floor); }
+    if (type) { paramIdx++; conditions.push(`meta->>'type' = $${paramIdx}`); params.push(type); }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Get switchboards
+    const { rows: boards } = await pool.query(`
+      SELECT s.*,
+             (SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id) as device_count,
+             (SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true) as complete_count
+      FROM switchboards s
+      ${whereClause}
+      ORDER BY s.meta->>'building_code', s.meta->>'floor', s.code
+    `, params);
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_switchboards_${site}_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).fillColor('#4f46e5').text('Rapport Tableaux Électriques', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(12).fillColor('#666').text(`Site: ${site}`, { align: 'center' });
+    doc.text(`Généré le: ${new Date().toLocaleDateString('fr-FR')}`, { align: 'center' });
+    doc.moveDown();
+
+    // Filters applied
+    const filtersText = [];
+    if (building) filtersText.push(`Bâtiment: ${building}`);
+    if (floor) filtersText.push(`Étage: ${floor}`);
+    if (type) filtersText.push(`Type: ${type}`);
+    if (filtersText.length > 0) {
+      doc.fontSize(10).fillColor('#888').text(`Filtres: ${filtersText.join(' | ')}`, { align: 'center' });
+    }
+    doc.moveDown();
+
+    // Summary
+    const totalDevices = boards.reduce((sum, b) => sum + (Number(b.device_count) || 0), 0);
+    const completeDevices = boards.reduce((sum, b) => sum + (Number(b.complete_count) || 0), 0);
+    doc.fontSize(14).fillColor('#333').text(`Tableaux: ${boards.length} | Disjoncteurs: ${totalDevices} | Complets: ${completeDevices}`);
+    doc.moveDown();
+
+    // Switchboard list
+    for (const board of boards) {
+      const progress = board.device_count > 0 ? Math.round((board.complete_count / board.device_count) * 100) : 0;
+
+      doc.fontSize(12).fillColor('#4f46e5').text(`${board.code}`, { continued: true });
+      doc.fillColor('#666').text(` - ${board.name || 'Sans nom'}`);
+      doc.fontSize(10).fillColor('#333');
+      doc.text(`  Bâtiment: ${board.meta?.building_code || 'N/A'} | Étage: ${board.meta?.floor || 'N/A'} | Local: ${board.meta?.room || 'N/A'}`);
+      doc.text(`  Disjoncteurs: ${board.device_count || 0} | Progression: ${progress}%`);
+      if (board.notes) doc.text(`  Notes: ${board.notes}`);
+      doc.moveDown(0.5);
+
+      if (doc.y > 700) {
+        doc.addPage();
+      }
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[SWITCHBOARD] Report error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
 // START SERVER
 // ============================================================
 
