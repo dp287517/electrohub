@@ -123,9 +123,9 @@ async function getAIContext(site) {
   };
 
   try {
-    // Get switchboards with details
+    // Get switchboards with details (NO status column!)
     const sbRes = await pool.query(
-      `SELECT id, name, code, building_code, floor, room, status FROM switchboards WHERE site = $1 ORDER BY code`,
+      `SELECT id, name, code, building_code, floor, room FROM switchboards WHERE site = $1 ORDER BY code`,
       [site]
     );
     context.switchboards.count = sbRes.rows.length;
@@ -148,129 +148,164 @@ async function getAIContext(site) {
     });
 
     // Get control schedules with FULL DETAILS for planning
-    const ctrlRes = await pool.query(`
-      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency, cs.last_completed_date,
-             ct.name as template_name, ct.id as template_id, ct.estimated_duration,
-             s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
-      FROM control_schedules cs
-      LEFT JOIN control_templates ct ON cs.template_id = ct.id
-      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
-      WHERE cs.site = $1
-      ORDER BY cs.next_due_date
-    `, [site]);
+    try {
+      const ctrlRes = await pool.query(`
+        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency,
+               ct.name as template_name, ct.id as template_id,
+               s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
+        FROM control_schedules cs
+        LEFT JOIN control_templates ct ON cs.template_id = ct.id
+        LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+        WHERE cs.site = $1
+        ORDER BY cs.next_due_date
+      `, [site]);
 
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-    const nextWeek = new Date(today); nextWeek.setDate(nextWeek.getDate() + 7);
-    const nextMonth = new Date(today); nextMonth.setDate(nextMonth.getDate() + 30);
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+      const nextWeek = new Date(today); nextWeek.setDate(nextWeek.getDate() + 7);
 
-    ctrlRes.rows.forEach(ctrl => {
-      context.controls.total++;
-      const dueDate = ctrl.next_due_date ? new Date(ctrl.next_due_date) : null;
+      ctrlRes.rows.forEach(ctrl => {
+        context.controls.total++;
+        const dueDate = ctrl.next_due_date ? new Date(ctrl.next_due_date) : null;
 
-      const controlItem = {
-        id: ctrl.id,
-        switchboardId: ctrl.switchboard_id,
-        switchboard: ctrl.switchboard_name,
-        switchboardCode: ctrl.switchboard_code,
-        building: ctrl.building_code,
-        floor: ctrl.floor,
-        room: ctrl.room,
-        template: ctrl.template_name,
-        templateId: ctrl.template_id,
-        dueDate: ctrl.next_due_date,
-        frequency: ctrl.frequency,
-        lastCompleted: ctrl.last_completed_date,
-        estimatedDuration: ctrl.estimated_duration || 30
-      };
+        const controlItem = {
+          id: ctrl.id,
+          switchboardId: ctrl.switchboard_id,
+          switchboard: ctrl.switchboard_name,
+          switchboardCode: ctrl.switchboard_code,
+          building: ctrl.building_code,
+          floor: ctrl.floor,
+          room: ctrl.room,
+          template: ctrl.template_name,
+          templateId: ctrl.template_id,
+          dueDate: ctrl.next_due_date,
+          frequency: ctrl.frequency,
+          estimatedDuration: 30
+        };
 
-      if (dueDate) {
-        if (dueDate < today) {
-          // OVERDUE - URGENT
-          context.controls.overdue++;
-          const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-          controlItem.daysOverdue = daysOverdue;
-          controlItem.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
-          context.controls.overdueList.push(controlItem);
-          context.urgentItems.push({ type: 'control_overdue', ...controlItem });
-        } else if (dueDate <= tomorrow) {
-          // Due today or tomorrow
-          controlItem.dueToday = dueDate.toDateString() === today.toDateString();
-          context.dailyPlan.push(controlItem);
-          context.controls.upcoming++;
-          context.controls.upcomingList.push(controlItem);
-        } else if (dueDate <= nextWeek) {
-          // Due this week
-          controlItem.daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-          context.controls.upcoming++;
-          context.controls.upcomingList.push(controlItem);
-        } else {
-          context.controls.upcoming++;
+        if (dueDate) {
+          if (dueDate < today) {
+            // OVERDUE - URGENT
+            context.controls.overdue++;
+            const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+            controlItem.daysOverdue = daysOverdue;
+            controlItem.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
+            context.controls.overdueList.push(controlItem);
+            context.urgentItems.push({ type: 'control_overdue', ...controlItem });
+          } else if (dueDate <= tomorrow) {
+            // Due today or tomorrow
+            controlItem.dueToday = dueDate.toDateString() === today.toDateString();
+            context.dailyPlan.push(controlItem);
+            context.controls.upcoming++;
+            context.controls.upcomingList.push(controlItem);
+          } else if (dueDate <= nextWeek) {
+            // Due this week
+            controlItem.daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+            context.controls.upcoming++;
+            context.controls.upcomingList.push(controlItem);
+          } else {
+            context.controls.upcoming++;
+          }
         }
-      }
-    });
+      });
 
-    // Sort overdue by urgency
-    context.controls.overdueList.sort((a, b) => b.daysOverdue - a.daysOverdue);
+      // Sort overdue by urgency
+      context.controls.overdueList.sort((a, b) => b.daysOverdue - a.daysOverdue);
+    } catch (e) {
+      console.error('[AI] Control schedules error:', e.message);
+    }
 
-    // Get VSD equipments with details
+    // Get VSD equipments
     try {
       const vsdRes = await pool.query(`
-        SELECT id, name, building, floor, location, manufacturer, model, status, last_maintenance
-        FROM vsd_equipments WHERE site = $1 ORDER BY name
+        SELECT id, name, building, floor, location, manufacturer, model
+        FROM vsd_equipments WHERE site = $1 ORDER BY name LIMIT 30
       `, [site]);
       context.vsd.count = vsdRes.rows.length;
-      context.vsd.list = vsdRes.rows.slice(0, 30);
-    } catch (e) { /* ignore */ }
+      context.vsd.list = vsdRes.rows;
+    } catch (e) {
+      console.error('[AI] VSD error:', e.message);
+    }
 
     // Get MECA count via sites join
     try {
       const mecaRes = await pool.query(`
-        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.status
+        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer
         FROM meca_equipments e
         INNER JOIN sites s ON s.id = e.site_id
         WHERE s.name = $1 ORDER BY e.name LIMIT 30
       `, [site]);
       context.meca.count = mecaRes.rows.length;
       context.meca.list = mecaRes.rows;
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.error('[AI] MECA error:', e.message);
+    }
 
-    // Get ATEX non-conformities with FULL DETAILS
+    // Get ATEX equipments with last_result = 'non_conforme' as NC
+    // ATEX uses company_id not site directly - we need to find site by name
     try {
-      const atexNcRes = await pool.query(`
-        SELECT nc.id, nc.equipment_id, nc.description, nc.severity, nc.status, nc.created_at,
-               ae.name as equipment_name, ae.building, ae.floor, ae.zone
-        FROM atex_nonconformities nc
-        LEFT JOIN atex_equipments ae ON nc.equipment_id = ae.id
-        WHERE nc.site = $1 AND nc.status IN ('open', 'in_progress')
-        ORDER BY
-          CASE nc.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
-          nc.created_at
-      `, [site]);
-      context.atex.ncCount = atexNcRes.rows.length;
-      context.atex.ncList = atexNcRes.rows;
+      // First get site_id from sites table
+      const siteRes = await pool.query(`SELECT id FROM sites WHERE name = $1 LIMIT 1`, [site]);
+      const siteId = siteRes.rows[0]?.id;
 
-      // Add critical NC to urgent items
-      atexNcRes.rows.filter(nc => nc.severity === 'critical' || nc.severity === 'high').forEach(nc => {
-        context.urgentItems.push({ type: 'atex_nc', ...nc });
-      });
-    } catch (e) { /* ignore */ }
+      if (siteId) {
+        // Get ATEX equipments with their last control result
+        const atexRes = await pool.query(`
+          SELECT
+            e.id, e.name, e.building, e.zone, e.equipment, e.type,
+            (SELECT c.result FROM atex_controls c WHERE c.equipment_id = e.id ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result
+          FROM atex_equipments e
+          WHERE e.site_id = $1
+          ORDER BY e.building, e.name
+        `, [siteId]);
 
-    try {
-      const atexEqRes = await pool.query(`SELECT COUNT(*) FROM atex_equipments WHERE site = $1`, [site]);
-      context.atex.equipmentCount = parseInt(atexEqRes.rows[0]?.count || 0);
-    } catch (e) { /* ignore */ }
+        context.atex.equipmentCount = atexRes.rows.length;
+
+        // Filter non-conformes
+        const nonConformes = atexRes.rows.filter(eq => eq.last_result === 'non_conforme');
+        context.atex.ncCount = nonConformes.length;
+        context.atex.ncList = nonConformes.map(eq => ({
+          id: eq.id,
+          equipment_name: eq.name,
+          building: eq.building,
+          zone: eq.zone,
+          type: eq.type,
+          severity: 'high', // NC ATEX are always high priority
+          last_result: eq.last_result
+        }));
+
+        // Add NC to urgent items
+        nonConformes.forEach(nc => {
+          context.urgentItems.push({
+            type: 'atex_nc',
+            id: nc.id,
+            equipment_name: nc.name,
+            building: nc.building,
+            zone: nc.zone,
+            severity: 'high'
+          });
+        });
+      }
+    } catch (e) {
+      console.error('[AI] ATEX error:', e.message);
+      // Fallback: try with site column directly
+      try {
+        const atexCountRes = await pool.query(`SELECT COUNT(*)::int as count FROM atex_equipments WHERE site = $1`, [site]);
+        context.atex.equipmentCount = atexCountRes.rows[0]?.count || 0;
+      } catch (e2) { /* ignore */ }
+    }
 
     // Calculate statistics
     context.statistics = {
-      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count,
+      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.equipmentCount,
       totalBuildings: Object.keys(context.buildings).length,
-      controlsThisWeek: context.controls.upcomingList.filter(c => c.daysUntil <= 7).length,
+      controlsThisWeek: context.controls.upcomingList.filter(c => c.daysUntil && c.daysUntil <= 7).length,
       overdueRate: context.controls.total > 0
         ? Math.round((context.controls.overdue / context.controls.total) * 100)
         : 0,
-      criticalIssues: context.urgentItems.filter(i => i.urgency === 'critical' || i.severity === 'critical').length
+      criticalIssues: context.urgentItems.filter(i => i.urgency === 'critical' || i.severity === 'critical').length,
+      atexNC: context.atex.ncCount
     };
 
     // Optimize daily plan by building/floor
