@@ -100,7 +100,7 @@ const getEquipmentDisplay = (item) => {
       name: item.mobile_equipment_name || item.equipment_name || `Équip. mobile #${item.mobile_equipment_id}`,
       type: 'mobile',
       icon: <Icon size={16} className={color} />,
-      link: `/app/mobile-equipment?equip=${item.mobile_equipment_id}`,
+      link: `/app/mobile-equipments?equipment=${item.mobile_equipment_id}`,
       category: item.mobile_category || item.category || ''
     };
   }
@@ -217,7 +217,10 @@ export default function SwitchboardControls() {
     status: 'all', // all, overdue, upcoming, conform, non_conform
     dateFrom: '',
     dateTo: '',
-    performers: []
+    performers: [],
+    // Equipment-specific filters from URL params
+    equipmentType: null, // 'switchboard', 'vsd', 'meca', 'mobile_equipment', 'hv', 'glo'
+    equipmentId: null    // The specific equipment ID to filter by
   });
   const [showFilters, setShowFilters] = useState(false);
 
@@ -313,6 +316,51 @@ export default function SwitchboardControls() {
     }
   }, [searchParams, schedules, loading, setSearchParams]);
 
+  // Handle equipment-specific URL params (from equipment pages "Gérer" button)
+  // e.g., ?tab=schedules&equipment_type=vsd&vsd_equipment_id=123
+  useEffect(() => {
+    const equipmentType = searchParams.get('equipment_type');
+    const switchboardId = searchParams.get('switchboard');
+
+    // Check for specific equipment IDs
+    const vsdId = searchParams.get('vsd_equipment_id');
+    const mecaId = searchParams.get('meca_equipment_id');
+    const mobileId = searchParams.get('mobile_equipment_id');
+    const hvId = searchParams.get('hv_equipment_id');
+    const gloId = searchParams.get('glo_equipment_id');
+
+    let eqType = equipmentType;
+    let eqId = null;
+
+    if (switchboardId) {
+      eqType = 'switchboard';
+      eqId = switchboardId;
+    } else if (vsdId) {
+      eqType = 'vsd';
+      eqId = vsdId;
+    } else if (mecaId) {
+      eqType = 'meca';
+      eqId = mecaId;
+    } else if (mobileId) {
+      eqType = 'mobile_equipment';
+      eqId = mobileId;
+    } else if (hvId) {
+      eqType = 'hv';
+      eqId = hvId;
+    } else if (gloId) {
+      eqType = 'glo';
+      eqId = gloId;
+    }
+
+    if (eqType || eqId) {
+      setFilters(prev => ({
+        ...prev,
+        equipmentType: eqType || null,
+        equipmentId: eqId || null
+      }));
+    }
+  }, [searchParams]);
+
   // Stats from dashboard API - structure: { stats: { pending, overdue, completed_30d, templates }, upcoming, overdue_list }
   const overdueCount = dashboard?.stats?.overdue || 0;
   const pendingCount = dashboard?.stats?.pending || 0;
@@ -370,6 +418,20 @@ export default function SwitchboardControls() {
         return false;
       }
 
+      // Equipment-specific filter (from URL params)
+      if (filters.equipmentType && filters.equipmentId) {
+        const eqType = filters.equipmentType;
+        const eqId = filters.equipmentId;
+
+        // Match based on equipment type
+        if (eqType === 'switchboard' && String(s.switchboard_id) !== String(eqId)) return false;
+        if (eqType === 'vsd' && String(s.vsd_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'meca' && String(s.meca_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'mobile_equipment' && String(s.mobile_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'hv' && String(s.hv_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'glo' && String(s.glo_equipment_id) !== String(eqId)) return false;
+      }
+
       // Status filter
       if (filters.status === 'overdue' && (!dueDate || dueDate >= now)) return false;
       if (filters.status === 'upcoming' && (!dueDate || dueDate < now)) return false;
@@ -409,6 +471,20 @@ export default function SwitchboardControls() {
         return false;
       }
 
+      // Equipment-specific filter (from URL params)
+      if (filters.equipmentType && filters.equipmentId) {
+        const eqType = filters.equipmentType;
+        const eqId = filters.equipmentId;
+
+        // Match based on equipment type
+        if (eqType === 'switchboard' && String(r.switchboard_id) !== String(eqId)) return false;
+        if (eqType === 'vsd' && String(r.vsd_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'meca' && String(r.meca_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'mobile_equipment' && String(r.mobile_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'hv' && String(r.hv_equipment_id) !== String(eqId)) return false;
+        if (eqType === 'glo' && String(r.glo_equipment_id) !== String(eqId)) return false;
+      }
+
       // Status filter (conform/non_conform)
       if (filters.status === 'conform' && r.status !== 'conform') return false;
       if (filters.status === 'non_conform' && r.status !== 'non_conform') return false;
@@ -436,10 +512,25 @@ export default function SwitchboardControls() {
     if (filters.status !== 'all') count++;
     if (filters.dateFrom || filters.dateTo) count++;
     if (filters.performers.length > 0) count++;
+    if (filters.equipmentType || filters.equipmentId) count++;
     return count;
   }, [filters]);
 
-  // Reset filters
+  // Get equipment filter label for display
+  const getEquipmentFilterLabel = () => {
+    if (!filters.equipmentType && !filters.equipmentId) return null;
+    const typeLabels = {
+      switchboard: 'Tableau',
+      vsd: 'Variateur',
+      meca: 'Équip. méca',
+      mobile_equipment: 'Équip. mobile',
+      hv: 'Haute tension',
+      glo: 'GLO'
+    };
+    return `${typeLabels[filters.equipmentType] || filters.equipmentType} #${filters.equipmentId}`;
+  };
+
+  // Reset filters (clears URL equipment filters too)
   const resetFilters = () => {
     setFilters({
       search: '',
@@ -449,8 +540,15 @@ export default function SwitchboardControls() {
       status: 'all',
       dateFrom: '',
       dateTo: '',
-      performers: []
+      performers: [],
+      equipmentType: null,
+      equipmentId: null
     });
+    // Clear equipment-specific URL params
+    const newParams = new URLSearchParams(searchParams);
+    ['equipment_type', 'switchboard', 'vsd_equipment_id', 'meca_equipment_id',
+     'mobile_equipment_id', 'hv_equipment_id', 'glo_equipment_id'].forEach(p => newParams.delete(p));
+    setSearchParams(newParams, { replace: true });
   };
 
   // Loading state (after all hooks)
@@ -830,6 +928,12 @@ export default function SwitchboardControls() {
                   <span className="px-2 py-1 bg-teal-100 text-teal-700 rounded-full text-xs flex items-center gap-1">
                     {filters.performers.length} controleur(s)
                     <button onClick={() => setFilters(f => ({ ...f, performers: [] }))} className="hover:text-teal-900">✕</button>
+                  </span>
+                )}
+                {(filters.equipmentType || filters.equipmentId) && (
+                  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs flex items-center gap-1">
+                    📍 {getEquipmentFilterLabel()}
+                    <button onClick={resetFilters} className="hover:text-orange-900">✕</button>
                   </span>
                 )}
               </div>

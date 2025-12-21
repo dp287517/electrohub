@@ -87,8 +87,8 @@ const EQUIPMENT_TYPES = {
     color: "#06b6d4", // cyan (like MobileEquipments_map from-cyan-400 to-blue-600)
     gradient: "linear-gradient(to bottom right, #22d3ee, #2563eb)", // cyan-to-blue like MobileEquipments_map
     api: api.mobileEquipment?.maps,
-    link: (id) => `/app/mobile-equipments?equip=${id}`,
-    mapLink: (id, plan) => `/app/mobile-equipments/map?equip=${id}&plan=${plan}`,
+    link: (id) => `/app/mobile-equipments?equipment=${id}`,
+    mapLink: (id, plan) => `/app/mobile-equipments/map?equipment=${id}&plan=${plan}`,
   },
   hv: {
     label: "Haute Tension",
