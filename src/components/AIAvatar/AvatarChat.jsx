@@ -5,9 +5,84 @@ import {
   AlertTriangle, Calendar, Search, FileText,
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
-  Volume2, VolumeX
+  Volume2, VolumeX, BarChart3, Play, Loader2
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
+import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend
+} from 'chart.js';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend
+);
+
+// Chart component based on type
+function AIChart({ chart }) {
+  if (!chart) return null;
+
+  const colors = [
+    'rgba(59, 130, 246, 0.8)',
+    'rgba(16, 185, 129, 0.8)',
+    'rgba(245, 158, 11, 0.8)',
+    'rgba(239, 68, 68, 0.8)',
+    'rgba(139, 92, 246, 0.8)',
+    'rgba(236, 72, 153, 0.8)',
+    'rgba(20, 184, 166, 0.8)',
+    'rgba(251, 146, 60, 0.8)'
+  ];
+
+  const data = {
+    labels: chart.labels || [],
+    datasets: [{
+      label: chart.title || 'Données',
+      data: chart.data || [],
+      backgroundColor: colors.slice(0, chart.data?.length || 1),
+      borderColor: colors.map(c => c.replace('0.8', '1')),
+      borderWidth: 1
+    }]
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: chart.type === 'pie' || chart.type === 'doughnut' },
+      title: { display: true, text: chart.title || '' }
+    }
+  };
+
+  const ChartComponent = {
+    bar: Bar,
+    line: Line,
+    pie: Pie,
+    doughnut: Doughnut
+  }[chart.type] || Bar;
+
+  return (
+    <div className="mt-3 p-3 bg-white rounded-lg border" style={{ height: 200 }}>
+      <ChartComponent data={data} options={options} />
+    </div>
+  );
+}
 
 // Suggestions contextuelles
 const QUICK_ACTIONS = [
@@ -223,6 +298,10 @@ Comment puis-je vous aider aujourd'hui ?`,
         content: response.message,
         actions: response.actions,
         sources: response.sources,
+        chart: response.chart,
+        pendingAction: response.pendingAction,
+        provider: response.provider,
+        model: response.model,
         timestamp: new Date()
       };
 
@@ -353,33 +432,76 @@ Comment puis-je vous aider aujourd'hui ?`,
                   </div>
                 )}
 
+                {/* Chart */}
+                {message.chart && (
+                  <AIChart chart={message.chart} />
+                )}
+
+                {/* Pending Action */}
+                {message.pendingAction && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <p className="text-xs font-medium text-gray-500 mb-2">Action proposée :</p>
+                    <button
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          const result = await aiAssistant.executeAction(
+                            message.pendingAction.action,
+                            message.pendingAction.params
+                          );
+                          const resultMessage = {
+                            id: Date.now(),
+                            role: 'assistant',
+                            content: result.success
+                              ? `✅ **Action exécutée:** ${result.message}`
+                              : `❌ **Erreur:** ${result.message}`,
+                            timestamp: new Date()
+                          };
+                          setMessages(prev => [...prev, resultMessage]);
+                        } catch (e) {
+                          console.error('Action error:', e);
+                        }
+                        setIsLoading(false);
+                      }}
+                      className="flex items-center gap-2 w-full px-3 py-2 bg-green-50 text-green-700 rounded-lg text-left text-sm hover:bg-green-100 transition-colors border border-green-200"
+                    >
+                      <Play className="w-4 h-4" />
+                      <span>Exécuter: {message.pendingAction.action}</span>
+                    </button>
+                  </div>
+                )}
+
                 {/* Sources */}
                 {message.sources && message.sources.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-200">
                     <p className="text-xs font-medium text-gray-500 mb-1">Sources :</p>
                     <div className="flex flex-wrap gap-1">
                       {message.sources.map((source, i) => (
-                        <a
+                        <span
                           key={i}
-                          href={source.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2 py-1 bg-white rounded text-xs text-brand-600 hover:underline border"
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-white rounded text-xs text-brand-600 border"
                         >
                           <FileText className="w-3 h-3" />
-                          {source.title || 'Source'}
-                        </a>
+                          {source.title || 'Document'} {source.page ? `(p.${source.page})` : ''}
+                        </span>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Timestamp */}
-                <p className={`text-xs mt-2 ${
+                {/* Provider badge + Timestamp */}
+                <div className={`flex items-center justify-between text-xs mt-2 ${
                   message.role === 'user' ? 'text-brand-200' : 'text-gray-400'
                 }`}>
-                  {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                </p>
+                  <span>
+                    {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {message.provider && (
+                    <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase">
+                      {message.provider}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ))}

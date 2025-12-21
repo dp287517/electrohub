@@ -240,13 +240,37 @@ class AIAssistant {
         message: data.message,
         actions: data.actions || [],
         sources: data.sources || [],
-        provider: data.provider
+        provider: data.provider,
+        model: data.model,
+        chart: data.chart || null,
+        pendingAction: data.pendingAction || null,
+        actionResult: data.actionResult || null
       };
     } catch (error) {
       console.error('Erreur chat IA:', error);
 
       // Fallback: réponse basique sans backend
       return this.fallbackResponse(message, context);
+    }
+  }
+
+  /**
+   * Exécute une action autonome
+   */
+  async executeAction(action, params) {
+    try {
+      const data = await post(`${this.baseUrl}/execute-action`, {
+        action,
+        params,
+        user: this.getCurrentUser()
+      });
+      return data;
+    } catch (error) {
+      console.error('Erreur exécution action:', error);
+      return {
+        success: false,
+        message: `Erreur: ${error.message}`
+      };
     }
   }
 
