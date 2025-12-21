@@ -201,14 +201,14 @@ function userInfo(req) {
 // ====================
 // HEALTH CHECK
 // ====================
-app.get("/health", (_req, res) => res.json({ ok: true, service: "datahub" }));
+app.get("/api/datahub/health", (_req, res) => res.json({ ok: true, service: "datahub" }));
 
 // ====================
 // CATEGORIES CRUD
 // ====================
 
 // List categories
-app.get("/categories", async (req, res) => {
+app.get("/api/datahub/categories", async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT c.*,
@@ -224,7 +224,7 @@ app.get("/categories", async (req, res) => {
 });
 
 // Create category
-app.post("/categories", async (req, res) => {
+app.post("/api/datahub/categories", async (req, res) => {
   try {
     const { name, description, color, icon, marker_size, sort_order } = req.body;
     if (!name?.trim()) return res.status(400).json({ ok: false, error: "Name required" });
@@ -244,7 +244,7 @@ app.post("/categories", async (req, res) => {
 });
 
 // Update category
-app.put("/categories/:id", async (req, res) => {
+app.put("/api/datahub/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, color, icon, marker_size, sort_order } = req.body;
@@ -272,7 +272,7 @@ app.put("/categories/:id", async (req, res) => {
 });
 
 // Delete category
-app.delete("/categories/:id", async (req, res) => {
+app.delete("/api/datahub/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rowCount } = await pool.query(`DELETE FROM dh_categories WHERE id = $1`, [id]);
@@ -292,7 +292,7 @@ app.delete("/categories/:id", async (req, res) => {
 // ====================
 
 // List items
-app.get("/items", async (req, res) => {
+app.get("/api/datahub/items", async (req, res) => {
   try {
     const { category_id, building, floor, search, limit = 500, offset = 0 } = req.query;
 
@@ -335,7 +335,7 @@ app.get("/items", async (req, res) => {
 });
 
 // Get single item
-app.get("/items/:id", async (req, res) => {
+app.get("/api/datahub/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`
@@ -354,7 +354,7 @@ app.get("/items/:id", async (req, res) => {
 });
 
 // Create item
-app.post("/items", async (req, res) => {
+app.post("/api/datahub/items", async (req, res) => {
   try {
     const { name, code, category_id, building, floor, location, description, notes, data } = req.body;
     if (!name?.trim()) return res.status(400).json({ ok: false, error: "Name required" });
@@ -374,7 +374,7 @@ app.post("/items", async (req, res) => {
 });
 
 // Update item
-app.put("/items/:id", async (req, res) => {
+app.put("/api/datahub/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, code, category_id, building, floor, location, description, notes, data } = req.body;
@@ -406,7 +406,7 @@ app.put("/items/:id", async (req, res) => {
 });
 
 // Delete item
-app.delete("/items/:id", async (req, res) => {
+app.delete("/api/datahub/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -430,7 +430,7 @@ app.delete("/items/:id", async (req, res) => {
 // ====================
 // PHOTO UPLOAD
 // ====================
-app.post("/items/:id/photo", uploadAny.single("photo"), async (req, res) => {
+app.post("/api/datahub/items/:id/photo", uploadAny.single("photo"), async (req, res) => {
   try {
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
@@ -447,7 +447,7 @@ app.post("/items/:id/photo", uploadAny.single("photo"), async (req, res) => {
 });
 
 // Get photo
-app.get("/items/:id/photo", async (req, res) => {
+app.get("/api/datahub/items/:id/photo", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`SELECT photo_path FROM dh_items WHERE id = $1`, [id]);
@@ -466,7 +466,7 @@ app.get("/items/:id/photo", async (req, res) => {
 // ====================
 // FILES
 // ====================
-app.get("/items/:id/files", async (req, res) => {
+app.get("/api/datahub/items/:id/files", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`
@@ -479,7 +479,7 @@ app.get("/items/:id/files", async (req, res) => {
   }
 });
 
-app.post("/items/:id/files", uploadAny.single("file"), async (req, res) => {
+app.post("/api/datahub/items/:id/files", uploadAny.single("file"), async (req, res) => {
   try {
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
@@ -497,7 +497,7 @@ app.post("/items/:id/files", uploadAny.single("file"), async (req, res) => {
   }
 });
 
-app.delete("/files/:id", async (req, res) => {
+app.delete("/api/datahub/files/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`DELETE FROM dh_files WHERE id = $1 RETURNING filepath`, [id]);
@@ -518,7 +518,7 @@ app.delete("/files/:id", async (req, res) => {
 // ====================
 
 // Get plans from VSD tables directly (same as GLO - symbiosis pattern)
-app.get("/maps/plans", async (_req, res) => {
+app.get("/api/datahub/maps/plans", async (_req, res) => {
   try {
     // Query VSD plans directly from shared database (vsd_plans, vsd_plan_names)
     const { rows } = await pool.query(`
@@ -541,7 +541,7 @@ app.get("/maps/plans", async (_req, res) => {
 });
 
 // Get plan file from VSD tables directly (same as GLO - symbiosis pattern)
-app.get("/maps/plan/:id/file", async (req, res) => {
+app.get("/api/datahub/maps/plan/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -587,7 +587,7 @@ app.get("/maps/plan/:id/file", async (req, res) => {
 });
 
 // Get positions for a plan
-app.get("/maps/positions", async (req, res) => {
+app.get("/api/datahub/maps/positions", async (req, res) => {
   try {
     const { logical_name, id, page_index = 0 } = req.query;
     const planKey = logical_name || id;
@@ -610,7 +610,7 @@ app.get("/maps/positions", async (req, res) => {
 });
 
 // Set/update position
-app.put("/maps/positions/:item_id", async (req, res) => {
+app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
   try {
     const { item_id } = req.params;
     const { logical_name, page_index = 0, x_frac, y_frac } = req.body;
@@ -637,7 +637,7 @@ app.put("/maps/positions/:item_id", async (req, res) => {
 });
 
 // Delete position
-app.delete("/maps/positions/:id", async (req, res) => {
+app.delete("/api/datahub/maps/positions/:id", async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query(`DELETE FROM dh_positions WHERE id = $1`, [id]);
@@ -649,7 +649,7 @@ app.delete("/maps/positions/:id", async (req, res) => {
 });
 
 // Get all placed item IDs
-app.get("/maps/placed-ids", async (_req, res) => {
+app.get("/api/datahub/maps/placed-ids", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT DISTINCT p.item_id,
@@ -675,7 +675,7 @@ app.get("/maps/placed-ids", async (_req, res) => {
 // ====================
 // BULK OPERATIONS
 // ====================
-app.post("/bulk/rename", async (req, res) => {
+app.post("/api/datahub/bulk/rename", async (req, res) => {
   try {
     const { field, from, to } = req.body;
     if (!["building", "floor"].includes(field)) {
@@ -698,7 +698,7 @@ app.post("/bulk/rename", async (req, res) => {
 // ====================
 // STATS
 // ====================
-app.get("/stats", async (_req, res) => {
+app.get("/api/datahub/stats", async (_req, res) => {
   try {
     const { rows: totals } = await pool.query(`
       SELECT

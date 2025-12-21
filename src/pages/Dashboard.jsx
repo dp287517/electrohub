@@ -56,15 +56,15 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
 
   return (
     <div
-      className="group relative bg-white rounded-2xl p-5 shadow-sm hover:shadow-2xl border border-gray-100 hover:border-transparent transition-all duration-500 hover:-translate-y-2 opacity-0 animate-slideUp"
+      className="group relative bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 shadow-sm hover:shadow-2xl border border-gray-100 hover:border-transparent transition-all duration-500 hover:-translate-y-2 opacity-0 animate-slideUp"
       style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'forwards' }}
     >
       {/* Hover glow effect */}
-      <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-2xl transition-opacity duration-500`} />
+      <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-xl sm:rounded-2xl transition-opacity duration-500`} />
 
       {/* Control status badges - absolute top right, small z-index */}
       {hasBadges && (
-        <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+        <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 flex items-center gap-1 z-10">
           {hasOverdue && (
             <button
               onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
@@ -88,18 +88,19 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
         </div>
       )}
 
-      <Link to={to} className="relative flex items-start gap-4">
-        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 flex-shrink-0`}>
-          <IconComponent size={22} />
+      <Link to={to} className="relative flex items-start gap-3 sm:gap-4">
+        <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 flex-shrink-0`}>
+          <IconComponent size={18} className="sm:hidden" />
+          <IconComponent size={22} className="hidden sm:block" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="font-semibold text-gray-900 group-hover:text-brand-600 transition-colors truncate">
+          <div className="flex items-center justify-between gap-1 sm:gap-2">
+            <h3 className="font-semibold text-sm sm:text-base text-gray-900 group-hover:text-brand-600 transition-colors truncate">
               {label}
             </h3>
-            <ChevronRight size={18} className="text-gray-400 group-hover:text-brand-500 group-hover:translate-x-2 transition-all duration-300 flex-shrink-0" />
+            <ChevronRight size={16} className="text-gray-400 group-hover:text-brand-500 group-hover:translate-x-2 transition-all duration-300 flex-shrink-0 sm:w-[18px] sm:h-[18px]" />
           </div>
-          <p className="text-sm text-gray-500 mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
         </div>
       </Link>
     </div>
@@ -791,7 +792,7 @@ export default function Dashboard() {
             />
 
             <div className={`transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-2">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4 pb-2">
                 {visibleOtherApps.map((app, index) => (
                   <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
@@ -813,7 +814,7 @@ export default function Dashboard() {
             />
 
             <div className={`transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-2">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4 pb-2">
                 {visibleElectricalApps.map((app, index) => (
                   <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
                 ))}
