@@ -167,10 +167,16 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
 
   const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel }) => (
     <div className="bg-purple-50 rounded-xl p-4 space-y-3 border border-purple-200">
-      <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl" placeholder="Nom *" autoFocus />
-      <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl" placeholder="Description" />
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
+        <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Nom de la catégorie" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+        <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Description optionnelle" />
+      </div>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm text-gray-600">Couleur:</span>
         {COLOR_PRESETS.map(c => (
@@ -252,13 +258,17 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
                 ) : (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: cat.color }}>
-                        <Circle size={16} className="text-white" />
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center shadow-sm" style={{ backgroundColor: cat.color }}>
+                        {(() => {
+                          const iconData = ICON_PRESETS.find(i => i.id === cat.icon);
+                          const IconComp = iconData?.icon || Circle;
+                          return <IconComp size={18} className="text-white" />;
+                        })()}
                       </div>
                       <div>
                         <h4 className="font-medium text-gray-900">{cat.name}</h4>
                         {cat.description && <p className="text-sm text-gray-500">{cat.description}</p>}
-                        <span className="text-xs text-gray-400">{cat.item_count || 0} items • {cat.marker_size}px</span>
+                        <span className="text-xs text-gray-400">{cat.item_count || 0} items • {cat.marker_size}px • {ICON_PRESETS.find(i => i.id === cat.icon)?.label || 'Cercle'}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
