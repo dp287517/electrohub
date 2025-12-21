@@ -16,10 +16,10 @@ export default function FloatingAssistant() {
     const saved = localStorage.getItem('eh_avatar_style');
     // Migration des anciens styles vers les nouveaux
     if (saved && !AVATAR_STYLES[saved]) {
-      localStorage.setItem('eh_avatar_style', 'alex');
-      return 'alex';
+      localStorage.setItem('eh_avatar_style', 'lucas');
+      return 'lucas';
     }
-    return saved || 'alex';
+    return saved || 'lucas';
   });
   const [showChat, setShowChat] = useState(false);
   const [showSelector, setShowSelector] = useState(false);

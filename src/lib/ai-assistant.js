@@ -70,8 +70,8 @@ class AIAssistant {
         context.totalEquipments += context.switchboards.equipments.length;
         this.aggregateByBuilding(context, context.switchboards.equipments, 'switchboard');
       }
-      if (context.vsd?.plans) {
-        context.totalEquipments += context.vsd.plans.length;
+      if (context.vsd?.equipments) {
+        context.totalEquipments += context.vsd.equipments.length;
       }
       if (context.meca?.equipments) {
         context.totalEquipments += context.meca.equipments.length;
@@ -118,10 +118,10 @@ class AIAssistant {
    */
   async fetchVSDContext() {
     try {
-      const data = await get('/api/vsd/plans');
+      const data = await get('/api/vsd/equipments');
       return {
-        plans: data?.plans || data || [],
-        count: data?.plans?.length || data?.length || 0
+        equipments: data || [],
+        count: data?.length || 0
       };
     } catch (error) {
       console.error('Erreur VSD:', error);
