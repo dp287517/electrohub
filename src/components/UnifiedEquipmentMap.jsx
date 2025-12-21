@@ -740,22 +740,39 @@ export default function UnifiedEquipmentMap({
     }
   };
 
-  // Load control statuses from API
+  // Load control statuses from API - fetch all schedules to get accurate statuses
   const loadControlStatuses = async () => {
     try {
-      const dashboardRes = await api.switchboardControls.dashboard();
+      // Fetch all schedules to get complete control status for all equipment
+      const schedulesRes = await api.switchboardControls.listSchedules();
+      const schedules = schedulesRes?.schedules || [];
       const statuses = {};
+      const now = new Date();
+      const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-      // Process overdue items
-      (dashboardRes?.overdue_list || []).forEach(item => {
+      schedules.forEach(item => {
         const key = getEquipmentKey(item);
-        if (key) statuses[key] = "overdue";
-      });
+        if (!key) return;
 
-      // Process upcoming items
-      (dashboardRes?.upcoming || []).forEach(item => {
-        const key = getEquipmentKey(item);
-        if (key && !statuses[key]) statuses[key] = "upcoming";
+        const nextDue = item.next_due_date ? new Date(item.next_due_date) : null;
+        if (!nextDue) return;
+
+        // Determine status based on due date
+        let status;
+        if (nextDue < now) {
+          status = "overdue";
+        } else if (nextDue <= thirtyDaysFromNow) {
+          status = "upcoming";
+        } else {
+          status = "pending";
+        }
+
+        // Keep the most urgent status (overdue > upcoming > pending)
+        if (!statuses[key] ||
+            (status === "overdue") ||
+            (status === "upcoming" && statuses[key] !== "overdue")) {
+          statuses[key] = status;
+        }
       });
 
       setControlStatuses(statuses);
@@ -870,8 +887,11 @@ export default function UnifiedEquipmentMap({
 
   const handleNavigate = (position) => {
     const typeConfig = EQUIPMENT_TYPES[position.equipment_type];
-    if (typeConfig?.link) {
+    // Guard against undefined equipment_id to prevent navigation to /undefined pages
+    if (typeConfig?.link && position.equipment_id != null) {
       navigate(typeConfig.link(position.equipment_id));
+    } else {
+      console.warn('Cannot navigate: missing equipment_id or type config', position);
     }
   };
 
