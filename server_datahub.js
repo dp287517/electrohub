@@ -517,42 +517,69 @@ app.delete("/files/:id", async (req, res) => {
 // MAPS - Use VSD plans (GET positions, SET position)
 // ====================
 
-// Get plans from VSD (shared plans)
+// Get plans from VSD tables directly (same as GLO - symbiosis pattern)
 app.get("/maps/plans", async (_req, res) => {
   try {
-    // Fetch plans from VSD service - VSD uses /api/vsd/maps/listPlans endpoint
-    const vsdUrl = process.env.VSD_BASE_URL || "http://127.0.0.1:3020";
-    const resp = await fetch(`${vsdUrl}/api/vsd/maps/listPlans`);
-    if (!resp.ok) throw new Error("VSD service unavailable");
-    const data = await resp.json();
-    res.json({ ok: true, plans: data.plans || [] });
+    // Query VSD plans directly from shared database (vsd_plans, vsd_plan_names)
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name)
+             p.id,
+             p.logical_name,
+             p.version,
+             p.filename,
+             p.page_count,
+             COALESCE(pn.display_name, p.logical_name) AS display_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+       ORDER BY p.logical_name, p.version DESC
+    `);
+    res.json({ ok: true, plans: rows });
   } catch (e) {
     console.error("[Datahub] List plans error:", e);
-    res.json({ ok: true, plans: [] }); // Return empty if VSD not available
+    res.json({ ok: true, plans: [] });
   }
 });
 
-// Get plan file from VSD
+// Get plan file from VSD tables directly (same as GLO - symbiosis pattern)
 app.get("/maps/plan/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
-    const vsdUrl = process.env.VSD_BASE_URL || "http://127.0.0.1:3020";
 
-    // Try by id first, then by logical_name - VSD uses /api/vsd/maps/planFile endpoint
-    let url = `${vsdUrl}/api/vsd/maps/planFile?id=${encodeURIComponent(id)}`;
-    let resp = await fetch(url);
+    // Try by id first, then by logical_name - direct query to vsd_plans table
+    let q = `SELECT file_path, content, filename FROM vsd_plans WHERE `;
+    let val;
 
-    if (!resp.ok) {
-      url = `${vsdUrl}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(id)}`;
-      resp = await fetch(url);
+    // Check if id looks like a UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+    if (isUuid) {
+      q += `id=$1`;
+      val = id;
+    } else {
+      q += `logical_name=$1 ORDER BY version DESC LIMIT 1`;
+      val = id;
     }
 
-    if (!resp.ok) return res.status(404).json({ ok: false, error: "Plan not found" });
+    const { rows } = await pool.query(q, [val]);
+    if (!rows[0]) return res.status(404).json({ ok: false, error: "Plan not found" });
 
-    const contentType = resp.headers.get("content-type");
-    res.setHeader("Content-Type", contentType || "application/pdf");
-    const buffer = await resp.arrayBuffer();
-    res.send(Buffer.from(buffer));
+    const { content, file_path, filename } = rows[0];
+
+    if (content && content.length) {
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `inline; filename="${filename || "plan.pdf"}"`);
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.send(content);
+    }
+
+    if (file_path && fs.existsSync(file_path)) {
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `inline; filename="${filename || "plan.pdf"}"`);
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.sendFile(file_path);
+    }
+
+    res.status(404).json({ ok: false, error: "Plan file not found" });
   } catch (e) {
     console.error("[Datahub] Get plan file error:", e);
     res.status(500).json({ ok: false, error: e.message });

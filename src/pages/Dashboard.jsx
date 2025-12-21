@@ -62,26 +62,26 @@ function AppCard({ label, to, description, icon, color, index, controlStats, nav
       {/* Hover glow effect */}
       <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-2xl transition-opacity duration-500`} />
 
-      {/* Control status badges - positioned at top right, inside card padding */}
+      {/* Control status badges - absolute top right, small z-index */}
       {hasBadges && (
-        <div className="flex items-center justify-end gap-1 mb-2">
+        <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
           {hasOverdue && (
             <button
               onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
-              className="px-2 py-1 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-1 hover:bg-red-200 transition-colors animate-pulse"
+              className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full flex items-center gap-0.5 hover:bg-red-200 transition-colors animate-pulse shadow-sm"
               title={`${controlStats.overdue} contrôle(s) en retard`}
             >
-              <AlertTriangle size={10} />
+              <AlertTriangle size={8} />
               {controlStats.overdue}
             </button>
           )}
           {hasPending && (
             <button
               onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=schedules'); }}
-              className="px-2 py-1 bg-blue-100 text-blue-700 text-[10px] rounded-full flex items-center gap-1 hover:bg-blue-200 transition-colors"
+              className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[9px] rounded-full flex items-center gap-0.5 hover:bg-blue-200 transition-colors shadow-sm"
               title={`${controlStats.pending} contrôle(s) planifié(s)`}
             >
-              <ClipboardCheck size={10} />
+              <ClipboardCheck size={8} />
               {controlStats.pending}
             </button>
           )}

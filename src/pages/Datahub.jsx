@@ -4,7 +4,19 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Database, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   Trash2, Edit3, Save, X, AlertTriangle, CheckCircle, RefreshCw, MapPin,
-  Tag, Camera, FileText, Download, Settings, Palette, Circle
+  Tag, Camera, FileText, Download, Settings, Palette, Circle, Square, Triangle,
+  Star, Heart, Zap, Flame, Droplet, Wind, Sun, Moon, Cloud, Thermometer,
+  Gauge, Power, Cpu, Wifi, Radio, Speaker, Mic, Headphones, Monitor, Smartphone,
+  Printer, Server, HardDrive, Usb, Cable, Plug, Battery, BatteryCharging,
+  Wrench, Hammer, Scissors, Key, Lock, Unlock, Shield, AlertCircle, Info,
+  HelpCircle, Clock, Timer, Calendar, Bell, Mail, MessageSquare, Phone,
+  Video, Image, Film, Music, Folder, File, Archive, Box, Package, Gift,
+  ShoppingCart, CreditCard, Wallet, DollarSign, PieChart, BarChart2, LineChart,
+  TrendingUp, Activity, Target, Flag, Bookmark, Award, Trophy, Crown, Gem,
+  Eye, EyeOff, User, Users, UserCheck, Home, Building, Factory, Store,
+  Car, Truck, Plane, Ship, Train, Bike, Footprints, Map, Compass, Navigation,
+  Globe, Pin, Anchor, Crosshair, Move, Maximize, Minimize, Copy, Clipboard,
+  Check, XCircle, MinusCircle, PlusCircle, ArrowUp, ArrowDown, ArrowLeft, ArrowRight
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -38,12 +50,69 @@ const COLOR_PRESETS = [
   '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'
 ];
 
-// Icon presets for markers
+// Icon presets for markers - extensive list
 const ICON_PRESETS = [
+  // Shapes
   { id: 'circle', label: 'Cercle', icon: Circle },
-  { id: 'database', label: 'Database', icon: Database },
-  { id: 'tag', label: 'Tag', icon: Tag },
+  { id: 'square', label: 'Carré', icon: Square },
+  { id: 'triangle', label: 'Triangle', icon: Triangle },
+  { id: 'star', label: 'Étoile', icon: Star },
+  { id: 'heart', label: 'Cœur', icon: Heart },
+  { id: 'target', label: 'Cible', icon: Target },
+  // Location
   { id: 'mappin', label: 'Pin', icon: MapPin },
+  { id: 'pin', label: 'Épingle', icon: Pin },
+  { id: 'crosshair', label: 'Viseur', icon: Crosshair },
+  { id: 'compass', label: 'Boussole', icon: Compass },
+  { id: 'navigation', label: 'Navigation', icon: Navigation },
+  { id: 'flag', label: 'Drapeau', icon: Flag },
+  // Data & Tech
+  { id: 'database', label: 'Base données', icon: Database },
+  { id: 'server', label: 'Serveur', icon: Server },
+  { id: 'harddrive', label: 'Disque dur', icon: HardDrive },
+  { id: 'cpu', label: 'Processeur', icon: Cpu },
+  { id: 'wifi', label: 'Wifi', icon: Wifi },
+  { id: 'monitor', label: 'Écran', icon: Monitor },
+  // Energy & Power
+  { id: 'zap', label: 'Électricité', icon: Zap },
+  { id: 'power', label: 'Power', icon: Power },
+  { id: 'battery', label: 'Batterie', icon: Battery },
+  { id: 'plug', label: 'Prise', icon: Plug },
+  { id: 'flame', label: 'Flamme', icon: Flame },
+  { id: 'thermometer', label: 'Thermomètre', icon: Thermometer },
+  // Industrial
+  { id: 'gauge', label: 'Jauge', icon: Gauge },
+  { id: 'wrench', label: 'Clé', icon: Wrench },
+  { id: 'hammer', label: 'Marteau', icon: Hammer },
+  { id: 'factory', label: 'Usine', icon: Factory },
+  { id: 'cable', label: 'Câble', icon: Cable },
+  // Nature
+  { id: 'droplet', label: 'Goutte', icon: Droplet },
+  { id: 'wind', label: 'Vent', icon: Wind },
+  { id: 'sun', label: 'Soleil', icon: Sun },
+  { id: 'cloud', label: 'Nuage', icon: Cloud },
+  // Status
+  { id: 'check', label: 'Validé', icon: Check },
+  { id: 'alertcircle', label: 'Alerte', icon: AlertCircle },
+  { id: 'info', label: 'Info', icon: Info },
+  { id: 'shield', label: 'Sécurité', icon: Shield },
+  { id: 'lock', label: 'Verrouillé', icon: Lock },
+  { id: 'eye', label: 'Visible', icon: Eye },
+  // Other
+  { id: 'tag', label: 'Tag', icon: Tag },
+  { id: 'bookmark', label: 'Marque-page', icon: Bookmark },
+  { id: 'award', label: 'Récompense', icon: Award },
+  { id: 'user', label: 'Utilisateur', icon: User },
+  { id: 'users', label: 'Groupe', icon: Users },
+  { id: 'building', label: 'Bâtiment', icon: Building },
+  { id: 'home', label: 'Maison', icon: Home },
+  { id: 'box', label: 'Boîte', icon: Box },
+  { id: 'package', label: 'Colis', icon: Package },
+  { id: 'folder', label: 'Dossier', icon: Folder },
+  { id: 'file', label: 'Fichier', icon: File },
+  { id: 'clock', label: 'Horloge', icon: Clock },
+  { id: 'calendar', label: 'Calendrier', icon: Calendar },
+  { id: 'bell', label: 'Cloche', icon: Bell },
 ];
 
 // Category Manager Modal
