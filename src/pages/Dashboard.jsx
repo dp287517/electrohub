@@ -10,6 +10,7 @@ import {
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
 import { api } from '../lib/api';
+import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
 
 // Icon mapping for apps
 const iconMap = {
@@ -842,6 +843,11 @@ export default function Dashboard() {
           onSave={handleSaveProfile}
         />
       )}
+
+      {/* Floating Assistant - Mobile only (hidden on desktop, Navbar handles it) */}
+      <div className="sm:hidden">
+        <FloatingAssistant />
+      </div>
     </div>
   );
 }

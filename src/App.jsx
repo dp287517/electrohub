@@ -40,7 +40,7 @@ import Glo from './pages/Glo.jsx';
 import GloMap from './pages/Glo_map.jsx';
 import Datahub from './pages/Datahub.jsx';
 import DatahubMap from './pages/Datahub_map.jsx';
-import FloatingAssistant from './components/AIAvatar/FloatingAssistant.jsx';
+// FloatingAssistant removed from global - now only in Dashboard for mobile
 // Infrastructure is now unified under ATEX
 
 // Component to redirect authenticated users to dashboard
@@ -56,7 +56,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
-      <FloatingAssistant />
       <div className="max-w-[95vw] mx-auto px-4 py-6">
         <Routes>
           {/* Public - redirect to dashboard if already logged in */}

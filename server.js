@@ -258,7 +258,51 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
 
 // >>> AI Assistant (avatar intelligent avec OpenAI/Gemini)
-app.use("/api/ai-assistant", mkProxy(aiAssistantTarget, { withRestream: false }));
+// Direct handler with fallback when microservice is unavailable
+app.use("/api/ai-assistant", (req, res, next) => {
+  // Short timeout for AI assistant (5s) - fallback to client-side if unavailable
+  const proxyMiddleware = mkProxy(aiAssistantTarget, { withRestream: false, timeoutMs: 5000 });
+
+  // If proxy fails, return a fallback response
+  const originalEnd = res.end;
+  let responseSent = false;
+
+  res.end = function(...args) {
+    responseSent = true;
+    return originalEnd.apply(this, args);
+  };
+
+  // Set a timeout to provide fallback if proxy takes too long
+  const fallbackTimeout = setTimeout(() => {
+    if (!responseSent && !res.headersSent) {
+      console.log('[AI-ASSISTANT] Proxy timeout, returning fallback');
+      res.json({
+        message: "Je suis actuellement en mode hors-ligne. Voici ce que je peux vous dire :\n\n• Consultez le **dashboard** pour voir vos contrôles à venir\n• Accédez aux **équipements** pour les détails techniques\n• Utilisez les **filtres par bâtiment** pour organiser vos données\n\nComment puis-je vous aider autrement ?",
+        actions: [
+          { label: "Voir le dashboard", prompt: "Redirige-moi vers le dashboard" },
+          { label: "Liste des équipements", prompt: "Montre-moi les équipements" }
+        ],
+        sources: [],
+        provider: "fallback",
+        offline: true
+      });
+    }
+  }, 6000);
+
+  proxyMiddleware(req, res, (err) => {
+    clearTimeout(fallbackTimeout);
+    if (err && !responseSent && !res.headersSent) {
+      console.log('[AI-ASSISTANT] Proxy error, returning fallback');
+      res.json({
+        message: "Je suis actuellement en mode hors-ligne. Le service IA sera bientôt disponible.\n\nEn attendant, vous pouvez naviguer dans l'application pour consulter vos équipements et contrôles.",
+        actions: [],
+        sources: [],
+        provider: "fallback",
+        offline: true
+      });
+    }
+  });
+});
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
 app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));
