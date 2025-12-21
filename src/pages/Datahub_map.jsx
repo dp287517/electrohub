@@ -282,13 +282,13 @@ const CategoryFilterChips = ({ categories, selectedCategories, onToggle, onClear
   );
 };
 
-// Detail Panel for selected item
+// Detail Panel for selected item - positioned to NOT cover the marker
 const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile }) => {
   if (!item) return null;
   const IconComp = ICON_MAP[category?.icon] || Circle;
 
   return (
-    <div className={`${isMobile ? 'fixed inset-x-2 bottom-16 z-[60]' : 'absolute bottom-4 left-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp`}>
+    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-72 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto`}>
       <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 text-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -605,16 +605,17 @@ export default function DatahubMap() {
       const size = isSelected ? ICON_PX_SELECTED : ICON_PX;
       const svgPath = SVG_PATHS[iconId] || SVG_PATHS.default;
 
-      const animClass = isSelected ? 'datahub-marker-selected' : '';
       const html = `
-        <div class="${animClass}" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
+        <div style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
           box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
           <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             ${svgPath}
           </svg>
         </div>`;
 
-      const icon = L.divIcon({ html, className: "datahub-marker", iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+      // Apply selected class to the divIcon wrapper for proper z-index stacking
+      const markerClass = isSelected ? 'datahub-marker datahub-marker-selected' : 'datahub-marker';
+      const icon = L.divIcon({ html, className: markerClass, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
       const lat = h * (1 - pos.y_frac);
       const lng = w * pos.x_frac;
       const marker = L.marker([lat, lng], { icon, draggable: true, riseOnHover: true }).addTo(mapRef.current);
@@ -653,21 +654,28 @@ export default function DatahubMap() {
     });
   }, [positions, items, categories, selectedItem, selectedCategories, selectedPlan, pageIndex, loadPositions]);
 
-  // Focus on item from URL
+  // Focus on item from URL - with delay to ensure map is ready
   useEffect(() => {
-    if (focusItemId && items.length > 0) {
+    if (focusItemId && items.length > 0 && positions.length > 0) {
       const item = items.find(i => i.id === focusItemId);
       if (item) {
         setSelectedItem(item);
         const pos = positions.find(p => p.item_id === focusItemId);
         if (pos) {
           setSelectedPosition(pos);
-          if (mapRef.current && overlayRef.current) {
-            const bounds = overlayRef.current.getBounds();
-            const h = bounds.getNorth();
-            const w = bounds.getEast();
-            mapRef.current.setView([h * (1 - pos.y_frac), w * pos.x_frac], 0);
-          }
+          // Delay to ensure map is fully initialized
+          const timer = setTimeout(() => {
+            if (mapRef.current && overlayRef.current) {
+              const bounds = overlayRef.current.getBounds();
+              const h = bounds.getNorth();
+              const w = bounds.getEast();
+              const lat = h * (1 - pos.y_frac);
+              const lng = w * pos.x_frac;
+              // Zoom in and animate to the marker position
+              mapRef.current.setView([lat, lng], 0, { animate: true, duration: 0.5 });
+            }
+          }, 300);
+          return () => clearTimeout(timer);
         }
       }
     }
@@ -711,12 +719,15 @@ export default function DatahubMap() {
     <div className="h-screen flex flex-col bg-gray-100">
       <style>{`
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
         .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
-        .datahub-marker { z-index: 500 !important; }
-        .datahub-marker-selected { animation: pulse 1.5s ease-in-out infinite; z-index: 1000 !important; }
-        .datahub-tooltip { font-size: 12px; padding: 8px 12px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+        .datahub-marker { z-index: 500 !important; transition: transform 0.2s ease; }
+        .datahub-marker-selected { animation: pulse 1.5s ease-in-out infinite; z-index: 2000 !important; }
+        .datahub-tooltip { font-size: 12px; padding: 8px 12px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15); z-index: 3000 !important; }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
+        .leaflet-pane { z-index: 400; }
+        .leaflet-marker-pane { z-index: 600 !important; }
+        .leaflet-popup-pane { z-index: 700 !important; }
       `}</style>
 
       {/* Header */}
@@ -950,7 +961,7 @@ export default function DatahubMap() {
             </div>
           ) : (
             <>
-              <div ref={mapContainerRef} className="absolute inset-0" />
+              <div ref={mapContainerRef} className="absolute inset-0 z-10" />
 
               {/* Loading overlay */}
               {isLoading && (
