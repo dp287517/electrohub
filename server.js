@@ -1272,6 +1272,179 @@ app.post("/api/ai-assistant/execute-action", express.json(), async (req, res) =>
   }
 });
 
+// ============================================================
+// COMPREHENSIVE STATISTICS ENDPOINT
+// ============================================================
+app.get("/api/ai-assistant/statistics", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+    const context = await getAIContext(site);
+
+    // Build comprehensive statistics
+    const stats = {
+      site,
+      generatedAt: new Date().toISOString(),
+
+      // Equipment counts
+      equipment: {
+        switchboards: context.switchboards.count,
+        vsd: context.vsd.count,
+        meca: context.meca.count,
+        atex: context.atex.equipmentCount,
+        total: context.statistics.totalEquipments
+      },
+
+      // Controls status
+      controls: {
+        total: context.controls.total,
+        overdue: context.controls.overdue,
+        upcoming: context.controls.upcoming,
+        overdueRate: context.statistics.overdueRate,
+        criticalOverdue: context.controls.overdueList.filter(c => c.urgency === 'critical').length,
+        urgentOverdue: context.controls.overdueList.filter(c => c.urgency === 'high').length
+      },
+
+      // ATEX compliance
+      atex: {
+        totalEquipments: context.atex.equipmentCount,
+        nonConformities: context.atex.ncCount,
+        complianceRate: context.atex.equipmentCount > 0
+          ? Math.round(((context.atex.equipmentCount - context.atex.ncCount) / context.atex.equipmentCount) * 100)
+          : 100
+      },
+
+      // Buildings
+      buildings: {
+        count: context.statistics.totalBuildings,
+        details: Object.entries(context.buildings).map(([name, data]) => ({
+          name,
+          equipmentCount: data.equipmentCount,
+          floors: data.floors
+        }))
+      },
+
+      // Urgent items
+      urgent: {
+        total: context.urgentItems.length,
+        controlsOverdue: context.urgentItems.filter(i => i.type === 'control_overdue').length,
+        atexNC: context.urgentItems.filter(i => i.type === 'atex_nc').length,
+        items: context.urgentItems.slice(0, 10)
+      },
+
+      // Daily workload
+      dailyPlan: {
+        tasksCount: context.dailyPlan.length,
+        estimatedHours: Math.round(context.dailyPlan.reduce((acc, t) => acc + (t.estimatedDuration || 30), 0) / 60 * 10) / 10,
+        tasks: context.dailyPlan.slice(0, 10)
+      }
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('[AI] Statistics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// WEEKLY PLAN ENDPOINT
+// ============================================================
+app.get("/api/ai-assistant/weekly-plan", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+    // Get all controls for the next 7 days + overdue
+    const result = await pool.query(`
+      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency,
+             ct.name as template_name,
+             s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+      WHERE cs.site = $1
+        AND cs.next_due_date <= CURRENT_DATE + INTERVAL '7 days'
+      ORDER BY cs.next_due_date
+    `, [site]);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Group by day
+    const weekPlan = {
+      overdue: [],
+      days: {}
+    };
+
+    // Initialize days
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() + i);
+      const dateKey = date.toISOString().split('T')[0];
+      weekPlan.days[dateKey] = {
+        date: dateKey,
+        dayName: date.toLocaleDateString('fr-FR', { weekday: 'long' }),
+        tasks: [],
+        estimatedHours: 0
+      };
+    }
+
+    result.rows.forEach(ctrl => {
+      const dueDate = new Date(ctrl.next_due_date);
+      dueDate.setHours(0, 0, 0, 0);
+
+      const task = {
+        id: ctrl.id,
+        switchboard: ctrl.switchboard_name,
+        code: ctrl.switchboard_code,
+        template: ctrl.template_name,
+        building: ctrl.building_code,
+        floor: ctrl.floor,
+        room: ctrl.room,
+        dueDate: ctrl.next_due_date,
+        estimatedDuration: 30
+      };
+
+      if (dueDate < today) {
+        // Overdue
+        const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+        task.daysOverdue = daysOverdue;
+        task.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
+        weekPlan.overdue.push(task);
+      } else {
+        // This week
+        const dateKey = dueDate.toISOString().split('T')[0];
+        if (weekPlan.days[dateKey]) {
+          weekPlan.days[dateKey].tasks.push(task);
+          weekPlan.days[dateKey].estimatedHours += 0.5; // 30 min per task
+        }
+      }
+    });
+
+    // Sort overdue by urgency
+    weekPlan.overdue.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+    // Calculate totals
+    const totalTasks = weekPlan.overdue.length + Object.values(weekPlan.days).reduce((acc, d) => acc + d.tasks.length, 0);
+    const totalHours = weekPlan.overdue.length * 0.5 + Object.values(weekPlan.days).reduce((acc, d) => acc + d.estimatedHours, 0);
+
+    res.json({
+      site,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalTasks,
+        overdueCount: weekPlan.overdue.length,
+        criticalCount: weekPlan.overdue.filter(t => t.urgency === 'critical').length,
+        estimatedTotalHours: Math.round(totalHours * 10) / 10
+      },
+      overdue: weekPlan.overdue,
+      days: Object.values(weekPlan.days)
+    });
+  } catch (error) {
+    console.error('[AI] Weekly plan error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health check for AI assistant
 app.get("/api/ai-assistant/health", (req, res) => {
   const providers = [];
