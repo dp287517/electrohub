@@ -53,11 +53,21 @@ Quand on te demande "mon planning", "ma journée", "quoi faire aujourd'hui":
 - Extraction d'informations avec citations et numéros de page
 - Recherche de procédures de maintenance spécifiques
 
-### 4. 📈 Analyse et graphiques
-Pour les statistiques, génère un bloc JSON avec:
+### 4. 📈 GRAPHIQUES VISUELS (OBLIGATOIRE pour les statistiques!)
+TOUJOURS générer un graphique pour toute demande d'analyse, statistiques, répartition ou vue d'ensemble.
+Le graphique DOIT être dans un bloc JSON séparé après ton texte:
+
 \`\`\`json
-{"chart": {"type": "bar|line|pie|doughnut", "title": "...", "labels": [...], "data": [...]}}
+{"chart": {"type": "bar", "title": "Titre du graphique", "labels": ["Label1", "Label2"], "data": [10, 20]}}
 \`\`\`
+
+Types de graphiques:
+- "bar" → Comparaisons (équipements par bâtiment, contrôles par mois)
+- "doughnut" → Répartitions (statuts, types d'équipements)
+- "pie" → Proportions simples
+- "line" → Évolutions temporelles
+
+⚠️ RÈGLE ABSOLUE: Si l'utilisateur demande une "analyse", "statistiques", "répartition", "vue globale" → GÉNÈRE UN GRAPHIQUE!
 
 ### 5. ⚡ Actions autonomes
 Tu peux CRÉER et MODIFIER via JSON:
@@ -93,10 +103,13 @@ Tu peux CRÉER et MODIFIER via JSON:
 ## 📋 FORMAT DE RÉPONSE
 
 Structure TOUJOURS ainsi:
-1. **Synthèse rapide** (1-2 lignes avec les chiffres clés)
-2. **Détails organisés** (listes, tableaux si besoin)
+1. **Synthèse rapide** (2-3 lignes avec les chiffres clés et emojis)
+2. **Détails organisés** (listes à puces, PAS de tableaux markdown car mal affichés)
 3. **Actions recommandées** avec emojis (🚨⚠️✅📋)
-4. **JSON d'action ou graphique** si pertinent
+4. **GRAPHIQUE JSON** (OBLIGATOIRE pour analyse/stats) dans un bloc \`\`\`json séparé
+
+⚠️ ÉVITE les tableaux markdown (|---|) - utilise plutôt des listes à puces
+⚠️ GÉNÈRE TOUJOURS un graphique pour les demandes d'analyse globale
 
 ## ⚡ RÈGLES D'OR
 - JAMAIS de réponse vague: donne des CHIFFRES, des NOMS, des DATES
@@ -150,8 +163,8 @@ async function getAIContext(site) {
     // Get control schedules with FULL DETAILS for planning
     try {
       const ctrlRes = await pool.query(`
-        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency,
-               ct.name as template_name, ct.id as template_id,
+        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.status,
+               ct.name as template_name, ct.id as template_id, ct.frequency_months,
                s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
@@ -180,7 +193,8 @@ async function getAIContext(site) {
           template: ctrl.template_name,
           templateId: ctrl.template_id,
           dueDate: ctrl.next_due_date,
-          frequency: ctrl.frequency,
+          frequencyMonths: ctrl.frequency_months,
+          status: ctrl.status,
           estimatedDuration: 30
         };
 
@@ -250,11 +264,11 @@ async function getAIContext(site) {
       const siteId = siteRes.rows[0]?.id;
 
       if (siteId) {
-        // Get ATEX equipments with their last control result
+        // Get ATEX equipments with their last control result from atex_checks table
         const atexRes = await pool.query(`
           SELECT
             e.id, e.name, e.building, e.zone, e.equipment, e.type,
-            (SELECT c.result FROM atex_controls c WHERE c.equipment_id = e.id ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result
+            (SELECT c.result FROM atex_checks c WHERE c.equipment_id = e.id ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result
           FROM atex_equipments e
           WHERE e.site_id = $1
           ORDER BY e.building, e.name
@@ -1076,10 +1090,24 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       }
     };
 
-    // Add chart if present
+    // Add chart if present, or auto-generate for statistical queries
     if (parsed.chart) {
       response.chart = parsed.chart;
       console.log('[AI] 📊 Chart generated:', parsed.chart.type, parsed.chart.title);
+    } else {
+      // Auto-generate chart for analysis/statistics/overview queries
+      const msgLower = message.toLowerCase();
+      if (msgLower.includes('analyse') || msgLower.includes('statistique') || msgLower.includes('global') ||
+          msgLower.includes('résumé') || msgLower.includes('vue') || msgLower.includes('situation') ||
+          msgLower.includes('répartition') || msgLower.includes('bâtiment') || msgLower.includes('carte')) {
+        const chartType = msgLower.includes('bâtiment') || msgLower.includes('carte') || msgLower.includes('répartition')
+          ? 'buildings'
+          : msgLower.includes('contrôle') ? 'controls' : 'overview';
+        response.chart = autoGenerateChart(dbContext, chartType);
+        if (response.chart) {
+          console.log('[AI] 📊 Auto-generated chart:', response.chart.type, response.chart.title);
+        }
+      }
     }
 
     // Add pending action if not executed
@@ -1109,6 +1137,75 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     res.json(generateIntelligentFallback(req.body?.message || '', dbContext));
   }
 });
+
+// Auto-generate chart from context data
+function autoGenerateChart(ctx, type = 'overview') {
+  const buildings = ctx.buildings || {};
+  const buildingNames = Object.keys(buildings).slice(0, 10);
+  const buildingCounts = buildingNames.map(b => buildings[b]?.equipmentCount || 0);
+
+  switch (type) {
+    case 'buildings':
+      if (buildingNames.length > 0) {
+        return {
+          type: 'bar',
+          title: 'Équipements par bâtiment',
+          labels: buildingNames,
+          data: buildingCounts
+        };
+      }
+      break;
+
+    case 'equipment':
+      return {
+        type: 'doughnut',
+        title: 'Types d\'équipements',
+        labels: ['Armoires', 'VSD', 'Mécanique', 'ATEX'],
+        data: [
+          ctx.switchboards?.count || 0,
+          ctx.vsd?.count || 0,
+          ctx.meca?.count || 0,
+          ctx.atex?.equipmentCount || 0
+        ]
+      };
+
+    case 'controls':
+      return {
+        type: 'doughnut',
+        title: 'État des contrôles',
+        labels: ['En retard', 'À venir', 'Planifiés'],
+        data: [
+          ctx.controls?.overdue || 0,
+          ctx.controls?.upcoming || 0,
+          Math.max(0, (ctx.controls?.total || 0) - (ctx.controls?.overdue || 0) - (ctx.controls?.upcoming || 0))
+        ]
+      };
+
+    case 'overview':
+    default:
+      // Combined overview chart
+      if (buildingNames.length > 0) {
+        return {
+          type: 'bar',
+          title: 'Répartition des équipements',
+          labels: buildingNames.slice(0, 8),
+          data: buildingCounts.slice(0, 8)
+        };
+      }
+      return {
+        type: 'doughnut',
+        title: 'Types d\'équipements',
+        labels: ['Armoires', 'VSD', 'Mécanique', 'ATEX'],
+        data: [
+          ctx.switchboards?.count || 0,
+          ctx.vsd?.count || 0,
+          ctx.meca?.count || 0,
+          ctx.atex?.equipmentCount || 0
+        ]
+      };
+  }
+  return null;
+}
 
 // Generate intelligent fallback response based on DB context
 function generateIntelligentFallback(message, ctx) {
@@ -1147,20 +1244,23 @@ function generateIntelligentFallback(message, ctx) {
     }
   }
 
-  if (msg.includes('bâtiment') || msg.includes('building') || msg.includes('étage') || msg.includes('floor')) {
+  if (msg.includes('bâtiment') || msg.includes('building') || msg.includes('étage') || msg.includes('floor') || msg.includes('carte') || msg.includes('map') || msg.includes('répartition')) {
     const buildings = ctx.buildings || {};
     const buildingList = Object.entries(buildings)
-      .map(([name, data]) => `• **${name}**: ${data.equipmentCount} équipements (${data.floors?.length || 0} étages)`)
+      .sort((a, b) => b[1].equipmentCount - a[1].equipmentCount)
+      .slice(0, 10)
+      .map(([name, data]) => `• **Bât. ${name}**: ${data.equipmentCount} équipements sur ${data.floors?.length || 0} étage(s)`)
       .join('\n');
 
     return {
-      message: `📍 **Répartition par bâtiment** (site ${ctx.site || 'actuel'}):\n\n` +
+      message: `📍 **Répartition par bâtiment** (site ${ctx.site || 'actuel'})\n\n` +
         (buildingList || '• Aucune donnée de bâtiment disponible') +
-        `\n\n**Total:** ${ctx.switchboards?.count || 0} armoires électriques`,
+        `\n\n**Total:** ${ctx.switchboards?.count || 0} armoires sur **${Object.keys(buildings).length} bâtiments**`,
       actions: Object.keys(buildings).slice(0, 3).map(b => ({
-        label: `Détails ${b}`,
+        label: `Détails bât. ${b}`,
         prompt: `Montre-moi les équipements du bâtiment ${b}`
       })),
+      chart: autoGenerateChart(ctx, 'buildings'),
       provider: "fallback"
     };
   }
@@ -1181,43 +1281,46 @@ function generateIntelligentFallback(message, ctx) {
     };
   }
 
-  if (msg.includes('résumé') || msg.includes('summary') || msg.includes('situation') || msg.includes('global')) {
+  if (msg.includes('résumé') || msg.includes('summary') || msg.includes('situation') || msg.includes('global') || msg.includes('analyse') || msg.includes('statistique')) {
     return {
-      message: `📊 **Résumé du site ${ctx.site || 'actuel'}**\n\n` +
-        `### Équipements\n` +
+      message: `📊 **Vue globale du site ${ctx.site || 'actuel'}**\n\n` +
+        `**Équipements:**\n` +
         `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
         `• **${ctx.vsd?.count || 0}** variateurs VSD\n` +
         `• **${ctx.meca?.count || 0}** équipements mécaniques\n` +
         `• **${ctx.atex?.equipmentCount || 0}** équipements ATEX\n\n` +
-        `### Contrôles\n` +
+        `**Contrôles:**\n` +
         (ctx.controls?.overdue > 0 ?
-          `• ⚠️ **${ctx.controls.overdue}** contrôles en RETARD\n` : '') +
-        `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n` +
-        `• **${ctx.controls?.total || 0}** contrôles planifiés\n\n` +
-        `### Bâtiments\n` +
-        `• **${Object.keys(ctx.buildings || {}).length}** bâtiments équipés`,
+          `• 🚨 **${ctx.controls.overdue}** en RETARD\n` : '• ✅ Aucun retard\n') +
+        `• **${ctx.controls?.upcoming || 0}** à venir\n` +
+        `• **${ctx.controls?.total || 0}** planifiés au total\n\n` +
+        `**${Object.keys(ctx.buildings || {}).length} bâtiments** équipés`,
       actions: [
         { label: "Contrôles en retard", prompt: "Montre-moi les contrôles en retard" },
         { label: "Par bâtiment", prompt: "Répartition par bâtiment" },
         { label: "ATEX", prompt: "Situation ATEX" }
       ],
+      chart: autoGenerateChart(ctx, 'overview'),
       provider: "fallback"
     };
   }
 
-  // Default: show summary
+  // Default: show summary with chart
   return {
-    message: `Bonjour ! Je suis **Electro**, votre assistant ElectroHub.\n\n` +
-      `📊 **Site ${ctx.site || 'actuel'} en un coup d'œil:**\n` +
+    message: `👋 Je suis **Electro**, votre assistant ElectroHub.\n\n` +
+      `📊 **Site ${ctx.site || 'actuel'} - Vue rapide:**\n` +
       `• **${ctx.switchboards?.count || 0}** armoires électriques\n` +
-      `• **${ctx.controls?.overdue || 0}** contrôles en retard${ctx.controls?.overdue > 0 ? ' ⚠️' : ''}\n` +
+      `• **${ctx.vsd?.count || 0}** variateurs VSD\n` +
+      `• **${ctx.meca?.count || 0}** équipements mécaniques\n` +
+      (ctx.controls?.overdue > 0 ? `• 🚨 **${ctx.controls.overdue}** contrôles en retard\n` : '') +
       `• **${ctx.controls?.upcoming || 0}** contrôles à venir\n\n` +
       `Comment puis-je vous aider ?`,
     actions: [
-      { label: "Résumé complet", prompt: "Donne-moi un résumé complet de la situation" },
-      { label: "Contrôles en retard", prompt: "Quels sont les contrôles en retard ?" },
-      { label: "Par bâtiment", prompt: "Montre-moi les équipements par bâtiment" }
+      { label: "Analyse complète", prompt: "Donne-moi une analyse globale de la situation" },
+      { label: "Mon planning", prompt: "Quel est mon planning de la semaine ?" },
+      { label: "Par bâtiment", prompt: "Montre-moi la répartition par bâtiment" }
     ],
+    chart: autoGenerateChart(ctx, 'equipment'),
     provider: "fallback"
   };
 }
@@ -1269,6 +1372,179 @@ app.post("/api/ai-assistant/execute-action", express.json(), async (req, res) =>
   } catch (error) {
     console.error('[AI] Execute action error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================================
+// COMPREHENSIVE STATISTICS ENDPOINT
+// ============================================================
+app.get("/api/ai-assistant/statistics", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+    const context = await getAIContext(site);
+
+    // Build comprehensive statistics
+    const stats = {
+      site,
+      generatedAt: new Date().toISOString(),
+
+      // Equipment counts
+      equipment: {
+        switchboards: context.switchboards.count,
+        vsd: context.vsd.count,
+        meca: context.meca.count,
+        atex: context.atex.equipmentCount,
+        total: context.statistics.totalEquipments
+      },
+
+      // Controls status
+      controls: {
+        total: context.controls.total,
+        overdue: context.controls.overdue,
+        upcoming: context.controls.upcoming,
+        overdueRate: context.statistics.overdueRate,
+        criticalOverdue: context.controls.overdueList.filter(c => c.urgency === 'critical').length,
+        urgentOverdue: context.controls.overdueList.filter(c => c.urgency === 'high').length
+      },
+
+      // ATEX compliance
+      atex: {
+        totalEquipments: context.atex.equipmentCount,
+        nonConformities: context.atex.ncCount,
+        complianceRate: context.atex.equipmentCount > 0
+          ? Math.round(((context.atex.equipmentCount - context.atex.ncCount) / context.atex.equipmentCount) * 100)
+          : 100
+      },
+
+      // Buildings
+      buildings: {
+        count: context.statistics.totalBuildings,
+        details: Object.entries(context.buildings).map(([name, data]) => ({
+          name,
+          equipmentCount: data.equipmentCount,
+          floors: data.floors
+        }))
+      },
+
+      // Urgent items
+      urgent: {
+        total: context.urgentItems.length,
+        controlsOverdue: context.urgentItems.filter(i => i.type === 'control_overdue').length,
+        atexNC: context.urgentItems.filter(i => i.type === 'atex_nc').length,
+        items: context.urgentItems.slice(0, 10)
+      },
+
+      // Daily workload
+      dailyPlan: {
+        tasksCount: context.dailyPlan.length,
+        estimatedHours: Math.round(context.dailyPlan.reduce((acc, t) => acc + (t.estimatedDuration || 30), 0) / 60 * 10) / 10,
+        tasks: context.dailyPlan.slice(0, 10)
+      }
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('[AI] Statistics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// WEEKLY PLAN ENDPOINT
+// ============================================================
+app.get("/api/ai-assistant/weekly-plan", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+    // Get all controls for the next 7 days + overdue
+    const result = await pool.query(`
+      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency,
+             ct.name as template_name,
+             s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
+      FROM control_schedules cs
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+      WHERE cs.site = $1
+        AND cs.next_due_date <= CURRENT_DATE + INTERVAL '7 days'
+      ORDER BY cs.next_due_date
+    `, [site]);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Group by day
+    const weekPlan = {
+      overdue: [],
+      days: {}
+    };
+
+    // Initialize days
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() + i);
+      const dateKey = date.toISOString().split('T')[0];
+      weekPlan.days[dateKey] = {
+        date: dateKey,
+        dayName: date.toLocaleDateString('fr-FR', { weekday: 'long' }),
+        tasks: [],
+        estimatedHours: 0
+      };
+    }
+
+    result.rows.forEach(ctrl => {
+      const dueDate = new Date(ctrl.next_due_date);
+      dueDate.setHours(0, 0, 0, 0);
+
+      const task = {
+        id: ctrl.id,
+        switchboard: ctrl.switchboard_name,
+        code: ctrl.switchboard_code,
+        template: ctrl.template_name,
+        building: ctrl.building_code,
+        floor: ctrl.floor,
+        room: ctrl.room,
+        dueDate: ctrl.next_due_date,
+        estimatedDuration: 30
+      };
+
+      if (dueDate < today) {
+        // Overdue
+        const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+        task.daysOverdue = daysOverdue;
+        task.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
+        weekPlan.overdue.push(task);
+      } else {
+        // This week
+        const dateKey = dueDate.toISOString().split('T')[0];
+        if (weekPlan.days[dateKey]) {
+          weekPlan.days[dateKey].tasks.push(task);
+          weekPlan.days[dateKey].estimatedHours += 0.5; // 30 min per task
+        }
+      }
+    });
+
+    // Sort overdue by urgency
+    weekPlan.overdue.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+    // Calculate totals
+    const totalTasks = weekPlan.overdue.length + Object.values(weekPlan.days).reduce((acc, d) => acc + d.tasks.length, 0);
+    const totalHours = weekPlan.overdue.length * 0.5 + Object.values(weekPlan.days).reduce((acc, d) => acc + d.estimatedHours, 0);
+
+    res.json({
+      site,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalTasks,
+        overdueCount: weekPlan.overdue.length,
+        criticalCount: weekPlan.overdue.filter(t => t.urgency === 'critical').length,
+        estimatedTotalHours: Math.round(totalHours * 10) / 10
+      },
+      overdue: weekPlan.overdue,
+      days: Object.values(weekPlan.days)
+    });
+  } catch (error) {
+    console.error('[AI] Weekly plan error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
