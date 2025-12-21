@@ -13,7 +13,7 @@ export default function FloatingAssistant() {
   const token = localStorage.getItem('eh_token');
 
   const [avatarStyle, setAvatarStyle] = useState(() => {
-    return localStorage.getItem('eh_avatar_style') || 'robot';
+    return localStorage.getItem('eh_avatar_style') || 'alex';
   });
   const [showChat, setShowChat] = useState(false);
   const [showSelector, setShowSelector] = useState(false);

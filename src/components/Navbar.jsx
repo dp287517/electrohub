@@ -18,7 +18,7 @@ export default function Navbar() {
 
   // AI Avatar states
   const [avatarStyle, setAvatarStyle] = useState(() => {
-    return localStorage.getItem('eh_avatar_style') || 'robot';
+    return localStorage.getItem('eh_avatar_style') || 'alex';
   });
   const [showChat, setShowChat] = useState(false);
   const [showAvatarSelector, setShowAvatarSelector] = useState(false);
