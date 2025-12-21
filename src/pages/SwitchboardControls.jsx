@@ -1523,13 +1523,16 @@ function TemplateModal({ template, onClose, onSave }) {
                     {item.type === "conform" ? "C/NC" : item.type === "value" ? "Valeur" : "Texte"}
                   </span>
                   {item.type === "value" && (
-                    <input
-                      type="text"
-                      value={item.unit || ""}
-                      onChange={(e) => updateItem(idx, "unit", e.target.value)}
-                      className="w-16 border rounded-lg px-2 py-2 text-sm bg-white text-gray-900"
-                      placeholder="Unité"
-                    />
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <span className="text-gray-400 text-xs">en</span>
+                      <input
+                        type="text"
+                        value={item.unit || ""}
+                        onChange={(e) => updateItem(idx, "unit", e.target.value)}
+                        className="w-20 border rounded-lg px-2 py-2 text-sm bg-white text-gray-900"
+                        placeholder="V, A, °C..."
+                      />
+                    </div>
                   )}
                   <button onClick={() => removeItem(idx)} className="p-1 text-red-500 hover:bg-red-100 rounded">
                     ✕
@@ -2028,15 +2031,17 @@ function ControlModal({ schedule, onClose, onComplete }) {
               )}
 
               {item.type === "value" && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-white border rounded-lg p-1">
                   <input
                     type="number"
                     value={results[idx]?.value || ""}
                     onChange={(e) => updateResult(idx, "value", e.target.value)}
-                    className="border rounded-lg px-3 py-2 w-28 bg-white text-gray-900"
-                    placeholder="Valeur"
+                    className="border-0 rounded-lg px-3 py-2 w-32 bg-blue-50 text-gray-900 font-medium text-lg focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                    placeholder="0"
                   />
-                  <span className="text-gray-500">{item.unit}</span>
+                  {item.unit && (
+                    <span className="text-gray-600 font-medium pr-2">{item.unit}</span>
+                  )}
                 </div>
               )}
 
