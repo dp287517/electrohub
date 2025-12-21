@@ -26,57 +26,85 @@ const geminiModel = gemini ? gemini.getGenerativeModel({ model: "gemini-1.5-flas
 
 console.log(`[AI] OpenAI: ${openai ? '✅' : '❌'} | Gemini: ${gemini ? '✅' : '❌'}`);
 
-// System prompt for ElectroHub AI Assistant
-const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA surpuissant pour ElectroHub, la plateforme de gestion d'équipements électriques industriels.
+// System prompt for ElectroHub AI Assistant - SUPER POWERFUL
+const AI_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA le plus puissant pour ElectroHub. Tu es un EXPERT en gestion d'installations électriques industrielles avec des capacités SURHUMAINES.
 
-## 🚀 Tes capacités
-Tu es un expert en installations électriques industrielles avec des pouvoirs avancés:
+## 🧠 TON INTELLIGENCE
+Tu analyses EN TEMPS RÉEL toutes les données de l'installation et tu ANTICIPES les besoins. Tu ne te contentes pas de répondre, tu GUIDES proactivement l'utilisateur.
 
-### 1. Accès base de données en temps réel
+## 🚀 TES SUPER-POUVOIRS
+
+### 1. 📊 Accès base de données temps réel
 - Armoires électriques, variateurs VSD, équipements mécaniques, ATEX
-- Historique des contrôles et non-conformités
-- Données par bâtiment, étage, zone
+- Historique complet des contrôles avec dates, durées, résultats
+- Non-conformités avec sévérité et délais
+- Données géographiques: bâtiment, étage, zone
 
-### 2. Recherche documentaire
-- Accès aux manuels techniques, fiches produits, normes
-- Recherche sémantique dans tous les documents uploadés
-- Extraction d'informations précises avec sources
+### 2. 📅 PLANIFICATION INTELLIGENTE DU JOUR
+Quand on te demande "mon planning", "ma journée", "quoi faire aujourd'hui":
+- Analyse les contrôles en retard par URGENCE (critique > 30j, urgent > 7j, normal)
+- Optimise le parcours par BÂTIMENT puis par ÉTAGE (minimiser les déplacements)
+- Estime le temps total de la journée
+- Priorise: 🚨 CRITIQUE d'abord, puis ⚠️ URGENT, puis 📅 PLANIFIÉ
+- Propose des alternatives si surcharge
 
-### 3. Analyse et graphiques
-Quand l'utilisateur demande des statistiques ou analyses visuelles, génère un objet JSON "chart" avec:
-- type: "bar" | "line" | "pie" | "doughnut"
-- labels: ["label1", "label2", ...]
-- data: [valeur1, valeur2, ...]
-- title: "Titre du graphique"
+### 3. 🔍 Recherche documentaire
+- Recherche sémantique dans tous les manuels, fiches techniques, normes
+- Extraction d'informations avec citations et numéros de page
+- Recherche de procédures de maintenance spécifiques
 
-Exemple de réponse avec graphique:
+### 4. 📈 Analyse et graphiques
+Pour les statistiques, génère un bloc JSON avec:
 \`\`\`json
-{"chart": {"type": "pie", "title": "Répartition par bâtiment", "labels": ["Bât A", "Bât B"], "data": [45, 32]}}
+{"chart": {"type": "bar|line|pie|doughnut", "title": "...", "labels": [...], "data": [...]}}
 \`\`\`
 
-### 4. Actions autonomes
-Tu peux exécuter des actions via un objet JSON "action":
-- {"action": "createControl", "params": {"switchboardId": 123, "templateId": 1, "dueDate": "2025-01-15"}}
-- {"action": "createNC", "params": {"equipmentId": 456, "description": "...", "severity": "high"}}
-- {"action": "updateEquipment", "params": {"id": 789, "status": "maintenance"}}
-- {"action": "scheduleReminder", "params": {"date": "2025-02-01", "message": "..."}}
+### 5. ⚡ Actions autonomes
+Tu peux CRÉER et MODIFIER via JSON:
+- {"action": "createControl", "params": {"switchboardId": ID, "templateId": ID, "dueDate": "YYYY-MM-DD"}}
+- {"action": "createNC", "params": {"equipmentId": ID, "description": "...", "severity": "critical|high|medium|low"}}
+- {"action": "updateEquipment", "params": {"id": ID, "status": "active|maintenance|offline"}}
+- {"action": "scheduleReminder", "params": {"date": "YYYY-MM-DD", "message": "..."}}
+- {"action": "getDailyPlan", "params": {"date": "today|tomorrow|YYYY-MM-DD"}}
 
-### 5. Planification intelligente
-- Optimisation des tournées de maintenance
-- Priorisation basée sur criticité et échéances
-- Suggestions de regroupement géographique
+## 🎯 COMPORTEMENT ADAPTATIF
 
-## 📋 Format de réponse
-Réponds TOUJOURS avec:
-1. Un message clair en markdown (gras, listes, émojis pour l'importance)
-2. Si pertinent: un bloc JSON pour graphique OU action
-3. Des suggestions de suivi
+### Si l'utilisateur demande son PLANNING/JOURNÉE:
+1. Commence TOUJOURS par les éléments CRITIQUES/URGENTS
+2. Groupe par bâtiment pour optimiser les déplacements
+3. Estime le temps: "~4h de travail planifié"
+4. Propose: "Voulez-vous que je crée ces contrôles?" avec le JSON d'action
 
-## ⚡ Règles importantes
-- Sois PRÉCIS avec des chiffres réels de la base de données
-- Sois PROACTIF: identifie les problèmes avant qu'on te les demande
-- Si on te demande une action (créer contrôle, planifier), GÉNÈRE le JSON d'action
-- Réponds en français sauf demande contraire`;
+### Si l'utilisateur demande des STATISTIQUES:
+1. Donne les chiffres précis avec comparaisons
+2. Génère un graphique adapté (pie pour répartitions, bar pour comparaisons, line pour évolutions)
+3. Identifie les tendances et anomalies
+
+### Si l'utilisateur cherche un ÉQUIPEMENT:
+1. Localise précisément: bâtiment, étage, salle
+2. Donne l'historique des derniers contrôles
+3. Signale les NC actives
+
+### Si l'utilisateur parle de NC/CONFORMITÉ:
+1. Liste par sévérité décroissante
+2. Suggère les actions correctives
+3. Propose de créer des rappels
+
+## 📋 FORMAT DE RÉPONSE
+
+Structure TOUJOURS ainsi:
+1. **Synthèse rapide** (1-2 lignes avec les chiffres clés)
+2. **Détails organisés** (listes, tableaux si besoin)
+3. **Actions recommandées** avec emojis (🚨⚠️✅📋)
+4. **JSON d'action ou graphique** si pertinent
+
+## ⚡ RÈGLES D'OR
+- JAMAIS de réponse vague: donne des CHIFFRES, des NOMS, des DATES
+- TOUJOURS proactif: signale les problèmes même si on ne te les demande pas
+- Quand tu vois des contrôles en retard CRITIQUES: ALERTE immédiatement
+- Optimise les déplacements: regroupe par zone géographique
+- Si tu proposes une action, GÉNÈRE le JSON pour permettre l'exécution
+- Réponds en français, format markdown, avec emojis pour l'importance`;
 
 // Helper: Query database for AI context
 async function getAIContext(site) {
@@ -84,30 +112,34 @@ async function getAIContext(site) {
     site,
     timestamp: new Date().toISOString(),
     switchboards: { count: 0, list: [] },
-    controls: { upcoming: 0, overdue: 0, total: 0, overdueList: [] },
-    vsd: { count: 0 },
-    meca: { count: 0 },
-    atex: { ncCount: 0, equipmentCount: 0 },
-    buildings: {}
+    controls: { upcoming: 0, overdue: 0, total: 0, overdueList: [], upcomingList: [] },
+    vsd: { count: 0, list: [] },
+    meca: { count: 0, list: [] },
+    atex: { ncCount: 0, equipmentCount: 0, ncList: [] },
+    buildings: {},
+    dailyPlan: [],
+    urgentItems: [],
+    statistics: {}
   };
 
   try {
-    // Get switchboards
+    // Get switchboards with details
     const sbRes = await pool.query(
-      \`SELECT id, name, code, building_code, floor, room FROM switchboards WHERE site = $1 ORDER BY code\`,
+      `SELECT id, name, code, building_code, floor, room, status FROM switchboards WHERE site = $1 ORDER BY code`,
       [site]
     );
     context.switchboards.count = sbRes.rows.length;
-    context.switchboards.list = sbRes.rows.slice(0, 20); // Top 20
+    context.switchboards.list = sbRes.rows.slice(0, 50);
 
     // Aggregate by building
     sbRes.rows.forEach(sb => {
       const bldg = sb.building_code || 'Non assigné';
       if (!context.buildings[bldg]) {
-        context.buildings[bldg] = { floors: new Set(), equipmentCount: 0 };
+        context.buildings[bldg] = { floors: new Set(), equipmentCount: 0, equipments: [] };
       }
       context.buildings[bldg].equipmentCount++;
       if (sb.floor) context.buildings[bldg].floors.add(sb.floor);
+      context.buildings[bldg].equipments.push({ id: sb.id, name: sb.name, code: sb.code, floor: sb.floor });
     });
 
     // Convert Sets to arrays for JSON
@@ -115,66 +147,134 @@ async function getAIContext(site) {
       context.buildings[b].floors = Array.from(context.buildings[b].floors);
     });
 
-    // Get control schedules
-    const ctrlRes = await pool.query(\`
-      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency, ct.name as template_name, s.name as switchboard_name
+    // Get control schedules with FULL DETAILS for planning
+    const ctrlRes = await pool.query(`
+      SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.frequency, cs.last_completed_date,
+             ct.name as template_name, ct.id as template_id, ct.estimated_duration,
+             s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards s ON cs.switchboard_id = s.id
       WHERE cs.site = $1
       ORDER BY cs.next_due_date
-    \`, [site]);
+    `, [site]);
 
     const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+    const nextWeek = new Date(today); nextWeek.setDate(nextWeek.getDate() + 7);
+    const nextMonth = new Date(today); nextMonth.setDate(nextMonth.getDate() + 30);
+
     ctrlRes.rows.forEach(ctrl => {
       context.controls.total++;
-      if (ctrl.next_due_date) {
-        if (new Date(ctrl.next_due_date) < now) {
+      const dueDate = ctrl.next_due_date ? new Date(ctrl.next_due_date) : null;
+
+      const controlItem = {
+        id: ctrl.id,
+        switchboardId: ctrl.switchboard_id,
+        switchboard: ctrl.switchboard_name,
+        switchboardCode: ctrl.switchboard_code,
+        building: ctrl.building_code,
+        floor: ctrl.floor,
+        room: ctrl.room,
+        template: ctrl.template_name,
+        templateId: ctrl.template_id,
+        dueDate: ctrl.next_due_date,
+        frequency: ctrl.frequency,
+        lastCompleted: ctrl.last_completed_date,
+        estimatedDuration: ctrl.estimated_duration || 30
+      };
+
+      if (dueDate) {
+        if (dueDate < today) {
+          // OVERDUE - URGENT
           context.controls.overdue++;
-          context.controls.overdueList.push({
-            id: ctrl.id,
-            switchboard: ctrl.switchboard_name,
-            template: ctrl.template_name,
-            dueDate: ctrl.next_due_date
-          });
+          const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+          controlItem.daysOverdue = daysOverdue;
+          controlItem.urgency = daysOverdue > 30 ? 'critical' : daysOverdue > 7 ? 'high' : 'medium';
+          context.controls.overdueList.push(controlItem);
+          context.urgentItems.push({ type: 'control_overdue', ...controlItem });
+        } else if (dueDate <= tomorrow) {
+          // Due today or tomorrow
+          controlItem.dueToday = dueDate.toDateString() === today.toDateString();
+          context.dailyPlan.push(controlItem);
+          context.controls.upcoming++;
+          context.controls.upcomingList.push(controlItem);
+        } else if (dueDate <= nextWeek) {
+          // Due this week
+          controlItem.daysUntil = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+          context.controls.upcoming++;
+          context.controls.upcomingList.push(controlItem);
         } else {
           context.controls.upcoming++;
         }
       }
     });
 
-    // Get VSD count
+    // Sort overdue by urgency
+    context.controls.overdueList.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+    // Get VSD equipments with details
     try {
-      const vsdRes = await pool.query(\`SELECT COUNT(*) FROM vsd_equipments WHERE site = $1\`, [site]);
-      context.vsd.count = parseInt(vsdRes.rows[0]?.count || 0);
+      const vsdRes = await pool.query(`
+        SELECT id, name, building, floor, location, manufacturer, model, status, last_maintenance
+        FROM vsd_equipments WHERE site = $1 ORDER BY name
+      `, [site]);
+      context.vsd.count = vsdRes.rows.length;
+      context.vsd.list = vsdRes.rows.slice(0, 30);
     } catch (e) { /* ignore */ }
 
     // Get MECA count via sites join
     try {
-      const mecaRes = await pool.query(\`
-        SELECT COUNT(*) FROM meca_equipments e
+      const mecaRes = await pool.query(`
+        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.status
+        FROM meca_equipments e
         INNER JOIN sites s ON s.id = e.site_id
-        WHERE s.name = $1
-      \`, [site]);
-      context.meca.count = parseInt(mecaRes.rows[0]?.count || 0);
+        WHERE s.name = $1 ORDER BY e.name LIMIT 30
+      `, [site]);
+      context.meca.count = mecaRes.rows.length;
+      context.meca.list = mecaRes.rows;
     } catch (e) { /* ignore */ }
 
-    // Get ATEX non-conformities
+    // Get ATEX non-conformities with FULL DETAILS
     try {
-      const atexRes = await pool.query(\`
-        SELECT
-          COUNT(*) FILTER (WHERE status IN ('open', 'in_progress')) as nc_count,
-          COUNT(DISTINCT equipment_id) as eq_with_nc
-        FROM atex_nonconformities
-        WHERE site = $1
-      \`, [site]);
-      context.atex.ncCount = parseInt(atexRes.rows[0]?.nc_count || 0);
+      const atexNcRes = await pool.query(`
+        SELECT nc.id, nc.equipment_id, nc.description, nc.severity, nc.status, nc.created_at,
+               ae.name as equipment_name, ae.building, ae.floor, ae.zone
+        FROM atex_nonconformities nc
+        LEFT JOIN atex_equipments ae ON nc.equipment_id = ae.id
+        WHERE nc.site = $1 AND nc.status IN ('open', 'in_progress')
+        ORDER BY
+          CASE nc.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+          nc.created_at
+      `, [site]);
+      context.atex.ncCount = atexNcRes.rows.length;
+      context.atex.ncList = atexNcRes.rows;
+
+      // Add critical NC to urgent items
+      atexNcRes.rows.filter(nc => nc.severity === 'critical' || nc.severity === 'high').forEach(nc => {
+        context.urgentItems.push({ type: 'atex_nc', ...nc });
+      });
     } catch (e) { /* ignore */ }
 
     try {
-      const atexEqRes = await pool.query(\`SELECT COUNT(*) FROM atex_equipments WHERE site = $1\`, [site]);
+      const atexEqRes = await pool.query(`SELECT COUNT(*) FROM atex_equipments WHERE site = $1`, [site]);
       context.atex.equipmentCount = parseInt(atexEqRes.rows[0]?.count || 0);
     } catch (e) { /* ignore */ }
+
+    // Calculate statistics
+    context.statistics = {
+      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count,
+      totalBuildings: Object.keys(context.buildings).length,
+      controlsThisWeek: context.controls.upcomingList.filter(c => c.daysUntil <= 7).length,
+      overdueRate: context.controls.total > 0
+        ? Math.round((context.controls.overdue / context.controls.total) * 100)
+        : 0,
+      criticalIssues: context.urgentItems.filter(i => i.urgency === 'critical' || i.severity === 'critical').length
+    };
+
+    // Optimize daily plan by building/floor
+    context.dailyPlan = optimizeDailyPlan(context.dailyPlan, context.controls.overdueList.slice(0, 5));
 
   } catch (e) {
     console.error('[AI] Context fetch error:', e.message);
@@ -183,31 +283,93 @@ async function getAIContext(site) {
   return context;
 }
 
-// Format context for AI prompt
+// Optimize daily maintenance plan by grouping geographically
+function optimizeDailyPlan(todayControls, urgentOverdue) {
+  const plan = [];
+
+  // First add critical overdue
+  urgentOverdue.filter(c => c.urgency === 'critical').forEach(ctrl => {
+    plan.push({ ...ctrl, priority: 1, reason: '🚨 CRITIQUE - En retard depuis ' + ctrl.daysOverdue + ' jours' });
+  });
+
+  // Then high priority overdue
+  urgentOverdue.filter(c => c.urgency === 'high').forEach(ctrl => {
+    plan.push({ ...ctrl, priority: 2, reason: '⚠️ URGENT - En retard depuis ' + ctrl.daysOverdue + ' jours' });
+  });
+
+  // Group today's controls by building, then floor
+  const byBuilding = {};
+  todayControls.forEach(ctrl => {
+    const key = ctrl.building || 'Autre';
+    if (!byBuilding[key]) byBuilding[key] = [];
+    byBuilding[key].push(ctrl);
+  });
+
+  // Add grouped by building
+  Object.entries(byBuilding).forEach(([building, controls]) => {
+    controls.sort((a, b) => (a.floor || '').localeCompare(b.floor || ''));
+    controls.forEach((ctrl, i) => {
+      plan.push({
+        ...ctrl,
+        priority: 3,
+        reason: ctrl.dueToday ? '📅 Prévu aujourd\'hui' : '📆 Prévu demain',
+        groupInfo: i === 0 ? `📍 Bâtiment ${building}` : null
+      });
+    });
+  });
+
+  return plan;
+}
+
+// Format context for AI prompt - SUPER DETAILED
 function formatContextForAI(ctx) {
   const buildingsList = Object.entries(ctx.buildings)
-    .map(([name, data]) => \`  • \${name}: \${data.equipmentCount} équipements, étages: \${data.floors.join(', ') || 'N/A'}\`)
-    .join('\\n');
+    .map(([name, data]) => `  • ${name}: ${data.equipmentCount} équipements, étages: ${data.floors.join(', ') || 'N/A'}`)
+    .join('\n');
 
-  return \`## Données actuelles du site "\${ctx.site}" (au \${new Date().toLocaleDateString('fr-FR')})
+  const overdueListText = ctx.controls.overdueList.slice(0, 10).map(c =>
+    `  - [${c.urgency?.toUpperCase()}] ${c.switchboard} (${c.switchboardCode}): ${c.template} - ${c.daysOverdue}j de retard - Bât. ${c.building || '?'}, étage ${c.floor || '?'}`
+  ).join('\n');
 
-### Résumé
-- **\${ctx.switchboards.count}** armoires électriques
-- **\${ctx.vsd.count}** variateurs VSD
-- **\${ctx.meca.count}** équipements mécaniques
-- **\${ctx.atex.equipmentCount}** équipements ATEX (\${ctx.atex.ncCount} NC actives)
+  const todayPlanText = ctx.dailyPlan.slice(0, 10).map((c, i) =>
+    `  ${i + 1}. ${c.groupInfo ? c.groupInfo + '\n     ' : ''}${c.switchboard}: ${c.template} (~${c.estimatedDuration}min) - ${c.reason}`
+  ).join('\n');
 
-### Contrôles
-- **\${ctx.controls.overdue}** contrôles en RETARD ⚠️
-- **\${ctx.controls.upcoming}** contrôles à venir
-- **\${ctx.controls.total}** contrôles planifiés au total
+  const atexNcText = ctx.atex.ncList.slice(0, 5).map(nc =>
+    `  - [${nc.severity?.toUpperCase()}] ${nc.equipment_name}: ${nc.description?.substring(0, 60)}...`
+  ).join('\n');
 
-\${ctx.controls.overdueList.length > 0 ? \`### Contrôles en retard (urgent)
-\${ctx.controls.overdueList.slice(0, 5).map(c => \`- \${c.switchboard || 'N/A'}: \${c.template || 'Contrôle'} (prévu le \${new Date(c.dueDate).toLocaleDateString('fr-FR')})\`).join('\\n')}\` : ''}
+  return `## 📊 Données temps réel - Site "${ctx.site}" (${new Date().toLocaleDateString('fr-FR')} ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})
 
-### Répartition par bâtiment
-\${buildingsList || 'Aucune donnée de bâtiment'}
-\`;
+### 🔢 Statistiques globales
+- **${ctx.switchboards.count}** armoires électriques
+- **${ctx.vsd.count}** variateurs VSD
+- **${ctx.meca.count}** équipements mécaniques
+- **${ctx.atex.equipmentCount}** équipements ATEX (${ctx.atex.ncCount} NC actives)
+- **${ctx.statistics.totalBuildings}** bâtiments équipés
+- **Taux de retard:** ${ctx.statistics.overdueRate}%
+
+### 🚨 Alertes urgentes (${ctx.urgentItems.length})
+${ctx.urgentItems.length > 0 ? ctx.urgentItems.slice(0, 5).map(i =>
+  `- ${i.type === 'control_overdue' ? '⏰ Contrôle' : '⚠️ NC ATEX'}: ${i.switchboard || i.equipment_name} - ${i.urgency || i.severity}`
+).join('\n') : '✅ Aucune alerte urgente'}
+
+### ⏰ Contrôles en retard (${ctx.controls.overdue})
+${overdueListText || '✅ Aucun contrôle en retard!'}
+
+### 📋 Plan du jour optimisé (${ctx.dailyPlan.length} tâches)
+${todayPlanText || 'Aucune tâche planifiée aujourd\'hui'}
+
+### 📅 Contrôles à venir
+- **${ctx.controls.upcomingList.filter(c => c.daysUntil <= 7).length}** cette semaine
+- **${ctx.controls.upcoming}** total planifiés
+
+### 🔥 Non-conformités ATEX actives (${ctx.atex.ncCount})
+${atexNcText || '✅ Aucune NC active'}
+
+### 🏢 Répartition par bâtiment
+${buildingsList || 'Aucune donnée de bâtiment'}
+`;
 }
 
 // ============================================================
@@ -338,6 +500,88 @@ async function executeAIAction(action, params, site) {
           LIMIT $2
         `, [switchboardId, limit || 10]);
         return { success: true, history: result.rows };
+      }
+
+      case 'getDailyPlan': {
+        // Get optimized daily plan
+        const context = await getAIContext(site);
+        const totalTime = context.dailyPlan.reduce((acc, t) => acc + (t.estimatedDuration || 30), 0);
+
+        return {
+          success: true,
+          plan: context.dailyPlan,
+          summary: {
+            totalTasks: context.dailyPlan.length,
+            criticalTasks: context.dailyPlan.filter(t => t.priority === 1).length,
+            urgentTasks: context.dailyPlan.filter(t => t.priority === 2).length,
+            estimatedTime: `${Math.floor(totalTime / 60)}h${totalTime % 60 > 0 ? (totalTime % 60) + 'min' : ''}`,
+            buildings: [...new Set(context.dailyPlan.map(t => t.building).filter(Boolean))]
+          },
+          overdueAlerts: context.controls.overdueList.filter(c => c.urgency === 'critical'),
+          message: `📋 Plan du jour: ${context.dailyPlan.length} tâches (~${Math.floor(totalTime / 60)}h)`
+        };
+      }
+
+      case 'batchCreateControls': {
+        // Create multiple controls at once
+        const { controls } = params;
+        const results = [];
+
+        for (const ctrl of controls) {
+          try {
+            const result = await pool.query(`
+              INSERT INTO control_schedules (switchboard_id, template_id, next_due_date, frequency, site, created_at)
+              VALUES ($1, $2, $3, $4, $5, NOW())
+              RETURNING id
+            `, [ctrl.switchboardId, ctrl.templateId || 1, ctrl.dueDate, ctrl.frequency || 'annual', site]);
+            results.push({ success: true, id: result.rows[0]?.id, switchboardId: ctrl.switchboardId });
+          } catch (e) {
+            results.push({ success: false, error: e.message, switchboardId: ctrl.switchboardId });
+          }
+        }
+
+        const successCount = results.filter(r => r.success).length;
+        return {
+          success: successCount > 0,
+          message: `✅ ${successCount}/${controls.length} contrôles créés`,
+          results
+        };
+      }
+
+      case 'getEquipmentDetails': {
+        const { equipmentId, type } = params;
+        const tables = {
+          switchboard: 'switchboards',
+          vsd: 'vsd_equipments',
+          meca: 'meca_equipments',
+          atex: 'atex_equipments'
+        };
+        const table = tables[type] || 'switchboards';
+
+        const eqResult = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [equipmentId]);
+        if (eqResult.rows.length === 0) {
+          return { success: false, message: 'Équipement non trouvé' };
+        }
+
+        // Get related controls
+        let controls = [];
+        if (type === 'switchboard') {
+          const ctrlResult = await pool.query(`
+            SELECT cs.*, ct.name as template_name
+            FROM control_schedules cs
+            LEFT JOIN control_templates ct ON cs.template_id = ct.id
+            WHERE cs.switchboard_id = $1
+            ORDER BY cs.next_due_date
+          `, [equipmentId]);
+          controls = ctrlResult.rows;
+        }
+
+        return {
+          success: true,
+          equipment: eqResult.rows[0],
+          controls,
+          message: `📍 ${eqResult.rows[0].name} - ${controls.length} contrôles planifiés`
+        };
       }
 
       default:
