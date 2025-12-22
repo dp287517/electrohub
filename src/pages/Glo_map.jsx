@@ -40,7 +40,6 @@ import {
   Target,
   ArrowLeft,
   Settings,
-  Upload,
   Plus,
   Battery,
   Lightbulb,
@@ -901,7 +900,6 @@ export default function GloMap() {
   const [confirmState, setConfirmState] = useState({ open: false, position: null });
 
   const viewerRef = useRef(null);
-  const zipInputRef = useRef(null);
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
@@ -1031,18 +1029,6 @@ export default function GloMap() {
     } finally {
       setLoadingEquipments(false);
     }
-  };
-
-  const handleZipUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await api.gloMaps.uploadZip(file);
-      await loadPlans();
-    } catch (err) {
-      console.error("Erreur upload ZIP:", err);
-    }
-    if (zipInputRef.current) zipInputRef.current.value = "";
   };
 
   const handleSelectPlan = async (plan) => {
@@ -1242,12 +1228,6 @@ export default function GloMap() {
               </div>
             )}
 
-            <button onClick={() => zipInputRef.current?.click()} className="px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 flex items-center gap-2">
-              <Upload size={16} />
-              Importer
-            </button>
-            <input ref={zipInputRef} type="file" accept=".zip" onChange={handleZipUpload} className="hidden" />
-
             {!isMobile && (
               <button onClick={() => setShowSidebar(!showSidebar)} className="p-2 hover:bg-gray-100 rounded-lg">
                 {showSidebar ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
@@ -1327,12 +1307,11 @@ export default function GloMap() {
           {!stableFileUrl ? (
             <EmptyState
               icon={MapPin}
-              title="Aucun plan selectionne"
-              description="Selectionnez un plan ou importez-en un nouveau"
+              title="Aucun plan disponible"
+              description="Importez des plans depuis la page Admin"
               action={
-                <button onClick={() => zipInputRef.current?.click()} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-600 flex items-center gap-2">
-                  <Upload size={16} />
-                  Importer un plan
+                <button onClick={() => navigate('/app/admin')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-600 flex items-center gap-2">
+                  Gérer les plans
                 </button>
               }
             />

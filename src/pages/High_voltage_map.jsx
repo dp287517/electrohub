@@ -20,7 +20,6 @@ import {
   RefreshCw,
   Search,
   Trash2,
-  Upload,
   X,
   Zap,
   Eye,
@@ -979,7 +978,6 @@ export default function HighVoltageMap() {
   const [confirmState, setConfirmState] = useState({ open: false, position: null });
 
   const viewerRef = useRef(null);
-  const zipInputRef = useRef(null);
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
@@ -1202,18 +1200,6 @@ export default function HighVoltageMap() {
     }
   };
 
-  const handleZipUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await api.hvMaps.uploadZip(file);
-      await loadPlans();
-    } catch (err) {
-      console.error("Erreur upload ZIP:", err);
-    }
-    e.target.value = "";
-  };
-
   // Filter equipments
   const filteredEquipments = useMemo(() => {
     let list = equipments;
@@ -1305,15 +1291,6 @@ export default function HighVoltageMap() {
               <Badge variant="success">Placés: {stats.placed}</Badge>
               <Badge variant="warning">Non placés: {stats.unplaced}</Badge>
             </div>
-
-            <button
-              onClick={() => zipInputRef.current?.click()}
-              className="p-2 sm:px-3 sm:py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
-            >
-              <Upload size={16} />
-              <span className="hidden sm:inline">Import</span>
-            </button>
-            <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
 
             {!isMobile && (
               <button
@@ -1429,12 +1406,11 @@ export default function HighVoltageMap() {
           {!selectedPlan ? (
             <EmptyState
               icon={MapPin}
-              title="Aucun plan sélectionné"
-              description="Importez un fichier ZIP contenant des plans PDF"
+              title="Aucun plan disponible"
+              description="Importez des plans depuis la page Admin"
               action={
-                <Btn onClick={() => zipInputRef.current?.click()}>
-                  <Upload size={16} className="mr-2" />
-                  Importer des plans
+                <Btn onClick={() => navigate('/app/admin')}>
+                  Gérer les plans
                 </Btn>
               }
             />
