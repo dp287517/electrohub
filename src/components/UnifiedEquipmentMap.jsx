@@ -819,6 +819,19 @@ export default function UnifiedEquipmentMap({
       { type: "mobile", api: api.mobileEquipment?.maps },
     ];
 
+    // Map type to the correct ID field name from API
+    const getEquipmentIdFromPosition = (type, p) => {
+      switch (type) {
+        case "switchboard": return p.switchboard_id;
+        case "vsd": return p.vsd_equipment_id;
+        case "meca": return p.meca_equipment_id;
+        case "mobile": return p.mobile_equipment_id;
+        case "hv": return p.hv_equipment_id;
+        case "glo": return p.glo_equipment_id;
+        default: return p.id;
+      }
+    };
+
     const results = await Promise.allSettled(
       loaders.map(async ({ type, api: mapApi }) => {
         if (!mapApi?.positionsAuto && !mapApi?.positions) return [];
@@ -828,6 +841,7 @@ export default function UnifiedEquipmentMap({
           return (res?.positions || []).map(p => ({
             ...p,
             equipment_type: type,
+            equipment_id: getEquipmentIdFromPosition(type, p),
           }));
         } catch {
           return [];
