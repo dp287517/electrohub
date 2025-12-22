@@ -9,6 +9,7 @@ import {
   MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { EquipmentAIChat } from '../components/AIAvatar';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
@@ -1087,6 +1088,9 @@ export default function Switchboards() {
   const [controlStatuses, setControlStatuses] = useState({}); // { boardId: { status: 'ok|pending|overdue', next_due: Date } }
   const [upcomingControls, setUpcomingControls] = useState([]); // Controls in next 30 days
   const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
+
+  // AI Chat state
+  const [showAIChat, setShowAIChat] = useState(false);
 
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
@@ -2642,6 +2646,17 @@ export default function Switchboards() {
                       </div>
 
                       <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setShowAIChat(true)}
+                          className={`p-1.5 sm:p-2 rounded-lg sm:rounded-xl flex items-center gap-1 ${
+                            controlStatuses[selectedBoard.id]?.status === 'overdue'
+                              ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
+                              : 'text-gray-400 hover:text-purple-500 hover:bg-purple-50'
+                          }`}
+                          title="Assistant IA"
+                        >
+                          <Sparkles size={16} className="sm:w-[18px] sm:h-[18px]" />
+                        </button>
                         <button onClick={() => setShowShareModal(true)} className="p-1.5 sm:p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg sm:rounded-xl" title="Partager">
                           <Link size={16} className="sm:w-[18px] sm:h-[18px]" />
                         </button>
@@ -3094,6 +3109,33 @@ export default function Switchboards() {
       )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* AI Chat for selected board */}
+      {selectedBoard && (
+        <EquipmentAIChat
+          isOpen={showAIChat}
+          onClose={() => setShowAIChat(false)}
+          equipmentType="switchboard"
+          equipment={{
+            id: selectedBoard.id,
+            name: selectedBoard.name,
+            code: selectedBoard.code,
+            building: selectedBoard.building_code,
+            floor: selectedBoard.floor,
+            room: selectedBoard.room,
+            regime_neutral: selectedBoard.regime_neutral,
+            is_principal: selectedBoard.is_principal,
+            device_count: selectedBoard.device_count,
+            complete_count: selectedBoard.complete_count
+          }}
+          controlStatus={controlStatuses[selectedBoard.id] ? {
+            hasOverdue: controlStatuses[selectedBoard.id].status === 'overdue',
+            nextDueDate: controlStatuses[selectedBoard.id].next_due,
+            lastControlDate: controlStatuses[selectedBoard.id].last_control,
+            templateName: controlStatuses[selectedBoard.id].template_name
+          } : null}
+        />
+      )}
     </div>
   );
 }

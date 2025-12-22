@@ -7,9 +7,10 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Upload, RefreshCw, Eye, AlertCircle, Menu, Share2, ExternalLink,
   MapPin, Tag, Hash, Info, Calendar, Clock, FileText, Download, Check,
-  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu
+  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu, Sparkles
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { EquipmentAIChat } from '../components/AIAvatar';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
@@ -694,7 +695,12 @@ const DetailPanel = ({
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showAIChat, setShowAIChat] = useState(false);
   const photoInputRef = useRef(null);
+
+  // Get control status for this equipment
+  const controlStatus = controlStatuses?.[equipment?.id];
+  const hasOverdueControl = controlStatus?.status === 'overdue';
 
   useEffect(() => {
     if (equipment?.id) {
@@ -748,6 +754,17 @@ const DetailPanel = ({
             <X size={20} />
           </button>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAIChat(true)}
+              className={`p-2 rounded-lg transition-all flex items-center gap-1 ${
+                hasOverdueControl
+                  ? 'bg-amber-500 hover:bg-amber-400 animate-pulse'
+                  : 'hover:bg-white/20'
+              }`}
+              title="Assistant IA"
+            >
+              <Sparkles size={18} />
+            </button>
             <button
               onClick={() => onShare(equipment)}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
@@ -1082,6 +1099,20 @@ const DetailPanel = ({
           Supprimer
         </button>
       </div>
+
+      {/* AI Chat Modal */}
+      <EquipmentAIChat
+        isOpen={showAIChat}
+        onClose={() => setShowAIChat(false)}
+        equipmentType="mobile"
+        equipment={equipment}
+        controlStatus={controlStatus ? {
+          hasOverdue: controlStatus.status === 'overdue',
+          nextDueDate: controlStatus.next_due,
+          lastControlDate: controlStatus.last_control,
+          templateName: controlStatus.template_name
+        } : null}
+      />
     </div>
   );
 };
