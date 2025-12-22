@@ -1120,7 +1120,7 @@ function VsdPlansTab() {
             <h3 className="font-semibold text-emerald-900">Gestion des Plans</h3>
             <p className="text-sm text-emerald-700 mt-1">
               Importez vos plans PDF pour localiser vos équipements.
-              Ces plans sont partagés entre tous les modules (VSD, GLO, Switchboard, Datahub, Mobile, HV).
+              Ces plans sont partagés entre tous les modules (VSD, MECA, GLO, Switchboard, Datahub, Mobile, HV).
               Les marqueurs existants sont automatiquement préservés lors des mises à jour.
             </p>
           </div>

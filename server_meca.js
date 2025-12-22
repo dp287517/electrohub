@@ -836,7 +836,7 @@ app.delete("/api/meca/files/:id", async (req, res) => {
 // MAPS (Plans PDF + positions)
 // -------------------------------------------------
 
-// POST /api/meca/maps/uploadZip
+// POST /api/meca/maps/uploadZip - Uses VSD plans for symbiosis (shared plans across modules)
 app.post(
   "/api/meca/maps/uploadZip",
   multerZip.single("zip"),
@@ -861,8 +861,9 @@ app.post(
         const dest = path.join(MAPS_DIR, `${Date.now()}_${base}.pdf`);
         await fsp.writeFile(dest, buf);
 
+        // Use VSD plans for symbiosis with all modules
         const { rows: existing } = await pool.query(
-          `SELECT id, version FROM meca_plans
+          `SELECT id, version FROM vsd_plans
             WHERE logical_name=$1
             ORDER BY version DESC
             LIMIT 1`,
@@ -871,14 +872,14 @@ app.post(
         const nextVer = existing[0] ? existing[0].version + 1 : 1;
 
         const { rows } = await pool.query(
-          `INSERT INTO meca_plans(logical_name, version, filename, file_path, content, page_count)
+          `INSERT INTO vsd_plans(logical_name, version, filename, file_path, content, page_count)
            VALUES($1,$2,$3,$4,$5,1)
            RETURNING *`,
           [logical, nextVer, e.name, dest, buf]
         );
 
         await pool.query(
-          `INSERT INTO meca_plan_names(logical_name, display_name)
+          `INSERT INTO vsd_plan_names(logical_name, display_name)
            VALUES($1,$2)
            ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
           [logical, base]
@@ -900,9 +901,10 @@ app.post(
   }
 );
 
-// GET /api/meca/maps/listPlans
+// GET /api/meca/maps/listPlans - Uses VSD plans for symbiosis (shared plans across modules)
 app.get("/api/meca/maps/listPlans", async (_req, res) => {
   try {
+    // Use VSD plans (vsd_plans, vsd_plan_names) for symbiosis with all modules
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
              p.id,
@@ -911,8 +913,8 @@ app.get("/api/meca/maps/listPlans", async (_req, res) => {
              p.filename,
              p.page_count,
              COALESCE(pn.display_name, p.logical_name) AS display_name
-        FROM meca_plans p
-        LEFT JOIN meca_plan_names pn ON pn.logical_name = p.logical_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
        ORDER BY p.logical_name, p.version DESC
     `);
     res.json({ ok: true, plans: rows });
@@ -921,11 +923,12 @@ app.get("/api/meca/maps/listPlans", async (_req, res) => {
   }
 });
 
-// GET /api/meca/maps/planFile?logical_name=... or ?id=...
+// GET /api/meca/maps/planFile?logical_name=... or ?id=... - Uses VSD plans for symbiosis
 app.get("/api/meca/maps/planFile", async (req, res) => {
   try {
     const { logical_name, id } = req.query;
-    let q = `SELECT file_path, content, filename FROM meca_plans WHERE `;
+    // Use VSD plans for symbiosis with all modules
+    let q = `SELECT file_path, content, filename FROM vsd_plans WHERE `;
     let val;
 
     if (id) {
@@ -1035,8 +1038,9 @@ app.get("/api/meca/maps/positions", async (req, res) => {
 
     let planKey = logical_name;
     if (id) {
+      // Use VSD plans for symbiosis
       const { rows: pRows } = await pool.query(
-        `SELECT logical_name FROM meca_plans WHERE id=$1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1`,
         [String(id)]
       );
       if (pRows[0]) planKey = pRows[0].logical_name;
