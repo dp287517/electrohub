@@ -78,7 +78,7 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 ULTRA HAUTE RÉSOLUTION pour plans techniques détaillés
+ * 🔥 QUALITÉ MAXIMALE ABSOLUE pour plans techniques très détaillés
  * ⚡ Optimisé pour téléphones bas de gamme (Xiaomi, Redmi, Realme, etc.)
  */
 export function getPDFConfig() {
@@ -91,67 +91,67 @@ export function getPDFConfig() {
   const isHighDPI = dpr >= 2;
   const isVeryHighDPI = dpr >= 2.5;
 
-  // 🔥 PC - ULTRA HAUTE QUALITÉ pour plans détaillés
+  // 🔥 PC - QUALITÉ MAXIMALE ABSOLUE
   let config = {
-    qualityBoost: 3.0,            // Très haute résolution
-    maxBitmapWidth: 6000,         // 6K pour plans détaillés
-    minBitmapWidth: 2000,
-    maxScale: 5.0,                // Zoom profond possible
+    qualityBoost: 4.0,            // Maximum
+    maxBitmapWidth: 8000,         // 8K pour plans très détaillés
+    minBitmapWidth: 3000,
+    maxScale: 8.0,                // Scale élevé pour PDFs petits
     minScale: 0.5,
     enableImageSmoothing: true,
-    intent: "print",  // "print" = qualité maximale
+    intent: "print",
     useHighQualityFormat: true,
   };
 
-  // 📱 TÉLÉPHONE BAS DE GAMME → Compromis mémoire/qualité
+  // 📱 TÉLÉPHONE BAS DE GAMME → Qualité réduite mais correcte
   if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: 1.8,           // Augmenté pour netteté
-      maxBitmapWidth: 2400,        // Augmenté
-      minBitmapWidth: 1200,
-      maxScale: 2.5,
+      qualityBoost: 2.5,
+      maxBitmapWidth: 3500,
+      minBitmapWidth: 1500,
+      maxScale: 4.0,
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "print",  // "print" = qualité maximale
+      intent: "print",
       useHighQualityFormat: true,
     };
   }
   // Mobile + réseau lent
   else if (isMobile && networkQuality === "slow") {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
-      maxBitmapWidth: isVeryHighDPI ? 3500 : (isHighDPI ? 3000 : 2500),
-      minBitmapWidth: 1400,
-      maxScale: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.0 : 2.5),
+      qualityBoost: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.8 : 2.2),
+      maxBitmapWidth: isVeryHighDPI ? 4500 : (isHighDPI ? 4000 : 3500),
+      minBitmapWidth: 2000,
+      maxScale: isVeryHighDPI ? 5.0 : (isHighDPI ? 4.5 : 4.0),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "print",  // "print" = qualité maximale
+      intent: "print",
       useHighQualityFormat: true,
     };
   }
   // Mobile + réseau moyen
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.8 : (isHighDPI ? 2.5 : 2.0),
-      maxBitmapWidth: isVeryHighDPI ? 4000 : (isHighDPI ? 3500 : 3000),
-      minBitmapWidth: 1600,
-      maxScale: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
+      qualityBoost: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.2 : 2.8),
+      maxBitmapWidth: isVeryHighDPI ? 5500 : (isHighDPI ? 5000 : 4500),
+      minBitmapWidth: 2500,
+      maxScale: isVeryHighDPI ? 6.0 : (isHighDPI ? 5.5 : 5.0),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "print",  // "print" = qualité maximale
+      intent: "print",
       useHighQualityFormat: true,
     };
   }
   // Mobile + réseau rapide → Qualité maximale
   else if (isMobile) {
     config = {
-      qualityBoost: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.8 : 2.2),
-      maxBitmapWidth: isVeryHighDPI ? 5000 : (isHighDPI ? 4500 : 3500),
-      minBitmapWidth: 1800,
-      maxScale: isVeryHighDPI ? 4.5 : (isHighDPI ? 4.0 : 3.5),
+      qualityBoost: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
+      maxBitmapWidth: isVeryHighDPI ? 7000 : (isHighDPI ? 6000 : 5000),
+      minBitmapWidth: 3000,
+      maxScale: isVeryHighDPI ? 7.0 : (isHighDPI ? 6.0 : 5.0),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "print",  // "print" = qualité maximale
+      intent: "print",
       useHighQualityFormat: true,
     };
   }
