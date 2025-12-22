@@ -1088,6 +1088,7 @@ app.get("/api/glo/maps/positions", async (req, res) => {
 });
 
 // POST /api/glo/maps/setPosition
+// This ensures equipment is only on ONE plan at a time (deletes ALL old positions first)
 app.post("/api/glo/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -1106,18 +1107,60 @@ app.post("/api/glo/maps/setPosition", async (req, res) => {
     if (!finalLogicalName)
       return res.status(400).json({ ok: false, error: "Could not determine logical_name" });
 
-    // Upsert position
+    // CRITICAL: Delete ALL existing positions for this equipment
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
+      `DELETE FROM glo_positions WHERE equipment_id = $1`,
+      [equipment_id]
+    );
+    console.log(`[GLO MAPS] Deleted ${deleteResult.rowCount} old positions for equipment ${equipment_id}`);
+
+    // Then insert the new position
     const { rows } = await pool.query(`
       INSERT INTO glo_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (equipment_id, logical_name, page_index)
-      DO UPDATE SET x_frac = $5, y_frac = $6, plan_id = $3
       RETURNING *
     `, [equipment_id, finalLogicalName, plan_id || null, page_index, x_frac, y_frac]);
 
+    console.log(`[GLO MAPS] Created new position for equipment ${equipment_id} on plan ${finalLogicalName}`);
     await logEvent("glo_position_set", { equipment_id, logical_name: finalLogicalName, page_index }, u);
     res.json({ ok: true, position: rows[0] });
   } catch (e) {
+    console.error("[GLO MAPS] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/glo/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM glo_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[GLO MAPS] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM glo_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM glo_positions
+          WHERE equipment_id = $1
+          ORDER BY id DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[GLO MAPS] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

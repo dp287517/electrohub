@@ -836,7 +836,7 @@ app.delete("/api/meca/files/:id", async (req, res) => {
 // MAPS (Plans PDF + positions)
 // -------------------------------------------------
 
-// POST /api/meca/maps/uploadZip
+// POST /api/meca/maps/uploadZip - Uses VSD plans for symbiosis (shared plans across modules)
 app.post(
   "/api/meca/maps/uploadZip",
   multerZip.single("zip"),
@@ -861,8 +861,9 @@ app.post(
         const dest = path.join(MAPS_DIR, `${Date.now()}_${base}.pdf`);
         await fsp.writeFile(dest, buf);
 
+        // Use VSD plans for symbiosis with all modules
         const { rows: existing } = await pool.query(
-          `SELECT id, version FROM meca_plans
+          `SELECT id, version FROM vsd_plans
             WHERE logical_name=$1
             ORDER BY version DESC
             LIMIT 1`,
@@ -871,14 +872,14 @@ app.post(
         const nextVer = existing[0] ? existing[0].version + 1 : 1;
 
         const { rows } = await pool.query(
-          `INSERT INTO meca_plans(logical_name, version, filename, file_path, content, page_count)
+          `INSERT INTO vsd_plans(logical_name, version, filename, file_path, content, page_count)
            VALUES($1,$2,$3,$4,$5,1)
            RETURNING *`,
           [logical, nextVer, e.name, dest, buf]
         );
 
         await pool.query(
-          `INSERT INTO meca_plan_names(logical_name, display_name)
+          `INSERT INTO vsd_plan_names(logical_name, display_name)
            VALUES($1,$2)
            ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
           [logical, base]
@@ -900,9 +901,10 @@ app.post(
   }
 );
 
-// GET /api/meca/maps/listPlans
+// GET /api/meca/maps/listPlans - Uses VSD plans for symbiosis (shared plans across modules)
 app.get("/api/meca/maps/listPlans", async (_req, res) => {
   try {
+    // Use VSD plans (vsd_plans, vsd_plan_names) for symbiosis with all modules
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
              p.id,
@@ -911,8 +913,8 @@ app.get("/api/meca/maps/listPlans", async (_req, res) => {
              p.filename,
              p.page_count,
              COALESCE(pn.display_name, p.logical_name) AS display_name
-        FROM meca_plans p
-        LEFT JOIN meca_plan_names pn ON pn.logical_name = p.logical_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
        ORDER BY p.logical_name, p.version DESC
     `);
     res.json({ ok: true, plans: rows });
@@ -921,11 +923,12 @@ app.get("/api/meca/maps/listPlans", async (_req, res) => {
   }
 });
 
-// GET /api/meca/maps/planFile?logical_name=... or ?id=...
+// GET /api/meca/maps/planFile?logical_name=... or ?id=... - Uses VSD plans for symbiosis
 app.get("/api/meca/maps/planFile", async (req, res) => {
   try {
     const { logical_name, id } = req.query;
-    let q = `SELECT file_path, content, filename FROM meca_plans WHERE `;
+    // Use VSD plans for symbiosis with all modules
+    let q = `SELECT file_path, content, filename FROM vsd_plans WHERE `;
     let val;
 
     if (id) {
@@ -1035,8 +1038,9 @@ app.get("/api/meca/maps/positions", async (req, res) => {
 
     let planKey = logical_name;
     if (id) {
+      // Use VSD plans for symbiosis
       const { rows: pRows } = await pool.query(
-        `SELECT logical_name FROM meca_plans WHERE id=$1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1`,
         [String(id)]
       );
       if (pRows[0]) planKey = pRows[0].logical_name;
@@ -1066,6 +1070,7 @@ app.get("/api/meca/maps/positions", async (req, res) => {
 });
 
 // POST /api/meca/maps/setPosition
+// This ensures equipment is only on ONE plan at a time (deletes ALL old positions first)
 app.post("/api/meca/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -1084,16 +1089,20 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
         .json({ ok: false, error: "Missing fields" });
     }
 
+    // CRITICAL: Delete ALL existing positions for this equipment
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
+      `DELETE FROM meca_positions WHERE equipment_id = $1`,
+      [equipment_id]
+    );
+    console.log(`[MECA MAPS] Deleted ${deleteResult.rowCount} old positions for equipment ${equipment_id}`);
+
+    // Then insert the new position
     await pool.query(
       `INSERT INTO meca_positions(
          equipment_id, logical_name, plan_id, page_index, x_frac, y_frac
        )
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(equipment_id, logical_name, page_index)
-       DO UPDATE SET
-         x_frac=EXCLUDED.x_frac,
-         y_frac=EXCLUDED.y_frac,
-         plan_id=EXCLUDED.plan_id`,
+       VALUES($1,$2,$3,$4,$5,$6)`,
       [
         equipment_id,
         logical_name,
@@ -1104,9 +1113,7 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
       ]
     );
 
-    // Option : mettre le logical_name dans "location" ou "panel" si tu veux,
-    // ici on ne touche pas à l'équipement pour rester neutre.
-
+    console.log(`[MECA MAPS] Created new position for equipment ${equipment_id} on plan ${logical_name}`);
     await logEvent(
       "meca_position_set",
       { equipment_id, logical_name, page_index },
@@ -1115,6 +1122,41 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
+    console.error("[MECA MAPS] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/meca/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM meca_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[MECA MAPS] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM meca_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM meca_positions
+          WHERE equipment_id = $1
+          ORDER BY id DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[MECA MAPS] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

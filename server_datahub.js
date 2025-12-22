@@ -655,6 +655,7 @@ app.get("/api/datahub/maps/positions", async (req, res) => {
 });
 
 // Set/update position
+// This ensures item is only on ONE plan at a time (deletes ALL old positions first)
 app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
   try {
     const { item_id } = req.params;
@@ -664,19 +665,60 @@ app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
 
-    // Upsert position
+    // CRITICAL: Delete ALL existing positions for this item
+    // This ensures the item is NEVER on multiple plans
+    const deleteResult = await pool.query(
+      `DELETE FROM dh_positions WHERE item_id = $1`,
+      [item_id]
+    );
+    console.log(`[Datahub] Deleted ${deleteResult.rowCount} old positions for item ${item_id}`);
+
+    // Then insert the new position
     const { rows } = await pool.query(`
       INSERT INTO dh_positions (item_id, logical_name, page_index, x_frac, y_frac)
       VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (item_id, logical_name, page_index)
-      DO UPDATE SET x_frac = $4, y_frac = $5, updated_at = now()
       RETURNING *
     `, [item_id, logical_name, parseInt(page_index), x_frac, y_frac]);
 
+    console.log(`[Datahub] Created new position for item ${item_id} on plan ${logical_name}`);
     await audit.log(req, AUDIT_ACTIONS.POSITION_SET, { entityType: 'position', entityId: item_id, details: { logical_name, x_frac, y_frac } });
     res.json({ ok: true, position: rows[0] });
   } catch (e) {
     console.error("[Datahub] Set position error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/datahub/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT item_id, COUNT(*) as count
+      FROM dh_positions
+      GROUP BY item_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[Datahub] Found ${duplicates.length} items with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM dh_positions
+        WHERE item_id = $1
+        AND id NOT IN (
+          SELECT id FROM dh_positions
+          WHERE item_id = $1
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT 1
+        )
+      `, [dup.item_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[Datahub] Cleanup error:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

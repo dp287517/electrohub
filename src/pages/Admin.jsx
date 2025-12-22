@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, UserPlus, Users, Key, Trash2, Search, Plus, X, Check,
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
-  Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut
+  Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
+  FileText
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
@@ -1021,6 +1022,291 @@ function DepartmentsTab({ departments, onRefresh, loading }) {
   );
 }
 
+// ============== VSD PLANS TAB ==============
+function VsdPlansTab() {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [previewPlan, setPreviewPlan] = useState(null);
+  const zipInputRef = useRef(null);
+  const pdfInputRef = useRef(null);
+
+  // Import api
+  const fetchPlans = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/vsd/maps/listPlans', getAuthOptions());
+      const data = await response.json();
+      setPlans(data.plans || []);
+    } catch (err) {
+      console.error('Error fetching plans:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchPlans(); }, []);
+
+  const handleZipUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('zip', file);
+      const response = await fetch('/api/vsd/maps/uploadZip', {
+        method: 'POST',
+        ...getAuthOptions(),
+        headers: {}, // Don't set Content-Type for FormData
+        body: fd
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setUploadResult({ success: true, message: `${data.imported?.length || 0} plan(s) importé(s) avec succès`, imported: data.imported });
+        fetchPlans();
+      } else {
+        setUploadResult({ success: false, message: data.error || 'Erreur lors de l\'import' });
+      }
+    } catch (err) {
+      setUploadResult({ success: false, message: err.message });
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handlePdfUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('pdf', file);
+      const response = await fetch('/api/vsd/maps/uploadPdf', {
+        method: 'POST',
+        ...getAuthOptions(),
+        headers: {}, // Don't set Content-Type for FormData
+        body: fd
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setUploadResult({ success: true, message: `Plan "${data.plan?.logical_name}" importé (v${data.plan?.version})`, imported: [data.plan] });
+        fetchPlans();
+      } else {
+        setUploadResult({ success: false, message: data.error || 'Erreur lors de l\'import' });
+      }
+    } catch (err) {
+      setUploadResult({ success: false, message: err.message });
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Chargement des plans VSD..." />;
+
+  return (
+    <div className="space-y-6">
+      {/* Header avec info */}
+      <div className="p-4 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+            <MapPin size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-emerald-900">Gestion des Plans</h3>
+            <p className="text-sm text-emerald-700 mt-1">
+              Importez vos plans PDF pour localiser vos équipements.
+              Ces plans sont partagés entre tous les modules (VSD, MECA, GLO, Switchboard, Datahub, Mobile, HV).
+              Les marqueurs existants sont automatiquement préservés lors des mises à jour.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Upload Section */}
+      <div className="bg-white rounded-xl border border-gray-100 p-6">
+        <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <Plus size={18} className="text-emerald-600" />
+          Importer des plans
+        </h3>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          {/* ZIP Upload */}
+          <div
+            onClick={() => !uploading && zipInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+              uploading ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-emerald-300 hover:border-emerald-400 hover:bg-emerald-50'
+            }`}
+          >
+            <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white">
+              <Database size={24} />
+            </div>
+            <p className="font-medium text-gray-900">Import ZIP</p>
+            <p className="text-sm text-gray-500 mt-1">Plusieurs plans PDF dans un fichier ZIP</p>
+            <p className="text-xs text-gray-400 mt-2">Max 300 Mo</p>
+            <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} disabled={uploading} />
+          </div>
+
+          {/* Single PDF Upload */}
+          <div
+            onClick={() => !uploading && pdfInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+              uploading ? 'opacity-50 cursor-not-allowed border-gray-200' : 'border-blue-300 hover:border-blue-400 hover:bg-blue-50'
+            }`}
+          >
+            <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white">
+              <Eye size={24} />
+            </div>
+            <p className="font-medium text-gray-900">Import PDF</p>
+            <p className="text-sm text-gray-500 mt-1">Un seul fichier PDF</p>
+            <p className="text-xs text-gray-400 mt-2">Max 100 Mo</p>
+            <input ref={pdfInputRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} disabled={uploading} />
+          </div>
+        </div>
+
+        {uploading && (
+          <div className="mt-4 flex items-center justify-center gap-2 text-emerald-600">
+            <Loader2 size={18} className="animate-spin" />
+            <span>Import en cours...</span>
+          </div>
+        )}
+
+        {uploadResult && (
+          <div className={`mt-4 p-4 rounded-xl flex items-start gap-3 ${
+            uploadResult.success ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'
+          }`}>
+            {uploadResult.success ? (
+              <Check size={20} className="text-emerald-600 mt-0.5" />
+            ) : (
+              <AlertTriangle size={20} className="text-red-600 mt-0.5" />
+            )}
+            <div>
+              <p className={`font-medium ${uploadResult.success ? 'text-emerald-800' : 'text-red-800'}`}>
+                {uploadResult.message}
+              </p>
+              {uploadResult.imported && uploadResult.imported.length > 0 && (
+                <ul className="mt-2 text-sm text-emerald-700 space-y-1">
+                  {uploadResult.imported.map((p, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      {p.logical_name || p.filename} (v{p.version}, {p.page_count} page{p.page_count > 1 ? 's' : ''})
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Plans List */}
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <MapPin size={18} className="text-emerald-600" />
+            Plans disponibles ({plans.length})
+          </h3>
+          <button onClick={fetchPlans} className="p-2 hover:bg-gray-100 rounded-lg" title="Actualiser">
+            <RefreshCw size={16} className="text-gray-500" />
+          </button>
+        </div>
+
+        {plans.length === 0 ? (
+          <div className="p-12 text-center">
+            <MapPin size={48} className="mx-auto text-gray-300 mb-4" />
+            <h4 className="text-lg font-medium text-gray-900">Aucun plan disponible</h4>
+            <p className="text-gray-500 mt-1">Importez un fichier ZIP ou PDF pour commencer</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {plans.map(plan => (
+              <div key={plan.id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-center gap-4">
+                  {/* Preview Thumbnail */}
+                  <div
+                    className="w-16 h-16 rounded-lg bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-emerald-400 transition-all overflow-hidden"
+                    onClick={() => setPreviewPlan(plan)}
+                  >
+                    <iframe
+                      src={`/api/vsd/maps/planFile?logical_name=${encodeURIComponent(plan.logical_name)}&site=Default#page=1&view=FitH`}
+                      className="w-full h-full border-0 pointer-events-none"
+                      style={{ transform: 'scale(0.15)', transformOrigin: 'top left', width: '400%', height: '400%' }}
+                    />
+                  </div>
+
+                  {/* Plan Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="font-medium text-gray-900 truncate">{plan.display_name || plan.logical_name}</h4>
+                      <span className="px-2 py-0.5 text-xs bg-emerald-100 text-emerald-700 rounded-full">v{plan.version}</span>
+                      <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">{plan.page_count || 1} page{(plan.page_count || 1) > 1 ? 's' : ''}</span>
+                    </div>
+                    <p className="text-sm text-gray-500 mt-0.5 truncate">{plan.filename}</p>
+                    <p className="text-xs text-gray-400 mt-1">ID: {plan.logical_name}</p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPreviewPlan(plan)}
+                      className="p-2 hover:bg-emerald-50 text-emerald-600 rounded-lg"
+                      title="Prévisualiser"
+                    >
+                      <Eye size={18} />
+                    </button>
+                    <a
+                      href={`/api/vsd/maps/planFile?logical_name=${encodeURIComponent(plan.logical_name)}&site=Default`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg"
+                      title="Ouvrir dans un nouvel onglet"
+                    >
+                      <Globe size={18} />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Preview Modal */}
+      {previewPlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setPreviewPlan(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+                  <MapPin size={18} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">{previewPlan.display_name || previewPlan.logical_name}</h3>
+                  <p className="text-sm text-gray-500">Version {previewPlan.version} - {previewPlan.page_count || 1} page(s)</p>
+                </div>
+              </div>
+              <button onClick={() => setPreviewPlan(null)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <iframe
+                src={`/api/vsd/maps/planFile?logical_name=${encodeURIComponent(previewPlan.logical_name)}&site=Default`}
+                className="w-full h-full min-h-[600px] border-0"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============== MAIN ==============
 export default function Admin() {
   const navigate = useNavigate();
@@ -1124,6 +1410,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} icon={Building2} count={companies.length}>Companies</TabButton>
             <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
+            <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>Plans</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
           </div>
         </div>
@@ -1139,6 +1426,7 @@ export default function Admin() {
             {activeTab === 'companies' && <CompaniesTab companies={companies} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'sites' && <SitesTab sites={sites} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
+            {activeTab === 'vsd-plans' && <VsdPlansTab />}
             {activeTab === 'auth-audit' && <AuthAuditTab />}
           </>
         )}

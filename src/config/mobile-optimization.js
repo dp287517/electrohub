@@ -6,21 +6,48 @@
  */
 export function isMobileDevice() {
   if (typeof window === "undefined") return false;
-  
+
   const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-  
+
   // Check for mobile devices
   const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
   if (mobileRegex.test(userAgent.toLowerCase())) return true;
-  
+
   // Check for small screens
   if (window.innerWidth <= 768) return true;
-  
+
   // Check for touch screen
   if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
     return window.innerWidth <= 1024;
   }
-  
+
+  return false;
+}
+
+/**
+ * Détecte si l'appareil est bas de gamme (téléphones chinois, vieux Android, etc.)
+ * Critères : peu de RAM, peu de cœurs CPU, ou petit écran avec faible DPR
+ */
+export function isLowEndDevice() {
+  if (typeof window === "undefined") return false;
+
+  // Vérifier la RAM (si disponible) - < 4 Go = bas de gamme
+  const ram = navigator.deviceMemory; // en Go
+  if (ram && ram < 4) return true;
+
+  // Vérifier les cœurs CPU - < 4 cœurs = bas de gamme
+  const cores = navigator.hardwareConcurrency;
+  if (cores && cores < 4) return true;
+
+  // Petit écran avec faible DPR = probablement bas de gamme
+  const dpr = window.devicePixelRatio || 1;
+  const screenWidth = window.screen?.width || window.innerWidth;
+  if (screenWidth < 400 && dpr < 2) return true;
+
+  // Vérifier les vieux Android (via User Agent)
+  const ua = navigator.userAgent.toLowerCase();
+  if (/android\s*[4-6]\./i.test(ua)) return true; // Android 4.x à 6.x
+
   return false;
 }
 
@@ -51,61 +78,81 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 VERSION OPTIMISÉE pour qualité + performance
+ * 🚀 ULTRA HAUTE RÉSOLUTION pour plans techniques détaillés
+ * ⚡ Optimisé pour téléphones bas de gamme (Xiaomi, Redmi, Realme, etc.)
  */
 export function getPDFConfig() {
   const isMobile = isMobileDevice();
+  const isLowEnd = isLowEndDevice();
   const networkQuality = getNetworkQuality();
 
-  // Adapter la qualité au DPR de l'écran (smartphones haute résolution)
+  // Adapter la qualité au DPR de l'écran
   const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
   const isHighDPI = dpr >= 2;
+  const isVeryHighDPI = dpr >= 2.5;
 
-  // 🔥 Configuration par défaut (PC / réseau rapide)
+  // 🔥 PC - ULTRA HAUTE QUALITÉ pour plans détaillés
   let config = {
-    qualityBoost: 1.5,
-    maxBitmapWidth: 3500,
-    minBitmapWidth: 1000,
-    maxScale: 3.0,
+    qualityBoost: 3.0,            // Très haute résolution
+    maxBitmapWidth: 6000,         // 6K pour plans détaillés
+    minBitmapWidth: 2000,
+    maxScale: 5.0,                // Zoom profond possible
     minScale: 0.5,
     enableImageSmoothing: true,
-    intent: "display",
+    intent: "print",  // "print" = qualité maximale
+    useHighQualityFormat: true,
   };
 
-  // Mobile + réseau lent → Qualité réduite mais lisible
-  if (isMobile && networkQuality === "slow") {
+  // 📱 TÉLÉPHONE BAS DE GAMME → Compromis mémoire/qualité
+  if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: isHighDPI ? 1.5 : 1.0,
-      maxBitmapWidth: isHighDPI ? 2000 : 1400,
-      minBitmapWidth: 800,
-      maxScale: isHighDPI ? 2.0 : 1.5,
+      qualityBoost: 1.8,           // Augmenté pour netteté
+      maxBitmapWidth: 2400,        // Augmenté
+      minBitmapWidth: 1200,
+      maxScale: 2.5,
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
+      useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau moyen → Bonne qualité
+  // Mobile + réseau lent
+  else if (isMobile && networkQuality === "slow") {
+    config = {
+      qualityBoost: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
+      maxBitmapWidth: isVeryHighDPI ? 3500 : (isHighDPI ? 3000 : 2500),
+      minBitmapWidth: 1400,
+      maxScale: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.0 : 2.5),
+      minScale: 0.5,
+      enableImageSmoothing: true,
+      intent: "print",  // "print" = qualité maximale
+      useHighQualityFormat: true,
+    };
+  }
+  // Mobile + réseau moyen
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: isHighDPI ? 1.8 : 1.3,
-      maxBitmapWidth: isHighDPI ? 2800 : 2200,
-      minBitmapWidth: 900,
-      maxScale: isHighDPI ? 2.5 : 2.0,
+      qualityBoost: isVeryHighDPI ? 2.8 : (isHighDPI ? 2.5 : 2.0),
+      maxBitmapWidth: isVeryHighDPI ? 4000 : (isHighDPI ? 3500 : 3000),
+      minBitmapWidth: 1600,
+      maxScale: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
+      useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau rapide/inconnu → Haute qualité
+  // Mobile + réseau rapide → Qualité maximale
   else if (isMobile) {
     config = {
-      qualityBoost: isHighDPI ? 2.0 : 1.5,
-      maxBitmapWidth: isHighDPI ? 3200 : 2600,
-      minBitmapWidth: 1000,
-      maxScale: isHighDPI ? 2.8 : 2.2,
+      qualityBoost: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.8 : 2.2),
+      maxBitmapWidth: isVeryHighDPI ? 5000 : (isHighDPI ? 4500 : 3500),
+      minBitmapWidth: 1800,
+      maxScale: isVeryHighDPI ? 4.5 : (isHighDPI ? 4.0 : 3.5),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
+      useHighQualityFormat: true,
     };
   }
 
@@ -141,13 +188,17 @@ export function getLazyLoadConfig() {
  */
 export function logDeviceInfo() {
   const isMobile = isMobileDevice();
+  const isLowEnd = isLowEndDevice();
   const networkQuality = getNetworkQuality();
   const pdfConfig = getPDFConfig();
 
   console.group("📱 Device & Network Info");
   console.log("Mobile:", isMobile);
+  console.log("Low-end device:", isLowEnd);
   console.log("Screen size:", `${window.innerWidth}x${window.innerHeight}`);
   console.log("Device pixel ratio:", window.devicePixelRatio);
+  console.log("RAM:", navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "unknown");
+  console.log("CPU cores:", navigator.hardwareConcurrency || "unknown");
   console.log("Network quality:", networkQuality);
   console.log("PDF config:", pdfConfig);
   console.groupEnd();
@@ -251,14 +302,12 @@ export function clearPlanCache() {
 }
 
 /**
- * Génère le format d'image optimal (JPEG sur mobile, PNG sur desktop)
- * JPEG 0.85 = ~5-10x plus petit que PNG, qualité excellente pour plans
+ * Génère le format d'image optimal - PNG PARTOUT pour netteté parfaite
+ * PNG = lossless = texte et lignes parfaitement nets
+ * Le cache compense la taille plus importante du PNG
  */
-export function getOptimalImageFormat(canvas) {
-  const isMobile = isMobileDevice();
-  if (isMobile) {
-    // 0.92 = haute qualité, bien meilleur rendu sur écrans haute résolution
-    return canvas.toDataURL("image/jpeg", 0.92);
-  }
+export function getOptimalImageFormat(canvas, config = {}) {
+  // ⚡ TOUJOURS PNG pour une netteté parfaite (lossless)
+  // Le système de cache rend le chargement instantané après la première visite
   return canvas.toDataURL("image/png");
 }

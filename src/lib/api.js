@@ -1289,6 +1289,14 @@ export const api = {
       if (name) fd.append("user_name", name);
       return upload(`/api/vsd/maps/uploadZip`, fd);
     },
+    uploadPdf: (file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("pdf", file);
+      if (email) fd.append("user_email", email);
+      if (name) fd.append("user_name", name);
+      return upload(`/api/vsd/maps/uploadPdf`, fd);
+    },
     listPlans: () => get(`/api/vsd/maps/listPlans`),
     listPlansCompat: () => get(`/api/vsd/maps/plans`),
     renamePlan: (logical_name, display_name) =>

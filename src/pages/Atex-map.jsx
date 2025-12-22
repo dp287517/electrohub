@@ -765,9 +765,10 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2️⃣ Rendu PDF -> image OPTIMISÉE pour performance + qualité
+        // 2️⃣ Rendu PDF -> image ULTRA HAUTE QUALITÉ pour plans détaillés
         if (fileUrl) {
-          const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
+          // Utiliser la taille d'ÉCRAN (pas conteneur) pour résolution maximale
+          const screenW = Math.max(window.screen.width, window.innerWidth, 1920);
           const dpr = window.devicePixelRatio || 1;
 
           // 🚀 UTILISER LA CONFIG MOBILE-OPTIMIZATION (adaptée au réseau)
@@ -788,10 +789,11 @@ export default function AtexMap({
             canvasH = cached.height;
             console.log(`[ATEX] ⚡ Cache HIT - Plan affiché instantanément!`);
           } else {
-            // 🔄 CACHE MISS - Rendre le PDF
+            // 🔄 CACHE MISS - Rendre le PDF en ULTRA HAUTE RÉSOLUTION
+            // Calculer la résolution cible basée sur l'écran (pas le conteneur)
             const targetBitmapW = Math.min(
               pdfConfig.maxBitmapWidth,
-              Math.max(pdfConfig.minBitmapWidth, Math.floor(containerW * dpr * pdfConfig.qualityBoost))
+              Math.max(pdfConfig.minBitmapWidth, Math.floor(screenW * dpr * pdfConfig.qualityBoost))
             );
 
             loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
@@ -799,7 +801,7 @@ export default function AtexMap({
             const page = await pdf.getPage(Number(pageIndex) + 1);
             const baseVp = page.getViewport({ scale: 1 });
 
-            // Scale adapté à la config (réduit sur mobile/réseau lent)
+            // Scale maximum pour qualité optimale
             const safeScale = Math.min(pdfConfig.maxScale, Math.max(pdfConfig.minScale, targetBitmapW / baseVp.width));
             const viewport = page.getViewport({ scale: safeScale });
 
@@ -807,7 +809,7 @@ export default function AtexMap({
             canvas.width = Math.floor(viewport.width);
             canvas.height = Math.floor(viewport.height);
 
-            // Context optimisé
+            // Context optimisé pour qualité maximale
             const ctx = canvas.getContext("2d", {
               alpha: false,
               desynchronized: false,
@@ -818,29 +820,29 @@ export default function AtexMap({
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Anti-aliasing selon config
-            ctx.imageSmoothingEnabled = pdfConfig.enableImageSmoothing;
-            ctx.imageSmoothingQuality = pdfConfig.enableImageSmoothing ? 'high' : 'low';
+            // Anti-aliasing haute qualité
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
 
+            // 🔥 Rendu PDF avec intent "print" pour qualité maximale
             renderTaskRef.current = page.render({
               canvasContext: ctx,
               viewport,
-              intent: pdfConfig.intent || 'display',
+              intent: 'print',  // "print" = meilleure qualité que "display"
               annotationMode: 2,
             });
             await renderTaskRef.current.promise;
 
-            // 🚀 JPEG haute qualité sur mobile (rapide + beau), PNG sur desktop
-            dataUrl = isMobile
-              ? canvas.toDataURL("image/jpeg", 0.92)
-              : canvas.toDataURL("image/png");
+            // 🚀 PNG PARTOUT = netteté parfaite (lossless, pas d'artefacts)
+            // Le cache compense la taille plus importante
+            dataUrl = canvas.toDataURL("image/png");
             canvasW = canvas.width;
             canvasH = canvas.height;
 
             // 💾 Stocker dans le cache pour les prochaines visites
             cachePlan(cacheKey, dataUrl, canvasW, canvasH);
 
-            console.log(`[ATEX] PDF rendu: ${canvasW}x${canvasH}px (scale: ${safeScale.toFixed(2)}, network: ${networkQuality}, format: ${isMobile ? 'JPEG' : 'PNG'})`);
+            console.log(`[ATEX] PDF rendu: ${canvasW}x${canvasH}px (scale: ${safeScale.toFixed(2)}, target: ${targetBitmapW}px, intent: print, format: PNG)`);
 
             try { await pdf.cleanup?.(); } catch {}
           }
@@ -856,8 +858,8 @@ export default function AtexMap({
 
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 1);
-          // Zoom max adapté (moins élevé sur mobile pour économiser la mémoire)
-          m.setMaxZoom(fitZoom2 + (isMobile ? 4 : 6));
+          // Zoom max élevé pour permettre de lire les détails fins
+          m.setMaxZoom(fitZoom2 + (isMobile ? 5 : 7));
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [8, 8] });
 
