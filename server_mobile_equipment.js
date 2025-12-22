@@ -2014,7 +2014,7 @@ app.get("/api/mobile-equipment/maps/pending-positions", async (req, res) => {
 });
 
 /** Save/Update position of equipment on a plan/page */
-/** This ensures equipment is only on ONE plan at a time (deletes old positions first) */
+/** This ensures equipment is only on ONE plan at a time (deletes ALL old positions first) */
 app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) => {
   try {
     const equipmentId = req.params.equipmentId;
@@ -2045,12 +2045,13 @@ app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) =>
       return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
 
-    // First, delete ALL existing positions for this equipment
-    // This ensures the equipment is only on ONE plan at a time
-    await pool.query(
+    // CRITICAL: Delete ALL existing positions for this equipment
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
       `DELETE FROM me_equipment_positions WHERE equipment_id = $1`,
       [equipmentId]
     );
+    console.log(`[Mobile Equipment] Deleted ${deleteResult.rowCount} old positions for equipment ${equipmentId}`);
 
     // Then insert the new position
     await pool.query(
@@ -2059,8 +2060,44 @@ app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) =>
       [equipmentId, String(logical_name), Number(page_index || 0), page_label, Number(xf), Number(yf)]
     );
 
+    console.log(`[Mobile Equipment] Created new position for equipment ${equipmentId} on plan ${logical_name}`);
     res.json({ ok: true });
   } catch (e) {
+    console.error("[Mobile Equipment] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/mobile-equipment/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM me_equipment_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[Mobile Equipment] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM me_equipment_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM me_equipment_positions
+          WHERE equipment_id = $1
+          ORDER BY COALESCE(updated_at, created_at) DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[Mobile Equipment] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

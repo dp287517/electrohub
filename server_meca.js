@@ -1066,7 +1066,7 @@ app.get("/api/meca/maps/positions", async (req, res) => {
 });
 
 // POST /api/meca/maps/setPosition
-// This ensures equipment is only on ONE plan at a time (deletes old positions first)
+// This ensures equipment is only on ONE plan at a time (deletes ALL old positions first)
 app.post("/api/meca/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -1085,12 +1085,13 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
         .json({ ok: false, error: "Missing fields" });
     }
 
-    // First, delete ALL existing positions for this equipment
-    // This ensures the equipment is only on ONE plan at a time
-    await pool.query(
+    // CRITICAL: Delete ALL existing positions for this equipment
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
       `DELETE FROM meca_positions WHERE equipment_id = $1`,
       [equipment_id]
     );
+    console.log(`[MECA MAPS] Deleted ${deleteResult.rowCount} old positions for equipment ${equipment_id}`);
 
     // Then insert the new position
     await pool.query(
@@ -1108,6 +1109,7 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
       ]
     );
 
+    console.log(`[MECA MAPS] Created new position for equipment ${equipment_id} on plan ${logical_name}`);
     await logEvent(
       "meca_position_set",
       { equipment_id, logical_name, page_index },
@@ -1116,6 +1118,41 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
+    console.error("[MECA MAPS] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/meca/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM meca_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[MECA MAPS] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM meca_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM meca_positions
+          WHERE equipment_id = $1
+          ORDER BY id DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[MECA MAPS] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

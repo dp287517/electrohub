@@ -1899,7 +1899,7 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
 });
 
 /** Enregistre/Met à jour la position d'une porte sur un plan/page (supporte plan_id) */
-/** This ensures door is only on ONE plan at a time (deletes old positions first) */
+/** This ensures door is only on ONE plan at a time (deletes ALL old positions first) */
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
     const doorId = req.params.doorId;
@@ -1930,12 +1930,13 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
       return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
 
-    // First, delete ALL existing positions for this door
-    // This ensures the door is only on ONE plan at a time
-    await pool.query(
+    // CRITICAL: Delete ALL existing positions for this door
+    // This ensures the door is NEVER on multiple plans
+    const deleteResult = await pool.query(
       `DELETE FROM fd_door_positions WHERE door_id = $1`,
       [doorId]
     );
+    console.log(`[Doors] Deleted ${deleteResult.rowCount} old positions for door ${doorId}`);
 
     // Then insert the new position
     await pool.query(
@@ -1944,8 +1945,44 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
       [doorId, String(logical_name), Number(page_index || 0), page_label, Number(xf), Number(yf)]
     );
 
+    console.log(`[Doors] Created new position for door ${doorId} on plan ${logical_name}`);
     res.json({ ok: true });
   } catch (e) {
+    console.error("[Doors] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/doors/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT door_id, COUNT(*) as count
+      FROM fd_door_positions
+      GROUP BY door_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[Doors] Found ${duplicates.length} doors with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM fd_door_positions
+        WHERE door_id = $1
+        AND id NOT IN (
+          SELECT id FROM fd_door_positions
+          WHERE door_id = $1
+          ORDER BY COALESCE(updated_at, created_at) DESC
+          LIMIT 1
+        )
+      `, [dup.door_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[Doors] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

@@ -960,7 +960,7 @@ app.get("/api/vsd/maps/positions", async (req, res) => {
   }
 });
 // POST /api/vsd/maps/setPosition
-// This ensures equipment is only on ONE plan at a time (deletes old positions first)
+// This ensures equipment is only on ONE plan at a time (deletes ALL old positions first)
 app.post("/api/vsd/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -976,12 +976,13 @@ app.post("/api/vsd/maps/setPosition", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing fields" });
     }
 
-    // First, delete ALL existing positions for this equipment
-    // This ensures the equipment is only on ONE plan at a time
-    await pool.query(
+    // CRITICAL: Delete ALL existing positions for this equipment
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
       `DELETE FROM vsd_positions WHERE equipment_id = $1`,
       [equipment_id]
     );
+    console.log(`[VSD MAPS] Deleted ${deleteResult.rowCount} old positions for equipment ${equipment_id}`);
 
     // Then insert the new position
     await pool.query(
@@ -993,9 +994,45 @@ app.post("/api/vsd/maps/setPosition", async (req, res) => {
       `UPDATE vsd_equipments SET equipment=$1 WHERE id=$2`,
       [logical_name, equipment_id]
     );
+    console.log(`[VSD MAPS] Created new position for equipment ${equipment_id} on plan ${logical_name}`);
     await logEvent("vsd_position_set", { equipment_id, logical_name, page_index }, u);
     res.json({ ok: true });
   } catch (e) {
+    console.error("[VSD MAPS] Set position error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions
+app.post("/api/vsd/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM vsd_positions
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `);
+
+    console.log(`[VSD MAPS] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      const result = await pool.query(`
+        DELETE FROM vsd_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM vsd_positions
+          WHERE equipment_id = $1
+          ORDER BY id DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+    }
+
+    res.json({ ok: true, duplicates_found: duplicates.length, positions_removed: totalRemoved });
+  } catch (e) {
+    console.error("[VSD MAPS] Cleanup error:", e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
