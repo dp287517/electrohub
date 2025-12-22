@@ -78,7 +78,7 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 VERSION NETTETÉ MAXIMALE - Plans parfaitement lisibles
+ * 🚀 HAUTE RÉSOLUTION + ANTI-ALIASING = Netteté parfaite
  * ⚡ Optimisé pour téléphones bas de gamme (Xiaomi, Redmi, Realme, etc.)
  */
 export function getPDFConfig() {
@@ -91,33 +91,33 @@ export function getPDFConfig() {
   const isHighDPI = dpr >= 2;
   const isVeryHighDPI = dpr >= 2.5; // iPhone 14 Pro+, Samsung S series, etc.
 
-  // 🔥 Configuration par défaut (PC / réseau rapide) - NETTETÉ MAX
+  // 🔥 Configuration par défaut (PC / réseau rapide) - HAUTE QUALITÉ
   let config = {
-    qualityBoost: 2.0,           // Augmenté pour netteté
-    maxBitmapWidth: 4000,        // Augmenté pour écrans haute résolution
+    qualityBoost: 2.0,
+    maxBitmapWidth: 4000,
     minBitmapWidth: 1200,
     maxScale: 3.5,
     minScale: 0.5,
-    enableImageSmoothing: false, // ⚡ DÉSACTIVÉ = lignes nettes sans flou
+    enableImageSmoothing: true,  // ✅ Anti-aliasing pour texte lisse
     intent: "display",
-    useHighQualityFormat: true,  // Force PNG (lossless)
+    useHighQualityFormat: true,  // PNG (lossless)
   };
 
-  // 📱 TÉLÉPHONE BAS DE GAMME → Config ultra-légère mais nette
+  // 📱 TÉLÉPHONE BAS DE GAMME → Config légère mais belle
   // Xiaomi, Redmi, Realme, vieux Android, peu de RAM
   if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: 1.0,           // Minimal mais suffisant
-      maxBitmapWidth: 1400,        // Léger en mémoire
-      minBitmapWidth: 800,
-      maxScale: 1.5,
+      qualityBoost: 1.2,           // Un peu plus que 1.0 pour netteté
+      maxBitmapWidth: 1600,        // Léger en mémoire
+      minBitmapWidth: 900,
+      maxScale: 1.8,
       minScale: 0.5,
-      enableImageSmoothing: false, // ⚡ Toujours désactivé pour netteté
+      enableImageSmoothing: true,  // ✅ Anti-aliasing important pour petits écrans
       intent: "display",
-      useHighQualityFormat: true,  // PNG pour netteté (CSS crisp-edges fait le reste)
+      useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau lent → Qualité optimisée mais nette
+  // Mobile + réseau lent → Qualité optimisée
   else if (isMobile && networkQuality === "slow") {
     config = {
       qualityBoost: isVeryHighDPI ? 1.8 : (isHighDPI ? 1.5 : 1.2),
@@ -125,12 +125,12 @@ export function getPDFConfig() {
       minBitmapWidth: 900,
       maxScale: isVeryHighDPI ? 2.2 : (isHighDPI ? 1.8 : 1.5),
       minScale: 0.5,
-      enableImageSmoothing: false,
+      enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau moyen → Bonne qualité nette
+  // Mobile + réseau moyen → Bonne qualité
   else if (isMobile && networkQuality === "medium") {
     config = {
       qualityBoost: isVeryHighDPI ? 2.0 : (isHighDPI ? 1.8 : 1.4),
@@ -138,7 +138,7 @@ export function getPDFConfig() {
       minBitmapWidth: 1000,
       maxScale: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
       minScale: 0.5,
-      enableImageSmoothing: false,
+      enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
@@ -151,7 +151,7 @@ export function getPDFConfig() {
       minBitmapWidth: 1100,
       maxScale: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.6 : 2.2),
       minScale: 0.5,
-      enableImageSmoothing: false,
+      enableImageSmoothing: true,  // ✅ Anti-aliasing
       intent: "display",
       useHighQualityFormat: true,
     };

@@ -103,28 +103,23 @@
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
 
-/* 🔥 NETTETÉ PIXEL-PERFECT - Plans parfaitement lisibles sur tous écrans */
+/* 🔥 HAUTE QUALITÉ D'IMAGE - Plans parfaitement lisibles */
 .leaflet-container .leaflet-image-layer,
 .leaflet-container .leaflet-overlay-pane img {
-  /* ⚡ Rendu NET sans flou - critique pour les plans techniques */
-  image-rendering: -webkit-optimize-contrast; /* Safari/iOS */
-  image-rendering: -moz-crisp-edges;          /* Firefox */
-  image-rendering: crisp-edges;               /* Standard */
-  image-rendering: pixelated;                 /* Fallback ultime pour netteté */
-  /* GPU acceleration pour fluidité (ne pas toucher) */
+  /* Rendu haute qualité avec anti-aliasing (optimal pour PDF/documents) */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: auto;
+  /* GPU acceleration pour fluidité */
   transform-origin: 0 0;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
-  /* Éviter le flou de sous-pixel */
-  -webkit-font-smoothing: none;
 }
 
-/* Pendant le zoom animé, garder crisp-edges pour éviter le flou */
+/* Pendant le zoom animé */
 .leaflet-container.leaflet-zoom-anim .leaflet-image-layer {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
 }
 
 /* GPU acceleration pour fluidité du zoom/pan */
@@ -134,20 +129,9 @@
   -webkit-transform: translate3d(0, 0, 0);
 }
 
-/* Overlay pane avec rendu net */
+/* Overlay pane */
 .leaflet-overlay-pane {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
-}
-
-/* Base pane spécifique pour le plan PDF - netteté maximale */
-.leaflet-pane.basePane,
-.leaflet-pane.basePane img {
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
-  /* Éviter tout flou de transformation */
-  filter: none !important;
-  -webkit-filter: none !important;
+  image-rendering: auto;
 }
 
 /* Assure un fond neutre derrière les overlays */
