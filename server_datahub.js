@@ -151,6 +151,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS description TEXT;`);
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS notes TEXT;`);
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS data JSONB DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS photo_file_id UUID;`);
 
   // Files attached to items
   await pool.query(`
@@ -158,12 +159,16 @@ async function ensureSchema() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       item_id UUID REFERENCES dh_items(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
-      filepath TEXT NOT NULL,
+      filepath TEXT,
       mimetype TEXT,
       size_bytes INT,
+      content BYTEA,
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE dh_files ADD COLUMN IF NOT EXISTS content BYTEA;`);
+  await pool.query(`ALTER TABLE dh_files ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'file';`);
+  try { await pool.query(`ALTER TABLE dh_files ALTER COLUMN filepath DROP NOT NULL;`); } catch {}
 
   // Positions on VSD maps (uses VSD plans - same as mobile equipment)
   await pool.query(`
@@ -463,11 +468,27 @@ app.post("/api/datahub/items/:id/photo", uploadAny.single("photo"), async (req, 
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
 
-    // Update item photo path
-    await pool.query(`UPDATE dh_items SET photo_path = $1, updated_at = now() WHERE id = $2`, [req.file.path, id]);
+    // Read file content into buffer
+    const buf = await fsp.readFile(req.file.path);
+
+    // Insert into dh_files with content (kind = 'photo')
+    const { rows: ins } = await pool.query(`
+      INSERT INTO dh_files (item_id, filename, filepath, mimetype, size_bytes, content, kind)
+      VALUES ($1, $2, $3, $4, $5, $6, 'photo')
+      RETURNING id
+    `, [id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]);
+
+    const fileId = ins[0].id;
+
+    // Update item with photo reference
+    await pool.query(`UPDATE dh_items SET photo_path = $1, photo_file_id = $2, updated_at = now() WHERE id = $3`,
+      [req.file.path, fileId, id]);
+
+    // Clean up temp file (optional, DB has the content now)
+    try { await fsp.unlink(req.file.path); } catch {}
 
     await audit.log(req, AUDIT_ACTIONS.PHOTO_UPDATED, { entityType: 'item', entityId: id });
-    res.json({ ok: true, photo_path: req.file.path });
+    res.json({ ok: true, photo_file_id: fileId });
   } catch (e) {
     console.error("[Datahub] Photo upload error:", e);
     res.status(500).json({ ok: false, error: e.message });
@@ -478,13 +499,35 @@ app.post("/api/datahub/items/:id/photo", uploadAny.single("photo"), async (req, 
 app.get("/api/datahub/items/:id/photo", async (req, res) => {
   try {
     const { id } = req.params;
-    const { rows } = await pool.query(`SELECT photo_path FROM dh_items WHERE id = $1`, [id]);
+    const { rows } = await pool.query(`SELECT photo_path, photo_file_id FROM dh_items WHERE id = $1`, [id]);
 
-    if (rows.length === 0 || !rows[0].photo_path) {
-      return res.status(404).json({ ok: false, error: "No photo" });
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Item not found" });
     }
 
-    res.sendFile(rows[0].photo_path, { root: "/" });
+    const row = rows[0];
+
+    // Try DB first (photo_file_id)
+    if (row.photo_file_id) {
+      const { rows: frows } = await pool.query(
+        `SELECT mimetype, content FROM dh_files WHERE id = $1`,
+        [row.photo_file_id]
+      );
+      const f = frows[0];
+      if (f?.content) {
+        res.setHeader("Content-Type", f.mimetype || "image/jpeg");
+        res.setHeader("Cache-Control", "public, max-age=3600");
+        return res.end(f.content, "binary");
+      }
+    }
+
+    // Fallback to disk
+    if (row.photo_path && fs.existsSync(row.photo_path)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      return res.sendFile(row.photo_path, { root: "/" });
+    }
+
+    return res.status(404).json({ ok: false, error: "No photo" });
   } catch (e) {
     console.error("[Datahub] Get photo error:", e);
     res.status(500).json({ ok: false, error: e.message });
@@ -498,7 +541,9 @@ app.get("/api/datahub/items/:id/files", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`
-      SELECT * FROM dh_files WHERE item_id = $1 ORDER BY created_at DESC
+      SELECT id, item_id, filename, filepath, mimetype, size_bytes, created_at
+      FROM dh_files WHERE item_id = $1 AND (kind IS NULL OR kind = 'file')
+      ORDER BY created_at DESC
     `, [id]);
     res.json({ ok: true, files: rows });
   } catch (e) {
@@ -512,11 +557,17 @@ app.post("/api/datahub/items/:id/files", uploadAny.single("file"), async (req, r
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
 
+    // Read file content into buffer
+    const buf = await fsp.readFile(req.file.path);
+
     const { rows } = await pool.query(`
-      INSERT INTO dh_files (item_id, filename, filepath, mimetype, size_bytes)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `, [id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size]);
+      INSERT INTO dh_files (item_id, filename, filepath, mimetype, size_bytes, content)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, item_id, filename, filepath, mimetype, size_bytes, created_at
+    `, [id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]);
+
+    // Clean up temp file
+    try { await fsp.unlink(req.file.path); } catch {}
 
     res.json({ ok: true, file: rows[0] });
   } catch (e) {
@@ -529,13 +580,24 @@ app.post("/api/datahub/items/:id/files", uploadAny.single("file"), async (req, r
 app.get("/api/datahub/files/:id/download", async (req, res) => {
   try {
     const { id } = req.params;
-    const { rows } = await pool.query(`SELECT * FROM dh_files WHERE id = $1`, [id]);
+    const { rows } = await pool.query(`SELECT filename, filepath, mimetype, content FROM dh_files WHERE id = $1`, [id]);
     if (rows.length === 0) return res.status(404).json({ ok: false, error: "File not found" });
 
     const file = rows[0];
     res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.filename)}"`);
-    res.sendFile(file.filepath, { root: "/" });
+
+    // Try DB content first
+    if (file.content) {
+      return res.end(file.content, "binary");
+    }
+
+    // Fallback to disk
+    if (file.filepath && fs.existsSync(file.filepath)) {
+      return res.sendFile(file.filepath, { root: "/" });
+    }
+
+    return res.status(404).json({ ok: false, error: "File content not found" });
   } catch (e) {
     console.error("[Datahub] Download file error:", e);
     res.status(500).json({ ok: false, error: e.message });
