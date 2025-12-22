@@ -905,7 +905,7 @@ app.get('/api/hv/maps/positions', async (req, res) => {
 });
 
 // Set/update equipment position on plan
-// This ensures equipment is only on ONE plan at a time (deletes old positions first)
+// This ensures equipment is only on ONE plan at a time (deletes ALL old positions first)
 app.post('/api/hv/maps/setPosition', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -916,12 +916,13 @@ app.post('/api/hv/maps/setPosition', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // First, delete ALL existing positions for this equipment on this site
-    // This ensures the equipment is only on ONE plan at a time
-    await pool.query(
-      `DELETE FROM hv_positions WHERE equipment_id = $1 AND site = $2`,
-      [equipment_id, site]
+    // CRITICAL: Delete ALL existing positions for this equipment (across ALL sites/plans)
+    // This ensures the equipment is NEVER on multiple plans
+    const deleteResult = await pool.query(
+      `DELETE FROM hv_positions WHERE equipment_id = $1`,
+      [equipment_id]
     );
+    console.log(`[HV MAPS] Deleted ${deleteResult.rowCount} old positions for equipment ${equipment_id}`);
 
     // Then insert the new position
     const { rows } = await pool.query(`
@@ -930,10 +931,55 @@ app.post('/api/hv/maps/setPosition', async (req, res) => {
       RETURNING *
     `, [site, equipment_id, logical_name, plan_id || null, Number(page_index), x_frac, y_frac]);
 
+    console.log(`[HV MAPS] Created new position for equipment ${equipment_id} on plan ${logical_name}`);
     res.json(rows[0]);
   } catch (e) {
     console.error('[HV MAPS] Set position error:', e.message);
     res.status(500).json({ error: 'Set position failed', details: e.message });
+  }
+});
+
+// Cleanup duplicate positions - keeps only the most recent position per equipment
+app.post('/api/hv/maps/cleanup-duplicates', async (req, res) => {
+  try {
+    const site = siteOf(req);
+
+    // Find equipments with multiple positions
+    const { rows: duplicates } = await pool.query(`
+      SELECT equipment_id, COUNT(*) as count
+      FROM hv_positions
+      ${site ? 'WHERE site = $1' : ''}
+      GROUP BY equipment_id
+      HAVING COUNT(*) > 1
+    `, site ? [site] : []);
+
+    console.log(`[HV MAPS] Found ${duplicates.length} equipments with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      // Keep only the most recent position (by created_at)
+      const result = await pool.query(`
+        DELETE FROM hv_positions
+        WHERE equipment_id = $1
+        AND id NOT IN (
+          SELECT id FROM hv_positions
+          WHERE equipment_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        )
+      `, [dup.equipment_id]);
+      totalRemoved += result.rowCount;
+      console.log(`[HV MAPS] Equipment ${dup.equipment_id}: removed ${result.rowCount} duplicate positions`);
+    }
+
+    res.json({
+      ok: true,
+      duplicates_found: duplicates.length,
+      positions_removed: totalRemoved
+    });
+  } catch (e) {
+    console.error('[HV MAPS] Cleanup error:', e.message);
+    res.status(500).json({ error: 'Cleanup failed', details: e.message });
   }
 });
 

@@ -495,7 +495,7 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
 });
 
 // POST /api/switchboard/maps/setPosition - Placer ou déplacer un switchboard
-// This ensures switchboard is only on ONE plan at a time (deletes old positions first)
+// This ensures switchboard is only on ONE plan at a time (deletes ALL old positions first)
 app.post("/api/switchboard/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -526,12 +526,13 @@ app.post("/api/switchboard/maps/setPosition", async (req, res) => {
       "X-User-Name": u.name || "",
     });
 
-    // First, delete ALL existing positions for this switchboard on this site
-    // This ensures the switchboard is only on ONE plan at a time
-    await pool.query(
-      `DELETE FROM switchboard_positions WHERE switchboard_id = $1 AND site = $2`,
-      [Number(switchboard_id), site]
+    // CRITICAL: Delete ALL existing positions for this switchboard (across ALL sites/plans)
+    // This ensures the switchboard is NEVER on multiple plans
+    const deleteResult = await pool.query(
+      `DELETE FROM switchboard_positions WHERE switchboard_id = $1`,
+      [Number(switchboard_id)]
     );
+    console.log(`[swb-map] Deleted ${deleteResult.rowCount} old positions for switchboard ${switchboard_id}`);
 
     // Then insert the new position
     const { rows } = await pool.query(
@@ -575,6 +576,50 @@ app.post("/api/switchboard/maps/setPosition", async (req, res) => {
     });
   } catch (e) {
     console.error("[swb-map] Set position error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Cleanup duplicate positions - keeps only the most recent position per switchboard
+app.post("/api/switchboard/maps/cleanup-duplicates", async (req, res) => {
+  try {
+    const site = getSite(req);
+
+    // Find switchboards with multiple positions
+    const { rows: duplicates } = await pool.query(`
+      SELECT switchboard_id, COUNT(*) as count
+      FROM switchboard_positions
+      ${site ? 'WHERE site = $1' : ''}
+      GROUP BY switchboard_id
+      HAVING COUNT(*) > 1
+    `, site ? [site] : []);
+
+    console.log(`[swb-map] Found ${duplicates.length} switchboards with duplicate positions`);
+
+    let totalRemoved = 0;
+    for (const dup of duplicates) {
+      // Keep only the most recent position (by created_at or updated_at)
+      const result = await pool.query(`
+        DELETE FROM switchboard_positions
+        WHERE switchboard_id = $1
+        AND id NOT IN (
+          SELECT id FROM switchboard_positions
+          WHERE switchboard_id = $1
+          ORDER BY COALESCE(updated_at, created_at) DESC
+          LIMIT 1
+        )
+      `, [dup.switchboard_id]);
+      totalRemoved += result.rowCount;
+      console.log(`[swb-map] Switchboard ${dup.switchboard_id}: removed ${result.rowCount} duplicate positions`);
+    }
+
+    res.json({
+      ok: true,
+      duplicates_found: duplicates.length,
+      positions_removed: totalRemoved
+    });
+  } catch (e) {
+    console.error("[swb-map] Cleanup error:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
