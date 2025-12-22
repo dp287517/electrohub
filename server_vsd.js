@@ -1049,7 +1049,7 @@ app.post("/api/vsd/extract", multerFiles.array("files"), async (req, res) => {
   }
 });
 // -------------------------------------------------
-// REPORT PDF GENERATION
+// REPORT PDF GENERATION - Professional VSD Report
 // -------------------------------------------------
 app.get("/report", async (req, res) => {
   try {
@@ -1067,18 +1067,61 @@ app.get("/report", async (req, res) => {
     if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
+    // Get equipments with checks and last result
     const { rows: equipments } = await pool.query(`
       SELECT e.*,
              (SELECT COUNT(*) FROM vsd_checks c WHERE c.equipment_id = e.id) as check_count,
-             (SELECT MAX(c.date) FROM vsd_checks c WHERE c.equipment_id = e.id) as last_check
+             (SELECT MAX(c.date) FROM vsd_checks c WHERE c.equipment_id = e.id) as last_check,
+             (SELECT c.result FROM vsd_checks c WHERE c.equipment_id = e.id AND c.status = 'fait' ORDER BY c.date DESC LIMIT 1) as last_result
         FROM vsd_equipments e
         ${where}
        ORDER BY e.building, e.floor, e.name
     `, params);
 
-    // Get stats
+    // Get positions for equipment cards
+    const { rows: positions } = await pool.query(`
+      SELECT p.*, pn.display_name as plan_display_name
+        FROM vsd_positions p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+    `);
+    const positionsMap = new Map();
+    positions.forEach(p => positionsMap.set(p.equipment_id, p));
+
+    // Get plans list
+    const { rows: plans } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name) p.*, pn.display_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+       ORDER BY p.logical_name, p.version DESC
+    `);
+
+    // Statistics
     const totalCount = equipments.length;
     const withChecks = equipments.filter(e => e.check_count > 0).length;
+    const conformeCount = equipments.filter(e => e.last_result === 'conforme').length;
+    const nonConformeCount = equipments.filter(e => e.last_result === 'non_conforme').length;
+    const naCount = totalCount - conformeCount - nonConformeCount;
+    const now = new Date();
+    const retardCount = equipments.filter(e => e.next_check_date && new Date(e.next_check_date) < now).length;
+
+    // Group by building
+    const byBuilding = {};
+    equipments.forEach(eq => {
+      const b = eq.building || 'Non defini';
+      if (!byBuilding[b]) byBuilding[b] = [];
+      byBuilding[b].push(eq);
+    });
+
+    // Colors
+    const colors = {
+      primary: '#7c3aed',    // Purple for VSD
+      success: '#059669',
+      danger: '#dc2626',
+      warning: '#d97706',
+      muted: '#6b7280',
+      text: '#374151',
+      light: '#f3f4f6'
+    };
 
     // Create PDF
     const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
@@ -1086,68 +1129,436 @@ app.get("/report", async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="rapport_vsd_${new Date().toISOString().split('T')[0]}.pdf"`);
     doc.pipe(res);
 
-    // Header
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT VSD', 50, 50, { align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+    // ========== PAGE DE COUVERTURE ==========
+    doc.rect(0, 0, 595, 842).fill('#faf5ff');
+    doc.rect(0, 0, 595, 180).fill(colors.primary);
 
-    // Filters applied
-    let y = 100;
-    doc.fontSize(12).fillColor('#374151').text('Filtres appliqués:', 50, y);
-    y += 20;
-    doc.fontSize(10);
-    if (building) doc.text(`• Tableau: ${building}`, 60, y); y += building ? 15 : 0;
-    if (floor) doc.text(`• Étage: ${floor}`, 60, y); y += floor ? 15 : 0;
-    if (from_date || to_date) doc.text(`• Période: ${from_date || '...'} - ${to_date || '...'}`, 60, y); y += (from_date || to_date) ? 15 : 0;
-    if (!building && !floor && !from_date && !to_date) { doc.text('• Aucun filtre', 60, y); y += 15; }
+    doc.fontSize(32).fillColor('#fff').text('RAPPORT VSD', 50, 70, { align: 'center', width: 495 });
+    doc.fontSize(14).text('Variateurs de Frequence', 50, 115, { align: 'center', width: 495 });
 
-    // Stats box
-    y += 10;
-    doc.rect(50, y, 495, 40).fill('#f3f4f6');
-    doc.fontSize(11).fillColor('#374151');
-    doc.text(`Total équipements: ${totalCount}`, 60, y + 12);
-    doc.text(`Avec contrôles: ${withChecks}`, 200, y + 12);
-    doc.text(`Sans contrôle: ${totalCount - withChecks}`, 350, y + 12);
+    doc.fontSize(16).fillColor(colors.text).text(site, 50, 220, { align: 'center', width: 495 });
+    doc.fontSize(11).fillColor(colors.muted).text(`Genere le ${new Date().toLocaleDateString('fr-FR')}`, 50, 250, { align: 'center', width: 495 });
 
-    // Equipment list
-    y += 60;
-    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
-    y += 25;
+    // Synthèse sur la couverture
+    let coverY = 320;
+    doc.fontSize(14).fillColor(colors.primary).text('Synthese', 50, coverY);
+    coverY += 30;
 
-    // Table header
-    doc.rect(50, y, 495, 20).fill('#e5e7eb');
-    doc.fontSize(9).fillColor('#374151');
-    doc.text('Nom', 55, y + 6);
-    doc.text('Référence', 150, y + 6);
-    doc.text('Bâtiment', 280, y + 6);
-    doc.text('Étage', 380, y + 6);
-    doc.text('Dernier ctrl', 440, y + 6);
-    y += 20;
+    const coverStats = [
+      { label: 'Total equipements VSD', value: totalCount },
+      { label: 'Equipements controles', value: withChecks },
+      { label: 'Conformes', value: conformeCount, color: colors.success },
+      { label: 'Non conformes', value: nonConformeCount, color: colors.danger },
+      { label: 'En retard de verification', value: retardCount, color: colors.warning },
+    ];
 
-    // Table rows
-    for (let i = 0; i < equipments.length; i++) {
-      const eq = equipments[i];
-      if (y > 750) { doc.addPage(); y = 50; }
+    coverStats.forEach(stat => {
+      doc.rect(50, coverY, 495, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(colors.text).text(stat.label, 70, coverY + 10);
+      doc.fontSize(14).fillColor(stat.color || colors.primary).text(String(stat.value), 480, coverY + 10, { align: 'right', width: 50 });
+      coverY += 40;
+    });
 
-      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
-      doc.rect(50, y, 495, 18).fill(bgColor);
-      doc.fontSize(8).fillColor('#374151');
-      doc.text((eq.name || '-').substring(0, 25), 55, y + 5, { width: 90 });
-      doc.text((eq.manufacturer_ref || '-').substring(0, 30), 150, y + 5, { width: 125 });
-      doc.text((eq.building || '-').substring(0, 20), 280, y + 5, { width: 95 });
-      doc.text(eq.floor || '-', 380, y + 5, { width: 55 });
-      doc.text(eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-', 440, y + 5);
-      y += 18;
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.rect(0, 0, 595, 842).fill('#fff');
+    doc.fontSize(24).fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Cadre reglementaire', page: 3 },
+      { num: '2', title: 'Presentation du site', page: 3 },
+      { num: '3', title: 'Liste des plans', page: 4 },
+      { num: '4', title: 'Inventaire des variateurs', page: 4 },
+      { num: '5', title: 'Etat de conformite', page: 5 },
+      { num: '6', title: 'Planification des controles', page: 6 },
+      { num: '7', title: 'Recommandations techniques', page: 7 },
+      { num: '8', title: 'Fiches equipements', page: 8 },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).fillColor(colors.text).text(`${item.num}. ${item.title}`, 70, somY);
+      doc.fillColor(colors.muted).text(`.....................................................`, 280, somY, { width: 200 });
+      doc.fillColor(colors.primary).text(String(item.page), 500, somY, { align: 'right', width: 30 });
+      somY += 28;
+    });
+
+    // ========== 1. CADRE RÉGLEMENTAIRE ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('1. Cadre reglementaire', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let regY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text('La maintenance des variateurs de frequence est encadree par les normes et reglementations suisses suivantes:', 50, regY, { width: 495 });
+    regY += 40;
+
+    const reglements = [
+      { title: 'NIBT (Norme d\'installation basse tension)', desc: 'Regles relatives a l\'installation et la maintenance des equipements electriques basse tension.' },
+      { title: 'OIBT (Ordonnance installations basse tension)', desc: 'Prescriptions legales pour les installations electriques a basse tension en Suisse.' },
+      { title: 'IEC 61800', desc: 'Norme internationale pour les entrainements electriques de puissance a vitesse variable - Exigences de securite.' },
+      { title: 'EN 61000 (CEM)', desc: 'Compatibilite electromagnetique - Limites d\'emission et immunite des variateurs.' },
+      { title: 'Directive Machines 2006/42/CE', desc: 'Exigences de securite pour les machines integrant des variateurs de frequence.' },
+    ];
+
+    reglements.forEach(reg => {
+      if (regY > 700) { doc.addPage(); regY = 50; }
+      doc.rect(50, regY, 495, 50).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(colors.primary).text(reg.title, 60, regY + 8, { width: 475 });
+      doc.fontSize(9).fillColor(colors.muted).text(reg.desc, 60, regY + 26, { width: 475 });
+      regY += 55;
+    });
+
+    // ========== 2. PRÉSENTATION DU SITE ==========
+    regY += 20;
+    if (regY > 600) { doc.addPage(); regY = 50; }
+    doc.fontSize(20).fillColor(colors.primary).text('2. Presentation du site', 50, regY);
+    doc.moveTo(50, regY + 30).lineTo(545, regY + 30).strokeColor(colors.primary).lineWidth(1).stroke();
+    regY += 50;
+
+    doc.fontSize(11).fillColor(colors.text)
+       .text(`Site: ${site}`, 50, regY);
+    regY += 20;
+    doc.text(`Nombre de batiments avec VSD: ${Object.keys(byBuilding).length}`, 50, regY);
+    regY += 20;
+    doc.text(`Total variateurs: ${totalCount}`, 50, regY);
+    regY += 20;
+    doc.text(`Plans de localisation: ${plans.length}`, 50, regY);
+
+    // ========== 3. LISTE DES PLANS ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('3. Liste des plans VSD', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let planListY = 100;
+    if (plans.length === 0) {
+      doc.fontSize(11).fillColor(colors.muted).text('Aucun plan disponible.', 50, planListY);
+    } else {
+      doc.fontSize(9).fillColor(colors.muted)
+         .text('Les plans avec localisation des variateurs sont affiches dans les fiches equipements (section 8).', 50, planListY);
+      planListY += 25;
+
+      plans.forEach((p, idx) => {
+        if (planListY > 750) { doc.addPage(); planListY = 50; }
+        doc.rect(50, planListY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+        doc.fontSize(9).fillColor(colors.text)
+           .text(`${idx + 1}. ${p.display_name || p.logical_name}`, 60, planListY + 7);
+        planListY += 25;
+      });
     }
 
-    // Footer on each page
-    const pages = doc.bufferedPageRange();
-    for (let i = 0; i < pages.count; i++) {
+    // ========== 4. INVENTAIRE DES VARIATEURS ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('4. Inventaire des variateurs', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text(`${totalCount} variateur(s) inventorie(s).`, 50, invY);
+    invY += 35;
+
+    // Table by building
+    const invHeaders = ['Batiment', 'Etage', 'Nb VSD', 'Conformes', 'Non conf.'];
+    const invColW = [140, 100, 80, 90, 85];
+    let x = 50;
+    invHeaders.forEach((h, i) => {
+      doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+      doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+      x += invColW[i];
+    });
+    invY += 22;
+
+    Object.entries(byBuilding).forEach(([bat, eqs]) => {
+      // Group by floor within building
+      const byFloor = {};
+      eqs.forEach(eq => {
+        const f = eq.floor || '-';
+        if (!byFloor[f]) byFloor[f] = [];
+        byFloor[f].push(eq);
+      });
+
+      Object.entries(byFloor).forEach(([flr, flrEqs]) => {
+        if (invY > 750) {
+          doc.addPage();
+          invY = 50;
+          x = 50;
+          invHeaders.forEach((h, i) => {
+            doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+            x += invColW[i];
+          });
+          invY += 22;
+        }
+        const conf = flrEqs.filter(e => e.last_result === 'conforme').length;
+        const nonConf = flrEqs.filter(e => e.last_result === 'non_conforme').length;
+        const row = [bat.substring(0, 28), flr.substring(0, 18), flrEqs.length, conf, nonConf];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          let txtCol = colors.text;
+          if (i === 4 && cell > 0) txtCol = colors.danger;
+          if (i === 3 && cell > 0) txtCol = colors.success;
+          doc.fontSize(8).fillColor(txtCol).text(String(cell), x + 5, invY + 5, { width: invColW[i] - 10 });
+          x += invColW[i];
+        });
+        invY += 20;
+      });
+    });
+
+    // ========== 5. ÉTAT DE CONFORMITÉ ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('5. Etat de conformite', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let confY = 100;
+    const confStats = [
+      { label: 'Conformes', count: conformeCount, color: colors.success, pct: totalCount ? Math.round(conformeCount / totalCount * 100) : 0 },
+      { label: 'Non conformes', count: nonConformeCount, color: colors.danger, pct: totalCount ? Math.round(nonConformeCount / totalCount * 100) : 0 },
+      { label: 'Non verifies', count: naCount, color: colors.muted, pct: totalCount ? Math.round(naCount / totalCount * 100) : 0 },
+      { label: 'Verification en retard', count: retardCount, color: colors.warning, pct: totalCount ? Math.round(retardCount / totalCount * 100) : 0 },
+    ];
+
+    confStats.forEach(stat => {
+      doc.rect(50, confY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(stat.color).text(stat.label, 60, confY + 8);
+      doc.fontSize(9).fillColor(colors.muted).text(`${stat.count} equipement(s)`, 60, confY + 23);
+      doc.rect(300, confY + 15, 180, 12).fillAndStroke(colors.light, '#d1d5db');
+      if (stat.pct > 0) {
+        doc.rect(300, confY + 15, Math.max(5, 180 * stat.pct / 100), 12).fill(stat.color);
+      }
+      doc.fontSize(10).fillColor(stat.color).text(`${stat.pct}%`, 490, confY + 13, { align: 'right', width: 40 });
+      confY += 45;
+    });
+
+    // Non conformes list
+    confY += 20;
+    const nonConformes = equipments.filter(e => e.last_result === 'non_conforme');
+    if (nonConformes.length > 0) {
+      doc.fontSize(12).fillColor(colors.danger).text('/!\\ Variateurs non conformes', 50, confY);
+      confY += 25;
+
+      nonConformes.forEach(eq => {
+        if (confY > 750) { doc.addPage(); confY = 50; }
+        doc.rect(50, confY, 495, 30).fillAndStroke('#fef2f2', '#fca5a5');
+        doc.fontSize(9).fillColor(colors.danger).text(eq.name || 'Variateur sans nom', 60, confY + 6);
+        doc.fontSize(8).fillColor(colors.muted)
+           .text(`${eq.building || '-'} | ${eq.floor || '-'} | ${eq.manufacturer || '-'} ${eq.manufacturer_ref || ''}`, 60, confY + 17);
+        confY += 35;
+      });
+    }
+
+    // ========== 6. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('6. Planification des controles', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let planY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text('Les variateurs font l\'objet de controles periodiques conformement aux normes IEC 61800 et aux recommandations constructeurs.', 50, planY, { width: 495 });
+    planY += 40;
+
+    const upcoming = equipments
+      .filter(e => e.next_check_date)
+      .sort((a, b) => new Date(a.next_check_date) - new Date(b.next_check_date));
+
+    if (upcoming.length > 0) {
+      doc.fontSize(12).fillColor(colors.primary).text('Prochains controles', 50, planY);
+      planY += 25;
+
+      const planHeaders = ['Variateur', 'Batiment', 'Etage', 'Date ctrl', 'Statut'];
+      const planColW = [180, 100, 70, 85, 60];
+      x = 50;
+      planHeaders.forEach((h, i) => {
+        doc.rect(x, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(8).fillColor('#fff').text(h, x + 4, planY + 5, { width: planColW[i] - 8 });
+        x += planColW[i];
+      });
+      planY += 20;
+
+      upcoming.slice(0, 30).forEach(eq => {
+        if (planY > 750) {
+          doc.addPage();
+          planY = 50;
+          x = 50;
+          planHeaders.forEach((h, i) => {
+            doc.rect(x, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(8).fillColor('#fff').text(h, x + 4, planY + 5, { width: planColW[i] - 8 });
+            x += planColW[i];
+          });
+          planY += 20;
+        }
+        const nextDate = new Date(eq.next_check_date);
+        const isLate = nextDate < now;
+        const isClose = !isLate && (nextDate - now) / (1000 * 60 * 60 * 24) < 90;
+        const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
+        const statusText = isLate ? 'RETARD' : (isClose ? 'PROCHE' : 'OK');
+
+        const row = [
+          (eq.name || '-').substring(0, 35),
+          (eq.building || '-').substring(0, 18),
+          (eq.floor || '-').substring(0, 12),
+          nextDate.toLocaleDateString('fr-FR'),
+          statusText
+        ];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, planY, planColW[i], 18).fillAndStroke('#fff', '#e5e7eb');
+          const col = i === 4 ? statusColor : colors.text;
+          doc.fontSize(7).fillColor(col).text(String(cell), x + 4, planY + 5, { width: planColW[i] - 8 });
+          x += planColW[i];
+        });
+        planY += 18;
+      });
+    }
+
+    // ========== 7. RECOMMANDATIONS TECHNIQUES ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('7. Recommandations techniques', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let recY = 100;
+    const recommandations = [
+      { title: 'Maintenance preventive', items: [
+        'Nettoyage regulier des filtres et ventilateurs',
+        'Verification des connexions electriques (serrage)',
+        'Controle de la temperature ambiante et du variateur',
+        'Surveillance des alarmes et codes d\'erreur',
+      ]},
+      { title: 'Controles periodiques', items: [
+        'Test de fonctionnement demarrage/arret',
+        'Verification des parametres de configuration',
+        'Mesure des courants et tensions',
+        'Controle de l\'isolation electrique',
+      ]},
+      { title: 'Bonnes pratiques', items: [
+        'Conserver les documents techniques et manuels',
+        'Former le personnel a l\'utilisation des variateurs',
+        'Maintenir un stock de pieces de rechange critiques',
+        'Documenter les interventions et modifications',
+      ]},
+    ];
+
+    recommandations.forEach(section => {
+      if (recY > 650) { doc.addPage(); recY = 50; }
+      doc.fontSize(12).fillColor(colors.primary).text(section.title, 50, recY);
+      recY += 22;
+      section.items.forEach(item => {
+        doc.fontSize(10).fillColor(colors.text).text(`- ${item}`, 70, recY, { width: 475 });
+        recY += 18;
+      });
+      recY += 15;
+    });
+
+    // ========== 8. FICHES ÉQUIPEMENTS ==========
+    if (equipments.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).fillColor(colors.muted).text(`${equipments.length} variateur(s) VSD`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const position = positionsMap.get(eq.id);
+
+        if (ficheY > 500) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Card frame
+        doc.rect(50, ficheY, 495, 280).stroke(colors.light);
+
+        // Header with name
+        doc.rect(50, ficheY, 495, 35).fill(colors.primary);
+        doc.fontSize(12).fillColor('#fff')
+           .text(eq.name || 'Variateur sans nom', 60, ficheY + 10, { width: 380 });
+
+        // Status badge
+        const statusLabel = eq.last_result === 'conforme' ? 'CONFORME' : (eq.last_result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER');
+        const statusBg = eq.last_result === 'conforme' ? colors.success : (eq.last_result === 'non_conforme' ? colors.danger : colors.warning);
+        doc.fontSize(8).fillColor(statusBg)
+           .text(statusLabel, 450, ficheY + 13, { width: 80, align: 'right' });
+
+        let infoY = ficheY + 45;
+        const infoX = 60;
+        const rightColX = 310;
+        const imgWidth = 100;
+        const imgHeight = 100;
+
+        // Photo on right
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            doc.image(eq.photo_content, rightColX, infoY, { fit: [imgWidth, imgHeight], align: 'center' });
+            doc.rect(rightColX, infoY, imgWidth, imgHeight).stroke('#e5e7eb');
+          } catch {
+            doc.rect(rightColX, infoY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 30, infoY + 45);
+          }
+        } else {
+          doc.rect(rightColX, infoY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 25, infoY + 45);
+        }
+
+        // Plan thumbnail placeholder
+        const planX = rightColX + imgWidth + 10;
+        if (position) {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(colors.primary);
+          doc.fontSize(7).fillColor(colors.muted)
+             .text(position.plan_display_name || 'Plan', planX + 10, infoY + 45, { width: imgWidth - 20, align: 'center' });
+        } else {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 20, infoY + 45);
+        }
+
+        // Equipment info fields
+        const vsdInfo = [
+          ['Tag', eq.tag || '-'],
+          ['Fabricant', eq.manufacturer || '-'],
+          ['Modele', eq.model || '-'],
+          ['Reference', eq.manufacturer_ref || '-'],
+          ['N° Serie', eq.serial_number || '-'],
+          ['Puissance', eq.power_kw ? `${eq.power_kw} kW` : '-'],
+          ['Tension', eq.voltage || '-'],
+          ['Courant', eq.current_nominal ? `${eq.current_nominal} A` : '-'],
+          ['IP', eq.ip_rating || '-'],
+          ['Protocole', eq.protocol || '-'],
+          ['Batiment', eq.building || '-'],
+          ['Etage', eq.floor || '-'],
+          ['Panneau', eq.panel || '-'],
+          ['Criticite', eq.criticality || '-'],
+          ['Dernier ctrl', eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-'],
+          ['Prochain ctrl', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
+        ];
+
+        vsdInfo.forEach(([label, value]) => {
+          doc.fontSize(8).fillColor(colors.text).text(label + ':', infoX, infoY, { width: 70 });
+          doc.fillColor(colors.muted).text(value, infoX + 72, infoY, { width: 165 });
+          infoY += 14;
+        });
+
+        // Legend
+        doc.fontSize(6).fillColor(colors.muted)
+           .text('Photo equipement', rightColX, infoY - 10, { width: imgWidth, align: 'center' });
+
+        ficheY += 290;
+      }
+    }
+
+    // ========== PAGE NUMBERING ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af');
-      doc.text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport VSD - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495 });
     }
 
     doc.end();
+    console.log(`[VSD] Generated professional PDF with ${totalCount} equipments`);
+
   } catch (e) {
     console.error('[VSD] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });

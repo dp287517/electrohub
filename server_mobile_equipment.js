@@ -2128,7 +2128,7 @@ app.get('/api/mobile-equipment/audit/stats', async (req, res) => {
 });
 
 // -------------------------------------------------
-// REPORT PDF GENERATION
+// REPORT PDF GENERATION - Professional Mobile Equipment Report
 // -------------------------------------------------
 app.get('/api/mobile-equipment/report', async (req, res) => {
   try {
@@ -2147,76 +2147,526 @@ app.get('/api/mobile-equipment/report', async (req, res) => {
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
     let { rows: equipments } = await pool.query(`
-      SELECT e.*, c.name as category_name,
-             (SELECT MAX(ch.created_at) FROM me_checks ch WHERE ch.equipment_id = e.id) as last_check,
-             (SELECT ch.status FROM me_checks ch WHERE ch.equipment_id = e.id ORDER BY ch.created_at DESC LIMIT 1) as last_status
+      SELECT e.*, c.name as category_name, c.frequency as category_frequency,
+             (SELECT MAX(ch.closed_at) FROM me_checks ch WHERE ch.equipment_id = e.id AND ch.closed_at IS NOT NULL) as last_check,
+             (SELECT ch.status FROM me_checks ch WHERE ch.equipment_id = e.id AND ch.closed_at IS NOT NULL ORDER BY ch.closed_at DESC LIMIT 1) as last_status,
+             (SELECT COUNT(*) FROM me_checks ch WHERE ch.equipment_id = e.id AND ch.closed_at IS NOT NULL) as check_count,
+             (SELECT MIN(ch.due_date) FROM me_checks ch WHERE ch.equipment_id = e.id AND ch.closed_at IS NULL) as next_check_date
         FROM me_equipments e
         LEFT JOIN me_categories c ON c.id = e.category_id
         ${where}
        ORDER BY e.building, e.floor, e.name
     `, params);
 
-    // Filter by status if provided (last_status is computed from subquery)
+    // Filter by status if provided
     if (status) {
       equipments = equipments.filter(e => e.last_status === status);
     }
 
+    // Get positions for equipment cards
+    const { rows: positions } = await pool.query(`
+      SELECT p.*, pn.display_name as plan_display_name
+        FROM me_equipment_positions p
+        LEFT JOIN me_plan_names pn ON pn.logical_name = p.plan_logical_name
+    `);
+    const positionsMap = new Map();
+    positions.forEach(p => positionsMap.set(p.equipment_id, p));
+
+    // Get plans list
+    const { rows: plans } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name) p.*, pn.display_name
+        FROM me_plans p
+        LEFT JOIN me_plan_names pn ON pn.logical_name = p.logical_name
+       ORDER BY p.logical_name, p.created_at DESC
+    `);
+
+    // Get categories
+    const { rows: categories } = await pool.query(`SELECT * FROM me_categories ORDER BY name`);
+
+    // Statistics
+    const totalCount = equipments.length;
+    const checkedCount = equipments.filter(e => e.last_check).length;
+    const conformeCount = equipments.filter(e => e.last_status === 'conforme').length;
+    const nonConformeCount = equipments.filter(e => e.last_status === 'non_conforme').length;
+    const naCount = totalCount - conformeCount - nonConformeCount;
+    const now = new Date();
+    const retardCount = equipments.filter(e => e.next_check_date && new Date(e.next_check_date) < now).length;
+
+    // Group by building
+    const byBuilding = {};
+    equipments.forEach(eq => {
+      const b = eq.building || 'Non defini';
+      if (!byBuilding[b]) byBuilding[b] = [];
+      byBuilding[b].push(eq);
+    });
+
+    // Group by category
+    const byCategory = {};
+    equipments.forEach(eq => {
+      const cat = eq.category_name || 'Sans categorie';
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(eq);
+    });
+
+    // Colors
+    const colors = {
+      primary: '#ea580c',    // Orange for Mobile Equipment
+      success: '#059669',
+      danger: '#dc2626',
+      warning: '#d97706',
+      muted: '#6b7280',
+      text: '#374151',
+      light: '#f3f4f6'
+    };
+
+    // Create PDF
     const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="rapport_mobile_equipment_${new Date().toISOString().split('T')[0]}.pdf"`);
     doc.pipe(res);
 
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT ÉQUIPEMENTS MOBILES', 50, 50, { align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+    // ========== PAGE DE COUVERTURE ==========
+    doc.rect(0, 0, 595, 842).fill('#fff7ed');
+    doc.rect(0, 0, 595, 180).fill(colors.primary);
 
-    // Stats
-    const totalChecked = equipments.filter(e => e.last_check).length;
-    const conformes = equipments.filter(e => e.last_status === 'conforme').length;
-    const nonConformes = equipments.filter(e => e.last_status === 'non_conforme').length;
+    doc.fontSize(28).fillColor('#fff').text('RAPPORT EQUIPEMENTS MOBILES', 50, 70, { align: 'center', width: 495 });
+    doc.fontSize(14).text('Controle Electrique Periodique', 50, 115, { align: 'center', width: 495 });
 
-    let y = 100;
-    doc.rect(50, y, 495, 50).fill('#f3f4f6');
-    doc.fontSize(11).fillColor('#374151');
-    doc.text(`Total: ${equipments.length}`, 60, y + 12);
-    doc.text(`Contrôlés: ${totalChecked}`, 160, y + 12);
-    doc.text(`Conformes: ${conformes}`, 280, y + 12);
-    doc.text(`Non conformes: ${nonConformes}`, 400, y + 12);
+    doc.fontSize(16).fillColor(colors.text).text(site, 50, 220, { align: 'center', width: 495 });
+    doc.fontSize(11).fillColor(colors.muted).text(`Genere le ${new Date().toLocaleDateString('fr-FR')}`, 50, 250, { align: 'center', width: 495 });
 
-    y += 70;
-    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
-    y += 25;
+    // Synthèse sur la couverture
+    let coverY = 320;
+    doc.fontSize(14).fillColor(colors.primary).text('Synthese', 50, coverY);
+    coverY += 30;
 
-    doc.rect(50, y, 495, 20).fill('#e5e7eb');
-    doc.fontSize(9).fillColor('#374151');
-    doc.text('Nom', 55, y + 6);
-    doc.text('Catégorie', 180, y + 6);
-    doc.text('Bâtiment', 300, y + 6);
-    doc.text('Dernier ctrl', 390, y + 6);
-    doc.text('Statut', 470, y + 6);
-    y += 20;
+    const coverStats = [
+      { label: 'Total equipements mobiles', value: totalCount },
+      { label: 'Equipements controles', value: checkedCount },
+      { label: 'Conformes', value: conformeCount, color: colors.success },
+      { label: 'Non conformes', value: nonConformeCount, color: colors.danger },
+      { label: 'En retard de controle', value: retardCount, color: colors.warning },
+      { label: 'Categories', value: categories.length },
+    ];
 
-    for (let i = 0; i < equipments.length; i++) {
-      const eq = equipments[i];
-      if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
-      doc.rect(50, y, 495, 18).fill(bgColor);
-      doc.fontSize(8).fillColor('#374151');
-      doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
-      doc.text((eq.category_name || '-').substring(0, 20), 180, y + 5, { width: 115 });
-      doc.text((eq.building || '-').substring(0, 15), 300, y + 5, { width: 85 });
-      doc.text(eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-', 390, y + 5, { width: 75 });
+    coverStats.forEach(stat => {
+      doc.rect(50, coverY, 495, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(colors.text).text(stat.label, 70, coverY + 10);
+      doc.fontSize(14).fillColor(stat.color || colors.primary).text(String(stat.value), 480, coverY + 10, { align: 'right', width: 50 });
+      coverY += 40;
+    });
 
-      const statusColor = eq.last_status === 'conforme' ? '#059669' : eq.last_status === 'non_conforme' ? '#dc2626' : '#6b7280';
-      doc.fillColor(statusColor).text(eq.last_status || '-', 470, y + 5);
-      y += 18;
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.rect(0, 0, 595, 842).fill('#fff');
+    doc.fontSize(24).fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Cadre reglementaire', page: 3 },
+      { num: '2', title: 'Presentation du site', page: 3 },
+      { num: '3', title: 'Categories d\'equipements', page: 4 },
+      { num: '4', title: 'Liste des plans', page: 4 },
+      { num: '5', title: 'Inventaire par batiment', page: 5 },
+      { num: '6', title: 'Etat de conformite', page: 6 },
+      { num: '7', title: 'Planification des controles', page: 7 },
+      { num: '8', title: 'Recommandations', page: 8 },
+      { num: '9', title: 'Fiches equipements', page: 9 },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).fillColor(colors.text).text(`${item.num}. ${item.title}`, 70, somY);
+      doc.fillColor(colors.muted).text(`.....................................................`, 280, somY, { width: 200 });
+      doc.fillColor(colors.primary).text(String(item.page), 500, somY, { align: 'right', width: 30 });
+      somY += 28;
+    });
+
+    // ========== 1. CADRE RÉGLEMENTAIRE ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('1. Cadre reglementaire', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let regY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text('Le controle des equipements electriques mobiles est encadre par les normes et reglementations suisses suivantes:', 50, regY, { width: 495 });
+    regY += 40;
+
+    const reglements = [
+      { title: 'NIBT (Norme d\'installation basse tension)', desc: 'Regles relatives a la securite des installations et appareils electriques.' },
+      { title: 'OIBT (Ordonnance installations basse tension)', desc: 'Prescriptions legales pour les controles periodiques des installations electriques.' },
+      { title: 'LTr (Loi sur le travail)', desc: 'Exigences de securite au travail incluant les equipements electriques.' },
+      { title: 'OPA (Ordonnance prevention accidents)', desc: 'Obligations de l\'employeur concernant les equipements de travail.' },
+      { title: 'SN EN 50678 / EN 50699', desc: 'Normes europeennes pour le controle des appareils electriques portatifs apres reparation ou pendant l\'utilisation.' },
+    ];
+
+    reglements.forEach(reg => {
+      if (regY > 700) { doc.addPage(); regY = 50; }
+      doc.rect(50, regY, 495, 50).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(colors.primary).text(reg.title, 60, regY + 8, { width: 475 });
+      doc.fontSize(9).fillColor(colors.muted).text(reg.desc, 60, regY + 26, { width: 475 });
+      regY += 55;
+    });
+
+    // ========== 2. PRÉSENTATION DU SITE ==========
+    regY += 20;
+    if (regY > 600) { doc.addPage(); regY = 50; }
+    doc.fontSize(20).fillColor(colors.primary).text('2. Presentation du site', 50, regY);
+    doc.moveTo(50, regY + 30).lineTo(545, regY + 30).strokeColor(colors.primary).lineWidth(1).stroke();
+    regY += 50;
+
+    doc.fontSize(11).fillColor(colors.text).text(`Site: ${site}`, 50, regY);
+    regY += 20;
+    doc.text(`Nombre de batiments: ${Object.keys(byBuilding).length}`, 50, regY);
+    regY += 20;
+    doc.text(`Total equipements mobiles: ${totalCount}`, 50, regY);
+    regY += 20;
+    doc.text(`Categories d'equipements: ${categories.length}`, 50, regY);
+    regY += 20;
+    doc.text(`Plans de localisation: ${plans.length}`, 50, regY);
+
+    // ========== 3. CATÉGORIES D'ÉQUIPEMENTS ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('3. Categories d\'equipements', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let catY = 100;
+    if (categories.length === 0) {
+      doc.fontSize(11).fillColor(colors.muted).text('Aucune categorie definie.', 50, catY);
+    } else {
+      const catHeaders = ['Categorie', 'Description', 'Frequence', 'Nb Equip.'];
+      const catColW = [140, 200, 80, 75];
+      let x = 50;
+      catHeaders.forEach((h, i) => {
+        doc.rect(x, catY, catColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(9).fillColor('#fff').text(h, x + 5, catY + 6, { width: catColW[i] - 10 });
+        x += catColW[i];
+      });
+      catY += 22;
+
+      categories.forEach(cat => {
+        if (catY > 750) { doc.addPage(); catY = 50; }
+        const count = byCategory[cat.name]?.length || 0;
+        const freqLabel = { '3_mois': '3 mois', '6_mois': '6 mois', '12_mois': '12 mois', '24_mois': '24 mois' }[cat.frequency] || cat.frequency;
+        const row = [(cat.name || '-').substring(0, 25), (cat.description || '-').substring(0, 40), freqLabel, count];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, catY, catColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          doc.fontSize(8).fillColor(colors.text).text(String(cell), x + 5, catY + 5, { width: catColW[i] - 10 });
+          x += catColW[i];
+        });
+        catY += 20;
+      });
     }
 
-    const pages = doc.bufferedPageRange();
-    for (let i = 0; i < pages.count; i++) {
+    // ========== 4. LISTE DES PLANS ==========
+    catY += 30;
+    if (catY > 600) { doc.addPage(); catY = 50; }
+    doc.fontSize(20).fillColor(colors.primary).text('4. Liste des plans', 50, catY);
+    doc.moveTo(50, catY + 30).lineTo(545, catY + 30).strokeColor(colors.primary).lineWidth(1).stroke();
+    catY += 50;
+
+    if (plans.length === 0) {
+      doc.fontSize(11).fillColor(colors.muted).text('Aucun plan disponible.', 50, catY);
+    } else {
+      plans.forEach((p, idx) => {
+        if (catY > 750) { doc.addPage(); catY = 50; }
+        doc.rect(50, catY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+        doc.fontSize(9).fillColor(colors.text)
+           .text(`${idx + 1}. ${p.display_name || p.logical_name}`, 60, catY + 7);
+        catY += 25;
+      });
+    }
+
+    // ========== 5. INVENTAIRE PAR BÂTIMENT ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('5. Inventaire par batiment', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    doc.fontSize(11).fillColor(colors.text).text(`${totalCount} equipement(s) inventorie(s).`, 50, invY);
+    invY += 35;
+
+    const invHeaders = ['Batiment', 'Etage', 'Nb Equip.', 'Conformes', 'Non conf.'];
+    const invColW = [140, 100, 80, 90, 85];
+    let x = 50;
+    invHeaders.forEach((h, i) => {
+      doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+      doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+      x += invColW[i];
+    });
+    invY += 22;
+
+    Object.entries(byBuilding).forEach(([bat, eqs]) => {
+      const byFloor = {};
+      eqs.forEach(eq => {
+        const f = eq.floor || '-';
+        if (!byFloor[f]) byFloor[f] = [];
+        byFloor[f].push(eq);
+      });
+
+      Object.entries(byFloor).forEach(([flr, flrEqs]) => {
+        if (invY > 750) {
+          doc.addPage();
+          invY = 50;
+          x = 50;
+          invHeaders.forEach((h, i) => {
+            doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+            x += invColW[i];
+          });
+          invY += 22;
+        }
+        const conf = flrEqs.filter(e => e.last_status === 'conforme').length;
+        const nonConf = flrEqs.filter(e => e.last_status === 'non_conforme').length;
+        const row = [bat.substring(0, 28), flr.substring(0, 18), flrEqs.length, conf, nonConf];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          let txtCol = colors.text;
+          if (i === 4 && cell > 0) txtCol = colors.danger;
+          if (i === 3 && cell > 0) txtCol = colors.success;
+          doc.fontSize(8).fillColor(txtCol).text(String(cell), x + 5, invY + 5, { width: invColW[i] - 10 });
+          x += invColW[i];
+        });
+        invY += 20;
+      });
+    });
+
+    // ========== 6. ÉTAT DE CONFORMITÉ ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('6. Etat de conformite', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let confY = 100;
+    const confStats = [
+      { label: 'Conformes', count: conformeCount, color: colors.success, pct: totalCount ? Math.round(conformeCount / totalCount * 100) : 0 },
+      { label: 'Non conformes', count: nonConformeCount, color: colors.danger, pct: totalCount ? Math.round(nonConformeCount / totalCount * 100) : 0 },
+      { label: 'Non verifies', count: naCount, color: colors.muted, pct: totalCount ? Math.round(naCount / totalCount * 100) : 0 },
+      { label: 'Controle en retard', count: retardCount, color: colors.warning, pct: totalCount ? Math.round(retardCount / totalCount * 100) : 0 },
+    ];
+
+    confStats.forEach(stat => {
+      doc.rect(50, confY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(stat.color).text(stat.label, 60, confY + 8);
+      doc.fontSize(9).fillColor(colors.muted).text(`${stat.count} equipement(s)`, 60, confY + 23);
+      doc.rect(300, confY + 15, 180, 12).fillAndStroke(colors.light, '#d1d5db');
+      if (stat.pct > 0) {
+        doc.rect(300, confY + 15, Math.max(5, 180 * stat.pct / 100), 12).fill(stat.color);
+      }
+      doc.fontSize(10).fillColor(stat.color).text(`${stat.pct}%`, 490, confY + 13, { align: 'right', width: 40 });
+      confY += 45;
+    });
+
+    // Non conformes list
+    confY += 20;
+    const nonConformes = equipments.filter(e => e.last_status === 'non_conforme');
+    if (nonConformes.length > 0) {
+      doc.fontSize(12).fillColor(colors.danger).text('/!\\ Equipements non conformes', 50, confY);
+      confY += 25;
+
+      nonConformes.forEach(eq => {
+        if (confY > 750) { doc.addPage(); confY = 50; }
+        doc.rect(50, confY, 495, 30).fillAndStroke('#fef2f2', '#fca5a5');
+        doc.fontSize(9).fillColor(colors.danger).text(eq.name || 'Equipement sans nom', 60, confY + 6);
+        doc.fontSize(8).fillColor(colors.muted)
+           .text(`${eq.category_name || '-'} | ${eq.building || '-'} | ${eq.floor || '-'}`, 60, confY + 17);
+        confY += 35;
+      });
+    }
+
+    // ========== 7. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('7. Planification des controles', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let planY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text('Les equipements mobiles font l\'objet de controles periodiques selon leur categorie (frequence de 3 a 24 mois).', 50, planY, { width: 495 });
+    planY += 40;
+
+    const upcoming = equipments
+      .filter(e => e.next_check_date)
+      .sort((a, b) => new Date(a.next_check_date) - new Date(b.next_check_date));
+
+    if (upcoming.length > 0) {
+      doc.fontSize(12).fillColor(colors.primary).text('Prochains controles', 50, planY);
+      planY += 25;
+
+      const planHeaders = ['Equipement', 'Categorie', 'Batiment', 'Date ctrl', 'Statut'];
+      const planColW = [150, 100, 80, 85, 80];
+      x = 50;
+      planHeaders.forEach((h, i) => {
+        doc.rect(x, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(8).fillColor('#fff').text(h, x + 4, planY + 5, { width: planColW[i] - 8 });
+        x += planColW[i];
+      });
+      planY += 20;
+
+      upcoming.slice(0, 25).forEach(eq => {
+        if (planY > 750) {
+          doc.addPage();
+          planY = 50;
+          x = 50;
+          planHeaders.forEach((h, i) => {
+            doc.rect(x, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(8).fillColor('#fff').text(h, x + 4, planY + 5, { width: planColW[i] - 8 });
+            x += planColW[i];
+          });
+          planY += 20;
+        }
+        const nextDate = new Date(eq.next_check_date);
+        const isLate = nextDate < now;
+        const isClose = !isLate && (nextDate - now) / (1000 * 60 * 60 * 24) < 30;
+        const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
+        const statusText = isLate ? 'EN RETARD' : (isClose ? 'PROCHE' : 'PLANIFIE');
+
+        const row = [
+          (eq.name || '-').substring(0, 30),
+          (eq.category_name || '-').substring(0, 18),
+          (eq.building || '-').substring(0, 14),
+          nextDate.toLocaleDateString('fr-FR'),
+          statusText
+        ];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, planY, planColW[i], 18).fillAndStroke('#fff', '#e5e7eb');
+          const col = i === 4 ? statusColor : colors.text;
+          doc.fontSize(7).fillColor(col).text(String(cell), x + 4, planY + 5, { width: planColW[i] - 8 });
+          x += planColW[i];
+        });
+        planY += 18;
+      });
+    }
+
+    // ========== 8. RECOMMANDATIONS ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('8. Recommandations', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let recY = 100;
+    const recommandations = [
+      { title: 'Avant utilisation', items: [
+        'Verifier visuellement l\'etat du cable et de la prise',
+        'Controler l\'absence de dommages visibles sur l\'appareil',
+        'S\'assurer que l\'appareil est adapte a l\'environnement de travail',
+      ]},
+      { title: 'Pendant l\'utilisation', items: [
+        'Ne pas utiliser d\'equipement endommage',
+        'Respecter les consignes du fabricant',
+        'Signaler toute anomalie au responsable',
+      ]},
+      { title: 'Maintenance et controles', items: [
+        'Effectuer les controles periodiques selon la frequence definie',
+        'Faire reparer les equipements par du personnel qualifie',
+        'Tenir a jour le registre des controles',
+        'Mettre hors service les equipements non conformes',
+      ]},
+    ];
+
+    recommandations.forEach(section => {
+      if (recY > 650) { doc.addPage(); recY = 50; }
+      doc.fontSize(12).fillColor(colors.primary).text(section.title, 50, recY);
+      recY += 22;
+      section.items.forEach(item => {
+        doc.fontSize(10).fillColor(colors.text).text(`- ${item}`, 70, recY, { width: 475 });
+        recY += 18;
+      });
+      recY += 15;
+    });
+
+    // ========== 9. FICHES ÉQUIPEMENTS ==========
+    if (equipments.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).fillColor(colors.primary).text('9. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).fillColor(colors.muted).text(`${equipments.length} equipement(s) mobile(s)`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const position = positionsMap.get(eq.id);
+
+        if (ficheY > 550) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Card frame
+        doc.rect(50, ficheY, 495, 230).stroke(colors.light);
+
+        // Header with name
+        doc.rect(50, ficheY, 495, 35).fill(colors.primary);
+        doc.fontSize(12).fillColor('#fff')
+           .text(eq.name || 'Equipement sans nom', 60, ficheY + 10, { width: 380 });
+
+        // Status badge
+        const statusLabel = eq.last_status === 'conforme' ? 'CONFORME' : (eq.last_status === 'non_conforme' ? 'NON CONFORME' : 'A CONTROLER');
+        const statusBg = eq.last_status === 'conforme' ? colors.success : (eq.last_status === 'non_conforme' ? colors.danger : colors.warning);
+        doc.fontSize(8).fillColor(statusBg)
+           .text(statusLabel, 450, ficheY + 13, { width: 80, align: 'right' });
+
+        let infoY = ficheY + 45;
+        const infoX = 60;
+        const rightColX = 320;
+        const imgWidth = 95;
+        const imgHeight = 95;
+
+        // Photo placeholder on right
+        doc.rect(rightColX, infoY, imgWidth, imgHeight).stroke(colors.light);
+        doc.fontSize(7).fillColor(colors.muted).text('Photo equipement', rightColX + 15, infoY + 40);
+
+        // Plan placeholder
+        const planX = rightColX + imgWidth + 10;
+        if (position) {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(colors.primary);
+          doc.fontSize(7).fillColor(colors.muted)
+             .text(position.plan_display_name || 'Plan', planX + 10, infoY + 40, { width: imgWidth - 20, align: 'center' });
+        } else {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 15, infoY + 40);
+        }
+
+        // Equipment info fields
+        const meInfo = [
+          ['Code', eq.code || '-'],
+          ['Categorie', eq.category_name || '-'],
+          ['Marque', eq.brand || '-'],
+          ['Modele', eq.model || '-'],
+          ['N° Serie', eq.serial_number || '-'],
+          ['Puissance', eq.power_rating || '-'],
+          ['Batiment', eq.building || '-'],
+          ['Etage', eq.floor || '-'],
+          ['Localisation', eq.location || '-'],
+          ['Frequence', eq.frequency || eq.category_frequency || '-'],
+          ['Nb controles', eq.check_count || 0],
+          ['Dernier ctrl', eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-'],
+          ['Prochain ctrl', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
+        ];
+
+        meInfo.forEach(([label, value]) => {
+          doc.fontSize(8).fillColor(colors.text).text(label + ':', infoX, infoY, { width: 75 });
+          doc.fillColor(colors.muted).text(String(value), infoX + 77, infoY, { width: 170 });
+          infoY += 13;
+        });
+
+        ficheY += 240;
+      }
+    }
+
+    // ========== PAGE NUMBERING ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport Equipements Mobiles - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495 });
     }
+
     doc.end();
+    console.log(`[mobile-equipment] Generated professional PDF with ${totalCount} equipments`);
+
   } catch (e) {
     console.error('[mobile-equipment] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
