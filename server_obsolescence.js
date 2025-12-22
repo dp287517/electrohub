@@ -518,6 +518,72 @@ async function computeHvTotals(site) {
   return out;
 }
 
+// ---------- DEVICES HV INDIVIDUELS (pour obsolescence détaillée) ----------
+async function computeHvDeviceTotals(site) {
+  const hasSite = site && site.trim() !== '';
+
+  // Récupérer tous les devices HV avec info de l'équipement parent
+  let result;
+  try {
+    result = await pool.query(`
+      SELECT d.id AS hv_device_id, d.name AS device_name, d.device_type, d.manufacturer, d.reference,
+             d.voltage_class_kv, d.short_circuit_current_ka, d.parent_id,
+             e.id AS hv_equipment_id, e.name AS equipment_name, e.building_code, e.floor, e.site,
+             e.service_year AS stored_service_year
+      FROM hv_devices d
+      JOIN hv_equipments e ON d.hv_equipment_id = e.id
+      ${hasSite ? 'WHERE e.site = $1' : ''}
+      ORDER BY e.id ASC, d.parent_id NULLS FIRST, d.id ASC
+    `, hasSite ? [site] : []);
+  } catch (err) {
+    console.log('[OBS] HV devices query failed:', err.message);
+    return [];
+  }
+
+  return result.rows.map(row => {
+    // Calculer le coût du device individuel
+    const estimated_cost_gbp = estimateHvDeviceCostGBP({
+      device_type: row.device_type,
+      voltage_class_kv: row.voltage_class_kv
+    });
+
+    // Service year hérite de l'équipement parent
+    const service_year = row.stored_service_year || null;
+
+    // Durée de vie selon le type de device
+    let avg_life_years = 30;
+    const t = String(row.device_type || '').toUpperCase();
+    if (t.includes('RELAY')) avg_life_years = 15;
+    else if (t.includes('CABLE')) avg_life_years = 40;
+    else if (t.includes('TRANSFORMER')) avg_life_years = 35;
+    else if (t.includes('CIRCUIT BREAKER') || t.includes('VCB')) avg_life_years = 25;
+
+    // Construire le nom avec hiérarchie
+    const displayName = row.parent_id
+      ? `↳ ${row.device_name || row.device_type}`
+      : (row.device_name || row.device_type);
+
+    return {
+      kind: 'hv_device',
+      hv_device_id: row.hv_device_id,
+      hv_equipment_id: row.hv_equipment_id,
+      parent_id: row.parent_id,
+      name: displayName,
+      equipment_name: row.equipment_name,
+      device_type: row.device_type,
+      manufacturer: row.manufacturer,
+      reference: row.reference,
+      building_code: row.building_code || 'Unknown',
+      floor: row.floor || '',
+      site: row.site,
+      device_count: 1,
+      service_year,
+      avg_life_years,
+      estimated_cost_gbp: GBP(estimated_cost_gbp * 1.10) // +10% installation
+    };
+  });
+}
+
 // ---------- Sélecteur selon le filtre asset ----------
 async function pickTotalsByAsset(site, asset = 'all') {
   const sbs = await computeSwitchboardTotals(site);
@@ -525,6 +591,15 @@ async function pickTotalsByAsset(site, asset = 'all') {
 
   const hvs = await computeHvTotals(site);
   if (asset === 'hv') return hvs;
+
+  // HV Devices (équipements individuels à l'intérieur des cellules HT)
+  let hvDevices = [];
+  try {
+    hvDevices = await computeHvDeviceTotals(site);
+  } catch (e) {
+    console.log('[OBS] HV devices not available:', e.message);
+  }
+  if (asset === 'hv_device') return hvDevices;
 
   // VSD support
   let vsds = [];
@@ -544,16 +619,18 @@ async function pickTotalsByAsset(site, asset = 'all') {
   }
   if (asset === 'meca') return mecas;
 
-  // Combined assets
-  return [...sbs, ...hvs, ...vsds, ...mecas];
+  // Combined assets (inclut les HV devices pour la vue complète)
+  return [...sbs, ...hvs, ...hvDevices, ...vsds, ...mecas];
 }
 
 // ---------- Get asset stats by type ----------
 async function getAssetStats(site) {
   const sbs = await computeSwitchboardTotals(site);
   const hvs = await computeHvTotals(site);
+  let hvDevices = [];
   let vsds = [];
   let mecas = [];
+  try { hvDevices = await computeHvDeviceTotals(site); } catch {}
   try { vsds = await computeVsdTotals(site); } catch {}
   try { mecas = await computeMecaTotals(site); } catch {}
 
@@ -574,9 +651,10 @@ async function getAssetStats(site) {
   return {
     switchboards: calcStats(sbs),
     hv: calcStats(hvs),
+    hv_device: calcStats(hvDevices),
     vsd: calcStats(vsds),
     meca: calcStats(mecas),
-    all: calcStats([...sbs, ...hvs, ...vsds, ...mecas])
+    all: calcStats([...sbs, ...hvs, ...hvDevices, ...vsds, ...mecas])
   };
 }
 
@@ -1084,6 +1162,7 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       // Get unique ID based on kind
       let itemId;
       if (it.kind === 'hv') itemId = `hv-${it.hv_equipment_id}`;
+      else if (it.kind === 'hv_device') itemId = `hv_device-${it.hv_device_id}`;
       else if (it.kind === 'vsd') itemId = `vsd-${it.vsd_id}`;
       else if (it.kind === 'meca') itemId = `meca-${it.meca_id}`;
       else itemId = `sb-${it.switchboard_id}`;
@@ -1092,10 +1171,15 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       const age = now - mfgYear;
       const progress = Math.min(100, Math.max(0, (age / life) * 100));
 
+      // Display name for HV devices includes parent equipment
+      const displayName = it.kind === 'hv_device'
+        ? `${it.equipment_name} › ${it.name || it.device_type}`
+        : (it.code || it.name || `${it.kind.toUpperCase()}-${it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id}`);
+
       return {
         start: new Date(mfgYear, 0, 1),
         end: new Date(endYear, 0, 1),
-        name: it.code || it.name || `${it.kind.toUpperCase()}-${it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id}`,
+        name: displayName,
         display_name: it.name,
         code: it.code,
         id: itemId,
@@ -1106,8 +1190,8 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
         kind: it.kind,
         remaining_years: remaining,
         urgency: remaining < 5 ? 'critical' : remaining <= 10 ? 'warning' : 'ok',
-        // For interoperability links
-        link_id: it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id
+        // For interoperability links (HV devices link to their parent equipment)
+        link_id: it.kind === 'hv_device' ? it.hv_equipment_id : (it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id)
       };
     });
 
