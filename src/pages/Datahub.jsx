@@ -385,7 +385,7 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
               className="hidden"
               onChange={handlePhotoChange}
             />
-            {item.photo_url ? (
+            {item.photo_path ? (
               <img
                 src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`}
                 alt=""
@@ -617,7 +617,7 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
             >
               {pendingPhotoPreview ? (
                 <img src={pendingPhotoPreview} alt="Preview" className="w-full h-full object-cover" />
-              ) : item?.id && item?.photo_url ? (
+              ) : item?.id && item?.photo_path ? (
                 <img src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`} alt="" className="w-full h-full object-cover" />
               ) : (
                 <div className="text-center text-gray-400">

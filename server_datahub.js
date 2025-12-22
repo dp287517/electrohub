@@ -203,10 +203,15 @@ async function ensureSchema() {
 
   console.log("[Datahub] Schema ready (including VSD plans tables)");
 }
-ensureSchema();
 
 // Create audit trail helper
 const audit = createAuditTrail(pool, "datahub");
+
+async function initSchema() {
+  await ensureSchema();
+  await audit.ensureTable();
+}
+initSchema();
 
 // Tenant extraction
 function getTenant(req) {
@@ -258,7 +263,7 @@ app.post("/api/datahub/categories", async (req, res) => {
       RETURNING *
     `, [name.trim(), description || null, color || '#3B82F6', icon || 'circle', marker_size || 32, sort_order || 0]);
 
-    await audit.log(req, AUDIT_ACTIONS.CREATE, 'category', rows[0].id, { name });
+    await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: 'category', entityId: rows[0].id, details: { name } });
     res.json({ ok: true, category: rows[0] });
   } catch (e) {
     console.error("[Datahub] Create category error:", e);
@@ -286,7 +291,7 @@ app.put("/api/datahub/categories/:id", async (req, res) => {
 
     if (rows.length === 0) return res.status(404).json({ ok: false, error: "Category not found" });
 
-    await audit.log(req, AUDIT_ACTIONS.UPDATE, 'category', id, { name });
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, { entityType: 'category', entityId: id, details: { name } });
     res.json({ ok: true, category: rows[0] });
   } catch (e) {
     console.error("[Datahub] Update category error:", e);
@@ -302,7 +307,7 @@ app.delete("/api/datahub/categories/:id", async (req, res) => {
 
     if (rowCount === 0) return res.status(404).json({ ok: false, error: "Category not found" });
 
-    await audit.log(req, AUDIT_ACTIONS.DELETE, 'category', id, {});
+    await audit.log(req, AUDIT_ACTIONS.DELETED, { entityType: 'category', entityId: id });
     res.json({ ok: true });
   } catch (e) {
     console.error("[Datahub] Delete category error:", e);
@@ -388,7 +393,7 @@ app.post("/api/datahub/items", async (req, res) => {
       RETURNING *
     `, [name.trim(), code, category_id || null, building, floor, location, description, notes, data || {}]);
 
-    await audit.log(req, AUDIT_ACTIONS.CREATE, 'item', rows[0].id, { name });
+    await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: 'item', entityId: rows[0].id, details: { name } });
     res.json({ ok: true, item: rows[0] });
   } catch (e) {
     console.error("[Datahub] Create item error:", e);
@@ -420,7 +425,7 @@ app.put("/api/datahub/items/:id", async (req, res) => {
 
     if (rows.length === 0) return res.status(404).json({ ok: false, error: "Item not found" });
 
-    await audit.log(req, AUDIT_ACTIONS.UPDATE, 'item', id, { name });
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, { entityType: 'item', entityId: id, details: { name } });
     res.json({ ok: true, item: rows[0] });
   } catch (e) {
     console.error("[Datahub] Update item error:", e);
@@ -442,7 +447,7 @@ app.delete("/api/datahub/items/:id", async (req, res) => {
     const { rowCount } = await pool.query(`DELETE FROM dh_items WHERE id = $1`, [id]);
     if (rowCount === 0) return res.status(404).json({ ok: false, error: "Item not found" });
 
-    await audit.log(req, AUDIT_ACTIONS.DELETE, 'item', id, {});
+    await audit.log(req, AUDIT_ACTIONS.DELETED, { entityType: 'item', entityId: id });
     res.json({ ok: true });
   } catch (e) {
     console.error("[Datahub] Delete item error:", e);
@@ -461,7 +466,7 @@ app.post("/api/datahub/items/:id/photo", uploadAny.single("photo"), async (req, 
     // Update item photo path
     await pool.query(`UPDATE dh_items SET photo_path = $1, updated_at = now() WHERE id = $2`, [req.file.path, id]);
 
-    await audit.log(req, AUDIT_ACTIONS.UPDATE, 'item', id, { action: 'photo_upload' });
+    await audit.log(req, AUDIT_ACTIONS.PHOTO_UPDATED, { entityType: 'item', entityId: id });
     res.json({ ok: true, photo_path: req.file.path });
   } catch (e) {
     console.error("[Datahub] Photo upload error:", e);
@@ -676,7 +681,7 @@ app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
     `, [item_id, logical_name, parseInt(page_index), x_frac, y_frac]);
 
     console.log(`[Datahub] Created new position for item ${item_id} on plan ${logical_name}`);
-    await audit.log(req, AUDIT_ACTIONS.UPDATE, 'position', item_id, { logical_name, x_frac, y_frac });
+    await audit.log(req, AUDIT_ACTIONS.POSITION_SET, { entityType: 'position', entityId: item_id, details: { logical_name, x_frac, y_frac } });
     res.json({ ok: true, position: rows[0] });
   } catch (e) {
     console.error("[Datahub] Set position error:", e);
@@ -769,7 +774,7 @@ app.post("/api/datahub/bulk/rename", async (req, res) => {
       [to, from]
     );
 
-    await audit.log(req, AUDIT_ACTIONS.UPDATE, 'bulk', null, { field, from, to, count: rowCount });
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, { entityType: 'bulk', details: { field, from, to, count: rowCount } });
     res.json({ ok: true, updated: rowCount });
   } catch (e) {
     console.error("[Datahub] Bulk rename error:", e);
