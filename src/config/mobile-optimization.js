@@ -78,7 +78,7 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 HAUTE RÉSOLUTION + ANTI-ALIASING = Netteté parfaite
+ * 🚀 ULTRA HAUTE RÉSOLUTION pour plans techniques détaillés
  * ⚡ Optimisé pour téléphones bas de gamme (Xiaomi, Redmi, Realme, etc.)
  */
 export function getPDFConfig() {
@@ -86,72 +86,71 @@ export function getPDFConfig() {
   const isLowEnd = isLowEndDevice();
   const networkQuality = getNetworkQuality();
 
-  // Adapter la qualité au DPR de l'écran (iPhone 15 = 3, Android haut de gamme = 2.5-3)
+  // Adapter la qualité au DPR de l'écran
   const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
   const isHighDPI = dpr >= 2;
-  const isVeryHighDPI = dpr >= 2.5; // iPhone 14 Pro+, Samsung S series, etc.
+  const isVeryHighDPI = dpr >= 2.5;
 
-  // 🔥 Configuration par défaut (PC / réseau rapide) - HAUTE QUALITÉ
+  // 🔥 PC - ULTRA HAUTE QUALITÉ pour plans détaillés
   let config = {
-    qualityBoost: 2.0,
-    maxBitmapWidth: 4000,
-    minBitmapWidth: 1200,
-    maxScale: 3.5,
+    qualityBoost: 3.0,            // Très haute résolution
+    maxBitmapWidth: 6000,         // 6K pour plans détaillés
+    minBitmapWidth: 2000,
+    maxScale: 5.0,                // Zoom profond possible
     minScale: 0.5,
-    enableImageSmoothing: true,  // ✅ Anti-aliasing pour texte lisse
+    enableImageSmoothing: true,
     intent: "display",
-    useHighQualityFormat: true,  // PNG (lossless)
+    useHighQualityFormat: true,
   };
 
-  // 📱 TÉLÉPHONE BAS DE GAMME → Config légère mais belle
-  // Xiaomi, Redmi, Realme, vieux Android, peu de RAM
+  // 📱 TÉLÉPHONE BAS DE GAMME → Compromis mémoire/qualité
   if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: 1.2,           // Un peu plus que 1.0 pour netteté
-      maxBitmapWidth: 1600,        // Léger en mémoire
-      minBitmapWidth: 900,
-      maxScale: 1.8,
+      qualityBoost: 1.8,           // Augmenté pour netteté
+      maxBitmapWidth: 2400,        // Augmenté
+      minBitmapWidth: 1200,
+      maxScale: 2.5,
       minScale: 0.5,
-      enableImageSmoothing: true,  // ✅ Anti-aliasing important pour petits écrans
+      enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau lent → Qualité optimisée
+  // Mobile + réseau lent
   else if (isMobile && networkQuality === "slow") {
     config = {
-      qualityBoost: isVeryHighDPI ? 1.8 : (isHighDPI ? 1.5 : 1.2),
-      maxBitmapWidth: isVeryHighDPI ? 2200 : (isHighDPI ? 1800 : 1400),
-      minBitmapWidth: 900,
-      maxScale: isVeryHighDPI ? 2.2 : (isHighDPI ? 1.8 : 1.5),
+      qualityBoost: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
+      maxBitmapWidth: isVeryHighDPI ? 3500 : (isHighDPI ? 3000 : 2500),
+      minBitmapWidth: 1400,
+      maxScale: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.0 : 2.5),
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau moyen → Bonne qualité
+  // Mobile + réseau moyen
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.0 : (isHighDPI ? 1.8 : 1.4),
-      maxBitmapWidth: isVeryHighDPI ? 2800 : (isHighDPI ? 2400 : 2000),
-      minBitmapWidth: 1000,
-      maxScale: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
+      qualityBoost: isVeryHighDPI ? 2.8 : (isHighDPI ? 2.5 : 2.0),
+      maxBitmapWidth: isVeryHighDPI ? 4000 : (isHighDPI ? 3500 : 3000),
+      minBitmapWidth: 1600,
+      maxScale: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau rapide/inconnu → Qualité maximale
+  // Mobile + réseau rapide → Qualité maximale
   else if (isMobile) {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.2 : (isHighDPI ? 2.0 : 1.6),
-      maxBitmapWidth: isVeryHighDPI ? 3400 : (isHighDPI ? 3000 : 2400),
-      minBitmapWidth: 1100,
-      maxScale: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.6 : 2.2),
+      qualityBoost: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.8 : 2.2),
+      maxBitmapWidth: isVeryHighDPI ? 5000 : (isHighDPI ? 4500 : 3500),
+      minBitmapWidth: 1800,
+      maxScale: isVeryHighDPI ? 4.5 : (isHighDPI ? 4.0 : 3.5),
       minScale: 0.5,
-      enableImageSmoothing: true,  // ✅ Anti-aliasing
+      enableImageSmoothing: true,
       intent: "display",
       useHighQualityFormat: true,
     };
