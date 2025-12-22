@@ -858,8 +858,8 @@ export default function AtexMap({
 
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 1);
-          // Zoom max élevé pour permettre de lire les détails fins
-          m.setMaxZoom(fitZoom2 + (isMobile ? 5 : 7));
+          // Zoom max très élevé pour lire les plus petits détails
+          m.setMaxZoom(fitZoom2 + (isMobile ? 6 : 8));
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [8, 8] });
 
