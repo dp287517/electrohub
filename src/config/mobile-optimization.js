@@ -99,7 +99,7 @@ export function getPDFConfig() {
     maxScale: 5.0,                // Zoom profond possible
     minScale: 0.5,
     enableImageSmoothing: true,
-    intent: "display",
+    intent: "print",  // "print" = qualité maximale
     useHighQualityFormat: true,
   };
 
@@ -112,7 +112,7 @@ export function getPDFConfig() {
       maxScale: 2.5,
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
       useHighQualityFormat: true,
     };
   }
@@ -125,7 +125,7 @@ export function getPDFConfig() {
       maxScale: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.0 : 2.5),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
       useHighQualityFormat: true,
     };
   }
@@ -138,7 +138,7 @@ export function getPDFConfig() {
       maxScale: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
       useHighQualityFormat: true,
     };
   }
@@ -151,7 +151,7 @@ export function getPDFConfig() {
       maxScale: isVeryHighDPI ? 4.5 : (isHighDPI ? 4.0 : 3.5),
       minScale: 0.5,
       enableImageSmoothing: true,
-      intent: "display",
+      intent: "print",  // "print" = qualité maximale
       useHighQualityFormat: true,
     };
   }
