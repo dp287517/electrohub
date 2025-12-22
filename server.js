@@ -61,10 +61,17 @@ Au lieu de dire "rien à faire", tu PROPOSES:
 
 ## 🔍 RECHERCHE DOCUMENTAIRE INTELLIGENTE
 
-Quand tu détectes un équipement sans documentation ou quand on te demande de la doc:
+Quand on te demande de la documentation:
 1. Utilise {"action": "searchDoc", "params": {"query": "marque modèle fiche technique", "equipment": "nom"}}
-2. Je lancerai automatiquement une recherche web via plusieurs IA
-3. Tu recevras les résultats et pourras les présenter
+2. Je lancerai automatiquement une recherche web ET je chercherai les équipements correspondants dans l'installation
+3. Tu recevras:
+   - Les résultats web (specs, manuels, etc.)
+   - La liste des équipements correspondants dans la base (ex: "3 VSD Altivar trouvés")
+4. Après avoir reçu les résultats, TOUJOURS proposer d'associer la doc aux équipements trouvés!
+   - Ex: "J'ai trouvé la doc ET 3 variateurs Altivar dans ton installation. Tu veux que j'associe cette doc à ces équipements?"
+
+Pour associer la documentation trouvée:
+{"action": "attachDocToEquipments", "params": {"docUrl": "URL", "docTitle": "Titre", "equipments": [{"id": 1, "type": "vsd", "name": "Nom"}]}}
 
 ## 📊 GRAPHIQUES (quand pertinent)
 Pour les stats/analyses, génère un graphique:
@@ -75,7 +82,8 @@ Pour les stats/analyses, génère un graphique:
 ## ⚡ ACTIONS AUTONOMES
 \`\`\`json
 {"action": "createControl", "params": {"switchboardId": ID, "dueDate": "YYYY-MM-DD"}}
-{"action": "searchDoc", "params": {"query": "recherche", "equipmentId": "id"}}
+{"action": "searchDoc", "params": {"query": "modèle fabricant", "equipmentId": "id"}}
+{"action": "attachDocToEquipments", "params": {"docUrl": "URL", "docTitle": "Titre doc", "equipments": [{"id": 1, "type": "vsd", "name": "Nom"}]}}
 {"action": "rescheduleControl", "params": {"controlId": ID, "newDate": "YYYY-MM-DD", "reason": "..."}}
 {"action": "batchReschedule", "params": {"controls": [...], "daysToAdd": 7}}
 {"action": "getUnfinishedTasks", "params": {}}
@@ -287,13 +295,14 @@ async function getAIContext(site) {
     // ========== VSD EQUIPMENTS ==========
     try {
       const vsdRes = await pool.query(`
-        SELECT id, name, building, floor, location, manufacturer, model, power, last_control_date
+        SELECT id, name, building, floor, location, manufacturer, model, power_kw, next_check_date
         FROM vsd_equipments WHERE site = $1 ORDER BY building, name LIMIT 50
       `, [site]);
       context.vsd.count = vsdRes.rows.length;
       context.vsd.list = vsdRes.rows.map(v => ({
         ...v,
-        lastControlFormatted: v.last_control_date ? new Date(v.last_control_date).toLocaleDateString('fr-FR') : 'Jamais'
+        power: v.power_kw,
+        lastControlFormatted: v.next_check_date ? new Date(v.next_check_date).toLocaleDateString('fr-FR') : 'Jamais'
       }));
     } catch (e) {
       console.error('[AI] VSD error:', e.message);
@@ -302,7 +311,7 @@ async function getAIContext(site) {
     // ========== MECA EQUIPMENTS ==========
     try {
       const mecaRes = await pool.query(`
-        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.type, e.last_control_date
+        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.equipment_type, e.next_check_date
         FROM meca_equipments e
         INNER JOIN sites s ON s.id = e.site_id
         WHERE s.name = $1 ORDER BY e.building, e.name LIMIT 50
@@ -310,7 +319,8 @@ async function getAIContext(site) {
       context.meca.count = mecaRes.rows.length;
       context.meca.list = mecaRes.rows.map(m => ({
         ...m,
-        lastControlFormatted: m.last_control_date ? new Date(m.last_control_date).toLocaleDateString('fr-FR') : 'Jamais'
+        type: m.equipment_type,
+        lastControlFormatted: m.next_check_date ? new Date(m.next_check_date).toLocaleDateString('fr-FR') : 'Jamais'
       }));
     } catch (e) {
       console.error('[AI] MECA error:', e.message);
@@ -325,7 +335,7 @@ async function getAIContext(site) {
         // Get ATEX equipments with their last check result AND details
         const atexRes = await pool.query(`
           SELECT
-            e.id, e.name, e.building, e.zone, e.equipment, e.type, e.brand, e.model,
+            e.id, e.name, e.building, e.zone, e.equipment, e.type, e.manufacturer, e.manufacturer_ref,
             c.result as last_result,
             c.date as last_check_date,
             c.items as check_items,
@@ -370,8 +380,8 @@ async function getAIContext(site) {
               building: eq.building || 'N/A',
               zone: eq.zone || 'N/A',
               type: eq.type || eq.equipment || 'N/A',
-              brand: eq.brand || '',
-              model: eq.model || '',
+              brand: eq.manufacturer || '',
+              model: eq.manufacturer_ref || '',
               lastCheckDate: eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : 'N/A',
               checkedBy: eq.checked_by || 'N/A',
               ncDetails: ncDetails.length > 0 ? ncDetails : ['Vérification complète requise'],
@@ -444,7 +454,7 @@ async function getAIContext(site) {
 
       if (siteId) {
         const atexOldRes = await pool.query(`
-          SELECT e.id, e.name, e.building, e.zone, e.brand, e.model,
+          SELECT e.id, e.name, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
             (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) as last_check
           FROM atex_equipments e
           WHERE e.site_id = $1
@@ -461,11 +471,11 @@ async function getAIContext(site) {
               building: eq.building, zone: eq.zone
             });
           }
-          if (!eq.brand || !eq.model) {
+          if (!eq.manufacturer || !eq.manufacturer_ref) {
             context.proactive.withoutDocumentation.push({
               id: eq.id, name: eq.name, type: 'ATEX',
               building: eq.building, zone: eq.zone,
-              issue: 'Marque/modèle manquant - documentation introuvable'
+              issue: 'Fabricant/référence manquant - documentation introuvable'
             });
           }
         });
@@ -1003,14 +1013,75 @@ async function executeAIAction(action, params, site) {
         // Also search local documents
         const localResults = await searchDocuments(query);
 
+        // 🔍 SEARCH FOR MATCHING EQUIPMENT IN DATABASE
+        // Extract potential manufacturer and model from query
+        const queryLower = query.toLowerCase();
+        const matchingEquipments = [];
+
+        // Search VSD equipments
+        try {
+          const vsdRes = await pool.query(`
+            SELECT id, name, building, floor, manufacturer, model, 'vsd' as equipment_type
+            FROM vsd_equipments
+            WHERE LOWER(model) LIKE $1 OR LOWER(manufacturer) LIKE $1 OR LOWER(name) LIKE $1
+            LIMIT 20
+          `, [`%${queryLower}%`]);
+          matchingEquipments.push(...vsdRes.rows);
+        } catch (e) { /* ignore */ }
+
+        // Search MECA equipments
+        try {
+          const mecaRes = await pool.query(`
+            SELECT id, name, building, floor, manufacturer, model, 'meca' as equipment_type
+            FROM meca_equipments
+            WHERE LOWER(model) LIKE $1 OR LOWER(manufacturer) LIKE $1 OR LOWER(name) LIKE $1
+            LIMIT 20
+          `, [`%${queryLower}%`]);
+          matchingEquipments.push(...mecaRes.rows);
+        } catch (e) { /* ignore */ }
+
+        // Search ATEX equipments
+        try {
+          const atexRes = await pool.query(`
+            SELECT id, name, building, zone, manufacturer, manufacturer_ref as model, 'atex' as equipment_type
+            FROM atex_equipments
+            WHERE LOWER(manufacturer_ref) LIKE $1 OR LOWER(manufacturer) LIKE $1 OR LOWER(name) LIKE $1
+            LIMIT 20
+          `, [`%${queryLower}%`]);
+          matchingEquipments.push(...atexRes.rows);
+        } catch (e) { /* ignore */ }
+
+        // Build response with matching equipment info
+        let matchingMessage = '';
+        if (matchingEquipments.length > 0) {
+          matchingMessage = `\n\n📦 **${matchingEquipments.length} équipement(s) correspondant(s) trouvé(s) dans votre installation:**\n`;
+          matchingEquipments.slice(0, 10).forEach(eq => {
+            matchingMessage += `• **${eq.name}** (${eq.equipment_type.toUpperCase()}) - ${eq.building || 'N/A'}${eq.floor ? '/' + eq.floor : ''}${eq.zone ? ' Zone ' + eq.zone : ''}\n`;
+          });
+          if (matchingEquipments.length > 10) {
+            matchingMessage += `• ... et ${matchingEquipments.length - 10} autres\n`;
+          }
+          matchingMessage += `\n💡 Souhaites-tu que j'associe cette documentation à ces équipements?`;
+        }
+
         return {
           success: true,
           equipment: equipmentInfo,
           webSearch: webResults,
           localDocuments: localResults,
+          matchingEquipments: matchingEquipments.map(eq => ({
+            id: eq.id,
+            name: eq.name,
+            type: eq.equipment_type,
+            building: eq.building,
+            floor: eq.floor,
+            zone: eq.zone
+          })),
+          matchingCount: matchingEquipments.length,
           message: `🔍 Recherche documentation pour ${equipmentInfo.name}:\n` +
             (webResults.summary ? `\n**Résultats web:**\n${webResults.summary.substring(0, 500)}...` : '') +
-            (localResults.count > 0 ? `\n\n**${localResults.count} documents locaux trouvés**` : '')
+            (localResults.count > 0 ? `\n\n**${localResults.count} documents locaux trouvés**` : '') +
+            matchingMessage
         };
       }
 
@@ -1043,6 +1114,72 @@ async function executeAIAction(action, params, site) {
           found: foundCount,
           results,
           message: `🔍 Recherche auto: ${foundCount}/${results.length} documentations trouvées`
+        };
+      }
+
+      case 'attachDocToEquipments': {
+        // Attach documentation URL to multiple equipments
+        const { docUrl, docTitle, equipments } = params;
+        // equipments = [{id, type: 'vsd'|'meca'|'atex'}]
+
+        if (!docUrl || !equipments || equipments.length === 0) {
+          return { success: false, message: '❌ URL de documentation ou équipements manquants' };
+        }
+
+        const updated = [];
+        const errors = [];
+
+        for (const eq of equipments) {
+          try {
+            const tables = {
+              vsd: 'vsd_equipments',
+              meca: 'meca_equipments',
+              atex: 'atex_equipments'
+            };
+            const table = tables[eq.type];
+            if (!table) {
+              errors.push({ id: eq.id, error: 'Type inconnu' });
+              continue;
+            }
+
+            // Update documentation_url field (create column if doesn't exist)
+            await pool.query(`
+              UPDATE ${table}
+              SET documentation_url = $1, documentation_title = $2, updated_at = NOW()
+              WHERE id = $3
+            `, [docUrl, docTitle || 'Documentation technique', eq.id]);
+
+            updated.push({ id: eq.id, type: eq.type, name: eq.name });
+          } catch (e) {
+            // If column doesn't exist, try to add it
+            try {
+              const tables = {
+                vsd: 'vsd_equipments',
+                meca: 'meca_equipments',
+                atex: 'atex_equipments'
+              };
+              const table = tables[eq.type];
+              await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS documentation_url TEXT`);
+              await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS documentation_title TEXT`);
+              await pool.query(`
+                UPDATE ${table}
+                SET documentation_url = $1, documentation_title = $2, updated_at = NOW()
+                WHERE id = $3
+              `, [docUrl, docTitle || 'Documentation technique', eq.id]);
+              updated.push({ id: eq.id, type: eq.type, name: eq.name });
+            } catch (e2) {
+              errors.push({ id: eq.id, error: e2.message });
+            }
+          }
+        }
+
+        return {
+          success: updated.length > 0,
+          updated,
+          errors,
+          message: updated.length > 0
+            ? `✅ Documentation associée à ${updated.length} équipement(s):\n${updated.map(u => `• ${u.name || u.id} (${u.type.toUpperCase()})`).join('\n')}`
+            : `❌ Impossible d'associer la documentation: ${errors.map(e => e.error).join(', ')}`
         };
       }
 
