@@ -103,13 +103,13 @@ export function getPDFConfig() {
     useHighQualityFormat: true,
   };
 
-  // 📱 TÉLÉPHONE BAS DE GAMME → Qualité réduite mais correcte
+  // 📱 TÉLÉPHONE BAS DE GAMME → Qualité augmentée
   if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: 2.5,
-      maxBitmapWidth: 3500,
-      minBitmapWidth: 1500,
-      maxScale: 4.0,
+      qualityBoost: 3.0,
+      maxBitmapWidth: 4500,
+      minBitmapWidth: 2000,
+      maxScale: 5.0,
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "print",
@@ -118,19 +118,6 @@ export function getPDFConfig() {
   }
   // Mobile + réseau lent
   else if (isMobile && networkQuality === "slow") {
-    config = {
-      qualityBoost: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.8 : 2.2),
-      maxBitmapWidth: isVeryHighDPI ? 4500 : (isHighDPI ? 4000 : 3500),
-      minBitmapWidth: 2000,
-      maxScale: isVeryHighDPI ? 5.0 : (isHighDPI ? 4.5 : 4.0),
-      minScale: 0.5,
-      enableImageSmoothing: true,
-      intent: "print",
-      useHighQualityFormat: true,
-    };
-  }
-  // Mobile + réseau moyen
-  else if (isMobile && networkQuality === "medium") {
     config = {
       qualityBoost: isVeryHighDPI ? 3.5 : (isHighDPI ? 3.2 : 2.8),
       maxBitmapWidth: isVeryHighDPI ? 5500 : (isHighDPI ? 5000 : 4500),
@@ -142,13 +129,26 @@ export function getPDFConfig() {
       useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau rapide → Qualité maximale
+  // Mobile + réseau moyen
+  else if (isMobile && networkQuality === "medium") {
+    config = {
+      qualityBoost: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.8 : 3.2),
+      maxBitmapWidth: isVeryHighDPI ? 6500 : (isHighDPI ? 6000 : 5500),
+      minBitmapWidth: 3000,
+      maxScale: isVeryHighDPI ? 7.0 : (isHighDPI ? 6.5 : 6.0),
+      minScale: 0.5,
+      enableImageSmoothing: true,
+      intent: "print",
+      useHighQualityFormat: true,
+    };
+  }
+  // Mobile + réseau rapide → Qualité maximale (proche PC)
   else if (isMobile) {
     config = {
-      qualityBoost: isVeryHighDPI ? 4.0 : (isHighDPI ? 3.5 : 3.0),
-      maxBitmapWidth: isVeryHighDPI ? 7000 : (isHighDPI ? 6000 : 5000),
-      minBitmapWidth: 3000,
-      maxScale: isVeryHighDPI ? 7.0 : (isHighDPI ? 6.0 : 5.0),
+      qualityBoost: isVeryHighDPI ? 4.0 : (isHighDPI ? 4.0 : 3.5),
+      maxBitmapWidth: isVeryHighDPI ? 8000 : (isHighDPI ? 7500 : 6500),
+      minBitmapWidth: 3500,
+      maxScale: isVeryHighDPI ? 8.0 : (isHighDPI ? 7.5 : 7.0),
       minScale: 0.5,
       enableImageSmoothing: true,
       intent: "print",
