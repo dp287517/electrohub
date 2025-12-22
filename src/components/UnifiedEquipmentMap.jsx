@@ -37,7 +37,6 @@ import {
   Zap,
   Cpu,
   Wrench,
-  Truck,
   Battery,
   AlertTriangle,
   Clock,
@@ -76,14 +75,14 @@ const EQUIPMENT_TYPES = {
     label: "Méca",
     icon: Wrench,
     color: "#3b82f6", // blue
-    gradient: "radial-gradient(circle at 30% 30%, #fb923c, #ea580c)", // orange gradient like Meca_map
+    gradient: "radial-gradient(circle at 30% 30%, #3b82f6, #2563eb)", // blue gradient like Meca_map
     api: api.mecaMaps,
     link: (id) => `/app/meca?meca=${id}`,
     mapLink: (id, plan) => `/app/meca/map?meca=${id}&plan=${plan}`,
   },
   mobile: {
     label: "Mobiles",
-    icon: Truck,
+    icon: Cpu,
     color: "#06b6d4", // cyan (like MobileEquipments_map from-cyan-400 to-blue-600)
     gradient: "linear-gradient(to bottom right, #22d3ee, #2563eb)", // cyan-to-blue like MobileEquipments_map
     api: api.mobileEquipment?.maps,
