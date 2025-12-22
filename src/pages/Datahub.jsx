@@ -19,6 +19,7 @@ import {
   Check, XCircle, MinusCircle, PlusCircle, ArrowUp, ArrowDown, ArrowLeft, ArrowRight
 } from 'lucide-react';
 import { api } from '../lib/api';
+import MiniElectro from '../components/MiniElectro';
 
 // Icon mapping for dynamic category icons
 const ICON_MAP = {
@@ -479,6 +480,17 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
             </div>
           )}
         </div>
+
+        {/* Mini Electro - AI Assistant */}
+        <MiniElectro
+          equipment={item}
+          equipmentType="datahub"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              onRefresh?.();
+            }
+          }}
+        />
       </div>
 
       <div className="border-t p-4 space-y-2">

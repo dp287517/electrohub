@@ -12,6 +12,7 @@ import { generatePdfThumbnail } from "../lib/pdf-utils.js";
 import AtexMap from "./Atex-map.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
+import MiniElectro from "../components/MiniElectro";
 
 // 📊 Chart.js imports pour l'onglet Analyse
 import { Doughnut, Bar, Line, Radar } from "react-chartjs-2";
@@ -3578,6 +3579,17 @@ function EquipmentDrawer({
                 title="Historique complet"
                 maxHeight="350px"
                 showFilters={true}
+              />
+
+              {/* Mini Electro - AI Assistant */}
+              <MiniElectro
+                equipment={editing}
+                equipmentType="atex"
+                onAction={(action, params) => {
+                  if (action === 'docAttached') {
+                    onRefresh?.();
+                  }
+                }}
               />
             </div>
           )}

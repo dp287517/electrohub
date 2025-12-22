@@ -725,9 +725,88 @@ async function searchDocuments(query, limit = 5) {
 // ============================================================
 // MULTI-MODEL WEB SEARCH FOR DOCUMENTATION
 // ============================================================
+
+// Known manufacturer documentation portals
+const MANUFACTURER_PORTALS = {
+  'schneider': {
+    name: 'Schneider Electric',
+    baseUrl: 'https://www.se.com/ww/en/download/document/',
+    searchUrl: 'https://www.se.com/ww/en/product/',
+    pdfPattern: (model) => `https://download.schneider-electric.com/files?p_Doc_Ref=${model}`
+  },
+  'abb': {
+    name: 'ABB',
+    baseUrl: 'https://library.abb.com/',
+    searchUrl: 'https://new.abb.com/products/',
+    pdfPattern: (model) => `https://library.abb.com/en/search?q=${encodeURIComponent(model)}`
+  },
+  'siemens': {
+    name: 'Siemens',
+    baseUrl: 'https://support.industry.siemens.com/',
+    searchUrl: 'https://mall.industry.siemens.com/',
+    pdfPattern: (model) => `https://support.industry.siemens.com/cs/search?t=all&search=${encodeURIComponent(model)}`
+  },
+  'legrand': {
+    name: 'Legrand',
+    baseUrl: 'https://www.legrand.fr/',
+    searchUrl: 'https://www.legrand.fr/catalogue/',
+    pdfPattern: (model) => `https://www.legrand.fr/recherche?q=${encodeURIComponent(model)}`
+  },
+  'hager': {
+    name: 'Hager',
+    baseUrl: 'https://www.hager.fr/',
+    searchUrl: 'https://www.hager.fr/catalogue/',
+    pdfPattern: (model) => `https://www.hager.fr/recherche/${encodeURIComponent(model)}`
+  },
+  'danfoss': {
+    name: 'Danfoss',
+    baseUrl: 'https://www.danfoss.com/',
+    searchUrl: 'https://www.danfoss.com/en/search/',
+    pdfPattern: (model) => `https://www.danfoss.com/en/search/?query=${encodeURIComponent(model)}`
+  },
+  'altivar': {
+    name: 'Schneider Electric (Altivar)',
+    baseUrl: 'https://www.se.com/ww/en/',
+    pdfPattern: (model) => `https://www.se.com/ww/en/product-range/62129-altivar-machine-atv320/#documents`
+  }
+};
+
 async function searchWebForDocumentation(query, equipmentInfo = {}) {
   console.log(`[AI] 🌐 Web search for: ${query}`);
-  const results = { sources: [], summary: null };
+  const results = { sources: [], summary: null, pdfLinks: [] };
+
+  // Detect manufacturer from query or equipment info
+  const manufacturer = (equipmentInfo.manufacturer || query || '').toLowerCase();
+  const model = equipmentInfo.model || query || '';
+
+  // Generate direct PDF links based on known manufacturers
+  for (const [key, portal] of Object.entries(MANUFACTURER_PORTALS)) {
+    if (manufacturer.includes(key) || query.toLowerCase().includes(key)) {
+      results.pdfLinks.push({
+        title: `Documentation ${portal.name} - ${model}`,
+        url: portal.pdfPattern(model),
+        manufacturer: portal.name,
+        type: 'pdf'
+      });
+      break;
+    }
+  }
+
+  // Special handling for Altivar (Schneider VSD)
+  if (query.toLowerCase().includes('altivar') || model.toLowerCase().includes('atv')) {
+    results.pdfLinks.push({
+      title: `Altivar ${model} - Fiche technique`,
+      url: `https://www.se.com/ww/en/product-range/62129-altivar-machine-atv320/#documents`,
+      manufacturer: 'Schneider Electric',
+      type: 'pdf'
+    });
+    results.pdfLinks.push({
+      title: `Altivar ${model} - Manuel utilisateur`,
+      url: `https://www.se.com/ww/en/faqs/FA345853/`,
+      manufacturer: 'Schneider Electric',
+      type: 'manual'
+    });
+  }
 
   // Build enhanced search query
   const enhancedQuery = `${query} ${equipmentInfo.manufacturer || ''} ${equipmentInfo.model || ''} fiche technique datasheet PDF`.trim();
@@ -735,26 +814,40 @@ async function searchWebForDocumentation(query, equipmentInfo = {}) {
   // Try Gemini with web grounding first
   if (geminiModel) {
     try {
-      const prompt = `Recherche les informations techniques et la documentation pour cet équipement industriel:
+      const prompt = `Tu es un expert en documentation technique industrielle. Recherche les informations techniques pour:
 
 Équipement: ${equipmentInfo.name || query}
 Fabricant: ${equipmentInfo.manufacturer || 'inconnu'}
 Modèle: ${equipmentInfo.model || 'inconnu'}
 Type: ${equipmentInfo.type || 'équipement électrique'}
 
-Trouve:
-1. Lien vers la fiche technique officielle (datasheet PDF)
-2. Manuel d'installation et maintenance
-3. Caractéristiques techniques principales
-4. Procédures de maintenance recommandées
+IMPORTANT: Fournis:
+1. Les caractéristiques techniques PRINCIPALES (puissance, tension, courant, dimensions)
+2. Les procédures de maintenance recommandées
+3. Les points de contrôle importants pour la sécurité
+4. Si possible, le lien EXACT vers le PDF de la fiche technique officielle
 
-Réponds avec les URLs trouvées et un résumé des specs principales.`;
+Format ta réponse de manière structurée avec des bullet points.`;
 
       const result = await geminiModel.generateContent(prompt);
       const response = result.response.text();
 
       results.summary = response;
       results.sources.push({ provider: 'Gemini', content: response });
+
+      // Extract any URLs from the response
+      const urlRegex = /https?:\/\/[^\s\)\]]+/g;
+      const foundUrls = response.match(urlRegex) || [];
+      foundUrls.forEach(url => {
+        if (!results.pdfLinks.find(l => l.url === url)) {
+          results.pdfLinks.push({
+            title: url.includes('.pdf') ? 'Document PDF trouvé' : 'Lien documentation',
+            url: url,
+            type: url.includes('.pdf') ? 'pdf' : 'web'
+          });
+        }
+      });
+
       console.log('[AI] ✅ Gemini web search completed');
     } catch (e) {
       console.error('[AI] Gemini web search error:', e.message);
@@ -769,18 +862,23 @@ Réponds avec les URLs trouvées et un résumé des specs principales.`;
         messages: [
           {
             role: 'system',
-            content: 'Tu es un expert en documentation technique industrielle. Fournis des informations précises sur les équipements électriques et leurs spécifications.'
+            content: `Tu es un expert en documentation technique industrielle. Fournis des informations précises sur les équipements électriques.
+IMPORTANT: Inclus toujours des spécifications techniques concrètes (tension, puissance, courant) et des recommandations de maintenance.`
           },
           {
             role: 'user',
-            content: `Donne-moi les informations techniques pour: ${equipmentInfo.name || query}
+            content: `Donne-moi les informations techniques détaillées pour: ${equipmentInfo.name || query}
 Fabricant: ${equipmentInfo.manufacturer || 'inconnu'}
 Modèle: ${equipmentInfo.model || 'inconnu'}
 
-Inclus: spécifications, maintenance recommandée, points de contrôle importants.`
+Inclus:
+1. Spécifications techniques (tension, puissance, courant, fréquence)
+2. Procédures de maintenance recommandées
+3. Points de contrôle importants
+4. Intervalles de maintenance suggérés`
           }
         ],
-        max_tokens: 500
+        max_tokens: 800
       });
 
       const content = completion.choices[0]?.message?.content;
@@ -792,6 +890,15 @@ Inclus: spécifications, maintenance recommandée, points de contrôle important
     } catch (e) {
       console.error('[AI] OpenAI doc search error:', e.message);
     }
+  }
+
+  // Add fallback search links if no PDFs found
+  if (results.pdfLinks.length === 0) {
+    results.pdfLinks.push({
+      title: `Rechercher "${model}" sur Google`,
+      url: `https://www.google.com/search?q=${encodeURIComponent(query + ' datasheet PDF filetype:pdf')}`,
+      type: 'search'
+    });
   }
 
   return results;
@@ -1064,11 +1171,25 @@ async function executeAIAction(action, params, site) {
           matchingMessage += `\n💡 Souhaites-tu que j'associe cette documentation à ces équipements?`;
         }
 
+        // Build sources array with PDF links
+        const sources = [];
+        if (webResults.pdfLinks) {
+          webResults.pdfLinks.forEach(link => {
+            sources.push({
+              title: link.title,
+              url: link.url,
+              type: link.type,
+              manufacturer: link.manufacturer
+            });
+          });
+        }
+
         return {
           success: true,
           equipment: equipmentInfo,
           webSearch: webResults,
           localDocuments: localResults,
+          sources: sources, // PDF and documentation links
           matchingEquipments: matchingEquipments.map(eq => ({
             id: eq.id,
             name: eq.name,
@@ -1080,6 +1201,7 @@ async function executeAIAction(action, params, site) {
           matchingCount: matchingEquipments.length,
           message: `🔍 Recherche documentation pour ${equipmentInfo.name}:\n` +
             (webResults.summary ? `\n**Résultats web:**\n${webResults.summary.substring(0, 500)}...` : '') +
+            (sources.length > 0 ? `\n\n📄 **${sources.length} lien(s) de documentation trouvé(s)**` : '') +
             (localResults.count > 0 ? `\n\n**${localResults.count} documents locaux trouvés**` : '') +
             matchingMessage
         };
@@ -1753,6 +1875,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // Add action result if executed
     if (actionResult) {
       response.actionResult = actionResult;
+      // Merge sources from action result (e.g., searchDoc returns PDF links)
+      if (actionResult.sources && actionResult.sources.length > 0) {
+        response.sources = [...(response.sources || []), ...actionResult.sources];
+      }
     }
 
     res.json(response);
@@ -2047,6 +2173,198 @@ app.post("/api/ai-assistant/execute-action", express.json(), async (req, res) =>
   } catch (error) {
     console.error('[AI] Execute action error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================================
+// MINI ELECTRO - EQUIPMENT ANALYSIS ENDPOINT
+// ============================================================
+app.post("/api/ai-assistant/analyze-equipment", express.json(), async (req, res) => {
+  try {
+    const { equipment, equipmentType } = req.body;
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+    if (!equipment) {
+      return res.status(400).json({ success: false, message: 'Equipment data required' });
+    }
+
+    console.log(`[AI] 🔍 Analyzing equipment: ${equipment.name} (${equipmentType})`);
+
+    const issues = [];
+    const suggestions = [];
+    const stats = {};
+
+    // 1. Check documentation status
+    if (!equipment.documentationUrl && equipment.model) {
+      issues.push('Documentation technique manquante pour ce modèle');
+      suggestions.push({
+        icon: 'search',
+        title: 'Rechercher documentation',
+        description: `Trouver la fiche technique ${equipment.manufacturer || ''} ${equipment.model || ''}`.trim(),
+        action: 'searchDoc',
+        color: 'bg-blue-100'
+      });
+    }
+
+    // 2. Check control dates
+    if (equipment.lastControl) {
+      const lastDate = new Date(equipment.lastControl);
+      const daysSince = Math.floor((new Date() - lastDate) / (1000 * 60 * 60 * 24));
+
+      if (daysSince > 365) {
+        issues.push(`Contrôle en retard de ${daysSince - 365} jours`);
+        suggestions.push({
+          icon: 'calendar',
+          title: 'Planifier contrôle urgent',
+          description: 'Cet équipement nécessite un contrôle immédiat',
+          action: 'scheduleControl',
+          params: { equipmentId: equipment.id, priority: 'high' },
+          color: 'bg-red-100'
+        });
+      } else if (daysSince > 300) {
+        suggestions.push({
+          icon: 'calendar',
+          title: 'Contrôle à prévoir',
+          description: `Prochain contrôle dans ${365 - daysSince} jours`,
+          action: 'scheduleControl',
+          params: { equipmentId: equipment.id },
+          color: 'bg-orange-100'
+        });
+      }
+
+      stats['Dernier ctrl'] = `${daysSince}j`;
+    } else {
+      issues.push('Aucun contrôle enregistré');
+      suggestions.push({
+        icon: 'calendar',
+        title: 'Premier contrôle',
+        description: 'Planifier le premier contrôle de cet équipement',
+        action: 'scheduleControl',
+        params: { equipmentId: equipment.id },
+        color: 'bg-yellow-100'
+      });
+    }
+
+    // 3. Check status
+    if (equipment.status === 'non_conforme') {
+      issues.push('Équipement marqué non conforme');
+      suggestions.push({
+        icon: 'wrench',
+        title: 'Traiter la non-conformité',
+        description: 'Consulter les actions correctives recommandées',
+        action: 'treatNC',
+        params: { equipmentId: equipment.id, type: equipmentType },
+        color: 'bg-red-100'
+      });
+    }
+
+    // 4. Type-specific analysis
+    if (equipmentType === 'vsd') {
+      // Check for similar VSD equipment
+      try {
+        const similarRes = await pool.query(`
+          SELECT COUNT(*) as count FROM vsd_equipments
+          WHERE manufacturer = $1 OR model = $2
+        `, [equipment.manufacturer, equipment.model]);
+        const similarCount = parseInt(similarRes.rows[0]?.count || 0);
+        if (similarCount > 1) {
+          stats['Similaires'] = similarCount;
+          suggestions.push({
+            icon: 'chart',
+            title: `${similarCount} équipements similaires`,
+            description: 'Voir tous les équipements du même type',
+            action: 'showSimilar',
+            params: { manufacturer: equipment.manufacturer, model: equipment.model },
+            color: 'bg-green-100'
+          });
+        }
+      } catch (e) { /* ignore */ }
+    } else if (equipmentType === 'atex') {
+      stats['Zone'] = equipment.zone || 'N/A';
+      // Check ATEX NC count
+      try {
+        const ncRes = await pool.query(`
+          SELECT COUNT(*) as count FROM atex_checks
+          WHERE equipment_id = $1 AND result = 'non_conforme'
+        `, [equipment.id]);
+        const ncCount = parseInt(ncRes.rows[0]?.count || 0);
+        if (ncCount > 0) {
+          stats['NC'] = ncCount;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // 5. Search for matching equipment (for doc association)
+    let matchingEquipments = [];
+    if (equipment.model || equipment.manufacturer) {
+      try {
+        const searchTerm = `%${(equipment.model || equipment.manufacturer || '').toLowerCase()}%`;
+
+        // Search across all equipment tables
+        const tables = [
+          { name: 'vsd_equipments', type: 'vsd', modelCol: 'model' },
+          { name: 'meca_equipments', type: 'meca', modelCol: 'model' },
+          { name: 'atex_equipments', type: 'atex', modelCol: 'manufacturer_ref' }
+        ];
+
+        for (const table of tables) {
+          try {
+            const res = await pool.query(`
+              SELECT id, name, building, '${table.type}' as equipment_type
+              FROM ${table.name}
+              WHERE LOWER(${table.modelCol}) LIKE $1 OR LOWER(manufacturer) LIKE $1
+              LIMIT 10
+            `, [searchTerm]);
+            matchingEquipments.push(...res.rows);
+          } catch (e) { /* ignore table if not exists */ }
+        }
+
+        if (matchingEquipments.length > 1) {
+          stats['Match'] = matchingEquipments.length;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Default suggestion if no issues
+    if (suggestions.length === 0) {
+      suggestions.push({
+        icon: 'doc',
+        title: 'Équipement à jour',
+        description: 'Aucune action urgente requise',
+        action: 'viewDetails',
+        color: 'bg-green-100'
+      });
+    }
+
+    res.json({
+      success: true,
+      equipment: {
+        id: equipment.id,
+        name: equipment.name,
+        type: equipmentType
+      },
+      issues,
+      suggestions,
+      stats,
+      matchingEquipments: matchingEquipments.slice(0, 5),
+      analyzedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[AI] Analyze equipment error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      issues: ['Erreur lors de l\'analyse'],
+      suggestions: [{
+        icon: 'search',
+        title: 'Rechercher documentation',
+        description: 'Action de secours',
+        action: 'searchDoc',
+        color: 'bg-blue-100'
+      }],
+      stats: {}
+    });
   }
 });
 

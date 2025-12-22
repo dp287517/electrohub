@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { api, get, post, del } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
+import MiniElectro from '../components/MiniElectro';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
@@ -1088,6 +1089,17 @@ const DetailPanel = ({
             <p className="text-gray-600 text-sm whitespace-pre-wrap">{equipment.notes}</p>
           </div>
         )}
+
+        {/* Mini Electro - AI Assistant */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="hv"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            }
+          }}
+        />
       </div>
 
       {/* Actions */}
