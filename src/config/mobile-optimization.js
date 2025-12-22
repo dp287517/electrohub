@@ -6,21 +6,48 @@
  */
 export function isMobileDevice() {
   if (typeof window === "undefined") return false;
-  
+
   const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-  
+
   // Check for mobile devices
   const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
   if (mobileRegex.test(userAgent.toLowerCase())) return true;
-  
+
   // Check for small screens
   if (window.innerWidth <= 768) return true;
-  
+
   // Check for touch screen
   if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
     return window.innerWidth <= 1024;
   }
-  
+
+  return false;
+}
+
+/**
+ * Détecte si l'appareil est bas de gamme (téléphones chinois, vieux Android, etc.)
+ * Critères : peu de RAM, peu de cœurs CPU, ou petit écran avec faible DPR
+ */
+export function isLowEndDevice() {
+  if (typeof window === "undefined") return false;
+
+  // Vérifier la RAM (si disponible) - < 4 Go = bas de gamme
+  const ram = navigator.deviceMemory; // en Go
+  if (ram && ram < 4) return true;
+
+  // Vérifier les cœurs CPU - < 4 cœurs = bas de gamme
+  const cores = navigator.hardwareConcurrency;
+  if (cores && cores < 4) return true;
+
+  // Petit écran avec faible DPR = probablement bas de gamme
+  const dpr = window.devicePixelRatio || 1;
+  const screenWidth = window.screen?.width || window.innerWidth;
+  if (screenWidth < 400 && dpr < 2) return true;
+
+  // Vérifier les vieux Android (via User Agent)
+  const ua = navigator.userAgent.toLowerCase();
+  if (/android\s*[4-6]\./i.test(ua)) return true; // Android 4.x à 6.x
+
   return false;
 }
 
@@ -52,9 +79,11 @@ export function getNetworkQuality() {
 /**
  * Configuration PDF selon le type d'appareil
  * 🚀 VERSION NETTETÉ MAXIMALE - Plans parfaitement lisibles
+ * ⚡ Optimisé pour téléphones bas de gamme (Xiaomi, Redmi, Realme, etc.)
  */
 export function getPDFConfig() {
   const isMobile = isMobileDevice();
+  const isLowEnd = isLowEndDevice();
   const networkQuality = getNetworkQuality();
 
   // Adapter la qualité au DPR de l'écran (iPhone 15 = 3, Android haut de gamme = 2.5-3)
@@ -74,26 +103,40 @@ export function getPDFConfig() {
     useHighQualityFormat: true,  // Force PNG (lossless)
   };
 
-  // Mobile + réseau lent → Qualité optimisée mais nette
-  if (isMobile && networkQuality === "slow") {
+  // 📱 TÉLÉPHONE BAS DE GAMME → Config ultra-légère mais nette
+  // Xiaomi, Redmi, Realme, vieux Android, peu de RAM
+  if (isMobile && isLowEnd) {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.0 : (isHighDPI ? 1.8 : 1.2),
-      maxBitmapWidth: isVeryHighDPI ? 2400 : (isHighDPI ? 2000 : 1600),
-      minBitmapWidth: 1000,
-      maxScale: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.0 : 1.5),
+      qualityBoost: 1.0,           // Minimal mais suffisant
+      maxBitmapWidth: 1400,        // Léger en mémoire
+      minBitmapWidth: 800,
+      maxScale: 1.5,
       minScale: 0.5,
       enableImageSmoothing: false, // ⚡ Toujours désactivé pour netteté
       intent: "display",
-      useHighQualityFormat: true,  // PNG même sur réseau lent (priorité netteté)
+      useHighQualityFormat: true,  // PNG pour netteté (CSS crisp-edges fait le reste)
     };
   }
-  // Mobile + réseau moyen → Haute qualité nette
+  // Mobile + réseau lent → Qualité optimisée mais nette
+  else if (isMobile && networkQuality === "slow") {
+    config = {
+      qualityBoost: isVeryHighDPI ? 1.8 : (isHighDPI ? 1.5 : 1.2),
+      maxBitmapWidth: isVeryHighDPI ? 2200 : (isHighDPI ? 1800 : 1400),
+      minBitmapWidth: 900,
+      maxScale: isVeryHighDPI ? 2.2 : (isHighDPI ? 1.8 : 1.5),
+      minScale: 0.5,
+      enableImageSmoothing: false,
+      intent: "display",
+      useHighQualityFormat: true,
+    };
+  }
+  // Mobile + réseau moyen → Bonne qualité nette
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.2 : (isHighDPI ? 2.0 : 1.5),
-      maxBitmapWidth: isVeryHighDPI ? 3200 : (isHighDPI ? 2800 : 2200),
+      qualityBoost: isVeryHighDPI ? 2.0 : (isHighDPI ? 1.8 : 1.4),
+      maxBitmapWidth: isVeryHighDPI ? 2800 : (isHighDPI ? 2400 : 2000),
       minBitmapWidth: 1000,
-      maxScale: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.5 : 2.0),
+      maxScale: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
       minScale: 0.5,
       enableImageSmoothing: false,
       intent: "display",
@@ -103,10 +146,10 @@ export function getPDFConfig() {
   // Mobile + réseau rapide/inconnu → Qualité maximale
   else if (isMobile) {
     config = {
-      qualityBoost: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
-      maxBitmapWidth: isVeryHighDPI ? 3800 : (isHighDPI ? 3400 : 2800),
-      minBitmapWidth: 1200,
-      maxScale: isVeryHighDPI ? 3.2 : (isHighDPI ? 2.8 : 2.5),
+      qualityBoost: isVeryHighDPI ? 2.2 : (isHighDPI ? 2.0 : 1.6),
+      maxBitmapWidth: isVeryHighDPI ? 3400 : (isHighDPI ? 3000 : 2400),
+      minBitmapWidth: 1100,
+      maxScale: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.6 : 2.2),
       minScale: 0.5,
       enableImageSmoothing: false,
       intent: "display",
@@ -146,13 +189,17 @@ export function getLazyLoadConfig() {
  */
 export function logDeviceInfo() {
   const isMobile = isMobileDevice();
+  const isLowEnd = isLowEndDevice();
   const networkQuality = getNetworkQuality();
   const pdfConfig = getPDFConfig();
 
   console.group("📱 Device & Network Info");
   console.log("Mobile:", isMobile);
+  console.log("Low-end device:", isLowEnd);
   console.log("Screen size:", `${window.innerWidth}x${window.innerHeight}`);
   console.log("Device pixel ratio:", window.devicePixelRatio);
+  console.log("RAM:", navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "unknown");
+  console.log("CPU cores:", navigator.hardwareConcurrency || "unknown");
   console.log("Network quality:", networkQuality);
   console.log("PDF config:", pdfConfig);
   console.groupEnd();
