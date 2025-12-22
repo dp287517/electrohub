@@ -665,17 +665,36 @@ export default function DatahubMap() {
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();
-    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true, duration: 0.5 });
+    const map = mapRef.current;
 
-    // Flash animation on the marker element
-    const el = mk.getElement();
-    if (el) {
-      const innerDiv = el.querySelector('div');
-      if (innerDiv) {
-        innerDiv.classList.add("datahub-marker-flash");
-        setTimeout(() => innerDiv.classList.remove("datahub-marker-flash"), 2000);
+    // Function to apply flash animation to the marker
+    const applyFlash = () => {
+      const el = mk.getElement();
+      if (el) {
+        const innerDiv = el.querySelector('div');
+        if (innerDiv) {
+          innerDiv.classList.add("datahub-marker-flash");
+          setTimeout(() => innerDiv.classList.remove("datahub-marker-flash"), 2000);
+        }
       }
-    }
+    };
+
+    // Wait for map to finish panning before applying flash
+    // This ensures the marker is in the viewport and rendered in DOM (especially on mobile)
+    const onMoveEnd = () => {
+      map.off('moveend', onMoveEnd);
+      // Small delay to ensure marker element is rendered in DOM
+      setTimeout(applyFlash, 100);
+    };
+
+    map.on('moveend', onMoveEnd);
+    map.setView(ll, map.getZoom(), { animate: true, duration: 0.5 });
+
+    // Fallback timeout in case moveend doesn't fire (marker already in view)
+    setTimeout(() => {
+      map.off('moveend', onMoveEnd);
+      applyFlash();
+    }, 700);
   }, []);
 
   // Handle map click
@@ -1062,8 +1081,10 @@ export default function DatahubMap() {
                             setSelectedPosition(pos || null);
                             // Animate to marker if placed
                             if (pos) {
-                              // Small delay to let the effect redraw first
-                              setTimeout(() => highlightMarker(item.id), 50);
+                              // Close sidebar on mobile so user can see the map animation
+                              if (isMobile) setShowSidebar(false);
+                              // Small delay to let the sidebar close and effect redraw first
+                              setTimeout(() => highlightMarker(item.id), isMobile ? 150 : 50);
                             }
                           }}
                           className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
