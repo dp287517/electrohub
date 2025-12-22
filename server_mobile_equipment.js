@@ -2146,7 +2146,7 @@ app.get('/api/mobile-equipment/report', async (req, res) => {
     if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
-    const { rows: equipments } = await pool.query(`
+    let { rows: equipments } = await pool.query(`
       SELECT e.*, c.name as category_name,
              (SELECT MAX(ch.created_at) FROM me_checks ch WHERE ch.equipment_id = e.id) as last_check,
              (SELECT ch.status FROM me_checks ch WHERE ch.equipment_id = e.id ORDER BY ch.created_at DESC LIMIT 1) as last_status
@@ -2155,6 +2155,11 @@ app.get('/api/mobile-equipment/report', async (req, res) => {
         ${where}
        ORDER BY e.building, e.floor, e.name
     `, params);
+
+    // Filter by status if provided (last_status is computed from subquery)
+    if (status) {
+      equipments = equipments.filter(e => e.last_status === status);
+    }
 
     const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
@@ -2190,9 +2195,10 @@ app.get('/api/mobile-equipment/report', async (req, res) => {
     doc.text('Statut', 470, y + 6);
     y += 20;
 
-    for (const eq of equipments) {
+    for (let i = 0; i < equipments.length; i++) {
+      const eq = equipments[i];
       if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
       doc.rect(50, y, 495, 18).fill(bgColor);
       doc.fontSize(8).fillColor('#374151');
       doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });

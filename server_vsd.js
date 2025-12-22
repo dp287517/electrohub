@@ -1061,19 +1061,19 @@ app.get("/report", async (req, res) => {
     const params = [];
     let idx = 1;
 
-    if (building) { where += ` AND e.table_name = $${idx++}`; params.push(building); }
+    if (building) { where += ` AND e.building = $${idx++}`; params.push(building); }
     if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
-    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.inverter ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.manufacturer_ref ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
     if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
     const { rows: equipments } = await pool.query(`
       SELECT e.*,
              (SELECT COUNT(*) FROM vsd_checks c WHERE c.equipment_id = e.id) as check_count,
-             (SELECT MAX(c.created_at) FROM vsd_checks c WHERE c.equipment_id = e.id) as last_check
+             (SELECT MAX(c.date) FROM vsd_checks c WHERE c.equipment_id = e.id) as last_check
         FROM vsd_equipments e
         ${where}
-       ORDER BY e.table_name, e.floor, e.name
+       ORDER BY e.building, e.floor, e.name
     `, params);
 
     // Get stats
@@ -1117,22 +1117,23 @@ app.get("/report", async (req, res) => {
     doc.rect(50, y, 495, 20).fill('#e5e7eb');
     doc.fontSize(9).fillColor('#374151');
     doc.text('Nom', 55, y + 6);
-    doc.text('Variateur', 150, y + 6);
-    doc.text('Tableau', 280, y + 6);
+    doc.text('Référence', 150, y + 6);
+    doc.text('Bâtiment', 280, y + 6);
     doc.text('Étage', 380, y + 6);
     doc.text('Dernier ctrl', 440, y + 6);
     y += 20;
 
     // Table rows
-    for (const eq of equipments) {
+    for (let i = 0; i < equipments.length; i++) {
+      const eq = equipments[i];
       if (y > 750) { doc.addPage(); y = 50; }
 
-      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
       doc.rect(50, y, 495, 18).fill(bgColor);
       doc.fontSize(8).fillColor('#374151');
       doc.text((eq.name || '-').substring(0, 25), 55, y + 5, { width: 90 });
-      doc.text((eq.inverter || '-').substring(0, 30), 150, y + 5, { width: 125 });
-      doc.text((eq.table_name || '-').substring(0, 20), 280, y + 5, { width: 95 });
+      doc.text((eq.manufacturer_ref || '-').substring(0, 30), 150, y + 5, { width: 125 });
+      doc.text((eq.building || '-').substring(0, 20), 280, y + 5, { width: 95 });
       doc.text(eq.floor || '-', 380, y + 5, { width: 55 });
       doc.text(eq.last_check ? new Date(eq.last_check).toLocaleDateString('fr-FR') : '-', 440, y + 5);
       y += 18;
