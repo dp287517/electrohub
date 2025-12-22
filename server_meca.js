@@ -1393,12 +1393,23 @@ app.delete("/api/meca/subcategories/:id", async (req, res) => {
 });
 
 // -------------------------------------------------
-// REPORT PDF GENERATION
+// REPORT PDF GENERATION - VERSION PROFESSIONNELLE
 // -------------------------------------------------
 app.get("/api/meca/report", async (req, res) => {
   try {
     const site = req.headers["x-site"] || "Default";
     const { building, floor, category_id, search, from_date, to_date } = req.query;
+
+    const colors = {
+      primary: '#059669',    // Emerald (mécanique)
+      secondary: '#10b981',
+      success: '#059669',
+      danger: '#dc2626',
+      warning: '#d97706',
+      text: '#111827',
+      muted: '#6b7280',
+      light: '#f3f4f6',
+    };
 
     let where = "WHERE 1=1";
     const params = [];
@@ -1420,52 +1431,246 @@ app.get("/api/meca/report", async (req, res) => {
        ORDER BY e.building, e.floor, e.name
     `, params);
 
-    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    let siteInfo = { company_name: site, site_name: site };
+    try {
+      const { rows } = await pool.query(`SELECT company_name, company_address FROM site_settings WHERE site = $1`, [site]);
+      if (rows[0]) siteInfo = { ...siteInfo, ...rows[0] };
+    } catch (e) { /* ignore */ }
+
+    // Stats
+    const byCategory = {};
+    equipments.forEach(e => {
+      const cat = e.category_name || 'Autres';
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    });
+    const byBuilding = {};
+    equipments.forEach(e => {
+      const bldg = e.building || 'Non renseigne';
+      if (!byBuilding[bldg]) byBuilding[bldg] = [];
+      byBuilding[bldg].push(e);
+    });
+    const criticalCount = equipments.filter(e => e.criticality === 'critical').length;
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true, info: {
+      Title: 'Rapport Equipements Mecaniques',
+      Author: siteInfo.company_name,
+      Subject: 'Pompes, moteurs, ventilateurs, equipements mecaniques'
+    }});
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="rapport_meca_${new Date().toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="Rapport_MECA_${site.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf"`);
     doc.pipe(res);
 
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT ÉQUIPEMENTS MÉCANIQUES', 50, 50, { align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+    // ========== PAGE DE GARDE ==========
+    doc.rect(0, 0, 595, 842).fill('#ecfdf5');
+    doc.rect(0, 0, 595, 120).fill(colors.primary);
 
-    let y = 100;
-    doc.rect(50, y, 495, 40).fill('#f3f4f6');
-    doc.fontSize(11).fillColor('#374151');
-    doc.text(`Total: ${equipments.length} équipements`, 60, y + 12);
+    doc.fontSize(26).font('Helvetica-Bold').fillColor('#fff')
+       .text('Rapport Equipements Mecaniques', 50, 35, { width: 495, align: 'center' });
+    doc.fontSize(12).font('Helvetica').fillColor('#fff')
+       .text('Pompes - Moteurs - Ventilateurs - Equipements mecaniques', 50, 75, { width: 495, align: 'center' });
 
-    y += 60;
-    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
-    y += 25;
+    doc.fontSize(22).font('Helvetica-Bold').fillColor(colors.primary)
+       .text(siteInfo.company_name || 'Entreprise', 50, 160, { align: 'center', width: 495 });
+    doc.fontSize(14).font('Helvetica').fillColor(colors.text)
+       .text(`Site: ${site}`, 50, 195, { align: 'center', width: 495 });
+    doc.fontSize(10).fillColor(colors.muted)
+       .text(`Document genere le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 50, 230, { align: 'center', width: 495 });
 
-    doc.rect(50, y, 495, 20).fill('#e5e7eb');
-    doc.fontSize(9).fillColor('#374151');
-    doc.text('Nom', 55, y + 6);
-    doc.text('Catégorie', 180, y + 6);
-    doc.text('Bâtiment', 320, y + 6);
-    doc.text('Étage', 420, y + 6);
-    doc.text('Statut', 480, y + 6);
-    y += 20;
+    const statsY = 280;
+    doc.rect(100, statsY, 395, 180).fillAndStroke('#fff', colors.primary);
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
+       .text('Synthese', 120, statsY + 15, { width: 355, align: 'center' });
 
-    for (let i = 0; i < equipments.length; i++) {
-      const eq = equipments[i];
-      if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
-      doc.rect(50, y, 495, 18).fill(bgColor);
-      doc.fontSize(8).fillColor('#374151');
-      doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
-      doc.text((eq.category_name || '-').substring(0, 25), 180, y + 5, { width: 135 });
-      doc.text((eq.building || '-').substring(0, 15), 320, y + 5, { width: 95 });
-      doc.text(eq.floor || '-', 420, y + 5, { width: 55 });
-      doc.text(eq.status || '-', 480, y + 5);
-      y += 18;
+    const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const statsItems = [
+      { label: 'Equipements mecaniques', value: equipments.length, color: colors.primary },
+      { label: 'Batiments', value: Object.keys(byBuilding).length, color: colors.secondary },
+      { label: 'Categories', value: Object.keys(byCategory).length, color: colors.secondary },
+      { label: 'Equipements critiques', value: criticalCount, color: criticalCount > 0 ? colors.danger : colors.success },
+    ];
+
+    let statY = statsY + 50;
+    statsItems.forEach(item => {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(item.label, 130, statY);
+      doc.font('Helvetica-Bold').fillColor(item.color).text(String(item.value), 400, statY, { width: 70, align: 'right' });
+      statY += 26;
+    });
+
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Reglementation et maintenance' },
+      { num: '2', title: 'Presentation de l\'etablissement' },
+      { num: '3', title: 'Inventaire par batiment' },
+      { num: '4', title: 'Fiches equipements' },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
+      doc.font('Helvetica').text(item.title, 80, somY);
+      somY += 30;
+    });
+
+    // ========== 1. RÉGLEMENTATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Reglementation et maintenance', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let regY = 100;
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(colors.text).text('Maintenance preventive', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('Les equipements mecaniques doivent faire l\'objet d\'une maintenance preventive reguliere selon les recommandations fabricant et les normes en vigueur.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('Controle des moteurs electriques', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('Les moteurs electriques doivent etre controles periodiquement (vibrations, temperature, isolation) pour prevenir les pannes.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('Pompes et ventilateurs', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('Les pompes et ventilateurs necessitent un suivi des performances (debit, pression) et de l\'usure des pieces mecaniques.', 50, regY, { width: 495 });
+
+    // ========== 2. PRÉSENTATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Presentation de l\'etablissement', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let presY = 100;
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, presY);
+    presY += 25;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Site: ${site}`, 50, presY);
+    presY += 40;
+
+    doc.fontSize(12).font('Helvetica-Bold').text('Repartition par categorie', 50, presY);
+    presY += 25;
+
+    topCategories.forEach(([cat, count]) => {
+      doc.rect(50, presY, 240, 30).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(10).font('Helvetica').fillColor(colors.muted).text(cat, 60, presY + 8);
+      doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(String(count), 220, presY + 6, { align: 'right', width: 50 });
+      presY += 35;
+    });
+
+    // ========== 3. INVENTAIRE ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('3. Inventaire par batiment', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    const invHeaders = ['Nom', 'Categorie', 'Etage', 'Puissance', 'Criticite'];
+    const invColW = [140, 120, 60, 80, 70];
+
+    Object.entries(byBuilding).forEach(([bldg, bldgEquips]) => {
+      if (invY > 700) { doc.addPage(); invY = 50; }
+
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.primary).text(`Batiment: ${bldg}`, 50, invY);
+      invY += 25;
+
+      let x = 50;
+      invHeaders.forEach((h, i) => {
+        doc.rect(x, invY, invColW[i], 18).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(7).font('Helvetica-Bold').fillColor('#fff').text(h, x + 3, invY + 5);
+        x += invColW[i];
+      });
+      invY += 18;
+
+      bldgEquips.forEach((eq, idx) => {
+        if (invY > 750) { doc.addPage(); invY = 50; }
+        const row = [(eq.name || '-').substring(0, 28), (eq.category_name || '-').substring(0, 22), eq.floor || '-', eq.power_kw ? `${eq.power_kw} kW` : '-', eq.criticality || '-'];
+        x = 50;
+        const bgColor = idx % 2 === 0 ? '#fff' : colors.light;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 16).fillAndStroke(bgColor, '#e5e7eb');
+          let txtColor = colors.text;
+          if (i === 4 && cell === 'critical') txtColor = colors.danger;
+          doc.fontSize(6).font('Helvetica').fillColor(txtColor).text(String(cell), x + 3, invY + 4);
+          x += invColW[i];
+        });
+        invY += 16;
+      });
+      invY += 15;
+    });
+
+    // ========== 4. FICHES ÉQUIPEMENTS ==========
+    if (equipments.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('4. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(`${equipments.length} equipement(s)`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const cardHeight = 160;
+
+        if (ficheY + cardHeight > 750) { doc.addPage(); ficheY = 50; }
+
+        doc.rect(50, ficheY, 495, cardHeight).stroke(colors.light);
+        doc.rect(50, ficheY, 495, 25).fill(colors.primary);
+        doc.fontSize(10).font('Helvetica-Bold').fillColor('#fff')
+           .text(`${eq.name || 'Equipement'}`, 60, ficheY + 7, { width: 350 });
+        doc.fontSize(8).font('Helvetica').fillColor('#fff')
+           .text(eq.category_name || '-', 420, ficheY + 8, { width: 110, align: 'right' });
+
+        let infoY = ficheY + 35;
+        const col1 = 60, col2 = 200, col3 = 340;
+
+        const info = [
+          [['Tag', eq.tag || '-'], ['Batiment', eq.building || '-'], ['Etage', eq.floor || '-']],
+          [['Type', eq.equipment_type || '-'], ['Fabricant', eq.manufacturer || '-'], ['Modele', eq.model || '-']],
+          [['Puissance', eq.power_kw ? `${eq.power_kw} kW` : '-'], ['Tension', eq.voltage ? `${eq.voltage}V` : '-'], ['Vitesse', eq.speed_rpm ? `${eq.speed_rpm} rpm` : '-']],
+          [['Criticite', eq.criticality || '-'], ['Statut', eq.status || '-'], ['IP', eq.ip_rating || '-']],
+        ];
+
+        info.forEach(row => {
+          [col1, col2, col3].forEach((cx, ci) => {
+            if (row[ci]) {
+              doc.fontSize(7).font('Helvetica-Bold').fillColor(colors.text).text(row[ci][0] + ':', cx, infoY);
+              let valColor = colors.muted;
+              if (row[ci][0] === 'Criticite' && row[ci][1] === 'critical') valColor = colors.danger;
+              doc.font('Helvetica').fillColor(valColor).text(String(row[ci][1]).substring(0, 18), cx + 50, infoY);
+            }
+          });
+          infoY += 14;
+        });
+
+        // Photo
+        const photoX = 430, photoY = ficheY + 35;
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            doc.image(eq.photo_content, photoX, photoY, { fit: [90, 70] });
+            doc.rect(photoX, photoY, 90, 70).stroke('#e5e7eb');
+          } catch (e) {
+            doc.rect(photoX, photoY, 90, 70).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', photoX + 20, photoY + 30);
+          }
+        } else {
+          doc.rect(photoX, photoY, 90, 70).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', photoX + 15, photoY + 30);
+        }
+
+        ficheY += cardHeight + 10;
+      }
     }
 
-    const pages = doc.bufferedPageRange();
-    for (let i = 0; i < pages.count; i++) {
+    // ========== PAGINATION ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport MECA - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
     }
+
     doc.end();
+    console.log(`[MECA] Generated professional report: ${equipments.length} equipments`);
+
   } catch (e) {
     console.error('[MECA] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });

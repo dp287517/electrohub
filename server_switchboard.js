@@ -3810,13 +3810,25 @@ app.get('/api/switchboard/audit/stats', async (req, res) => {
 });
 
 // ============================================================
-// REPORT PDF
+// REPORT PDF - VERSION PROFESSIONNELLE COMPLÈTE
 // ============================================================
 app.get('/api/switchboard/report', async (req, res) => {
   try {
     const { building, floor, type } = req.query;
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    // Couleurs professionnelles (électrique/bleu)
+    const colors = {
+      primary: '#4f46e5',    // Indigo
+      secondary: '#1e40af',  // Blue
+      success: '#059669',    // Green
+      danger: '#dc2626',     // Red
+      warning: '#d97706',    // Amber
+      text: '#111827',       // Gray-900
+      muted: '#6b7280',      // Gray-500
+      light: '#f3f4f6',      // Gray-100
+    };
 
     // Build WHERE clause
     const conditions = ['site = $1'];
@@ -3829,7 +3841,7 @@ app.get('/api/switchboard/report', async (req, res) => {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Get switchboards
+    // Get switchboards with counts
     const { rows: boards } = await pool.query(`
       SELECT s.*,
              (SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id) as device_count,
@@ -3839,53 +3851,390 @@ app.get('/api/switchboard/report', async (req, res) => {
       ORDER BY s.building_code, s.floor, s.code
     `, params);
 
-    // Create PDF
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="rapport_switchboards_${site}_${new Date().toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
-
-    // Header
-    doc.fontSize(20).fillColor('#4f46e5').text('Rapport Tableaux Électriques', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(12).fillColor('#666').text(`Site: ${site}`, { align: 'center' });
-    doc.text(`Généré le: ${new Date().toLocaleDateString('fr-FR')}`, { align: 'center' });
-    doc.moveDown();
-
-    // Filters applied
-    const filtersText = [];
-    if (building) filtersText.push(`Bâtiment: ${building}`);
-    if (floor) filtersText.push(`Étage: ${floor}`);
-    if (type) filtersText.push(`Type: ${type}`);
-    if (filtersText.length > 0) {
-      doc.fontSize(10).fillColor('#888').text(`Filtres: ${filtersText.join(' | ')}`, { align: 'center' });
+    // Get all devices for all boards
+    const boardIds = boards.map(b => b.id);
+    let devicesMap = new Map();
+    if (boardIds.length > 0) {
+      const { rows: devices } = await pool.query(`
+        SELECT id, switchboard_id, name, device_type, manufacturer, reference,
+               in_amps, icu_ka, poles, is_differential, is_complete, position_number
+        FROM devices
+        WHERE switchboard_id = ANY($1)
+        ORDER BY position_number, name
+      `, [boardIds]);
+      devices.forEach(d => {
+        if (!devicesMap.has(d.switchboard_id)) devicesMap.set(d.switchboard_id, []);
+        devicesMap.get(d.switchboard_id).push(d);
+      });
     }
-    doc.moveDown();
 
-    // Summary
+    // Get positions on plans (if switchboard_positions table exists)
+    let positionsMap = new Map();
+    try {
+      const { rows: positions } = await pool.query(`
+        SELECT sp.switchboard_id, sp.logical_name, sp.x_frac, sp.y_frac,
+               p.thumbnail as plan_thumbnail, COALESCE(pn.display_name, sp.logical_name) as plan_display_name
+        FROM switchboard_positions sp
+        LEFT JOIN switchboard_plans p ON p.logical_name = sp.logical_name
+        LEFT JOIN switchboard_plan_names pn ON pn.logical_name = sp.logical_name
+        WHERE sp.switchboard_id = ANY($1)
+      `, [boardIds]);
+      positions.forEach(p => {
+        if (!positionsMap.has(p.switchboard_id)) positionsMap.set(p.switchboard_id, p);
+      });
+    } catch (e) { /* Table might not exist */ }
+
+    // Get site settings
+    let siteInfo = { company_name: site, site_name: site };
+    try {
+      const { rows } = await pool.query(`SELECT company_name, company_address, company_phone FROM site_settings WHERE site = $1`, [site]);
+      if (rows[0]) siteInfo = { ...siteInfo, ...rows[0] };
+    } catch (e) { /* ignore */ }
+
+    // Statistics
     const totalDevices = boards.reduce((sum, b) => sum + (Number(b.device_count) || 0), 0);
     const completeDevices = boards.reduce((sum, b) => sum + (Number(b.complete_count) || 0), 0);
-    doc.fontSize(14).fillColor('#333').text(`Tableaux: ${boards.length} | Disjoncteurs: ${totalDevices} | Complets: ${completeDevices}`);
-    doc.moveDown();
+    const progressPct = totalDevices > 0 ? Math.round(completeDevices / totalDevices * 100) : 0;
+    const principalBoards = boards.filter(b => b.is_principal).length;
 
-    // Switchboard list
-    for (const board of boards) {
-      const progress = board.device_count > 0 ? Math.round((board.complete_count / board.device_count) * 100) : 0;
+    // Group by building
+    const byBuilding = {};
+    boards.forEach(b => {
+      const bldg = b.building_code || 'Non renseigné';
+      if (!byBuilding[bldg]) byBuilding[bldg] = [];
+      byBuilding[bldg].push(b);
+    });
 
-      doc.fontSize(12).fillColor('#4f46e5').text(`${board.code}`, { continued: true });
-      doc.fillColor('#666').text(` - ${board.name || 'Sans nom'}`);
-      doc.fontSize(10).fillColor('#333');
-      doc.text(`  Bâtiment: ${board.building_code || 'N/A'} | Étage: ${board.floor || 'N/A'} | Local: ${board.room || 'N/A'}`);
-      doc.text(`  Disjoncteurs: ${board.device_count || 0} | Progression: ${progress}%`);
-      if (board.notes) doc.text(`  Notes: ${board.notes}`);
-      doc.moveDown(0.5);
+    // Create PDF
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true, info: {
+      Title: 'Rapport Tableaux Électriques',
+      Author: siteInfo.company_name,
+      Subject: 'Inventaire des tableaux électriques et disjoncteurs'
+    }});
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Rapport_Tableaux_${site.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf"`);
+    doc.pipe(res);
 
-      if (doc.y > 700) {
-        doc.addPage();
+    // ========== PAGE DE GARDE ==========
+    doc.rect(0, 0, 595, 842).fill('#eef2ff');
+    doc.rect(0, 0, 595, 120).fill(colors.primary);
+
+    doc.fontSize(28).font('Helvetica-Bold').fillColor('#fff')
+       .text('Rapport Tableaux Electriques', 50, 40, { width: 495, align: 'center' });
+    doc.fontSize(12).font('Helvetica').fillColor('#fff')
+       .text('Inventaire & Controle des installations', 50, 80, { width: 495, align: 'center' });
+
+    doc.fontSize(22).font('Helvetica-Bold').fillColor(colors.primary)
+       .text(siteInfo.company_name || 'Entreprise', 50, 160, { align: 'center', width: 495 });
+    doc.fontSize(14).font('Helvetica').fillColor(colors.text)
+       .text(`Site: ${site}`, 50, 195, { align: 'center', width: 495 });
+
+    // Filters
+    let filterText = '';
+    if (building) filterText += `Batiment: ${building}  `;
+    if (floor) filterText += `Etage: ${floor}  `;
+    if (type) filterText += `Regime: ${type}`;
+    if (filterText) {
+      doc.fontSize(10).fillColor(colors.muted).text(`Filtres: ${filterText}`, 50, 220, { align: 'center', width: 495 });
+    }
+
+    doc.fontSize(10).fillColor(colors.muted)
+       .text(`Document genere le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 50, 245, { align: 'center', width: 495 });
+
+    // Stats box
+    const statsY = 300;
+    doc.rect(100, statsY, 395, 200).fillAndStroke('#fff', colors.primary);
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
+       .text('Synthese', 120, statsY + 15, { width: 355, align: 'center' });
+
+    const statsItems = [
+      { label: 'Tableaux electriques', value: boards.length, color: colors.primary },
+      { label: 'Tableaux principaux', value: principalBoards, color: colors.secondary },
+      { label: 'Disjoncteurs total', value: totalDevices, color: colors.text },
+      { label: 'Disjoncteurs completes', value: completeDevices, color: colors.success },
+      { label: 'Progression globale', value: `${progressPct}%`, color: progressPct >= 80 ? colors.success : (progressPct >= 50 ? colors.warning : colors.danger) },
+    ];
+
+    let statY = statsY + 50;
+    statsItems.forEach(item => {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(item.label, 130, statY);
+      doc.font('Helvetica-Bold').fillColor(item.color).text(String(item.value), 400, statY, { width: 70, align: 'right' });
+      statY += 28;
+    });
+
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Cadre reglementaire (Suisse)' },
+      { num: '2', title: 'Presentation de l\'etablissement' },
+      { num: '3', title: 'Inventaire par batiment' },
+      { num: '4', title: 'Etat de progression' },
+      { num: '5', title: 'Fiches tableaux et disjoncteurs' },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
+      doc.font('Helvetica').text(item.title, 80, somY);
+      somY += 30;
+    });
+
+    // ========== 1. CADRE RÉGLEMENTAIRE ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Cadre reglementaire (Suisse)', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let regY = 100;
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(colors.text).text('NIBT - Norme sur les Installations a Basse Tension', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('La NIBT (SN 411000) definit les regles de conception, realisation et verification des installations electriques a basse tension en Suisse.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('OIBT - Ordonnance sur les Installations electriques a Basse Tension', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('L\'OIBT (RS 734.27) regit les conditions de mise en service et de controle periodique des installations electriques.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('Controles periodiques obligatoires', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('Les installations electriques doivent faire l\'objet de controles periodiques selon leur categorie (1 a 20 ans selon le type d\'installation).', 50, regY, { width: 495 });
+    regY += 50;
+
+    doc.rect(50, regY, 495, 60).fillAndStroke('#fef3c7', colors.warning);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.warning).text('/!\\ IMPORTANT', 70, regY + 12);
+    doc.font('Helvetica').fillColor(colors.text).text('Chaque tableau doit disposer d\'un schema unifilaire a jour et les disjoncteurs doivent etre correctement dimensionnes.', 70, regY + 30, { width: 455 });
+
+    // ========== 2. PRÉSENTATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Presentation de l\'etablissement', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let presY = 100;
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, presY);
+    presY += 25;
+    if (siteInfo.company_address) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Adresse: ${siteInfo.company_address}`, 50, presY);
+      presY += 18;
+    }
+    doc.text(`Site: ${site}`, 50, presY);
+    presY += 40;
+
+    doc.fontSize(12).font('Helvetica-Bold').text('Synthese de l\'installation', 50, presY);
+    presY += 25;
+
+    [['Tableaux electriques', boards.length], ['Batiments', Object.keys(byBuilding).length], ['Disjoncteurs', totalDevices]].forEach(([label, value]) => {
+      doc.rect(50, presY, 240, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(10).font('Helvetica').fillColor(colors.muted).text(label, 60, presY + 10);
+      doc.fontSize(16).font('Helvetica-Bold').fillColor(colors.primary).text(String(value), 220, presY + 8, { align: 'right', width: 50 });
+      presY += 40;
+    });
+
+    // ========== 3. INVENTAIRE PAR BÂTIMENT ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('3. Inventaire par batiment', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    const invHeaders = ['Code', 'Nom', 'Etage', 'Local', 'Disj.', 'Progr.'];
+    const invColW = [70, 150, 60, 80, 50, 60];
+
+    Object.entries(byBuilding).forEach(([bldg, bldgBoards]) => {
+      if (invY > 700) { doc.addPage(); invY = 50; }
+
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.primary).text(`Batiment: ${bldg}`, 50, invY);
+      invY += 25;
+
+      // Header row
+      let x = 50;
+      invHeaders.forEach((h, i) => {
+        doc.rect(x, invY, invColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, x + 3, invY + 6, { width: invColW[i] - 6 });
+        x += invColW[i];
+      });
+      invY += 20;
+
+      bldgBoards.forEach((board, idx) => {
+        if (invY > 750) { doc.addPage(); invY = 50; }
+        const progress = board.device_count > 0 ? Math.round((board.complete_count / board.device_count) * 100) : 0;
+        const row = [board.code || '-', (board.name || '-').substring(0, 28), board.floor || '-', (board.room || '-').substring(0, 14), board.device_count || 0, `${progress}%`];
+
+        x = 50;
+        const bgColor = idx % 2 === 0 ? '#fff' : colors.light;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 18).fillAndStroke(bgColor, '#e5e7eb');
+          let txtColor = colors.text;
+          if (i === 5) txtColor = progress >= 80 ? colors.success : (progress >= 50 ? colors.warning : colors.danger);
+          doc.fontSize(7).font('Helvetica').fillColor(txtColor).text(String(cell), x + 3, invY + 5, { width: invColW[i] - 6 });
+          x += invColW[i];
+        });
+        invY += 18;
+      });
+      invY += 15;
+    });
+
+    // ========== 4. ÉTAT DE PROGRESSION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('4. Etat de progression', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let progY = 100;
+    const progStats = [
+      { label: 'Disjoncteurs completes', count: completeDevices, pct: progressPct, color: colors.success },
+      { label: 'Disjoncteurs a completer', count: totalDevices - completeDevices, pct: 100 - progressPct, color: colors.warning },
+    ];
+
+    progStats.forEach(stat => {
+      doc.rect(50, progY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(stat.color).text(stat.label, 60, progY + 8);
+      doc.fontSize(9).font('Helvetica').fillColor(colors.muted).text(`${stat.count} disjoncteur(s)`, 60, progY + 23);
+      doc.rect(300, progY + 15, 180, 12).fillAndStroke(colors.light, '#d1d5db');
+      if (stat.pct > 0) doc.rect(300, progY + 15, Math.max(5, 180 * stat.pct / 100), 12).fill(stat.color);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(stat.color).text(`${stat.pct}%`, 490, progY + 13, { align: 'right', width: 40 });
+      progY += 50;
+    });
+
+    // ========== 5. FICHES TABLEAUX ==========
+    if (boards.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('5. Fiches tableaux et disjoncteurs', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(`${boards.length} tableau(x) electrique(s)`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < boards.length; i++) {
+        const board = boards[i];
+        const devices = devicesMap.get(board.id) || [];
+        const progress = board.device_count > 0 ? Math.round((board.complete_count / board.device_count) * 100) : 0;
+
+        // Calculate height needed
+        const deviceRows = Math.ceil(devices.length / 1); // one device per row in table
+        const cardHeight = 180 + Math.min(devices.length, 8) * 16;
+
+        if (ficheY + cardHeight > 750) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Card border
+        doc.rect(50, ficheY, 495, cardHeight).stroke(colors.light);
+
+        // Header with code
+        doc.rect(50, ficheY, 495, 30).fill(colors.primary);
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#fff')
+           .text(`${board.code} - ${board.name || 'Sans nom'}`, 60, ficheY + 9, { width: 380 });
+
+        // Progress badge
+        const progColor = progress >= 80 ? colors.success : (progress >= 50 ? colors.warning : colors.danger);
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(progColor === colors.success ? '#fff' : progColor)
+           .text(`${progress}%`, 480, ficheY + 10, { width: 50, align: 'right' });
+
+        let infoY = ficheY + 40;
+        const leftCol = 60;
+        const rightCol = 300;
+
+        // Left column - Info
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text('Batiment:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(colors.muted).text(board.building_code || '-', leftCol + 60, infoY);
+        infoY += 16;
+
+        doc.font('Helvetica-Bold').fillColor(colors.text).text('Etage:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(colors.muted).text(board.floor || '-', leftCol + 60, infoY);
+        infoY += 16;
+
+        doc.font('Helvetica-Bold').fillColor(colors.text).text('Local:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(colors.muted).text(board.room || '-', leftCol + 60, infoY);
+        infoY += 16;
+
+        doc.font('Helvetica-Bold').fillColor(colors.text).text('Regime:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(colors.muted).text(board.regime_neutral || '-', leftCol + 60, infoY);
+        infoY += 16;
+
+        doc.font('Helvetica-Bold').fillColor(colors.text).text('Principal:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(board.is_principal ? colors.success : colors.muted).text(board.is_principal ? 'Oui' : 'Non', leftCol + 60, infoY);
+        infoY += 16;
+
+        doc.font('Helvetica-Bold').fillColor(colors.text).text('Disjoncteurs:', leftCol, infoY);
+        doc.font('Helvetica').fillColor(colors.muted).text(`${board.complete_count || 0} / ${board.device_count || 0} complets`, leftCol + 60, infoY);
+
+        // Right column - Photo placeholder
+        const photoX = rightCol + 50;
+        const photoY = ficheY + 40;
+        if (board.photo && board.photo.length > 0) {
+          try {
+            doc.image(board.photo, photoX, photoY, { fit: [100, 80] });
+            doc.rect(photoX, photoY, 100, 80).stroke('#e5e7eb');
+          } catch (e) {
+            doc.rect(photoX, photoY, 100, 80).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', photoX + 30, photoY + 35);
+          }
+        } else {
+          doc.rect(photoX, photoY, 100, 80).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', photoX + 25, photoY + 35);
+        }
+
+        // Devices table
+        if (devices.length > 0) {
+          let devY = ficheY + 135;
+          doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.primary).text('Disjoncteurs:', leftCol, devY);
+          devY += 18;
+
+          const devHeaders = ['Pos.', 'Nom', 'Type', 'In (A)', 'Icu', 'Diff.', 'OK'];
+          const devColW = [35, 140, 100, 45, 40, 35, 30];
+          let dx = leftCol;
+          devHeaders.forEach((h, hi) => {
+            doc.rect(dx, devY, devColW[hi], 14).fillAndStroke(colors.light, '#e5e7eb');
+            doc.fontSize(6).font('Helvetica-Bold').fillColor(colors.text).text(h, dx + 2, devY + 4, { width: devColW[hi] - 4 });
+            dx += devColW[hi];
+          });
+          devY += 14;
+
+          devices.slice(0, 8).forEach((dev, di) => {
+            dx = leftCol;
+            const devRow = [
+              dev.position_number || '-',
+              (dev.name || '-').substring(0, 28),
+              (dev.device_type || '-').substring(0, 18),
+              dev.in_amps || '-',
+              dev.icu_ka ? `${dev.icu_ka}kA` : '-',
+              dev.is_differential ? 'Oui' : '-',
+              dev.is_complete ? 'OK' : '-'
+            ];
+            const rowBg = di % 2 === 0 ? '#fff' : colors.light;
+            devRow.forEach((cell, ci) => {
+              doc.rect(dx, devY, devColW[ci], 12).fillAndStroke(rowBg, '#e5e7eb');
+              let cellColor = colors.text;
+              if (ci === 6) cellColor = dev.is_complete ? colors.success : colors.muted;
+              doc.fontSize(6).font('Helvetica').fillColor(cellColor).text(String(cell), dx + 2, devY + 3, { width: devColW[ci] - 4 });
+              dx += devColW[ci];
+            });
+            devY += 12;
+          });
+
+          if (devices.length > 8) {
+            doc.fontSize(7).fillColor(colors.muted).text(`... et ${devices.length - 8} autres disjoncteurs`, leftCol, devY + 2);
+          }
+        }
+
+        ficheY += cardHeight + 15;
       }
     }
 
+    // ========== PAGINATION ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport Tableaux Electriques - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
+    }
+
     doc.end();
+    console.log(`[SWITCHBOARD] Generated professional report: ${boards.length} boards, ${totalDevices} devices`);
+
   } catch (e) {
     console.error('[SWITCHBOARD] Report error:', e.message);
     res.status(500).json({ error: e.message });

@@ -1391,12 +1391,24 @@ app.get("/api/glo/health", (_req, res) => {
 });
 
 // -------------------------------------------------
-// REPORT PDF GENERATION
+// REPORT PDF GENERATION - VERSION PROFESSIONNELLE
 // -------------------------------------------------
 app.get("/api/glo/report", async (req, res) => {
   try {
     const site = req.headers["x-site"] || "Default";
     const { building, floor, type, search, from_date, to_date } = req.query;
+
+    // Couleurs professionnelles (bleu électrique)
+    const colors = {
+      primary: '#1e40af',
+      secondary: '#3b82f6',
+      success: '#059669',
+      danger: '#dc2626',
+      warning: '#d97706',
+      text: '#111827',
+      muted: '#6b7280',
+      light: '#f3f4f6',
+    };
 
     let where = "WHERE 1=1";
     const params = [];
@@ -1410,67 +1422,361 @@ app.get("/api/glo/report", async (req, res) => {
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
     const { rows: equipments } = await pool.query(`
-      SELECT e.*
+      SELECT e.*, c.name as category_name
         FROM glo_equipments e
+        LEFT JOIN glo_equipment_categories c ON c.id = e.category_id
         ${where}
        ORDER BY e.equipment_type, e.building, e.floor, e.name
     `, params);
 
-    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="rapport_glo_${new Date().toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
-
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT GLO', 50, 50, { align: 'center' });
-    doc.fontSize(12).fillColor('#6b7280').text('UPS, Batteries de compensation, Éclairage de sécurité', { align: 'center' });
-    doc.fontSize(10).text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+    // Get site settings
+    let siteInfo = { company_name: site, site_name: site };
+    try {
+      const { rows } = await pool.query(`SELECT company_name, company_address FROM site_settings WHERE site = $1`, [site]);
+      if (rows[0]) siteInfo = { ...siteInfo, ...rows[0] };
+    } catch (e) { /* ignore */ }
 
     // Stats by type
     const byType = { ups: 0, battery: 0, lighting: 0 };
     equipments.forEach(e => { if (byType[e.equipment_type] !== undefined) byType[e.equipment_type]++; });
 
-    let y = 120;
-    doc.rect(50, y, 495, 50).fill('#f3f4f6');
-    doc.fontSize(11).fillColor('#374151');
-    doc.text(`Total: ${equipments.length}`, 60, y + 12);
-    doc.text(`UPS: ${byType.ups}`, 180, y + 12);
-    doc.text(`Batteries: ${byType.battery}`, 300, y + 12);
-    doc.text(`Éclairage: ${byType.lighting}`, 420, y + 12);
+    // Group by building
+    const byBuilding = {};
+    equipments.forEach(e => {
+      const bldg = e.building || 'Non renseigne';
+      if (!byBuilding[bldg]) byBuilding[bldg] = [];
+      byBuilding[bldg].push(e);
+    });
 
-    y += 70;
-    doc.fontSize(14).fillColor('#1e40af').text('Liste des équipements', 50, y);
-    y += 25;
+    // Stats
+    const criticalCount = equipments.filter(e => e.criticality === 'critical').length;
+    const needsTestCount = equipments.filter(e => {
+      if (!e.next_test_date) return false;
+      return new Date(e.next_test_date) < new Date();
+    }).length;
 
-    doc.rect(50, y, 495, 20).fill('#e5e7eb');
-    doc.fontSize(9).fillColor('#374151');
-    doc.text('Type', 55, y + 6);
-    doc.text('Nom', 120, y + 6);
-    doc.text('Bâtiment', 280, y + 6);
-    doc.text('Étage', 380, y + 6);
-    doc.text('Statut', 440, y + 6);
-    y += 20;
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true, info: {
+      Title: 'Rapport Equipements Electriques Globaux',
+      Author: siteInfo.company_name,
+      Subject: 'UPS, Batteries de compensation, Eclairage de securite'
+    }});
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Rapport_GLO_${site.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf"`);
+    doc.pipe(res);
 
-    const typeLabels = { ups: 'UPS', battery: 'Batterie', lighting: 'Éclairage' };
-    for (let i = 0; i < equipments.length; i++) {
-      const eq = equipments[i];
-      if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
-      doc.rect(50, y, 495, 18).fill(bgColor);
-      doc.fontSize(8).fillColor('#374151');
-      doc.text(typeLabels[eq.equipment_type] || eq.equipment_type || '-', 55, y + 5, { width: 60 });
-      doc.text((eq.name || '-').substring(0, 35), 120, y + 5, { width: 155 });
-      doc.text((eq.building || '-').substring(0, 15), 280, y + 5, { width: 95 });
-      doc.text(eq.floor || '-', 380, y + 5, { width: 55 });
-      doc.text(eq.status || '-', 440, y + 5);
-      y += 18;
+    // ========== PAGE DE GARDE ==========
+    doc.rect(0, 0, 595, 842).fill('#eff6ff');
+    doc.rect(0, 0, 595, 120).fill(colors.primary);
+
+    doc.fontSize(26).font('Helvetica-Bold').fillColor('#fff')
+       .text('Rapport Equipements Electriques', 50, 35, { width: 495, align: 'center' });
+    doc.fontSize(12).font('Helvetica').fillColor('#fff')
+       .text('UPS - Batteries de compensation - Eclairage de securite', 50, 75, { width: 495, align: 'center' });
+
+    doc.fontSize(22).font('Helvetica-Bold').fillColor(colors.primary)
+       .text(siteInfo.company_name || 'Entreprise', 50, 160, { align: 'center', width: 495 });
+    doc.fontSize(14).font('Helvetica').fillColor(colors.text)
+       .text(`Site: ${site}`, 50, 195, { align: 'center', width: 495 });
+
+    doc.fontSize(10).fillColor(colors.muted)
+       .text(`Document genere le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 50, 230, { align: 'center', width: 495 });
+
+    // Stats box
+    const statsY = 280;
+    doc.rect(100, statsY, 395, 220).fillAndStroke('#fff', colors.primary);
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
+       .text('Synthese', 120, statsY + 15, { width: 355, align: 'center' });
+
+    const statsItems = [
+      { label: 'Equipements total', value: equipments.length, color: colors.primary },
+      { label: 'UPS / Onduleurs', value: byType.ups, color: colors.secondary },
+      { label: 'Batteries de compensation', value: byType.battery, color: colors.secondary },
+      { label: 'Eclairage de securite', value: byType.lighting, color: colors.secondary },
+      { label: 'Equipements critiques', value: criticalCount, color: colors.danger },
+      { label: 'Tests en retard', value: needsTestCount, color: needsTestCount > 0 ? colors.danger : colors.success },
+    ];
+
+    let statY = statsY + 50;
+    statsItems.forEach(item => {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(item.label, 130, statY);
+      doc.font('Helvetica-Bold').fillColor(item.color).text(String(item.value), 400, statY, { width: 70, align: 'right' });
+      statY += 26;
+    });
+
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Reglementation applicable' },
+      { num: '2', title: 'Presentation de l\'etablissement' },
+      { num: '3', title: 'Inventaire par batiment' },
+      { num: '4', title: 'Planification des tests' },
+      { num: '5', title: 'Fiches equipements' },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
+      doc.font('Helvetica').text(item.title, 80, somY);
+      somY += 30;
+    });
+
+    // ========== 1. RÉGLEMENTATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Reglementation applicable', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let regY = 100;
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(colors.text).text('Eclairage de securite (AEAI / SIA)', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('L\'eclairage de securite doit assurer l\'evacuation des personnes en cas de defaillance de l\'eclairage normal. Tests mensuels et annuels obligatoires.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('Alimentations sans interruption (UPS)', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('Les onduleurs doivent etre controles regulierement pour garantir leur fonctionnement en cas de coupure. Batterie a remplacer selon specifications fabricant.', 50, regY, { width: 495, align: 'justify' });
+    regY += 50;
+
+    doc.font('Helvetica-Bold').text('Batteries de compensation', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('La compensation de l\'energie reactive permet de reduire les pertes et d\'optimiser la facturation. Controle thermographique recommande annuellement.', 50, regY, { width: 495, align: 'justify' });
+
+    // ========== 2. PRÉSENTATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Presentation de l\'etablissement', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let presY = 100;
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, presY);
+    presY += 25;
+    if (siteInfo.company_address) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Adresse: ${siteInfo.company_address}`, 50, presY);
+      presY += 18;
+    }
+    doc.text(`Site: ${site}`, 50, presY);
+    presY += 40;
+
+    doc.fontSize(12).font('Helvetica-Bold').text('Synthese de l\'installation', 50, presY);
+    presY += 25;
+
+    [['Equipements GLO', equipments.length], ['Batiments', Object.keys(byBuilding).length], ['Types d\'equipements', Object.values(byType).filter(v => v > 0).length]].forEach(([label, value]) => {
+      doc.rect(50, presY, 240, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(10).font('Helvetica').fillColor(colors.muted).text(label, 60, presY + 10);
+      doc.fontSize(16).font('Helvetica-Bold').fillColor(colors.primary).text(String(value), 220, presY + 8, { align: 'right', width: 50 });
+      presY += 40;
+    });
+
+    // ========== 3. INVENTAIRE PAR BÂTIMENT ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('3. Inventaire par batiment', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    const invHeaders = ['Nom', 'Type', 'Etage', 'Puissance', 'Criticite', 'Statut'];
+    const invColW = [130, 80, 50, 70, 70, 70];
+    const typeLabels = { ups: 'UPS', battery: 'Batterie', lighting: 'Eclairage' };
+
+    Object.entries(byBuilding).forEach(([bldg, bldgEquips]) => {
+      if (invY > 700) { doc.addPage(); invY = 50; }
+
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.primary).text(`Batiment: ${bldg}`, 50, invY);
+      invY += 25;
+
+      let x = 50;
+      invHeaders.forEach((h, i) => {
+        doc.rect(x, invY, invColW[i], 18).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(7).font('Helvetica-Bold').fillColor('#fff').text(h, x + 3, invY + 5, { width: invColW[i] - 6 });
+        x += invColW[i];
+      });
+      invY += 18;
+
+      bldgEquips.forEach((eq, idx) => {
+        if (invY > 750) { doc.addPage(); invY = 50; }
+        const row = [
+          (eq.name || '-').substring(0, 25),
+          typeLabels[eq.equipment_type] || eq.equipment_type || '-',
+          eq.floor || '-',
+          eq.power_kw ? `${eq.power_kw} kW` : (eq.power_kva ? `${eq.power_kva} kVA` : '-'),
+          eq.criticality || '-',
+          eq.status || '-'
+        ];
+
+        x = 50;
+        const bgColor = idx % 2 === 0 ? '#fff' : colors.light;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 16).fillAndStroke(bgColor, '#e5e7eb');
+          let txtColor = colors.text;
+          if (i === 4 && cell === 'critical') txtColor = colors.danger;
+          if (i === 5 && cell === 'ok') txtColor = colors.success;
+          doc.fontSize(6).font('Helvetica').fillColor(txtColor).text(String(cell), x + 3, invY + 4, { width: invColW[i] - 6 });
+          x += invColW[i];
+        });
+        invY += 16;
+      });
+      invY += 15;
+    });
+
+    // ========== 4. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('4. Planification des tests', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let planY = 100;
+    const upcoming = equipments.filter(e => e.next_test_date).sort((a, b) => new Date(a.next_test_date) - new Date(b.next_test_date));
+
+    if (upcoming.length > 0) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`${upcoming.length} equipement(s) avec test planifie.`, 50, planY);
+      planY += 25;
+
+      const planHeaders = ['Equipement', 'Type', 'Batiment', 'Date test', 'Statut'];
+      const planColW = [170, 80, 100, 80, 65];
+      let x = 50;
+      planHeaders.forEach((h, i) => {
+        doc.rect(x, planY, planColW[i], 18).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, x + 4, planY + 5);
+        x += planColW[i];
+      });
+      planY += 18;
+
+      upcoming.slice(0, 30).forEach((eq, idx) => {
+        if (planY > 750) { doc.addPage(); planY = 50; }
+        const nextDate = new Date(eq.next_test_date);
+        const isLate = nextDate < new Date();
+        const isClose = !isLate && (nextDate - new Date()) / (1000 * 60 * 60 * 24) < 30;
+        const statusText = isLate ? 'RETARD' : (isClose ? 'PROCHE' : 'OK');
+        const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
+
+        const row = [(eq.name || '-').substring(0, 32), typeLabels[eq.equipment_type] || '-', (eq.building || '-').substring(0, 18), nextDate.toLocaleDateString('fr-FR'), statusText];
+        x = 50;
+        const bgColor = idx % 2 === 0 ? '#fff' : colors.light;
+        row.forEach((cell, i) => {
+          doc.rect(x, planY, planColW[i], 16).fillAndStroke(bgColor, '#e5e7eb');
+          const col = i === 4 ? statusColor : colors.text;
+          doc.fontSize(7).font('Helvetica').fillColor(col).text(String(cell), x + 4, planY + 4);
+          x += planColW[i];
+        });
+        planY += 16;
+      });
+    } else {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text('Aucun test planifie.', 50, planY);
     }
 
-    const pages = doc.bufferedPageRange();
-    for (let i = 0; i < pages.count; i++) {
+    // ========== 5. FICHES ÉQUIPEMENTS ==========
+    if (equipments.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('5. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(`${equipments.length} equipement(s)`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const cardHeight = 200;
+
+        if (ficheY + cardHeight > 750) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        doc.rect(50, ficheY, 495, cardHeight).stroke(colors.light);
+        doc.rect(50, ficheY, 495, 28).fill(colors.primary);
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#fff')
+           .text(`${eq.name || 'Equipement sans nom'}`, 60, ficheY + 8, { width: 380 });
+
+        const typeLabel = typeLabels[eq.equipment_type] || eq.equipment_type || '-';
+        doc.fontSize(8).font('Helvetica').fillColor('#fff').text(typeLabel, 450, ficheY + 10, { width: 80, align: 'right' });
+
+        let infoY = ficheY + 38;
+        const leftCol = 60;
+        const rightCol = 300;
+
+        // Left column
+        const leftInfo = [
+          ['Tag', eq.tag || '-'],
+          ['Batiment', eq.building || '-'],
+          ['Etage', eq.floor || '-'],
+          ['Zone', eq.zone || '-'],
+          ['Fabricant', eq.manufacturer || '-'],
+          ['Modele', eq.model || '-'],
+        ];
+        leftInfo.forEach(([label, value]) => {
+          doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', leftCol, infoY);
+          doc.font('Helvetica').fillColor(colors.muted).text(value.substring(0, 25), leftCol + 60, infoY);
+          infoY += 14;
+        });
+
+        // Right column
+        infoY = ficheY + 38;
+        const rightInfo = [
+          ['Puissance', eq.power_kw ? `${eq.power_kw} kW` : (eq.power_kva ? `${eq.power_kva} kVA` : '-')],
+          ['Tension', eq.voltage_input ? `${eq.voltage_input}V` : '-'],
+          ['Criticite', eq.criticality || '-'],
+          ['Statut', eq.status || '-'],
+          ['Dernier test', eq.last_test_date ? new Date(eq.last_test_date).toLocaleDateString('fr-FR') : '-'],
+          ['Prochain test', eq.next_test_date ? new Date(eq.next_test_date).toLocaleDateString('fr-FR') : '-'],
+        ];
+        rightInfo.forEach(([label, value]) => {
+          doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', rightCol, infoY);
+          let valColor = colors.muted;
+          if (label === 'Criticite' && value === 'critical') valColor = colors.danger;
+          if (label === 'Statut' && value === 'ok') valColor = colors.success;
+          doc.font('Helvetica').fillColor(valColor).text(value, rightCol + 70, infoY);
+          infoY += 14;
+        });
+
+        // Photo placeholder
+        const photoX = 430;
+        const photoY = ficheY + 38;
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            doc.image(eq.photo_content, photoX, photoY, { fit: [100, 80] });
+            doc.rect(photoX, photoY, 100, 80).stroke('#e5e7eb');
+          } catch (e) {
+            doc.rect(photoX, photoY, 100, 80).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', photoX + 25, photoY + 35);
+          }
+        } else {
+          doc.rect(photoX, photoY, 100, 80).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', photoX + 20, photoY + 35);
+        }
+
+        // Type-specific info box
+        let specY = ficheY + 130;
+        doc.rect(60, specY, 425, 60).fillAndStroke(colors.light, '#e5e7eb');
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.primary).text('Caracteristiques specifiques:', 70, specY + 8);
+
+        if (eq.equipment_type === 'ups') {
+          doc.fontSize(7).font('Helvetica').fillColor(colors.text)
+             .text(`Topologie: ${eq.ups_topology || '-'} | Autonomie: ${eq.autonomy_minutes ? eq.autonomy_minutes + ' min' : '-'} | Batteries: ${eq.battery_count || '-'} | Rendement: ${eq.efficiency_percent ? eq.efficiency_percent + '%' : '-'}`, 70, specY + 25, { width: 405 });
+        } else if (eq.equipment_type === 'battery') {
+          doc.fontSize(7).font('Helvetica').fillColor(colors.text)
+             .text(`Puissance reactive: ${eq.reactive_power_kvar ? eq.reactive_power_kvar + ' kVAr' : '-'} | Type: ${eq.capacitor_type || '-'} | Etapes: ${eq.steps || '-'} | Filtre THD: ${eq.thd_filter ? 'Oui' : 'Non'}`, 70, specY + 25, { width: 405 });
+        } else if (eq.equipment_type === 'lighting') {
+          doc.fontSize(7).font('Helvetica').fillColor(colors.text)
+             .text(`Type eclairage: ${eq.lighting_type || '-'} | Lampe: ${eq.lamp_type || '-'} | Flux: ${eq.lumen_output ? eq.lumen_output + ' lm' : '-'} | Autonomie: ${eq.autonomy_hours ? eq.autonomy_hours + 'h' : '-'} | Auto-test: ${eq.self_test ? 'Oui' : 'Non'}`, 70, specY + 25, { width: 405 });
+        } else {
+          doc.fontSize(7).font('Helvetica').fillColor(colors.muted).text('Aucune caracteristique specifique', 70, specY + 25);
+        }
+
+        ficheY += cardHeight + 10;
+      }
+    }
+
+    // ========== PAGINATION ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport GLO - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
     }
+
     doc.end();
+    console.log(`[GLO] Generated professional report: ${equipments.length} equipments`);
+
   } catch (e) {
     console.error('[GLO] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });

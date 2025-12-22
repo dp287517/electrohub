@@ -752,7 +752,7 @@ app.get("/api/datahub/stats", async (_req, res) => {
 });
 
 // ====================
-// REPORT PDF GENERATION
+// REPORT PDF GENERATION - Professional DataHub Report
 // ====================
 app.get("/api/datahub/report", async (req, res) => {
   try {
@@ -769,81 +769,416 @@ app.get("/api/datahub/report", async (req, res) => {
     if (search) { where += ` AND (i.name ILIKE $${idx} OR i.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
 
     const { rows: items } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size
         FROM dh_items i
         LEFT JOIN dh_categories c ON c.id = i.category_id
         ${where}
        ORDER BY c.name, i.building, i.floor, i.name
     `, params);
 
+    // Get positions for items
+    const { rows: positions } = await pool.query(`
+      SELECT p.*, pn.display_name as plan_display_name
+        FROM dh_positions p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+    `);
+    const positionsMap = new Map();
+    positions.forEach(p => positionsMap.set(p.item_id, p));
+
+    // Get plans list (using VSD plans)
+    const { rows: plans } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name) p.*, pn.display_name
+        FROM vsd_plans p
+        LEFT JOIN vsd_plan_names pn ON pn.logical_name = p.logical_name
+       ORDER BY p.logical_name, p.version DESC
+    `);
+
+    // Get categories
+    const { rows: categories } = await pool.query(`SELECT * FROM dh_categories ORDER BY sort_order, name`);
+
+    // Statistics
+    const totalCount = items.length;
+
+    // Group by building
+    const byBuilding = {};
+    items.forEach(item => {
+      const b = item.building || 'Non defini';
+      if (!byBuilding[b]) byBuilding[b] = [];
+      byBuilding[b].push(item);
+    });
+
+    // Group by category
+    const byCategory = {};
+    items.forEach(item => {
+      const cat = item.category_name || 'Sans categorie';
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(item);
+    });
+
+    // Colors
+    const colors = {
+      primary: '#3B82F6',    // Blue for DataHub
+      success: '#059669',
+      danger: '#dc2626',
+      warning: '#d97706',
+      muted: '#6b7280',
+      text: '#374151',
+      light: '#f3f4f6'
+    };
+
+    // Create PDF
     const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="rapport_datahub_${new Date().toISOString().split('T')[0]}.pdf"`);
     doc.pipe(res);
 
-    // Header
-    doc.fontSize(20).fillColor('#3B82F6').text('RAPPORT DATAHUB', 50, 50, { align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+    // ========== PAGE DE COUVERTURE ==========
+    doc.rect(0, 0, 595, 842).fill('#eff6ff');
+    doc.rect(0, 0, 595, 180).fill(colors.primary);
 
-    // Stats by category
-    const byCategory = {};
-    items.forEach(i => {
-      const cat = i.category_name || 'Sans catégorie';
-      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    doc.fontSize(32).fillColor('#fff').text('RAPPORT DATAHUB', 50, 70, { align: 'center', width: 495 });
+    doc.fontSize(14).text('Inventaire et Gestion des Donnees', 50, 115, { align: 'center', width: 495 });
+
+    doc.fontSize(16).fillColor(colors.text).text(site, 50, 220, { align: 'center', width: 495 });
+    doc.fontSize(11).fillColor(colors.muted).text(`Genere le ${new Date().toLocaleDateString('fr-FR')}`, 50, 250, { align: 'center', width: 495 });
+
+    // Synthèse sur la couverture
+    let coverY = 320;
+    doc.fontSize(14).fillColor(colors.primary).text('Synthese', 50, coverY);
+    coverY += 30;
+
+    const coverStats = [
+      { label: 'Total elements', value: totalCount },
+      { label: 'Batiments', value: Object.keys(byBuilding).length },
+      { label: 'Categories', value: categories.length },
+      { label: 'Plans disponibles', value: plans.length },
+      { label: 'Elements positionnes', value: positions.length },
+    ];
+
+    coverStats.forEach(stat => {
+      doc.rect(50, coverY, 495, 35).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).fillColor(colors.text).text(stat.label, 70, coverY + 10);
+      doc.fontSize(14).fillColor(colors.primary).text(String(stat.value), 480, coverY + 10, { align: 'right', width: 50 });
+      coverY += 40;
     });
 
-    let y = 100;
-    doc.rect(50, y, 495, 40).fill('#f3f4f6');
-    doc.fontSize(11).fillColor('#374151');
-    doc.text(`Total: ${items.length} éléments`, 60, y + 12);
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.rect(0, 0, 595, 842).fill('#fff');
+    doc.fontSize(24).fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
 
-    const categories = Object.keys(byCategory);
-    if (categories.length > 0) {
-      let catX = 200;
-      for (const cat of categories.slice(0, 3)) {
-        doc.text(`${cat}: ${byCategory[cat]}`, catX, y + 12);
-        catX += 100;
+    const sommaire = [
+      { num: '1', title: 'Presentation du DataHub', page: 3 },
+      { num: '2', title: 'Presentation du site', page: 3 },
+      { num: '3', title: 'Categories d\'elements', page: 4 },
+      { num: '4', title: 'Liste des plans', page: 4 },
+      { num: '5', title: 'Inventaire par batiment', page: 5 },
+      { num: '6', title: 'Inventaire par categorie', page: 6 },
+      { num: '7', title: 'Fiches elements', page: 7 },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).fillColor(colors.text).text(`${item.num}. ${item.title}`, 70, somY);
+      doc.fillColor(colors.muted).text(`.....................................................`, 280, somY, { width: 200 });
+      doc.fillColor(colors.primary).text(String(item.page), 500, somY, { align: 'right', width: 30 });
+      somY += 28;
+    });
+
+    // ========== 1. PRÉSENTATION DU DATAHUB ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('1. Presentation du DataHub', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let presY = 100;
+    doc.fontSize(11).fillColor(colors.text)
+       .text('Le DataHub est un systeme centralise de gestion des donnees techniques permettant:', 50, presY, { width: 495 });
+    presY += 35;
+
+    const features = [
+      'Inventorier tous les elements techniques du site',
+      'Categoriser les elements avec des marqueurs personnalises',
+      'Localiser les elements sur les plans du site',
+      'Gerer les informations et documents associes',
+      'Faciliter la recherche et le suivi des donnees',
+    ];
+
+    features.forEach(feat => {
+      doc.fontSize(10).fillColor(colors.text).text(`- ${feat}`, 70, presY, { width: 475 });
+      presY += 18;
+    });
+
+    // ========== 2. PRÉSENTATION DU SITE ==========
+    presY += 30;
+    doc.fontSize(20).fillColor(colors.primary).text('2. Presentation du site', 50, presY);
+    doc.moveTo(50, presY + 30).lineTo(545, presY + 30).strokeColor(colors.primary).lineWidth(1).stroke();
+    presY += 50;
+
+    doc.fontSize(11).fillColor(colors.text).text(`Site: ${site}`, 50, presY);
+    presY += 20;
+    doc.text(`Nombre de batiments: ${Object.keys(byBuilding).length}`, 50, presY);
+    presY += 20;
+    doc.text(`Total elements: ${totalCount}`, 50, presY);
+    presY += 20;
+    doc.text(`Categories definies: ${categories.length}`, 50, presY);
+    presY += 20;
+    doc.text(`Plans disponibles: ${plans.length}`, 50, presY);
+
+    // ========== 3. CATÉGORIES D'ÉLÉMENTS ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('3. Categories d\'elements', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let catY = 100;
+    if (categories.length === 0) {
+      doc.fontSize(11).fillColor(colors.muted).text('Aucune categorie definie.', 50, catY);
+    } else {
+      doc.fontSize(11).fillColor(colors.text).text(`${categories.length} categorie(s) definies pour organiser les elements.`, 50, catY);
+      catY += 30;
+
+      const catHeaders = ['Categorie', 'Description', 'Couleur', 'Nb Elements'];
+      const catColW = [140, 220, 70, 65];
+      let x = 50;
+      catHeaders.forEach((h, i) => {
+        doc.rect(x, catY, catColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(9).fillColor('#fff').text(h, x + 5, catY + 6, { width: catColW[i] - 10 });
+        x += catColW[i];
+      });
+      catY += 22;
+
+      categories.forEach(cat => {
+        if (catY > 750) { doc.addPage(); catY = 50; }
+        const count = byCategory[cat.name]?.length || 0;
+        x = 50;
+        doc.rect(x, catY, catColW[0], 20).fillAndStroke('#fff', '#e5e7eb');
+        doc.fontSize(8).fillColor(colors.text).text((cat.name || '-').substring(0, 28), x + 5, catY + 5, { width: catColW[0] - 10 });
+        x += catColW[0];
+
+        doc.rect(x, catY, catColW[1], 20).fillAndStroke('#fff', '#e5e7eb');
+        doc.fontSize(8).fillColor(colors.text).text((cat.description || '-').substring(0, 45), x + 5, catY + 5, { width: catColW[1] - 10 });
+        x += catColW[1];
+
+        // Color swatch
+        doc.rect(x, catY, catColW[2], 20).fillAndStroke('#fff', '#e5e7eb');
+        doc.rect(x + 20, catY + 4, 30, 12).fill(cat.color || colors.primary);
+        x += catColW[2];
+
+        doc.rect(x, catY, catColW[3], 20).fillAndStroke('#fff', '#e5e7eb');
+        doc.fontSize(8).fillColor(colors.text).text(String(count), x + 5, catY + 5, { width: catColW[3] - 10, align: 'center' });
+        catY += 20;
+      });
+    }
+
+    // ========== 4. LISTE DES PLANS ==========
+    catY += 30;
+    if (catY > 600) { doc.addPage(); catY = 50; }
+    doc.fontSize(20).fillColor(colors.primary).text('4. Liste des plans', 50, catY);
+    doc.moveTo(50, catY + 30).lineTo(545, catY + 30).strokeColor(colors.primary).lineWidth(1).stroke();
+    catY += 50;
+
+    if (plans.length === 0) {
+      doc.fontSize(11).fillColor(colors.muted).text('Aucun plan disponible. Les plans VSD peuvent etre utilises pour positionner les elements.', 50, catY, { width: 495 });
+    } else {
+      doc.fontSize(9).fillColor(colors.muted)
+         .text('Les plans utilises sont ceux du module VSD. Les elements peuvent etre positionnes sur ces plans.', 50, catY, { width: 495 });
+      catY += 25;
+
+      plans.forEach((p, idx) => {
+        if (catY > 750) { doc.addPage(); catY = 50; }
+        doc.rect(50, catY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+        doc.fontSize(9).fillColor(colors.text)
+           .text(`${idx + 1}. ${p.display_name || p.logical_name}`, 60, catY + 7);
+        catY += 25;
+      });
+    }
+
+    // ========== 5. INVENTAIRE PAR BÂTIMENT ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('5. Inventaire par batiment', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let invY = 100;
+    doc.fontSize(11).fillColor(colors.text).text(`${totalCount} element(s) inventorie(s) sur ${Object.keys(byBuilding).length} batiment(s).`, 50, invY);
+    invY += 35;
+
+    const invHeaders = ['Batiment', 'Etage', 'Nb Elements', 'Positionnes'];
+    const invColW = [170, 120, 100, 105];
+    let x = 50;
+    invHeaders.forEach((h, i) => {
+      doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+      doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+      x += invColW[i];
+    });
+    invY += 22;
+
+    Object.entries(byBuilding).forEach(([bat, batItems]) => {
+      const byFloor = {};
+      batItems.forEach(item => {
+        const f = item.floor || '-';
+        if (!byFloor[f]) byFloor[f] = [];
+        byFloor[f].push(item);
+      });
+
+      Object.entries(byFloor).forEach(([flr, flrItems]) => {
+        if (invY > 750) {
+          doc.addPage();
+          invY = 50;
+          x = 50;
+          invHeaders.forEach((h, i) => {
+            doc.rect(x, invY, invColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(9).fillColor('#fff').text(h, x + 5, invY + 6, { width: invColW[i] - 10 });
+            x += invColW[i];
+          });
+          invY += 22;
+        }
+        const positioned = flrItems.filter(it => positionsMap.has(it.id)).length;
+        const row = [bat.substring(0, 30), flr.substring(0, 20), flrItems.length, positioned];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, invColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          doc.fontSize(8).fillColor(colors.text).text(String(cell), x + 5, invY + 5, { width: invColW[i] - 10 });
+          x += invColW[i];
+        });
+        invY += 20;
+      });
+    });
+
+    // ========== 6. INVENTAIRE PAR CATÉGORIE ==========
+    doc.addPage();
+    doc.fontSize(20).fillColor(colors.primary).text('6. Inventaire par categorie', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let catInvY = 100;
+
+    Object.entries(byCategory).forEach(([catName, catItems]) => {
+      if (catInvY > 650) { doc.addPage(); catInvY = 50; }
+
+      // Category header
+      const catInfo = categories.find(c => c.name === catName);
+      const catColor = catInfo?.color || colors.primary;
+
+      doc.rect(50, catInvY, 495, 30).fillAndStroke(catColor, catColor);
+      doc.fontSize(12).fillColor('#fff').text(catName, 60, catInvY + 8);
+      doc.fontSize(10).text(`${catItems.length} element(s)`, 450, catInvY + 10, { align: 'right', width: 80 });
+      catInvY += 35;
+
+      // List items in this category (max 10 per category to avoid too long report)
+      const displayItems = catItems.slice(0, 10);
+      displayItems.forEach((item, idx) => {
+        if (catInvY > 750) { doc.addPage(); catInvY = 50; }
+        doc.rect(50, catInvY, 495, 20).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+        doc.fontSize(8).fillColor(colors.text)
+           .text(`${item.name || '-'}`, 60, catInvY + 5, { width: 200 });
+        doc.fillColor(colors.muted)
+           .text(`${item.code || '-'}`, 270, catInvY + 5, { width: 100 })
+           .text(`${item.building || '-'} / ${item.floor || '-'}`, 380, catInvY + 5, { width: 150 });
+        catInvY += 20;
+      });
+
+      if (catItems.length > 10) {
+        doc.fontSize(8).fillColor(colors.muted).text(`... et ${catItems.length - 10} autres elements`, 60, catInvY + 5);
+        catInvY += 20;
+      }
+
+      catInvY += 15;
+    });
+
+    // ========== 7. FICHES ÉLÉMENTS ==========
+    if (items.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).fillColor(colors.primary).text('7. Fiches elements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).fillColor(colors.muted).text(`${items.length} element(s) DataHub`, 50, ficheY);
+      ficheY += 30;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const position = positionsMap.get(item.id);
+        const catInfo = categories.find(c => c.name === item.category_name);
+        const itemColor = catInfo?.color || colors.primary;
+
+        if (ficheY > 580) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Card frame
+        doc.rect(50, ficheY, 495, 200).stroke(colors.light);
+
+        // Header with name
+        doc.rect(50, ficheY, 495, 35).fill(itemColor);
+        doc.fontSize(12).fillColor('#fff')
+           .text(item.name || 'Element sans nom', 60, ficheY + 10, { width: 420 });
+
+        let infoY = ficheY + 45;
+        const infoX = 60;
+        const rightColX = 330;
+        const imgWidth = 90;
+        const imgHeight = 90;
+
+        // Photo placeholder on right
+        doc.rect(rightColX, infoY, imgWidth, imgHeight).stroke(colors.light);
+        doc.fontSize(7).fillColor(colors.muted).text('Photo element', rightColX + 18, infoY + 38);
+
+        // Plan placeholder
+        const planX = rightColX + imgWidth + 10;
+        if (position) {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(itemColor);
+          doc.fontSize(7).fillColor(colors.muted)
+             .text(position.plan_display_name || 'Plan', planX + 10, infoY + 38, { width: imgWidth - 20, align: 'center' });
+        } else {
+          doc.rect(planX, infoY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 15, infoY + 38);
+        }
+
+        // Item info fields
+        const dhInfo = [
+          ['Code', item.code || '-'],
+          ['Categorie', item.category_name || '-'],
+          ['Batiment', item.building || '-'],
+          ['Etage', item.floor || '-'],
+          ['Localisation', item.location || '-'],
+          ['Description', (item.description || '-').substring(0, 50)],
+          ['Notes', (item.notes || '-').substring(0, 50)],
+          ['Cree le', item.created_at ? new Date(item.created_at).toLocaleDateString('fr-FR') : '-'],
+          ['Modifie le', item.updated_at ? new Date(item.updated_at).toLocaleDateString('fr-FR') : '-'],
+        ];
+
+        dhInfo.forEach(([label, value]) => {
+          doc.fontSize(8).fillColor(colors.text).text(label + ':', infoX, infoY, { width: 75 });
+          doc.fillColor(colors.muted).text(String(value), infoX + 77, infoY, { width: 185 });
+          infoY += 14;
+        });
+
+        // Show custom data if any
+        if (item.data && Object.keys(item.data).length > 0) {
+          infoY += 5;
+          doc.fontSize(7).fillColor(colors.primary).text('Donnees personnalisees:', infoX, infoY);
+          infoY += 12;
+          Object.entries(item.data).slice(0, 3).forEach(([key, val]) => {
+            doc.fontSize(7).fillColor(colors.muted).text(`${key}: ${String(val).substring(0, 40)}`, infoX + 10, infoY);
+            infoY += 10;
+          });
+        }
+
+        ficheY += 210;
       }
     }
 
-    y += 60;
-    doc.fontSize(14).fillColor('#3B82F6').text('Liste des éléments', 50, y);
-    y += 25;
-
-    // Table header
-    doc.rect(50, y, 495, 20).fill('#e5e7eb');
-    doc.fontSize(9).fillColor('#374151');
-    doc.text('Nom', 55, y + 6);
-    doc.text('Code', 180, y + 6);
-    doc.text('Catégorie', 260, y + 6);
-    doc.text('Bâtiment', 370, y + 6);
-    doc.text('Étage', 450, y + 6);
-    y += 20;
-
-    // Table rows
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (y > 750) { doc.addPage(); y = 50; }
-
-      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
-      doc.rect(50, y, 495, 18).fill(bgColor);
-      doc.fontSize(8).fillColor('#374151');
-      doc.text((item.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
-      doc.text((item.code || '-').substring(0, 15), 180, y + 5, { width: 75 });
-      doc.text((item.category_name || '-').substring(0, 20), 260, y + 5, { width: 105 });
-      doc.text((item.building || '-').substring(0, 15), 370, y + 5, { width: 75 });
-      doc.text(item.floor || '-', 450, y + 5, { width: 45 });
-      y += 18;
-    }
-
-    // Footer on each page
-    const pages = doc.bufferedPageRange();
-    for (let i = 0; i < pages.count; i++) {
+    // ========== PAGE NUMBERING ==========
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Rapport DataHub - ${site} - Page ${i + 1}/${range.count}`, 50, 810, { align: 'center', width: 495 });
     }
 
     doc.end();
+    console.log(`[Datahub] Generated professional PDF with ${totalCount} items`);
+
   } catch (e) {
     console.error('[Datahub] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
