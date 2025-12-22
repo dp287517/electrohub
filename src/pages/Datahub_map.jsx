@@ -385,12 +385,13 @@ export default function DatahubMap() {
   const createModeRef = useRef(false);
   const placementModeRef = useRef(null);
   const canvasDimRef = useRef({ w: 0, h: 0 });
-  const selectedItemIdRef = useRef(null); // Track selected item without causing re-renders
+  const selectedItemIdRef = useRef(null); // Track selected item for marker drawing
+  const positionsRef = useRef([]); // Keep positions for redrawing
+  const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
   useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
-  useEffect(() => { selectedItemIdRef.current = selectedItem?.id || null; }, [selectedItem]);
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
 
@@ -491,6 +492,10 @@ export default function DatahubMap() {
   const initMap = (imageUrl, w, h) => {
     if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
     markersRef.current = [];
+    markersMapRef.current.clear();
+
+    // Store image size for marker drawing
+    imgSizeRef.current = { w, h };
 
     const bounds = [[0, 0], [h, w]];
     const map = L.map(mapContainerRef.current, {
@@ -504,45 +509,123 @@ export default function DatahubMap() {
     overlayRef.current = overlay;
 
     map.on("click", handleMapClick);
+
+    // Draw markers after map is initialized
+    if (positionsRef.current.length > 0) {
+      drawMarkers();
+    }
   };
 
-  // Highlight and animate to a marker (for navigation)
-  const highlightMarker = useCallback((itemId, shouldZoom = false) => {
+  // Create marker icon (like Switchboard's makeSwitchboardIcon)
+  const makeMarkerIcon = useCallback((item, cat, isSelected) => {
+    const size = isSelected ? ICON_PX_SELECTED : ICON_PX;
+    const color = cat?.color || "#6366F1";
+    const iconId = cat?.icon || 'circle';
+    const svgPath = SVG_PATHS[iconId] || SVG_PATHS.default;
+
+    // Animation class goes on the INNER div (like Switchboard)
+    const animClass = isSelected ? 'datahub-marker-selected' : '';
+
+    const html = `
+      <div class="${animClass}" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
+        box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          ${svgPath}
+        </svg>
+      </div>`;
+
+    return L.divIcon({
+      className: "datahub-marker-inline", // Neutral wrapper (like sb-marker-inline)
+      html,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2]
+    });
+  }, []);
+
+  // Draw markers function (like Switchboard's drawMarkers)
+  const drawMarkers = useCallback(() => {
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    if (!map || !overlay) return;
+
+    const { w, h } = imgSizeRef.current;
+    if (w === 0 || h === 0) return;
+
+    // Clear existing markers
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
+    markersMapRef.current.clear();
+
+    const bounds = overlay.getBounds();
+    const boundsH = bounds.getNorth();
+    const boundsW = bounds.getEast();
+
+    positionsRef.current.forEach(pos => {
+      const item = items.find(i => i.id === pos.item_id);
+      if (!item) return;
+
+      // Filter by selected categories
+      if (selectedCategories.length > 0 && !selectedCategories.includes(item.category_id)) return;
+
+      const cat = categories.find(c => c.id === item.category_id);
+      const isSelected = pos.item_id === selectedItemIdRef.current;
+      const icon = makeMarkerIcon(item, cat, isSelected);
+
+      const lat = boundsH * (1 - pos.y_frac);
+      const lng = boundsW * pos.x_frac;
+      const marker = L.marker([lat, lng], { icon, draggable: true, riseOnHover: true }).addTo(map);
+      marker.__meta = { id: pos.id, item_id: pos.item_id, lat, lng };
+
+      marker.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        setSelectedItem(item);
+        setSelectedPosition(pos);
+        setPlacementMode(null);
+        setCreateMode(false);
+        // Animate to marker position
+        map.setView([lat, lng], map.getZoom(), { animate: true });
+      });
+
+      marker.on("dragend", async () => {
+        const ll = marker.getLatLng();
+        const newX = clamp(ll.lng / boundsW, 0, 1);
+        const newY = clamp(1 - ll.lat / boundsH, 0, 1);
+        try {
+          await api.datahub.maps.setPosition(pos.item_id, {
+            logical_name: selectedPlan.logical_name || selectedPlan.id,
+            page_index: pageIndex, x_frac: newX, y_frac: newY
+          });
+          await loadPositions();
+        } catch (e) {
+          console.error("Move error:", e);
+          await loadPositions();
+        }
+      });
+
+      marker.bindTooltip(`<strong>${item.name}</strong><br/>${cat?.name || 'Sans categorie'}`, {
+        direction: "top", offset: [0, -ICON_PX / 2], className: "datahub-tooltip"
+      });
+
+      markersRef.current.push(marker);
+      markersMapRef.current.set(pos.item_id, marker);
+    });
+  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon]);
+
+  // Highlight marker with flash animation (for navigation)
+  const highlightMarker = useCallback((itemId) => {
     const mk = markersMapRef.current.get(itemId);
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();
-    const targetZoom = shouldZoom ? Math.max(0, mapRef.current.getZoom()) : mapRef.current.getZoom();
-    mapRef.current.setView(ll, targetZoom, { animate: true, duration: 0.5 });
+    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true, duration: 0.5 });
 
     // Flash animation on the marker element
     const el = mk.getElement();
     if (el) {
-      el.classList.add("datahub-marker-flash");
-      setTimeout(() => el.classList.remove("datahub-marker-flash"), 2000);
-    }
-  }, []);
-
-  // Update selected marker appearance without recreating all markers
-  const updateSelectedMarkerAppearance = useCallback((newSelectedId, oldSelectedId) => {
-    // Remove selected class from old marker
-    if (oldSelectedId) {
-      const oldMk = markersMapRef.current.get(oldSelectedId);
-      if (oldMk) {
-        const el = oldMk.getElement();
-        if (el) {
-          el.classList.remove("datahub-marker-selected");
-        }
-      }
-    }
-    // Add selected class to new marker
-    if (newSelectedId) {
-      const newMk = markersMapRef.current.get(newSelectedId);
-      if (newMk) {
-        const el = newMk.getElement();
-        if (el) {
-          el.classList.add("datahub-marker-selected");
-        }
+      const innerDiv = el.querySelector('div');
+      if (innerDiv) {
+        innerDiv.classList.add("datahub-marker-flash");
+        setTimeout(() => innerDiv.classList.remove("datahub-marker-flash"), 2000);
       }
     }
   }, []);
@@ -611,7 +694,6 @@ export default function DatahubMap() {
   // Delete position
   const handleDeletePosition = async (posId) => {
     try {
-      const prevSelectedId = selectedItemIdRef.current;
       await api.datahub.maps.deletePosition(posId);
       await loadPositions();
       const pos = positions.find(p => p.id === posId);
@@ -620,115 +702,49 @@ export default function DatahubMap() {
       }
       setSelectedItem(null);
       setSelectedPosition(null);
-      updateSelectedMarkerAppearance(null, prevSelectedId);
       showToast("Position supprimee");
     } catch {
       showToast("Erreur de suppression", "error");
     }
   };
 
-  // Render markers - does NOT depend on selectedItem to avoid recreating markers on selection
+  // Keep positions ref in sync and redraw markers when positions change
   useEffect(() => {
-    if (!mapRef.current || !overlayRef.current) return;
-    markersRef.current.forEach(m => m.remove());
-    markersRef.current = [];
-    markersMapRef.current.clear();
+    positionsRef.current = positions;
+    if (mapRef.current && imgSizeRef.current.w > 0) {
+      drawMarkers();
+    }
+  }, [positions, items, categories, selectedCategories, drawMarkers]);
 
-    const bounds = overlayRef.current.getBounds();
-    const h = bounds.getNorth();
-    const w = bounds.getEast();
-
-    positions.forEach(pos => {
-      const item = items.find(i => i.id === pos.item_id);
-      if (!item) return;
-
-      // Filter by selected categories
-      if (selectedCategories.length > 0 && !selectedCategories.includes(item.category_id)) return;
-
-      const cat = categories.find(c => c.id === item.category_id);
-      const color = cat?.color || "#6366F1";
-      const iconId = cat?.icon || 'circle';
-      const size = ICON_PX; // Always use normal size, selected state handled via CSS
-      const svgPath = SVG_PATHS[iconId] || SVG_PATHS.default;
-
-      const html = `
-        <div class="datahub-marker-inner" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
-          box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;">
-          <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            ${svgPath}
-          </svg>
-        </div>`;
-
-      // Start with base class, selected state will be added via updateSelectedMarkerAppearance
-      const isCurrentlySelected = selectedItemIdRef.current === pos.item_id;
-      const markerClass = isCurrentlySelected ? 'datahub-marker datahub-marker-selected' : 'datahub-marker';
-      const icon = L.divIcon({ html, className: markerClass, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-      const lat = h * (1 - pos.y_frac);
-      const lng = w * pos.x_frac;
-      const marker = L.marker([lat, lng], { icon, draggable: true, riseOnHover: true }).addTo(mapRef.current);
-      marker.__meta = { id: pos.id, item_id: pos.item_id, lat, lng };
-
-      marker.on("click", (e) => {
-        L.DomEvent.stopPropagation(e);
-        const prevSelectedId = selectedItemIdRef.current;
-        setSelectedItem(item);
-        setSelectedPosition(pos);
-        setPlacementMode(null);
-        setCreateMode(false);
-        // Update marker appearance without recreating
-        updateSelectedMarkerAppearance(pos.item_id, prevSelectedId);
-        // Animate to marker position
-        mapRef.current?.setView([lat, lng], mapRef.current.getZoom(), { animate: true });
-      });
-
-      marker.on("dragend", async () => {
-        const ll = marker.getLatLng();
-        const newX = clamp(ll.lng / w, 0, 1);
-        const newY = clamp(1 - ll.lat / h, 0, 1);
-        try {
-          await api.datahub.maps.setPosition(pos.item_id, {
-            logical_name: selectedPlan.logical_name || selectedPlan.id,
-            page_index: pageIndex, x_frac: newX, y_frac: newY
-          });
-          await loadPositions();
-        } catch (e) {
-          console.error("Move error:", e);
-          await loadPositions();
-        }
-      });
-
-      marker.bindTooltip(`<strong>${item.name}</strong><br/>${cat?.name || 'Sans categorie'}`, {
-        direction: "top", offset: [0, -size / 2], className: "datahub-tooltip"
-      });
-      markersRef.current.push(marker);
-      markersMapRef.current.set(pos.item_id, marker);
-    });
-  }, [positions, items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, updateSelectedMarkerAppearance]);
+  // Redraw markers when selectedItem changes (like Switchboard line 574-580)
+  useEffect(() => {
+    selectedItemIdRef.current = selectedItem?.id || null;
+    // Redraw markers to update selection state
+    if (mapRef.current && imgSizeRef.current.w > 0) {
+      drawMarkers();
+    }
+  }, [selectedItem, drawMarkers]);
 
   // Focus on item from URL - with delay to ensure map is ready
   useEffect(() => {
     if (focusItemId && items.length > 0 && positions.length > 0) {
       const item = items.find(i => i.id === focusItemId);
       if (item) {
-        const prevSelectedId = selectedItemIdRef.current;
         setSelectedItem(item);
         const pos = positions.find(p => p.item_id === focusItemId);
         if (pos) {
           setSelectedPosition(pos);
-          // Delay to ensure map and markers are fully initialized
+          // Delay to ensure map and markers are fully initialized, then flash the marker
           const timer = setTimeout(() => {
             if (mapRef.current && overlayRef.current) {
-              // Update selected marker appearance
-              updateSelectedMarkerAppearance(focusItemId, prevSelectedId);
-              // Use highlightMarker for animation and flash effect
-              highlightMarker(focusItemId, true);
+              highlightMarker(focusItemId);
             }
-          }, 400);
+          }, 500);
           return () => clearTimeout(timer);
         }
       }
     }
-  }, [focusItemId, items, positions, highlightMarker, updateSelectedMarkerAppearance]);
+  }, [focusItemId, items, positions, highlightMarker]);
 
   // Filter items
   const filteredItems = useMemo(() => {
@@ -770,20 +786,21 @@ export default function DatahubMap() {
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes pulse-selected {
           0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
-          50% { transform: scale(1.2); box-shadow: 0 0 0 12px rgba(99, 102, 241, 0); }
+          50% { transform: scale(1.15); box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
         }
         @keyframes flash-marker {
           0%, 100% { transform: scale(1); filter: brightness(1); }
-          25% { transform: scale(1.4); filter: brightness(1.3); }
-          50% { transform: scale(1.2); filter: brightness(1.1); }
-          75% { transform: scale(1.3); filter: brightness(1.2); }
+          20% { transform: scale(1.5); filter: brightness(1.4); }
+          40% { transform: scale(1.2); filter: brightness(1.2); }
+          60% { transform: scale(1.4); filter: brightness(1.3); }
+          80% { transform: scale(1.1); filter: brightness(1.1); }
         }
         .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
-        .datahub-marker { z-index: 500 !important; }
-        .datahub-marker .datahub-marker-inner { transition: transform 0.2s ease, filter 0.2s ease; }
-        .datahub-marker-selected { z-index: 2000 !important; }
-        .datahub-marker-selected .datahub-marker-inner { animation: pulse-selected 1.5s ease-in-out infinite; }
-        .datahub-marker-flash .datahub-marker-inner { animation: flash-marker 2s ease-in-out; }
+        /* Neutral wrapper like sb-marker-inline */
+        .datahub-marker-inline { background: transparent !important; border: none !important; }
+        /* Animation class on inner div (like Switchboard) */
+        .datahub-marker-selected { animation: pulse-selected 1.5s ease-in-out infinite; z-index: 2000 !important; }
+        .datahub-marker-flash { animation: flash-marker 2s ease-in-out; }
         .datahub-tooltip { font-size: 12px; padding: 8px 12px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15); z-index: 3000 !important; }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
         .leaflet-pane { z-index: 400; }
@@ -982,14 +999,13 @@ export default function DatahubMap() {
                       <div className="flex gap-2 mt-2">
                         <button
                           onClick={() => {
-                            const prevSelectedId = selectedItemIdRef.current;
                             setSelectedItem(item);
                             const pos = positions.find(p => p.item_id === item.id);
                             setSelectedPosition(pos || null);
-                            // Update marker appearance and animate to it if placed
+                            // Animate to marker if placed
                             if (pos) {
-                              updateSelectedMarkerAppearance(item.id, prevSelectedId);
-                              highlightMarker(item.id, false);
+                              // Small delay to let the effect redraw first
+                              setTimeout(() => highlightMarker(item.id), 50);
                             }
                           }}
                           className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
@@ -1047,11 +1063,9 @@ export default function DatahubMap() {
               {/* Create button */}
               <button
                 onClick={() => {
-                  const prevSelectedId = selectedItemIdRef.current;
                   setCreateMode(true);
                   setPlacementMode(null);
                   setSelectedItem(null);
-                  updateSelectedMarkerAppearance(null, prevSelectedId);
                 }}
                 disabled={createMode || isLoading}
                 className="absolute top-3 left-3 z-10 w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 text-white shadow-lg flex items-center justify-center hover:from-green-400 hover:to-emerald-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1103,10 +1117,8 @@ export default function DatahubMap() {
                   category={categories.find(c => c.id === selectedItem.category_id)}
                   position={selectedPosition}
                   onClose={() => {
-                    const prevSelectedId = selectedItemIdRef.current;
                     setSelectedItem(null);
                     setSelectedPosition(null);
-                    updateSelectedMarkerAppearance(null, prevSelectedId);
                   }}
                   onDelete={handleDeletePosition}
                   onNavigate={(item) => navigate(`/app/datahub?item=${item.id}`)}
