@@ -1117,9 +1117,10 @@ function VsdPlansTab() {
             <MapPin size={20} />
           </div>
           <div>
-            <h3 className="font-semibold text-emerald-900">Gestion des Plans VSD</h3>
+            <h3 className="font-semibold text-emerald-900">Gestion des Plans</h3>
             <p className="text-sm text-emerald-700 mt-1">
-              Importez vos plans PDF pour localiser les variateurs de vitesse (VSD).
+              Importez vos plans PDF pour localiser vos équipements.
+              Ces plans sont partagés entre tous les modules (VSD, GLO, Switchboard, Datahub, Mobile, HV).
               Les marqueurs existants sont automatiquement préservés lors des mises à jour.
             </p>
           </div>
@@ -1409,7 +1410,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} icon={Building2} count={companies.length}>Companies</TabButton>
             <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
-            <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>VSD Plans</TabButton>
+            <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>Plans</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
           </div>
         </div>
