@@ -823,7 +823,7 @@ const MecaLeafletViewer = forwardRef(({
 
       <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white">
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fb923c, #ea580c)" }} />
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #3b82f6, #2563eb)" }} />
           Équipement
         </span>
         <span className="inline-flex items-center gap-1">
