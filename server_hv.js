@@ -905,6 +905,7 @@ app.get('/api/hv/maps/positions', async (req, res) => {
 });
 
 // Set/update equipment position on plan
+// This ensures equipment is only on ONE plan at a time (deletes old positions first)
 app.post('/api/hv/maps/setPosition', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -915,11 +916,17 @@ app.post('/api/hv/maps/setPosition', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // First, delete ALL existing positions for this equipment on this site
+    // This ensures the equipment is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM hv_positions WHERE equipment_id = $1 AND site = $2`,
+      [equipment_id, site]
+    );
+
+    // Then insert the new position
     const { rows } = await pool.query(`
       INSERT INTO hv_positions (site, equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (equipment_id, logical_name, page_index)
-      DO UPDATE SET x_frac = EXCLUDED.x_frac, y_frac = EXCLUDED.y_frac, plan_id = EXCLUDED.plan_id
       RETURNING *
     `, [site, equipment_id, logical_name, plan_id || null, Number(page_index), x_frac, y_frac]);
 

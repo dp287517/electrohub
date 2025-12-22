@@ -960,6 +960,7 @@ app.get("/api/vsd/maps/positions", async (req, res) => {
   }
 });
 // POST /api/vsd/maps/setPosition
+// This ensures equipment is only on ONE plan at a time (deletes old positions first)
 app.post("/api/vsd/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -974,11 +975,18 @@ app.post("/api/vsd/maps/setPosition", async (req, res) => {
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null) {
       return res.status(400).json({ ok: false, error: "Missing fields" });
     }
+
+    // First, delete ALL existing positions for this equipment
+    // This ensures the equipment is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM vsd_positions WHERE equipment_id = $1`,
+      [equipment_id]
+    );
+
+    // Then insert the new position
     await pool.query(
       `INSERT INTO vsd_positions(equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(equipment_id, logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, plan_id=EXCLUDED.plan_id`,
+       VALUES($1,$2,$3,$4,$5,$6)`,
       [equipment_id, logical_name, plan_id, Number(page_index), Number(x_frac), Number(y_frac)]
     );
     await pool.query(

@@ -1066,6 +1066,7 @@ app.get("/api/meca/maps/positions", async (req, res) => {
 });
 
 // POST /api/meca/maps/setPosition
+// This ensures equipment is only on ONE plan at a time (deletes old positions first)
 app.post("/api/meca/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -1084,16 +1085,19 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
         .json({ ok: false, error: "Missing fields" });
     }
 
+    // First, delete ALL existing positions for this equipment
+    // This ensures the equipment is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM meca_positions WHERE equipment_id = $1`,
+      [equipment_id]
+    );
+
+    // Then insert the new position
     await pool.query(
       `INSERT INTO meca_positions(
          equipment_id, logical_name, plan_id, page_index, x_frac, y_frac
        )
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(equipment_id, logical_name, page_index)
-       DO UPDATE SET
-         x_frac=EXCLUDED.x_frac,
-         y_frac=EXCLUDED.y_frac,
-         plan_id=EXCLUDED.plan_id`,
+       VALUES($1,$2,$3,$4,$5,$6)`,
       [
         equipment_id,
         logical_name,
@@ -1103,9 +1107,6 @@ app.post("/api/meca/maps/setPosition", async (req, res) => {
         Number(y_frac),
       ]
     );
-
-    // Option : mettre le logical_name dans "location" ou "panel" si tu veux,
-    // ici on ne touche pas à l'équipement pour rester neutre.
 
     await logEvent(
       "meca_position_set",
