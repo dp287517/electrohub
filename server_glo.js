@@ -14,6 +14,7 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
 import PDFDocument from "pdfkit";
+import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 
 dotenv.config();
@@ -260,6 +261,9 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_glo_plans_logical ON glo_plans(logical_name);`);
+
+  // Migration: add thumbnail column for pre-generated plan thumbnails
+  await pool.query(`ALTER TABLE glo_plans ADD COLUMN IF NOT EXISTS thumbnail BYTEA NULL`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS glo_plan_names (
@@ -1473,6 +1477,289 @@ app.get("/api/glo/report", async (req, res) => {
   } catch (e) {
     console.error('[GLO] Report error:', e);
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// -------------------------------------------------
+// MANAGEMENT MONITORING REPORT (avec mini plans)
+// -------------------------------------------------
+app.get("/api/glo/management-monitoring", async (req, res) => {
+  try {
+    const siteName = req.query.site || req.headers["x-site"] || "Default";
+    const filterBuilding = req.query.building || null;
+    const filterFloor = req.query.floor || null;
+    const filterType = req.query.type || null;
+
+    // Récupérer les informations du site
+    let siteInfo = { company_name: "Entreprise", site_name: siteName, logo: null, logo_mime: null };
+    try {
+      const siteRes = await pool.query(
+        `SELECT company_name, company_address, company_phone, company_email, logo, logo_mime
+         FROM site_settings WHERE site = $1`,
+        [siteName]
+      );
+      if (siteRes.rows[0]) {
+        siteInfo = { ...siteInfo, ...siteRes.rows[0], site_name: siteName };
+      }
+    } catch (e) { console.warn('[GLO-MM] No site settings:', e.message); }
+
+    // Récupérer les équipements avec filtres
+    let equipmentQuery = `SELECT e.* FROM glo_equipments e WHERE 1=1`;
+    const params = [];
+    let paramIdx = 1;
+
+    if (filterBuilding) { equipmentQuery += ` AND e.building = $${paramIdx++}`; params.push(filterBuilding); }
+    if (filterFloor) { equipmentQuery += ` AND e.floor = $${paramIdx++}`; params.push(filterFloor); }
+    if (filterType) { equipmentQuery += ` AND e.type = $${paramIdx++}`; params.push(filterType); }
+
+    equipmentQuery += ` ORDER BY e.type, e.building, e.floor, e.name`;
+
+    const { rows: equipments } = await pool.query(equipmentQuery, params);
+    console.log(`[GLO-MM] Found ${equipments.length} equipments`);
+
+    // Récupérer les positions des équipements sur les plans
+    const equipmentIds = equipments.map(e => e.id);
+    let positionsMap = new Map();
+    if (equipmentIds.length > 0) {
+      const { rows: positions } = await pool.query(`
+        SELECT pos.equipment_id, pos.logical_name, pos.plan_id, pos.x_frac, pos.y_frac,
+               COALESCE(p_by_logical.thumbnail, p_by_id.thumbnail) AS plan_thumbnail,
+               COALESCE(p_by_logical.content, p_by_id.content) AS plan_content,
+               COALESCE(pn.display_name, pos.logical_name, 'Plan') AS plan_display_name
+        FROM glo_positions pos
+        LEFT JOIN (
+          SELECT DISTINCT ON (logical_name) id, logical_name, content, thumbnail
+          FROM glo_plans
+          ORDER BY logical_name, version DESC
+        ) p_by_logical ON p_by_logical.logical_name = pos.logical_name
+        LEFT JOIN glo_plans p_by_id ON p_by_id.id = pos.plan_id
+        LEFT JOIN glo_plan_names pn ON pn.logical_name = COALESCE(pos.logical_name, p_by_id.logical_name)
+        WHERE pos.equipment_id = ANY($1)
+      `, [equipmentIds]);
+
+      for (const pos of positions) {
+        if (!positionsMap.has(pos.equipment_id)) {
+          positionsMap.set(pos.equipment_id, pos);
+        }
+      }
+      console.log(`[GLO-MM] Found ${positions.length} equipment positions on plans`);
+    }
+
+    // Créer le PDF
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 50,
+      bufferPages: true,
+      info: {
+        Title: 'Management Monitoring - Équipements GLO',
+        Author: siteInfo.company_name,
+        Subject: 'Rapport de suivi GLO (UPS, Batteries, Éclairage)'
+      }
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Management_Monitoring_GLO_${siteName.replace(/[^a-zA-Z0-9-_]/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf"`);
+    doc.pipe(res);
+
+    // Couleurs
+    const colors = {
+      primary: '#34d399',    // Emerald
+      secondary: '#059669',
+      text: '#1f2937',
+      muted: '#6b7280',
+      light: '#e5e7eb'
+    };
+
+    const typeLabels = { ups: 'UPS', battery: 'Batterie de compensation', lighting: 'Éclairage de sécurité' };
+
+    // En-tête avec logo
+    if (siteInfo.logo && siteInfo.logo_mime) {
+      try {
+        const logoBuffer = Buffer.isBuffer(siteInfo.logo) ? siteInfo.logo : Buffer.from(siteInfo.logo);
+        doc.image(logoBuffer, 50, 30, { fit: [100, 50] });
+      } catch (e) { console.warn('[GLO-MM] Logo error:', e.message); }
+    }
+
+    doc.fontSize(20).fillColor(colors.primary)
+       .text('Management Monitoring', 200, 35, { width: 350, align: 'right' });
+    doc.fontSize(12).fillColor(colors.muted)
+       .text('Équipements GLO', 200, 60, { width: 350, align: 'right' });
+    doc.fontSize(10)
+       .text(`${siteInfo.company_name} - ${siteInfo.site_name}`, 200, 78, { width: 350, align: 'right' })
+       .text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 200, 92, { width: 350, align: 'right' });
+
+    // Statistiques
+    let y = 130;
+    const byType = { ups: 0, battery: 0, lighting: 0 };
+    equipments.forEach(e => { if (byType[e.type] !== undefined) byType[e.type]++; });
+
+    doc.rect(50, y, 495, 50).fill('#f3f4f6');
+    doc.fontSize(11).fillColor(colors.text);
+    doc.text(`Total: ${equipments.length}`, 60, y + 12);
+    doc.text(`UPS: ${byType.ups}`, 160, y + 12);
+    doc.text(`Batteries: ${byType.battery}`, 260, y + 12);
+    doc.text(`Éclairage: ${byType.lighting}`, 380, y + 12);
+
+    const withPosition = equipments.filter(e => positionsMap.has(e.id)).length;
+    doc.text(`Positionnés: ${withPosition}`, 60, y + 32);
+
+    // Fiches par équipement (2 par page)
+    y = 200;
+    let ficheY = y;
+    let ficheCount = 0;
+
+    for (const eq of equipments) {
+      if (ficheCount > 0 && ficheCount % 2 === 0) {
+        doc.addPage();
+        ficheY = 50;
+      }
+
+      // Cadre de la fiche
+      doc.rect(50, ficheY, 495, 320).stroke(colors.light);
+
+      // En-tête de fiche
+      doc.rect(50, ficheY, 495, 30).fill(colors.primary);
+      doc.fontSize(12).fillColor('#ffffff')
+         .text(`${eq.name || `Équipement #${eq.id}`} (${typeLabels[eq.type] || eq.type})`, 60, ficheY + 9, { width: 475, lineBreak: false });
+
+      // Contenu de la fiche
+      const infoX = 60;
+      let infoY = ficheY + 45;
+      const infoWidth = 240;
+      const rightColX = 310;
+      const imgWidth = 110;
+      const imgHeight = 130;
+      const rightY = ficheY + 45;
+
+      const position = positionsMap.get(eq.id);
+
+      // Photo de l'équipement
+      if (eq.photo_content && eq.photo_content.length) {
+        try {
+          const photoBuffer = Buffer.isBuffer(eq.photo_content) ? eq.photo_content : Buffer.from(eq.photo_content);
+          doc.image(photoBuffer, rightColX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+          doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.primary);
+        } catch (e) {
+          doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 35, rightY + 60, { lineBreak: false });
+        }
+      } else {
+        doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+        doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 60, { lineBreak: false });
+      }
+
+      // Mini plan avec localisation
+      const planX = rightColX + imgWidth + 10;
+      if (position && (position.plan_thumbnail || position.plan_content)) {
+        try {
+          const planDisplayName = position.plan_display_name || 'Plan';
+          let planThumbnail = null;
+
+          if (position.plan_thumbnail && position.plan_thumbnail.length > 0) {
+            const { loadImage } = await import('canvas');
+            const thumbnailBuffer = Buffer.isBuffer(position.plan_thumbnail)
+              ? position.plan_thumbnail
+              : Buffer.from(position.plan_thumbnail);
+
+            const img = await loadImage(thumbnailBuffer);
+            const canvas = createCanvas(img.width, img.height);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            if (position.x_frac !== null && position.y_frac !== null &&
+                !isNaN(position.x_frac) && !isNaN(position.y_frac)) {
+              const markerX = position.x_frac * img.width;
+              const markerY = position.y_frac * img.height;
+              const markerRadius = Math.max(12, img.width / 25);
+
+              ctx.beginPath();
+              ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
+              ctx.fillStyle = colors.primary;
+              ctx.fill();
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 3;
+              ctx.stroke();
+
+              ctx.beginPath();
+              ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
+              ctx.fillStyle = '#ffffff';
+              ctx.fill();
+            }
+
+            planThumbnail = canvas.toBuffer('image/png');
+          }
+
+          if (planThumbnail) {
+            doc.image(planThumbnail, planX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+            doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.primary);
+            doc.fontSize(6).fillColor(colors.muted)
+               .text(planDisplayName, planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
+          } else {
+            doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 60, { lineBreak: false });
+          }
+        } catch (planErr) {
+          console.warn(`[GLO-MM] Plan thumbnail error for ${eq.name}:`, planErr.message);
+          doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 60, { lineBreak: false });
+        }
+      } else {
+        doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+        doc.fontSize(7).fillColor(colors.muted).text('Non positionné', planX + 25, rightY + 60, { lineBreak: false });
+      }
+
+      // Informations de l'équipement
+      const infoItems = [
+        ['Type', typeLabels[eq.type] || eq.type || '-'],
+        ['Code', eq.code || '-'],
+        ['Bâtiment', eq.building || '-'],
+        ['Étage', eq.floor || '-'],
+        ['Localisation', eq.location || '-'],
+        ['Fabricant', eq.manufacturer || '-'],
+        ['Modèle', eq.model || '-'],
+        ['N° série', eq.serial_number || '-'],
+        ['Puissance', eq.power || '-'],
+        ['Statut', eq.status || '-'],
+        ['Créé le', eq.created_at ? new Date(eq.created_at).toLocaleDateString('fr-FR') : '-'],
+      ];
+
+      infoItems.forEach(([label, value]) => {
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 85 });
+        doc.font('Helvetica').fillColor(colors.muted).text(String(value).substring(0, 40), infoX + 88, infoY, { width: infoWidth - 88, lineBreak: false });
+        infoY += 16;
+      });
+
+      if (eq.notes) {
+        infoY += 5;
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.text).text('Notes:', infoX, infoY);
+        infoY += 12;
+        doc.font('Helvetica').fillColor(colors.muted).text(eq.notes.substring(0, 200), infoX, infoY, { width: 230, height: 40 });
+      }
+
+      doc.fontSize(7).fillColor(colors.muted)
+         .text('Photo équipement', rightColX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
+
+      ficheY += 330;
+      ficheCount++;
+    }
+
+    // Numérotation des pages
+    const range = doc.bufferedPageRange();
+    const totalPages = range.count;
+    for (let i = range.start; i < range.start + totalPages; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor(colors.muted)
+         .text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
+    }
+
+    doc.end();
+    console.log(`[GLO-MM] Generated PDF with ${equipments.length} equipments`);
+
+  } catch (e) {
+    console.error('[GLO-MM] Error:', e);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   }
 });
 
