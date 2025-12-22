@@ -1404,8 +1404,8 @@ app.get("/api/glo/report", async (req, res) => {
 
     if (building) { where += ` AND e.building = $${idx++}`; params.push(building); }
     if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
-    if (type) { where += ` AND e.type = $${idx++}`; params.push(type); }
-    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (type) { where += ` AND e.equipment_type = $${idx++}`; params.push(type); }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.tag ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
     if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
@@ -1413,7 +1413,7 @@ app.get("/api/glo/report", async (req, res) => {
       SELECT e.*
         FROM glo_equipments e
         ${where}
-       ORDER BY e.type, e.building, e.floor, e.name
+       ORDER BY e.equipment_type, e.building, e.floor, e.name
     `, params);
 
     const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
@@ -1427,7 +1427,7 @@ app.get("/api/glo/report", async (req, res) => {
 
     // Stats by type
     const byType = { ups: 0, battery: 0, lighting: 0 };
-    equipments.forEach(e => { if (byType[e.type] !== undefined) byType[e.type]++; });
+    equipments.forEach(e => { if (byType[e.equipment_type] !== undefined) byType[e.equipment_type]++; });
 
     let y = 120;
     doc.rect(50, y, 495, 50).fill('#f3f4f6');
@@ -1451,12 +1451,13 @@ app.get("/api/glo/report", async (req, res) => {
     y += 20;
 
     const typeLabels = { ups: 'UPS', battery: 'Batterie', lighting: 'Éclairage' };
-    for (const eq of equipments) {
+    for (let i = 0; i < equipments.length; i++) {
+      const eq = equipments[i];
       if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
       doc.rect(50, y, 495, 18).fill(bgColor);
       doc.fontSize(8).fillColor('#374151');
-      doc.text(typeLabels[eq.type] || eq.type || '-', 55, y + 5, { width: 60 });
+      doc.text(typeLabels[eq.equipment_type] || eq.equipment_type || '-', 55, y + 5, { width: 60 });
       doc.text((eq.name || '-').substring(0, 35), 120, y + 5, { width: 155 });
       doc.text((eq.building || '-').substring(0, 15), 280, y + 5, { width: 95 });
       doc.text(eq.floor || '-', 380, y + 5, { width: 55 });

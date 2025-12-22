@@ -1407,7 +1407,7 @@ app.get("/api/meca/report", async (req, res) => {
     if (building) { where += ` AND e.building = $${idx++}`; params.push(building); }
     if (floor) { where += ` AND e.floor = $${idx++}`; params.push(floor); }
     if (category_id) { where += ` AND e.category_id = $${idx++}`; params.push(category_id); }
-    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+    if (search) { where += ` AND (e.name ILIKE $${idx} OR e.tag ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
     if (from_date) { where += ` AND e.created_at >= $${idx++}`; params.push(from_date); }
     if (to_date) { where += ` AND e.created_at <= $${idx++}`; params.push(to_date); }
 
@@ -1446,9 +1446,10 @@ app.get("/api/meca/report", async (req, res) => {
     doc.text('Statut', 480, y + 6);
     y += 20;
 
-    for (const eq of equipments) {
+    for (let i = 0; i < equipments.length; i++) {
+      const eq = equipments[i];
       if (y > 750) { doc.addPage(); y = 50; }
-      const bgColor = equipments.indexOf(eq) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
       doc.rect(50, y, 495, 18).fill(bgColor);
       doc.fontSize(8).fillColor('#374151');
       doc.text((eq.name || '-').substring(0, 30), 55, y + 5, { width: 120 });

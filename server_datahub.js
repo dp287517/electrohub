@@ -20,6 +20,7 @@ import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.j
 
 // MAPS - PDF handling (reuse VSD plans)
 import crypto from "crypto";
+import PDFDocument from "pdfkit";
 
 dotenv.config();
 
@@ -747,6 +748,105 @@ app.get("/api/datahub/stats", async (_req, res) => {
   } catch (e) {
     console.error("[Datahub] Stats error:", e);
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ====================
+// REPORT PDF GENERATION
+// ====================
+app.get("/api/datahub/report", async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || "Default";
+    const { building, floor, category_id, search } = req.query;
+
+    let where = "WHERE 1=1";
+    const params = [];
+    let idx = 1;
+
+    if (building) { where += ` AND i.building = $${idx++}`; params.push(building); }
+    if (floor) { where += ` AND i.floor = $${idx++}`; params.push(floor); }
+    if (category_id) { where += ` AND i.category_id = $${idx++}`; params.push(category_id); }
+    if (search) { where += ` AND (i.name ILIKE $${idx} OR i.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
+
+    const { rows: items } = await pool.query(`
+      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+        FROM dh_items i
+        LEFT JOIN dh_categories c ON c.id = i.category_id
+        ${where}
+       ORDER BY c.name, i.building, i.floor, i.name
+    `, params);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rapport_datahub_${new Date().toISOString().split('T')[0]}.pdf"`);
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).fillColor('#3B82F6').text('RAPPORT DATAHUB', 50, 50, { align: 'center' });
+    doc.fontSize(10).fillColor('#6b7280').text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Site: ${site}`, { align: 'center' });
+
+    // Stats by category
+    const byCategory = {};
+    items.forEach(i => {
+      const cat = i.category_name || 'Sans catégorie';
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    });
+
+    let y = 100;
+    doc.rect(50, y, 495, 40).fill('#f3f4f6');
+    doc.fontSize(11).fillColor('#374151');
+    doc.text(`Total: ${items.length} éléments`, 60, y + 12);
+
+    const categories = Object.keys(byCategory);
+    if (categories.length > 0) {
+      let catX = 200;
+      for (const cat of categories.slice(0, 3)) {
+        doc.text(`${cat}: ${byCategory[cat]}`, catX, y + 12);
+        catX += 100;
+      }
+    }
+
+    y += 60;
+    doc.fontSize(14).fillColor('#3B82F6').text('Liste des éléments', 50, y);
+    y += 25;
+
+    // Table header
+    doc.rect(50, y, 495, 20).fill('#e5e7eb');
+    doc.fontSize(9).fillColor('#374151');
+    doc.text('Nom', 55, y + 6);
+    doc.text('Code', 180, y + 6);
+    doc.text('Catégorie', 260, y + 6);
+    doc.text('Bâtiment', 370, y + 6);
+    doc.text('Étage', 450, y + 6);
+    y += 20;
+
+    // Table rows
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (y > 750) { doc.addPage(); y = 50; }
+
+      const bgColor = i % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(50, y, 495, 18).fill(bgColor);
+      doc.fontSize(8).fillColor('#374151');
+      doc.text((item.name || '-').substring(0, 30), 55, y + 5, { width: 120 });
+      doc.text((item.code || '-').substring(0, 15), 180, y + 5, { width: 75 });
+      doc.text((item.category_name || '-').substring(0, 20), 260, y + 5, { width: 105 });
+      doc.text((item.building || '-').substring(0, 15), 370, y + 5, { width: 75 });
+      doc.text(item.floor || '-', 450, y + 5, { width: 45 });
+      y += 18;
+    }
+
+    // Footer on each page
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af').text(`Page ${i + 1} / ${pages.count}`, 50, 800, { align: 'center', width: 495 });
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[Datahub] Report error:', e);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
