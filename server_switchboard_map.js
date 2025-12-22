@@ -495,6 +495,7 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
 });
 
 // POST /api/switchboard/maps/setPosition - Placer ou déplacer un switchboard
+// This ensures switchboard is only on ONE plan at a time (deletes old positions first)
 app.post("/api/switchboard/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -525,17 +526,18 @@ app.post("/api/switchboard/maps/setPosition", async (req, res) => {
       "X-User-Name": u.name || "",
     });
 
-    // Upsert la position
+    // First, delete ALL existing positions for this switchboard on this site
+    // This ensures the switchboard is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM switchboard_positions WHERE switchboard_id = $1 AND site = $2`,
+      [Number(switchboard_id), site]
+    );
+
+    // Then insert the new position
     const { rows } = await pool.query(
       `INSERT INTO switchboard_positions
         (site, switchboard_id, logical_name, plan_id, page_index, x_frac, y_frac)
        VALUES($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT(site, switchboard_id, logical_name, page_index)
-       DO UPDATE SET
-         x_frac = EXCLUDED.x_frac,
-         y_frac = EXCLUDED.y_frac,
-         plan_id = EXCLUDED.plan_id,
-         updated_at = NOW()
        RETURNING *`,
       [
         site,
@@ -548,10 +550,10 @@ app.post("/api/switchboard/maps/setPosition", async (req, res) => {
       ]
     );
 
-    await logEvent(site, "position_set", { 
-      switchboard_id, 
+    await logEvent(site, "position_set", {
+      switchboard_id,
       switchboard_name: sbInfo?.name || sbInfo?.code,
-      logical_name, 
+      logical_name,
       page_index,
       x_frac: xVal,
       y_frac: yVal,
@@ -566,8 +568,8 @@ app.post("/api/switchboard/maps/setPosition", async (req, res) => {
       by: u.email || u.name || "unknown",
     });
 
-    res.json({ 
-      ok: true, 
+    res.json({
+      ok: true,
       position: rows[0],
       switchboard: sbInfo || { id: switchboard_id }
     });

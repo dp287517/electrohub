@@ -1088,6 +1088,7 @@ app.get("/api/glo/maps/positions", async (req, res) => {
 });
 
 // POST /api/glo/maps/setPosition
+// This ensures equipment is only on ONE plan at a time (deletes old positions first)
 app.post("/api/glo/maps/setPosition", async (req, res) => {
   try {
     const u = getUser(req);
@@ -1106,12 +1107,17 @@ app.post("/api/glo/maps/setPosition", async (req, res) => {
     if (!finalLogicalName)
       return res.status(400).json({ ok: false, error: "Could not determine logical_name" });
 
-    // Upsert position
+    // First, delete ALL existing positions for this equipment
+    // This ensures the equipment is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM glo_positions WHERE equipment_id = $1`,
+      [equipment_id]
+    );
+
+    // Then insert the new position
     const { rows } = await pool.query(`
       INSERT INTO glo_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (equipment_id, logical_name, page_index)
-      DO UPDATE SET x_frac = $5, y_frac = $6, plan_id = $3
       RETURNING *
     `, [equipment_id, finalLogicalName, plan_id || null, page_index, x_frac, y_frac]);
 

@@ -633,6 +633,7 @@ app.get("/api/datahub/maps/positions", async (req, res) => {
 });
 
 // Set/update position
+// This ensures item is only on ONE plan at a time (deletes old positions first)
 app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
   try {
     const { item_id } = req.params;
@@ -642,12 +643,17 @@ app.put("/api/datahub/maps/positions/:item_id", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
 
-    // Upsert position
+    // First, delete ALL existing positions for this item
+    // This ensures the item is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM dh_positions WHERE item_id = $1`,
+      [item_id]
+    );
+
+    // Then insert the new position
     const { rows } = await pool.query(`
       INSERT INTO dh_positions (item_id, logical_name, page_index, x_frac, y_frac)
       VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (item_id, logical_name, page_index)
-      DO UPDATE SET x_frac = $4, y_frac = $5, updated_at = now()
       RETURNING *
     `, [item_id, logical_name, parseInt(page_index), x_frac, y_frac]);
 
