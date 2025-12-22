@@ -2331,7 +2331,52 @@ export const api = {
       setPosition: (itemId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
         put(`/api/datahub/maps/positions/${encodeURIComponent(itemId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
       deletePosition: (positionId) => del(`/api/datahub/maps/positions/${encodeURIComponent(positionId)}`),
-      placedIds: () => get("/api/datahub/maps/placed-ids"),
+      placedIds: async () => {
+        // Try dedicated endpoint first
+        const tryDedicatedEndpoint = async () => {
+          try {
+            const r = await get("/api/datahub/maps/placed-ids");
+            if (r && Array.isArray(r.placed_ids)) {
+              // If backend already provides placed_details, use it
+              if (r.placed_details) return r;
+              // Otherwise just return placed_ids (will build details below)
+              return null;
+            }
+            return null;
+          } catch { return null; }
+        };
+
+        // Build placed_details by scanning all plans
+        const buildFromPlans = async () => {
+          const placed_ids = [];
+          const placed_details = {};
+          try {
+            const plansRes = await get("/api/datahub/maps/plans").catch(() => null);
+            const plans = plansRes?.plans || plansRes || [];
+            for (const plan of plans) {
+              try {
+                const posRes = await get("/api/datahub/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+                for (const pos of (posRes?.positions || [])) {
+                  if (pos.item_id) {
+                    const itemId = String(pos.item_id);
+                    if (!placed_ids.includes(itemId)) {
+                      placed_ids.push(itemId);
+                      placed_details[itemId] = { plans: [plan.logical_name], page_index: pos.page_index || 0 };
+                    } else if (placed_details[itemId] && !placed_details[itemId].plans.includes(plan.logical_name)) {
+                      placed_details[itemId].plans.push(plan.logical_name);
+                    }
+                  }
+                }
+              } catch {}
+            }
+          } catch {}
+          return { placed_ids, placed_details };
+        };
+
+        const dedicated = await tryDedicatedEndpoint();
+        if (dedicated) return dedicated;
+        return buildFromPlans();
+      },
     },
   },
 

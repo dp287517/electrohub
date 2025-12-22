@@ -393,8 +393,13 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
 
 export default function DatahubMap() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const focusItemId = searchParams.get("item");
+  const urlPlanKey = searchParams.get("plan");
+
+  // Track if we've handled URL params on initial load
+  const urlParamsHandledRef = useRef(false);
+  const targetItemIdRef = useRef(null);
 
   // Core data
   const [plans, setPlans] = useState([]);
@@ -475,16 +480,34 @@ export default function DatahubMap() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Restore last plan
+  // Restore last plan or use URL param
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const saved = localStorage.getItem(STORAGE_KEY_PLAN);
-      const found = plans.find(p => p.logical_name === saved || p.id === saved);
-      setSelectedPlan(found || plans[0]);
+      let planToSelect = null;
+
+      // Priority 1: URL parameter (from navigation with specific item)
+      if (urlPlanKey && !urlParamsHandledRef.current) {
+        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
+        if (focusItemId) {
+          targetItemIdRef.current = focusItemId;
+        }
+        urlParamsHandledRef.current = true;
+        // Clear URL params after reading
+        setSearchParams({}, { replace: true });
+      }
+
+      // Priority 2: Saved plan from localStorage
+      if (!planToSelect) {
+        const saved = localStorage.getItem(STORAGE_KEY_PLAN);
+        planToSelect = plans.find(p => p.logical_name === saved || p.id === saved);
+      }
+
+      // Fallback: First plan
+      setSelectedPlan(planToSelect || plans[0]);
       const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
-      setPageIndex(savedPage);
+      setPageIndex(urlPlanKey ? 0 : savedPage); // Reset to page 0 if coming from URL
     }
-  }, [plans, selectedPlan]);
+  }, [plans, selectedPlan, urlPlanKey, focusItemId, setSearchParams]);
 
   // Save selected plan
   useEffect(() => {
@@ -804,21 +827,27 @@ export default function DatahubMap() {
 
   // Focus on item from URL - with delay to ensure map is ready
   useEffect(() => {
-    if (focusItemId && items.length > 0 && positions.length > 0) {
-      const item = items.find(i => i.id === focusItemId);
-      if (item) {
-        setSelectedItem(item);
-        const pos = positions.find(p => p.item_id === focusItemId);
-        if (pos) {
-          setSelectedPosition(pos);
-          // Delay to ensure map and markers are fully initialized, then flash the marker
-          const timer = setTimeout(() => {
-            if (mapRef.current && overlayRef.current) {
-              highlightMarker(focusItemId);
-            }
-          }, 500);
-          return () => clearTimeout(timer);
+    // Use targetItemIdRef if set (from URL navigation), otherwise use focusItemId
+    const itemIdToFocus = targetItemIdRef.current || focusItemId;
+    if (!itemIdToFocus || items.length === 0 || positions.length === 0) return;
+
+    const item = items.find(i => i.id === itemIdToFocus);
+    if (item) {
+      setSelectedItem(item);
+      const pos = positions.find(p => p.item_id === itemIdToFocus);
+      if (pos) {
+        setSelectedPosition(pos);
+        // Clear the target after use
+        if (targetItemIdRef.current) {
+          targetItemIdRef.current = null;
         }
+        // Delay to ensure map and markers are fully initialized, then flash the marker
+        const timer = setTimeout(() => {
+          if (mapRef.current && overlayRef.current) {
+            highlightMarker(itemIdToFocus);
+          }
+        }, 500);
+        return () => clearTimeout(timer);
       }
     }
   }, [focusItemId, items, positions, highlightMarker]);
