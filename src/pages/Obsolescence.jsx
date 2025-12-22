@@ -30,18 +30,21 @@ const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4
 const ASSET_COLORS = {
   sb: '#3b82f6',
   hv: '#8b5cf6',
+  hv_device: '#a855f7',
   vsd: '#10b981',
   meca: '#f59e0b'
 };
 const ASSET_LABELS = {
   sb: 'Switchboards',
   hv: 'High Voltage',
+  hv_device: 'HV Devices',
   vsd: 'VSD',
   meca: 'Mechanical'
 };
 const ASSET_ICONS = {
   sb: Zap,
   hv: Gauge,
+  hv_device: CircleDot,
   vsd: Cpu,
   meca: Cog
 };
@@ -520,14 +523,18 @@ export default function Obsolescence() {
   const navigateToItem = (item) => {
     const id = item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id;
     if (item.kind === 'sb') navigate(`/app/switchboards?switchboard=${id}`);
-    else if (item.kind === 'hv') navigate(`/app/hv?hv=${id}`);
+    else if (item.kind === 'hv') navigate(`/app/hv?equipment=${id}`);
+    else if (item.kind === 'hv_device') navigate(`/app/hv?equipment=${item.hv_equipment_id}`);
     else if (item.kind === 'vsd') navigate(`/app/vsd?vsd=${id}`);
     else if (item.kind === 'meca') navigate(`/app/meca?meca=${id}`);
   };
 
   // Get display name (prefer code over name)
   const getItemDisplayName = (item) => {
-    return item.code || item.name || `${(item.kind || 'item').toUpperCase()}-${item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id}`;
+    if (item.kind === 'hv_device') {
+      return `${item.equipment_name} › ${item.name || item.device_type}`;
+    }
+    return item.code || item.name || `${(item.kind || 'item').toUpperCase()}-${item.switchboard_id || item.hv_equipment_id || item.vsd_id || item.meca_id || item.hv_device_id}`;
   };
 
   // ==================== SERVICE YEAR EDIT ====================
@@ -541,14 +548,15 @@ export default function Obsolescence() {
   const saveServiceYear = async () => {
     if (!editServiceYear) return;
 
-    const kind = editServiceYear.kind;
-    const id = editServiceYear.switchboard_id || editServiceYear.hv_equipment_id || editServiceYear.vsd_id || editServiceYear.meca_id;
+    // Pour les HV devices, on met à jour l'équipement parent
+    const kind = editServiceYear.kind === 'hv_device' ? 'hv' : editServiceYear.kind;
+    const id = editServiceYear.switchboard_id || editServiceYear.hv_equipment_id || editServiceYear.vsd_id || editServiceYear.meca_id || editServiceYear.hv_device_id;
 
     try {
       setEditSaving(true);
       await put('/api/obsolescence/service-year', {
         kind,
-        id,
+        id: editServiceYear.kind === 'hv_device' ? editServiceYear.hv_equipment_id : id,
         service_year: parseInt(editServiceYearValue, 10)
       });
       setToast({ msg: 'Date de mise en service mise à jour!', type: 'success' });
@@ -1353,7 +1361,8 @@ END:VCALENDAR`;
                                         key={task.id}
                                         onClick={() => {
                                           if (kind === 'sb') navigate(`/app/switchboards?switchboard=${id}`);
-                                          else if (kind === 'hv') navigate(`/app/hv?hv=${id}`);
+                                          else if (kind === 'hv') navigate(`/app/hv?equipment=${id}`);
+                                          else if (kind === 'hv_device') navigate(`/app/hv?equipment=${task.link_id}`);
                                           else if (kind === 'vsd') navigate(`/app/vsd?vsd=${id}`);
                                           else if (kind === 'meca') navigate(`/app/meca?meca=${id}`);
                                         }}
@@ -1393,7 +1402,7 @@ END:VCALENDAR`;
                                               e.stopPropagation();
                                               const item = items.find(it =>
                                                 (it.kind === kind) &&
-                                                ((it.switchboard_id || it.hv_equipment_id || it.vsd_id || it.meca_id) === parseInt(id, 10))
+                                                ((it.switchboard_id || it.hv_equipment_id || it.hv_device_id || it.vsd_id || it.meca_id) === parseInt(id, 10))
                                               );
                                               if (item) openServiceYearEdit(item);
                                             }}
