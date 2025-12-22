@@ -90,6 +90,21 @@ const multerZip = multer({
   }),
   limits: { fileSize: 300 * 1024 * 1024 },
 });
+const multerPdf = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MAPS_DIR),
+    filename: (_req, file, cb) =>
+      cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
+  }),
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf" || file.originalname.toLowerCase().endsWith(".pdf")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF files are allowed"), false);
+    }
+  },
+});
 // -------------------------------------------------
 const { Pool } = pg;
 const pool = new Pool({
@@ -860,6 +875,56 @@ app.post("/api/vsd/maps/uploadZip", multerZip.single("zip"), async (req, res) =>
     await zip.close();
     await logEvent("vsd_maps_zip_uploaded", { count: imported.length }, u);
     res.json({ ok: true, imported });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// POST /api/vsd/maps/uploadPdf - Upload a single PDF plan
+app.post("/api/vsd/maps/uploadPdf", multerPdf.single("pdf"), async (req, res) => {
+  try {
+    const u = getUser(req);
+    if (!req.file) return res.status(400).json({ ok: false, error: "No PDF file provided" });
+
+    const filePath = req.file.path;
+    const base = path.basename(req.file.originalname, ".pdf");
+    const logical = base.replace(/[^\w-]+/g, "_");
+
+    // Read file content for BYTEA storage
+    const buf = await fsp.readFile(filePath);
+
+    // Check for existing plan with same logical_name
+    const { rows: existing } = await pool.query(
+      `SELECT id, version FROM vsd_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
+      [logical]
+    );
+    const nextVer = existing[0] ? existing[0].version + 1 : 1;
+
+    // Get page count (optional, requires pdf-lib or similar)
+    let pageCount = 1;
+    try {
+      const { PDFDocument } = await import("pdf-lib");
+      const pdfDoc = await PDFDocument.load(buf);
+      pageCount = pdfDoc.getPageCount();
+    } catch {
+      // If pdf-lib fails, default to 1 page
+    }
+
+    // Insert new plan version
+    const { rows } = await pool.query(
+      `INSERT INTO vsd_plans(logical_name,version,filename,file_path,page_count,content)
+       VALUES($1,$2,$3,$4,$5,$6) RETURNING id,logical_name,version,filename,page_count`,
+      [logical, nextVer, req.file.originalname, filePath, pageCount, buf]
+    );
+
+    // Update display name
+    await pool.query(
+      `INSERT INTO vsd_plan_names(logical_name, display_name) VALUES($1,$2)
+         ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
+      [logical, base]
+    );
+
+    await logEvent("vsd_maps_pdf_uploaded", { plan: logical, version: nextVer }, u);
+    res.json({ ok: true, plan: rows[0] });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
