@@ -471,19 +471,41 @@ Comment puis-je vous aider aujourd'hui ?`,
                   </div>
                 )}
 
-                {/* Sources */}
+                {/* Sources & Documentation */}
                 {message.sources && message.sources.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-200">
-                    <p className="text-xs font-medium text-gray-500 mb-1">Sources :</p>
-                    <div className="flex flex-wrap gap-1">
+                    <p className="text-xs font-medium text-gray-500 mb-2">📚 Documentation trouvée :</p>
+                    <div className="space-y-2">
                       {message.sources.map((source, i) => (
-                        <span
+                        <a
                           key={i}
-                          className="inline-flex items-center gap-1 px-2 py-1 bg-white rounded text-xs text-brand-600 border"
+                          href={source.url || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 p-2 bg-white rounded-lg border hover:bg-blue-50 hover:border-blue-300 transition-colors group"
                         >
-                          <FileText className="w-3 h-3" />
-                          {source.title || 'Document'} {source.page ? `(p.${source.page})` : ''}
-                        </span>
+                          {source.url?.includes('.pdf') ? (
+                            <div className="p-1.5 bg-red-100 rounded">
+                              <FileText className="w-4 h-4 text-red-600" />
+                            </div>
+                          ) : (
+                            <div className="p-1.5 bg-blue-100 rounded">
+                              <ExternalLink className="w-4 h-4 text-blue-600" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {source.title || 'Documentation'}
+                            </p>
+                            {source.url && (
+                              <p className="text-xs text-gray-500 truncate">{new URL(source.url).hostname}</p>
+                            )}
+                          </div>
+                          {source.url?.includes('.pdf') && (
+                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded">PDF</span>
+                          )}
+                          <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-blue-600 flex-shrink-0" />
+                        </a>
                       ))}
                     </div>
                   </div>

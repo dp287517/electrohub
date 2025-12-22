@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
+import MiniElectro from '../components/MiniElectro';
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -795,6 +796,19 @@ const DetailPanel = ({
             </div>
           </div>
         )}
+
+        {/* Mini Electro - AI Assistant */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="vsd"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            } else if (action === 'scheduleControl') {
+              navigate(`/app/switchboard-controls?tab=schedules&equipment_type=vsd&vsd_equipment_id=${equipment.id}`);
+            }
+          }}
+        />
       </div>
 
       {/* Actions */}

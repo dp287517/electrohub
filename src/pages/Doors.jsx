@@ -9,6 +9,7 @@ import {
   XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode
 } from 'lucide-react';
 import { api } from '../lib/api';
+import MiniElectro from '../components/MiniElectro';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
@@ -841,6 +842,17 @@ const DetailPanel = ({
             </div>
           </div>
         )}
+
+        {/* Mini Electro - AI Assistant */}
+        <MiniElectro
+          equipment={door}
+          equipmentType="doors"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            }
+          }}
+        />
       </div>
 
       {/* Actions */}
