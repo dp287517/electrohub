@@ -130,6 +130,56 @@ const ICON_PRESETS = [
   { id: 'bell', label: 'Cloche', icon: Bell },
 ];
 
+// Category Form Component - MUST be defined outside CategoryManagerModal to prevent re-mounting on state changes
+const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel, isLoading }) => (
+  <div className="bg-purple-50 rounded-xl p-4 space-y-3 border border-purple-200">
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
+      <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Nom de la catégorie" />
+    </div>
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+      <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Description optionnelle" />
+    </div>
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-sm text-gray-600">Couleur:</span>
+      {COLOR_PRESETS.map(c => (
+        <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
+          className={`w-6 h-6 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
+          style={{ backgroundColor: c }} />
+      ))}
+    </div>
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-sm text-gray-600">Icône:</span>
+      {ICON_PRESETS.map(({ id, label, icon: Icon }) => (
+        <button key={id} onClick={() => setForm(f => ({ ...f, icon: id }))}
+          className={`p-2 rounded-lg border-2 transition-all ${form.icon === id ? 'border-purple-600 bg-purple-100' : 'border-gray-200 hover:border-purple-300'}`}
+          title={label}>
+          <Icon size={18} className={form.icon === id ? 'text-purple-600' : 'text-gray-500'} />
+        </button>
+      ))}
+    </div>
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-sm text-gray-600">Taille:</span>
+      {[24, 32, 40, 48].map(s => (
+        <button key={s} onClick={() => setForm(f => ({ ...f, marker_size: s }))}
+          className={`px-2 py-1 rounded text-xs ${form.marker_size === s ? 'bg-purple-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
+          {s}px
+        </button>
+      ))}
+    </div>
+    <div className="flex gap-2">
+      <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
+      <button onClick={onSave} disabled={isLoading}
+        className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-purple-700">
+        {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
+      </button>
+    </div>
+  </div>
+);
+
 // Category Manager Modal
 const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange, showToast }) => {
   const [localCategories, setLocalCategories] = useState([]);
@@ -180,55 +230,6 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
     finally { setIsLoading(false); }
   };
 
-  const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel }) => (
-    <div className="bg-purple-50 rounded-xl p-4 space-y-3 border border-purple-200">
-      <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
-        <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Nom de la catégorie" />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
-        <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Description optionnelle" />
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm text-gray-600">Couleur:</span>
-        {COLOR_PRESETS.map(c => (
-          <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
-            className={`w-6 h-6 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
-            style={{ backgroundColor: c }} />
-        ))}
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm text-gray-600">Icône:</span>
-        {ICON_PRESETS.map(({ id, label, icon: Icon }) => (
-          <button key={id} onClick={() => setForm(f => ({ ...f, icon: id }))}
-            className={`p-2 rounded-lg border-2 transition-all ${form.icon === id ? 'border-purple-600 bg-purple-100' : 'border-gray-200 hover:border-purple-300'}`}
-            title={label}>
-            <Icon size={18} className={form.icon === id ? 'text-purple-600' : 'text-gray-500'} />
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm text-gray-600">Taille:</span>
-        {[24, 32, 40, 48].map(s => (
-          <button key={s} onClick={() => setForm(f => ({ ...f, marker_size: s }))}
-            className={`px-2 py-1 rounded text-xs ${form.marker_size === s ? 'bg-purple-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
-            {s}px
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
-        <button onClick={onSave} disabled={isLoading}
-          className="flex-1 py-2 px-3 rounded-lg bg-purple-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-purple-700">
-          {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
@@ -256,7 +257,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
           {showNewForm && (
             <CategoryForm form={newCategory} setForm={setNewCategory} onSave={handleCreate}
               onCancel={() => { setShowNewForm(false); setNewCategory({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32 }); }}
-              saveLabel="Creer" />
+              saveLabel="Creer" isLoading={isLoading} />
           )}
 
           <div className="space-y-2">
@@ -269,7 +270,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
               <div key={cat.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                 {editingId === cat.id ? (
                   <CategoryForm form={editForm} setForm={setEditForm} onSave={() => handleUpdate(cat.id)}
-                    onCancel={() => setEditingId(null)} saveLabel="Sauvegarder" />
+                    onCancel={() => setEditingId(null)} saveLabel="Sauvegarder" isLoading={isLoading} />
                 ) : (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
