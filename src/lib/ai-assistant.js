@@ -255,6 +255,248 @@ class AIAssistant {
   }
 
   /**
+   * Chat avec contexte d'équipement spécifique
+   * @param {string} message - Message de l'utilisateur
+   * @param {object} equipmentContext - Contexte de l'équipement
+   * @param {object} options - Options supplémentaires
+   */
+  async chatWithEquipment(message, equipmentContext, options = {}) {
+    const { conversationHistory = [] } = options;
+
+    try {
+      const data = await post(`${this.baseUrl}/chat`, {
+        message,
+        context: this.prepareEquipmentContextForAI(equipmentContext),
+        provider: 'openai',
+        conversationHistory: conversationHistory.map(m => ({
+          role: m.role,
+          content: m.content
+        })),
+        webSearch: true, // Enable web search for documentation
+        user: this.getCurrentUser(),
+        mode: 'equipment' // Indicate equipment-specific mode
+      });
+
+      return {
+        message: data.message,
+        actions: data.actions || [],
+        sources: data.sources || [],
+        provider: data.provider,
+        model: data.model,
+        chart: data.chart || null,
+        pendingAction: data.pendingAction || null,
+        actionResult: data.actionResult || null
+      };
+    } catch (error) {
+      console.error('Erreur chat équipement:', error);
+      // Fallback response for equipment
+      return this.fallbackEquipmentResponse(message, equipmentContext);
+    }
+  }
+
+  /**
+   * Prépare le contexte équipement pour l'IA
+   */
+  prepareEquipmentContextForAI(equipmentContext) {
+    if (!equipmentContext) return null;
+
+    return {
+      mode: 'equipment',
+      equipmentType: equipmentContext.type,
+      equipmentTypeName: equipmentContext.typeName,
+      equipment: equipmentContext.equipment,
+      controlStatus: equipmentContext.controlStatus,
+      user: this.getCurrentUser() ? {
+        name: this.getCurrentUser().name,
+        site: this.getCurrentUser().site,
+        role: this.getCurrentUser().role
+      } : null
+    };
+  }
+
+  /**
+   * Réponse de fallback pour équipement si le backend n'est pas disponible
+   */
+  fallbackEquipmentResponse(message, equipmentContext) {
+    const lowerMessage = message.toLowerCase();
+    const eq = equipmentContext?.equipment || {};
+    const eqName = eq.name || eq.tag || 'cet équipement';
+    const eqType = equipmentContext?.typeName || 'équipement';
+
+    // Diagnostic request
+    if (lowerMessage.includes('diagnostic') || lowerMessage.includes('état') || lowerMessage.includes('analyse')) {
+      return {
+        message: `Voici mon diagnostic pour **${eqName}** :
+
+📋 **Informations générales :**
+• Type : ${eqType}
+• Fabricant : ${eq.manufacturer || 'Non renseigné'}
+• Modèle : ${eq.model || 'Non renseigné'}
+• Localisation : ${[eq.building, eq.floor, eq.room].filter(Boolean).join(' > ') || 'Non spécifiée'}
+${eq.power_kw ? `• Puissance : ${eq.power_kw} kW` : ''}
+${eq.voltage ? `• Tension : ${eq.voltage} V` : ''}
+
+${equipmentContext?.controlStatus?.hasOverdue ?
+  `⚠️ **Point d'attention** : Des contrôles sont en retard pour cet équipement. Je recommande de planifier une intervention rapidement.` :
+  `✅ **Statut contrôles** : Les contrôles sont à jour.`}
+
+Souhaitez-vous que je recherche la documentation technique ou que je propose un plan de maintenance ?`,
+        actions: [
+          { label: 'Rechercher documentation', prompt: `Recherche la documentation technique pour ${eq.manufacturer || ''} ${eq.model || eqName}` },
+          { label: 'Plan de maintenance', prompt: 'Propose un plan de maintenance préventive pour cet équipement' }
+        ]
+      };
+    }
+
+    // Maintenance request
+    if (lowerMessage.includes('maintenance') || lowerMessage.includes('entretien') || lowerMessage.includes('préventif')) {
+      return {
+        message: `Voici mes recommandations de maintenance pour **${eqName}** (${eqType}) :
+
+📅 **Maintenance préventive recommandée :**
+
+**Hebdomadaire :**
+• Inspection visuelle de l'état général
+• Vérification des voyants et indicateurs
+• Contrôle des connexions visibles
+
+**Mensuelle :**
+• Nettoyage des filtres et ventilations
+• Vérification des serrages
+• Test des dispositifs de sécurité
+
+**Annuelle :**
+• Contrôle complet par un technicien qualifié
+• Remplacement des pièces d'usure
+• Mise à jour de la documentation
+
+${equipmentContext?.controlStatus?.nextDueDate ?
+  `📌 **Prochain contrôle prévu** : ${new Date(equipmentContext.controlStatus.nextDueDate).toLocaleDateString('fr-FR')}` : ''}
+
+Voulez-vous plus de détails sur un type de maintenance spécifique ?`,
+        actions: [
+          { label: 'Checklist maintenance', prompt: 'Génère une checklist de maintenance détaillée' },
+          { label: 'Pièces de rechange', prompt: 'Quelles pièces de rechange prévoir pour cet équipement ?' }
+        ]
+      };
+    }
+
+    // Documentation request
+    if (lowerMessage.includes('documentation') || lowerMessage.includes('doc') || lowerMessage.includes('manuel') || lowerMessage.includes('recherche')) {
+      return {
+        message: `Je vais rechercher la documentation pour **${eqName}**.
+
+🔍 **Termes de recherche suggérés :**
+• "${eq.manufacturer || ''} ${eq.model || ''} manual"
+• "${eq.manufacturer || ''} ${eq.reference || ''} datasheet"
+• "${eqType} maintenance guide"
+
+📚 **Types de documents utiles :**
+• Manuel d'installation et mise en service
+• Guide de maintenance préventive
+• Schémas électriques et mécaniques
+• Fiches de paramétrage
+• Bulletins de sécurité
+
+Pour une recherche plus précise, activez la recherche web dans les paramètres ou fournissez-moi plus de détails sur ce que vous cherchez.`,
+        actions: [
+          { label: 'Normes applicables', prompt: 'Quelles normes s\'appliquent à ce type d\'équipement ?' },
+          { label: 'Procédures sécurité', prompt: 'Quelles sont les procédures de sécurité pour intervenir sur cet équipement ?' }
+        ]
+      };
+    }
+
+    // Safety/compliance request
+    if (lowerMessage.includes('sécurité') || lowerMessage.includes('conformité') || lowerMessage.includes('norme') || lowerMessage.includes('risque')) {
+      return {
+        message: `Analyse de conformité pour **${eqName}** (${eqType}) :
+
+🛡️ **Points de sécurité à vérifier :**
+• Protection contre les contacts directs et indirects
+• Dispositifs de coupure d'urgence
+• Signalétique et balisage
+• Accès et dégagements
+• Ventilation et température
+
+📋 **Normes potentiellement applicables :**
+• NF C 15-100 (Installations électriques BT)
+• NF C 13-100/200 (Postes HT/BT)
+• EN 60204 (Sécurité machines)
+• Directives ATEX si applicable
+
+${equipmentContext?.controlStatus?.hasOverdue ?
+  `⚠️ **Alerte** : Des contrôles réglementaires sont en retard. Cela peut impacter la conformité de l'installation.` : ''}
+
+Voulez-vous que j'approfondisse un point particulier ?`,
+        actions: [
+          { label: 'Analyse des risques', prompt: 'Fais une analyse des risques pour cet équipement' },
+          { label: 'Plan de conformité', prompt: 'Propose un plan pour mettre cet équipement en conformité' }
+        ]
+      };
+    }
+
+    // Problems/issues request
+    if (lowerMessage.includes('problème') || lowerMessage.includes('panne') || lowerMessage.includes('erreur') || lowerMessage.includes('défaut')) {
+      return {
+        message: `Guide de dépannage pour **${eqName}** (${eqType}) :
+
+🔧 **Problèmes courants et solutions :**
+
+**1. Défaut d'alimentation**
+• Vérifier le disjoncteur amont
+• Contrôler les fusibles
+• Mesurer la tension d'entrée
+
+**2. Surchauffe**
+• Nettoyer les ventilations
+• Vérifier la charge
+• Contrôler l'environnement (température ambiante)
+
+**3. Défaut de communication**
+• Vérifier les connexions réseau/bus
+• Contrôler les paramètres de communication
+• Redémarrer l'équipement si nécessaire
+
+**4. Alarmes/Voyants**
+• Consulter le manuel pour les codes d'erreur
+• Noter le code pour diagnostic approfondi
+
+Quel problème rencontrez-vous exactement ?`,
+        actions: [
+          { label: 'Code d\'erreur', prompt: 'J\'ai un code d\'erreur, aide-moi à le comprendre' },
+          { label: 'Contacter support', prompt: 'Comment contacter le support technique du fabricant ?' }
+        ]
+      };
+    }
+
+    // Default response
+    return {
+      message: `Je suis prêt à vous aider avec **${eqName}** (${eqType}).
+
+📊 **Informations disponibles :**
+• Fabricant : ${eq.manufacturer || 'Non renseigné'}
+• Modèle : ${eq.model || 'Non renseigné'}
+• Localisation : ${[eq.building, eq.floor].filter(Boolean).join(' > ') || 'Non spécifiée'}
+${eq.power_kw ? `• Puissance : ${eq.power_kw} kW` : ''}
+
+🤖 **Je peux vous aider à :**
+• Faire un **diagnostic** de l'équipement
+• Proposer un **plan de maintenance**
+• Rechercher de la **documentation technique**
+• Analyser la **conformité** et les normes
+• Résoudre des **problèmes** techniques
+
+Que souhaitez-vous savoir ?`,
+      actions: [
+        { label: 'Diagnostic complet', prompt: 'Fais un diagnostic complet de cet équipement' },
+        { label: 'Plan maintenance', prompt: 'Propose un plan de maintenance préventive' },
+        { label: 'Documentation', prompt: 'Recherche la documentation technique' },
+        { label: 'Conformité', prompt: 'Vérifie la conformité de cet équipement' }
+      ]
+    };
+  }
+
+  /**
    * Exécute une action autonome
    */
   async executeAction(action, params) {

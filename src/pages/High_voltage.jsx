@@ -12,6 +12,7 @@ import {
   Thermometer, Wind, PlugZap, Radio, Cpu, FolderPlus, Folder, ChevronUp
 } from 'lucide-react';
 import { api, get, post, del } from '../lib/api';
+import { EquipmentAIChat } from '../components/AIAvatar';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
@@ -784,6 +785,11 @@ const DetailPanel = ({
 }) => {
   const [showTechnical, setShowTechnical] = useState(false);
   const [showDevices, setShowDevices] = useState(true);
+  const [showAIChat, setShowAIChat] = useState(false);
+
+  // Get control status for this equipment
+  const controlStatus = controlStatuses?.[equipment?.id];
+  const hasOverdueControl = controlStatus?.status === 'overdue';
 
   useEffect(() => {
     if (equipment?.id && (!devices || devices.length === 0)) {
@@ -812,6 +818,17 @@ const DetailPanel = ({
             <X size={20} />
           </button>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAIChat(true)}
+              className={`p-2 rounded-lg transition-all flex items-center gap-1 ${
+                hasOverdueControl
+                  ? 'bg-red-500 hover:bg-red-400 animate-pulse'
+                  : 'hover:bg-white/20'
+              }`}
+              title="Assistant IA"
+            >
+              <Sparkles size={18} />
+            </button>
             <button onClick={() => onShare(equipment)} className="p-2 hover:bg-white/20 rounded-lg transition-colors" title="Partager">
               <Share2 size={18} />
             </button>
@@ -1056,6 +1073,23 @@ const DetailPanel = ({
           <Trash2 size={18} />
         </button>
       </div>
+
+      {/* AI Chat Modal */}
+      <EquipmentAIChat
+        isOpen={showAIChat}
+        onClose={() => setShowAIChat(false)}
+        equipmentType="hv"
+        equipment={{
+          ...equipment,
+          building: equipment.building_code
+        }}
+        controlStatus={controlStatus ? {
+          hasOverdue: controlStatus.status === 'overdue',
+          nextDueDate: controlStatus.next_due,
+          lastControlDate: controlStatus.last_control,
+          templateName: controlStatus.template_name
+        } : null}
+      />
     </div>
   );
 };
