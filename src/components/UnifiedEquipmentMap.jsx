@@ -820,16 +820,10 @@ export default function UnifiedEquipmentMap({
     ];
 
     // Map type to the correct ID field name from API
+    // Switchboard uses switchboard_id, all other types use equipment_id
     const getEquipmentIdFromPosition = (type, p) => {
-      switch (type) {
-        case "switchboard": return p.switchboard_id;
-        case "vsd": return p.vsd_equipment_id;
-        case "meca": return p.meca_equipment_id;
-        case "mobile": return p.mobile_equipment_id;
-        case "hv": return p.hv_equipment_id;
-        case "glo": return p.glo_equipment_id;
-        default: return p.id;
-      }
+      if (type === "switchboard") return p.switchboard_id;
+      return p.equipment_id || p.id;
     };
 
     const results = await Promise.allSettled(
