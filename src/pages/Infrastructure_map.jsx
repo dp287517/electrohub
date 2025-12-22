@@ -6,6 +6,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "../styles/atex-map.css"; // Styles de netteté pour les plans
 import { api } from "../lib/api.js";
 import {
   isMobileDevice,

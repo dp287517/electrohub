@@ -830,17 +830,16 @@ export default function AtexMap({
             });
             await renderTaskRef.current.promise;
 
-            // 🚀 JPEG haute qualité sur mobile (rapide + beau), PNG sur desktop
-            dataUrl = isMobile
-              ? canvas.toDataURL("image/jpeg", 0.92)
-              : canvas.toDataURL("image/png");
+            // 🚀 PNG PARTOUT = netteté parfaite (lossless, pas d'artefacts)
+            // Le cache compense la taille plus importante
+            dataUrl = canvas.toDataURL("image/png");
             canvasW = canvas.width;
             canvasH = canvas.height;
 
             // 💾 Stocker dans le cache pour les prochaines visites
             cachePlan(cacheKey, dataUrl, canvasW, canvasH);
 
-            console.log(`[ATEX] PDF rendu: ${canvasW}x${canvasH}px (scale: ${safeScale.toFixed(2)}, network: ${networkQuality}, format: ${isMobile ? 'JPEG' : 'PNG'})`);
+            console.log(`[ATEX] PDF rendu: ${canvasW}x${canvasH}px (scale: ${safeScale.toFixed(2)}, network: ${networkQuality}, format: PNG, crisp-edges: ON)`);
 
             try { await pdf.cleanup?.(); } catch {}
           }
