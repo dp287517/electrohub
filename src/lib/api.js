@@ -2291,6 +2291,7 @@ export const api = {
       return upload(`/api/datahub/items/${encodeURIComponent(id)}/files`, fd);
     },
     deleteFile: (fileId) => del(`/api/datahub/files/${encodeURIComponent(fileId)}`),
+    fileUrl: (fileId) => `${API_BASE}/api/datahub/files/${encodeURIComponent(fileId)}/download?site=${currentSite()}`,
 
     // Categories
     listCategories: () => get("/api/datahub/categories"),
