@@ -51,61 +51,66 @@ export function getNetworkQuality() {
 
 /**
  * Configuration PDF selon le type d'appareil
- * 🚀 VERSION OPTIMISÉE pour qualité + performance
+ * 🚀 VERSION NETTETÉ MAXIMALE - Plans parfaitement lisibles
  */
 export function getPDFConfig() {
   const isMobile = isMobileDevice();
   const networkQuality = getNetworkQuality();
 
-  // Adapter la qualité au DPR de l'écran (smartphones haute résolution)
+  // Adapter la qualité au DPR de l'écran (iPhone 15 = 3, Android haut de gamme = 2.5-3)
   const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
   const isHighDPI = dpr >= 2;
+  const isVeryHighDPI = dpr >= 2.5; // iPhone 14 Pro+, Samsung S series, etc.
 
-  // 🔥 Configuration par défaut (PC / réseau rapide)
+  // 🔥 Configuration par défaut (PC / réseau rapide) - NETTETÉ MAX
   let config = {
-    qualityBoost: 1.5,
-    maxBitmapWidth: 3500,
-    minBitmapWidth: 1000,
-    maxScale: 3.0,
+    qualityBoost: 2.0,           // Augmenté pour netteté
+    maxBitmapWidth: 4000,        // Augmenté pour écrans haute résolution
+    minBitmapWidth: 1200,
+    maxScale: 3.5,
     minScale: 0.5,
-    enableImageSmoothing: true,
+    enableImageSmoothing: false, // ⚡ DÉSACTIVÉ = lignes nettes sans flou
     intent: "display",
+    useHighQualityFormat: true,  // Force PNG (lossless)
   };
 
-  // Mobile + réseau lent → Qualité réduite mais lisible
+  // Mobile + réseau lent → Qualité optimisée mais nette
   if (isMobile && networkQuality === "slow") {
     config = {
-      qualityBoost: isHighDPI ? 1.5 : 1.0,
-      maxBitmapWidth: isHighDPI ? 2000 : 1400,
-      minBitmapWidth: 800,
-      maxScale: isHighDPI ? 2.0 : 1.5,
+      qualityBoost: isVeryHighDPI ? 2.0 : (isHighDPI ? 1.8 : 1.2),
+      maxBitmapWidth: isVeryHighDPI ? 2400 : (isHighDPI ? 2000 : 1600),
+      minBitmapWidth: 1000,
+      maxScale: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.0 : 1.5),
       minScale: 0.5,
-      enableImageSmoothing: true,
+      enableImageSmoothing: false, // ⚡ Toujours désactivé pour netteté
       intent: "display",
+      useHighQualityFormat: true,  // PNG même sur réseau lent (priorité netteté)
     };
   }
-  // Mobile + réseau moyen → Bonne qualité
+  // Mobile + réseau moyen → Haute qualité nette
   else if (isMobile && networkQuality === "medium") {
     config = {
-      qualityBoost: isHighDPI ? 1.8 : 1.3,
-      maxBitmapWidth: isHighDPI ? 2800 : 2200,
-      minBitmapWidth: 900,
-      maxScale: isHighDPI ? 2.5 : 2.0,
+      qualityBoost: isVeryHighDPI ? 2.2 : (isHighDPI ? 2.0 : 1.5),
+      maxBitmapWidth: isVeryHighDPI ? 3200 : (isHighDPI ? 2800 : 2200),
+      minBitmapWidth: 1000,
+      maxScale: isVeryHighDPI ? 3.0 : (isHighDPI ? 2.5 : 2.0),
       minScale: 0.5,
-      enableImageSmoothing: true,
+      enableImageSmoothing: false,
       intent: "display",
+      useHighQualityFormat: true,
     };
   }
-  // Mobile + réseau rapide/inconnu → Haute qualité
+  // Mobile + réseau rapide/inconnu → Qualité maximale
   else if (isMobile) {
     config = {
-      qualityBoost: isHighDPI ? 2.0 : 1.5,
-      maxBitmapWidth: isHighDPI ? 3200 : 2600,
-      minBitmapWidth: 1000,
-      maxScale: isHighDPI ? 2.8 : 2.2,
+      qualityBoost: isVeryHighDPI ? 2.5 : (isHighDPI ? 2.2 : 1.8),
+      maxBitmapWidth: isVeryHighDPI ? 3800 : (isHighDPI ? 3400 : 2800),
+      minBitmapWidth: 1200,
+      maxScale: isVeryHighDPI ? 3.2 : (isHighDPI ? 2.8 : 2.5),
       minScale: 0.5,
-      enableImageSmoothing: true,
+      enableImageSmoothing: false,
       intent: "display",
+      useHighQualityFormat: true,
     };
   }
 
@@ -251,14 +256,12 @@ export function clearPlanCache() {
 }
 
 /**
- * Génère le format d'image optimal (JPEG sur mobile, PNG sur desktop)
- * JPEG 0.85 = ~5-10x plus petit que PNG, qualité excellente pour plans
+ * Génère le format d'image optimal - PNG PARTOUT pour netteté parfaite
+ * PNG = lossless = texte et lignes parfaitement nets
+ * Le cache compense la taille plus importante du PNG
  */
-export function getOptimalImageFormat(canvas) {
-  const isMobile = isMobileDevice();
-  if (isMobile) {
-    // 0.92 = haute qualité, bien meilleur rendu sur écrans haute résolution
-    return canvas.toDataURL("image/jpeg", 0.92);
-  }
+export function getOptimalImageFormat(canvas, config = {}) {
+  // ⚡ TOUJOURS PNG pour une netteté parfaite (lossless)
+  // Le système de cache rend le chargement instantané après la première visite
   return canvas.toDataURL("image/png");
 }

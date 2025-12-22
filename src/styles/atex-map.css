@@ -103,41 +103,51 @@
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
 
-/* 🔥 ULTRA HAUTE QUALITÉ D'IMAGE - Texte parfaitement lisible */
+/* 🔥 NETTETÉ PIXEL-PERFECT - Plans parfaitement lisibles sur tous écrans */
 .leaflet-container .leaflet-image-layer,
 .leaflet-container .leaflet-overlay-pane img {
-  /* Rendu optimal pour texte (auto = meilleur anti-aliasing) */
-  image-rendering: auto;
-  image-rendering: -webkit-optimize-contrast;
-  /* Optimisations pour fluidité */
+  /* ⚡ Rendu NET sans flou - critique pour les plans techniques */
+  image-rendering: -webkit-optimize-contrast; /* Safari/iOS */
+  image-rendering: -moz-crisp-edges;          /* Firefox */
+  image-rendering: crisp-edges;               /* Standard */
+  image-rendering: pixelated;                 /* Fallback ultime pour netteté */
+  /* GPU acceleration pour fluidité (ne pas toucher) */
   transform-origin: 0 0;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
-  /* Force le GPU rendering pour performance */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  /* Éviter le flou de sous-pixel */
+  -webkit-font-smoothing: none;
 }
 
-/* Pendant le zoom, garder la qualité */
+/* Pendant le zoom animé, garder crisp-edges pour éviter le flou */
 .leaflet-container.leaflet-zoom-anim .leaflet-image-layer {
-  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 
 /* GPU acceleration pour fluidité du zoom/pan */
 .leaflet-pane {
   will-change: transform;
-  transform: translateZ(0);
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
 }
 
-/* Meilleur rendu pour les overlays (zones, marqueurs) */
+/* Overlay pane avec rendu net */
 .leaflet-overlay-pane {
-  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 
-/* Force le rendu haute qualité sur l'image du plan */
-.leaflet-image-layer {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* Base pane spécifique pour le plan PDF - netteté maximale */
+.leaflet-pane.basePane,
+.leaflet-pane.basePane img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  /* Éviter tout flou de transformation */
+  filter: none !important;
+  -webkit-filter: none !important;
 }
 
 /* Assure un fond neutre derrière les overlays */

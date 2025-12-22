@@ -19,6 +19,7 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 // Leaflet
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
