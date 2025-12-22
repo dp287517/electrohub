@@ -780,6 +780,7 @@ export default function Datahub() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [viewMode, setViewMode] = useState('detail');
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
   const [toast, setToast] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
@@ -808,7 +809,8 @@ export default function Datahub() {
     try {
       const res = await api.datahub.maps.placedIds();
       setPlacedIds(new Set((res?.placed_ids || []).map(String)));
-    } catch { setPlacedIds(new Set()); }
+      setPlacedDetails(res?.placed_details || {});
+    } catch { setPlacedIds(new Set()); setPlacedDetails({}); }
   }, []);
 
   useEffect(() => {
@@ -888,6 +890,23 @@ export default function Datahub() {
   }), [items, placedIds, categories]);
 
   const isPlaced = (id) => placedIds.has(String(id));
+
+  const handleNavigateToMap = (item) => {
+    const itemId = item?.id;
+    if (!itemId) {
+      navigate('/app/datahub/map');
+      return;
+    }
+
+    const details = placedDetails[String(itemId)];
+    if (details?.plans?.length > 0) {
+      const planKey = details.plans[0];
+      navigate(`/app/datahub/map?item=${itemId}&plan=${encodeURIComponent(planKey)}`);
+    } else {
+      // Pass item ID so user can position it on map
+      navigate(`/app/datahub/map?item=${itemId}`);
+    }
+  };
 
   return (
     <div className="h-screen flex flex-col bg-gray-50">
@@ -987,7 +1006,7 @@ export default function Datahub() {
               onClose={() => { setSelectedItem(null); setSearchParams({}); }}
               onEdit={(i) => { setSelectedItem(i); setViewMode('edit'); }}
               onDelete={(i) => { setDeleteTarget(i); setShowDeleteModal(true); }}
-              onNavigateToMap={(i) => navigate('/app/datahub/map?item=' + i.id)}
+              onNavigateToMap={handleNavigateToMap}
               isPlaced={isPlaced(selectedItem?.id)} />
           ) : viewMode === 'edit' ? (
             <EditForm item={selectedItem} categories={categories} onSave={handleSaveItem} showToast={showToast}
@@ -1091,7 +1110,7 @@ export default function Datahub() {
                                             <Eye size={14} />
                                           </button>
                                           {placed && (
-                                            <button onClick={() => navigate('/app/datahub/map?item=' + item.id)}
+                                            <button onClick={() => handleNavigateToMap(item)}
                                               className="p-1.5 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-xs" title="Voir sur plan">
                                               <MapPin size={14} />
                                             </button>
