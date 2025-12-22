@@ -2014,6 +2014,7 @@ app.get("/api/mobile-equipment/maps/pending-positions", async (req, res) => {
 });
 
 /** Save/Update position of equipment on a plan/page */
+/** This ensures equipment is only on ONE plan at a time (deletes old positions first) */
 app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) => {
   try {
     const equipmentId = req.params.equipmentId;
@@ -2044,11 +2045,17 @@ app.put("/api/mobile-equipment/maps/positions/:equipmentId", async (req, res) =>
       return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
 
+    // First, delete ALL existing positions for this equipment
+    // This ensures the equipment is only on ONE plan at a time
+    await pool.query(
+      `DELETE FROM me_equipment_positions WHERE equipment_id = $1`,
+      [equipmentId]
+    );
+
+    // Then insert the new position
     await pool.query(
       `INSERT INTO me_equipment_positions (equipment_id, plan_logical_name, page_index, page_label, x_frac, y_frac)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (equipment_id, plan_logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
+       VALUES ($1,$2,$3,$4,$5,$6)`,
       [equipmentId, String(logical_name), Number(page_index || 0), page_label, Number(xf), Number(yf)]
     );
 
