@@ -135,23 +135,40 @@ const Badge = ({ children, variant = 'default', className = '' }) => {
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>{children}</span>;
 };
 
-// Create Item Modal
+// Create Item Modal with Photo Upload
 const CreateItemModal = ({ isOpen, onClose, categories, onCreate, position }) => {
   const [name, setName] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState(null);
+  const [pendingPhotoPreview, setPendingPhotoPreview] = useState(null);
+  const photoInputRef = useRef(null);
 
   useEffect(() => {
-    if (isOpen) { setName(''); setCategoryId(categories[0]?.id || ''); }
+    if (isOpen) {
+      setName('');
+      setCategoryId(categories[0]?.id || '');
+      setPendingPhoto(null);
+      setPendingPhotoPreview(null);
+    }
   }, [isOpen, categories]);
 
   if (!isOpen) return null;
+
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingPhoto(file);
+    const reader = new FileReader();
+    reader.onloadend = () => setPendingPhotoPreview(reader.result);
+    reader.readAsDataURL(file);
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) return;
     setIsCreating(true);
     try {
-      await onCreate({ name: name.trim(), category_id: categoryId || null }, position);
+      await onCreate({ name: name.trim(), category_id: categoryId || null }, position, pendingPhoto);
       onClose();
     } catch (e) {
       console.error(e);
@@ -162,8 +179,8 @@ const CreateItemModal = ({ isOpen, onClose, categories, onCreate, position }) =>
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
-        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-5 text-white">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
+        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-5 text-white flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl"><Plus size={24} /></div>
             <div>
@@ -173,7 +190,37 @@ const CreateItemModal = ({ isOpen, onClose, categories, onCreate, position }) =>
           </div>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          {/* Photo Upload */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Photo (optionnel)</label>
+            <div className="flex items-center gap-3">
+              <div
+                onClick={() => photoInputRef.current?.click()}
+                className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all overflow-hidden flex-shrink-0"
+              >
+                {pendingPhotoPreview ? (
+                  <img src={pendingPhotoPreview} alt="Preview" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="text-center text-gray-400">
+                    <Database size={20} className="mx-auto" />
+                    <span className="text-[10px]">Photo</span>
+                  </div>
+                )}
+              </div>
+              <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoSelect} />
+              {pendingPhoto && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-700 truncate">{pendingPhoto.name}</p>
+                  <button onClick={() => { setPendingPhoto(null); setPendingPhotoPreview(null); }}
+                    className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 mt-1">
+                    <X size={12} /> Supprimer
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Nom *</label>
             <input
@@ -219,7 +266,7 @@ const CreateItemModal = ({ isOpen, onClose, categories, onCreate, position }) =>
           </div>
         </div>
 
-        <div className="border-t p-4 flex gap-3">
+        <div className="border-t p-4 flex gap-3 flex-shrink-0">
           <button
             onClick={onClose}
             className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -666,11 +713,21 @@ export default function DatahubMap() {
   };
 
   // Create item and place it
-  const handleCreateItem = async (formData, position) => {
+  const handleCreateItem = async (formData, position, pendingPhoto = null) => {
     try {
       const res = await api.datahub.create(formData);
       const newItem = res?.item;
       if (!newItem?.id) throw new Error("Creation failed");
+
+      // Upload photo if provided
+      if (pendingPhoto) {
+        try {
+          await api.datahub.uploadPhoto(newItem.id, pendingPhoto);
+        } catch (photoErr) {
+          console.error("Photo upload error:", photoErr);
+          // Continue even if photo upload fails
+        }
+      }
 
       // Place the item on the map
       await api.datahub.maps.setPosition(newItem.id, {

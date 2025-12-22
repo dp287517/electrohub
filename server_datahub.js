@@ -520,6 +520,23 @@ app.post("/api/datahub/items/:id/files", uploadAny.single("file"), async (req, r
   }
 });
 
+// Download file
+app.get("/api/datahub/files/:id/download", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(`SELECT * FROM dh_files WHERE id = $1`, [id]);
+    if (rows.length === 0) return res.status(404).json({ ok: false, error: "File not found" });
+
+    const file = rows[0];
+    res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.filename)}"`);
+    res.sendFile(file.filepath, { root: "/" });
+  } catch (e) {
+    console.error("[Datahub] Download file error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.delete("/api/datahub/files/:id", async (req, res) => {
   try {
     const { id } = req.params;

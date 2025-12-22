@@ -461,7 +461,7 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
                   <FileText size={16} className="text-gray-400 flex-shrink-0" />
                   <span className="text-sm truncate flex-1">{file.filename}</span>
                   <a
-                    href={`${api.datahub.fileUrl ? api.datahub.fileUrl(file.id) : `/api/datahub/files/${file.id}/download`}`}
+                    href={api.datahub.fileUrl(file.id)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1 hover:bg-gray-100 rounded text-gray-500"
@@ -497,11 +497,20 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
   );
 };
 
-// Edit Form
+// Edit Form with Photo & Files upload
 const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
   const isNew = !item?.id;
   const [form, setForm] = useState({ name: '', code: '', category_id: '', building: '', floor: '', location: '', description: '', notes: '' });
   const [isSaving, setIsSaving] = useState(false);
+
+  // Photo & Files state
+  const [pendingPhoto, setPendingPhoto] = useState(null);
+  const [pendingPhotoPreview, setPendingPhotoPreview] = useState(null);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [existingFiles, setExistingFiles] = useState([]);
+  const [photoKey, setPhotoKey] = useState(Date.now());
+  const photoInputRef = React.useRef(null);
+  const fileInputRef = React.useRef(null);
 
   useEffect(() => {
     if (item) setForm({
@@ -509,13 +518,80 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
       building: item.building || '', floor: item.floor || '', location: item.location || '',
       description: item.description || '', notes: item.notes || ''
     });
+    // Load existing files for existing items
+    if (item?.id) {
+      api.datahub.listFiles(item.id).then(res => setExistingFiles(res?.files || [])).catch(() => {});
+    }
+    // Reset pending files when item changes
+    setPendingPhoto(null);
+    setPendingPhotoPreview(null);
+    setPendingFiles([]);
   }, [item]);
+
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingPhoto(file);
+    // Create preview
+    const reader = new FileReader();
+    reader.onloadend = () => setPendingPhotoPreview(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setPendingFiles(prev => [...prev, ...files]);
+    }
+    e.target.value = ''; // Reset input
+  };
+
+  const removePendingFile = (index) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  };
 
   const handleSave = async () => {
     if (!form.name.trim()) { showToast('Le nom est requis', 'error'); return; }
     setIsSaving(true);
-    try { await onSave(form); } catch { showToast('Erreur', 'error'); }
+    try {
+      // Save form and get the item id
+      const savedItem = await onSave(form, { pendingPhoto, pendingFiles });
+
+      // If we have an item ID (returned from onSave), upload files
+      if (savedItem?.id) {
+        if (pendingPhoto) {
+          try {
+            await api.datahub.uploadPhoto(savedItem.id, pendingPhoto);
+            setPhotoKey(Date.now());
+          } catch (err) {
+            console.error('Photo upload error:', err);
+            showToast('Photo sauvegardée mais upload échoué', 'warning');
+          }
+        }
+        for (const file of pendingFiles) {
+          try {
+            await api.datahub.uploadFile(savedItem.id, file);
+          } catch (err) {
+            console.error('File upload error:', err);
+          }
+        }
+      }
+    } catch { showToast('Erreur', 'error'); }
     finally { setIsSaving(false); }
+  };
+
+  // Existing photo upload (for existing items only)
+  const handleExistingPhotoChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !item?.id) return;
+    try {
+      await api.datahub.uploadPhoto(item.id, file);
+      setPhotoKey(Date.now());
+      showToast('Photo mise à jour', 'success');
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      showToast('Erreur upload photo', 'error');
+    }
   };
 
   return (
@@ -531,6 +607,92 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Photo Section */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Camera size={16} className="text-indigo-500" />Photo</h3>
+          <div className="flex items-start gap-4">
+            <div
+              onClick={() => photoInputRef.current?.click()}
+              className="w-32 h-32 rounded-xl border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all overflow-hidden"
+            >
+              {pendingPhotoPreview ? (
+                <img src={pendingPhotoPreview} alt="Preview" className="w-full h-full object-cover" />
+              ) : item?.id && item?.photo_url ? (
+                <img src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <div className="text-center text-gray-400">
+                  <Camera size={32} className="mx-auto mb-2" />
+                  <span className="text-xs">Cliquer pour ajouter</span>
+                </div>
+              )}
+            </div>
+            <input ref={photoInputRef} type="file" accept="image/*" className="hidden"
+              onChange={isNew ? handlePhotoSelect : handleExistingPhotoChange} />
+            <div className="flex-1 text-sm text-gray-500">
+              <p className="font-medium text-gray-700 mb-1">Photo principale</p>
+              <p>Formats acceptés: JPG, PNG, GIF</p>
+              <p>Taille max: 10 MB</p>
+              {pendingPhoto && (
+                <div className="mt-2 flex items-center gap-2 text-indigo-600">
+                  <CheckCircle size={14} />
+                  <span>{pendingPhoto.name}</span>
+                  <button onClick={() => { setPendingPhoto(null); setPendingPhotoPreview(null); }} className="text-red-500 hover:text-red-700">
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Documents Section */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><File size={16} className="text-indigo-500" />Documents</h3>
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all"
+          >
+            <Folder size={24} className="mx-auto mb-2 text-gray-400" />
+            <p className="text-sm text-gray-600">Cliquer pour ajouter des documents</p>
+            <p className="text-xs text-gray-400 mt-1">PDF, Word, Excel, images...</p>
+          </div>
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+
+          {/* Pending files */}
+          {pendingFiles.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Fichiers à ajouter:</p>
+              {pendingFiles.map((file, idx) => (
+                <div key={idx} className="flex items-center gap-2 bg-indigo-50 rounded-lg p-2">
+                  <File size={16} className="text-indigo-500" />
+                  <span className="flex-1 text-sm truncate">{file.name}</span>
+                  <span className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
+                  <button onClick={() => removePendingFile(idx)} className="text-red-500 hover:text-red-700 p-1">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Existing files (for existing items) */}
+          {!isNew && existingFiles.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">Fichiers existants:</p>
+              {existingFiles.map(file => (
+                <div key={file.id} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                  <File size={16} className="text-gray-500" />
+                  <span className="flex-1 text-sm truncate">{file.original_name}</span>
+                  <a href={api.datahub.fileUrl(file.id)} target="_blank" rel="noopener noreferrer"
+                    className="text-indigo-500 hover:text-indigo-700 p-1">
+                    <Download size={14} />
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="space-y-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Tag size={16} className="text-indigo-500" />Identification</h3>
           <div className="grid grid-cols-2 gap-4">
@@ -663,7 +825,7 @@ export default function Datahub() {
 
   const handleNewItem = () => { setSelectedItem({}); setViewMode('edit'); setSearchParams({}); };
 
-  const handleSaveItem = async (formData) => {
+  const handleSaveItem = async (formData, fileUploads = {}) => {
     const isNew = !selectedItem?.id;
     try {
       const saved = isNew ? await api.datahub.create(formData) : await api.datahub.update(selectedItem.id, formData);
@@ -674,6 +836,8 @@ export default function Datahub() {
       setViewMode('detail');
       setSearchParams({ item: newItem.id });
       showToast(isNew ? 'Item cree' : 'Item mis a jour', 'success');
+      // Return the saved item so EditForm can upload files
+      return newItem;
     } catch { throw new Error('Save failed'); }
   };
 
