@@ -919,6 +919,20 @@ const DetailPanel = ({
           Supprimer
         </button>
       </div>
+
+      {/* AI Chat Modal */}
+      <EquipmentAIChat
+        isOpen={showAIChat}
+        onClose={() => setShowAIChat(false)}
+        equipmentType="meca"
+        equipment={equipment}
+        controlStatus={controlStatus ? {
+          hasOverdue: controlStatus.status === 'overdue',
+          nextDueDate: controlStatus.next_due,
+          lastControlDate: controlStatus.last_control,
+          templateName: controlStatus.template_name
+        } : null}
+      />
     </div>
   );
 };
@@ -1266,20 +1280,6 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
           </div>
         )}
       </div>
-
-      {/* AI Chat Modal */}
-      <EquipmentAIChat
-        isOpen={showAIChat}
-        onClose={() => setShowAIChat(false)}
-        equipmentType="meca"
-        equipment={equipment}
-        controlStatus={controlStatus ? {
-          hasOverdue: controlStatus.status === 'overdue',
-          nextDueDate: controlStatus.next_due,
-          lastControlDate: controlStatus.last_control,
-          templateName: controlStatus.template_name
-        } : null}
-      />
     </div>
   );
 };
