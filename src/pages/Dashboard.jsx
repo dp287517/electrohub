@@ -481,32 +481,6 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 -mt-8 relative z-10 pb-10">
 
-        {/* Quick Access - Switchboard Controls */}
-        <Link
-          to="/app/switchboard-controls"
-          className="group block mb-6 animate-slideUp"
-        >
-          <div className="relative overflow-hidden bg-white rounded-2xl p-4 sm:p-5 shadow-lg hover:shadow-xl border border-gray-100 transition-all hover:scale-[1.005]">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-500/30 group-hover:scale-110 group-hover:rotate-3 transition-all">
-                <ClipboardCheck size={24} className="text-white sm:w-7 sm:h-7" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-bold text-gray-900 text-lg">Contrôles Périodiques</h3>
-                <p className="text-gray-500 text-sm">Gérer les vérifications des tableaux électriques</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {stats.overdue > 0 && (
-                  <span className="px-2.5 py-1 bg-red-100 text-red-600 rounded-full text-xs font-bold animate-pulse">
-                    {stats.overdue} en retard
-                  </span>
-                )}
-                <ChevronRight size={20} className="text-gray-400 group-hover:text-gray-600 group-hover:translate-x-1 transition-all" />
-              </div>
-            </div>
-          </div>
-        </Link>
-
         {/* Stats Grid - Spectacular */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
           <StatCard
