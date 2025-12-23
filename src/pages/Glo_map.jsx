@@ -553,38 +553,18 @@ const GloLeafletViewer = forwardRef(({
     let mk = markersMapRef.current.get(equipmentId);
     if (!mk) mk = markersMapRef.current.get(String(equipmentId));
     if (!mk) mk = markersMapRef.current.get(Number(equipmentId));
-    if (!mk || !mapRef.current) return false;
+    if (!mk || !mapRef.current) return;
 
     // Center on marker
     const ll = mk.getLatLng();
-    const map = mapRef.current;
-
-    // Calculate a zoom level that shows the marker clearly
-    // Use current zoom + 1 level for better visibility, capped at max zoom
-    const currentZoom = map.getZoom();
-    const maxZoom = map.getMaxZoom() || 4;
-    const targetZoom = Math.min(currentZoom + 1, maxZoom, 3);
-
-    // Smooth animated flyTo with zoom adjustment
-    map.flyTo(ll, targetZoom, {
-      animate: true,
-      duration: 0.8,
-      easeLinearity: 0.5
-    });
+    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
 
     // Flash animation
     const el = mk.getElement();
     if (el) {
-      // Enhanced flash animation with multiple pulses
       el.classList.add("glo-marker-flash");
-      el.classList.add("glo-marker-highlight-ring");
-      setTimeout(() => {
-        el.classList.remove("glo-marker-flash");
-        el.classList.remove("glo-marker-highlight-ring");
-      }, 3000);
+      setTimeout(() => el.classList.remove("glo-marker-flash"), 2000);
     }
-
-    return true;
   }, []);
 
   useEffect(() => {
@@ -1314,38 +1294,16 @@ export default function GloMap() {
         .animate-slideRight { animation: slideRight .3s ease-out forwards; }
         .glo-marker-selected { animation: pulse-selected 1.5s ease-in-out infinite; }
         .glo-marker-overdue { animation: blink-overdue 1s ease-in-out infinite; }
-        .glo-marker-flash > div { animation: flash-marker 3s ease-in-out; }
-        .glo-marker-highlight-ring { position: relative; }
-        .glo-marker-highlight-ring::before {
-          content: '';
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          width: 60px;
-          height: 60px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(16, 185, 129, 0.4) 0%, rgba(16, 185, 129, 0) 70%);
-          animation: ring-pulse 1.5s ease-out infinite;
-          pointer-events: none;
-          z-index: -1;
-        }
-        @keyframes ring-pulse {
-          0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
-          100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
-        }
+        .glo-marker-flash > div { animation: flash-marker 2s ease-in-out; }
         @keyframes pulse-selected {
           0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); }
           50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(139, 92, 246, 0); }
         }
         @keyframes flash-marker {
-          0% { transform: scale(1); filter: brightness(1) drop-shadow(0 0 0 transparent); }
-          15% { transform: scale(1.5); filter: brightness(1.4) drop-shadow(0 0 12px rgba(16, 185, 129, 0.8)); }
-          30% { transform: scale(1.1); filter: brightness(1.1) drop-shadow(0 0 6px rgba(16, 185, 129, 0.5)); }
-          50% { transform: scale(1.4); filter: brightness(1.3) drop-shadow(0 0 10px rgba(16, 185, 129, 0.7)); }
-          70% { transform: scale(1.1); filter: brightness(1.1) drop-shadow(0 0 6px rgba(16, 185, 129, 0.5)); }
-          85% { transform: scale(1.3); filter: brightness(1.2) drop-shadow(0 0 8px rgba(16, 185, 129, 0.6)); }
-          100% { transform: scale(1); filter: brightness(1) drop-shadow(0 0 0 transparent); }
+          0%, 100% { transform: scale(1); filter: brightness(1); }
+          25% { transform: scale(1.3); filter: brightness(1.3); }
+          50% { transform: scale(1); filter: brightness(1); }
+          75% { transform: scale(1.3); filter: brightness(1.3); }
         }
         .glo-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
