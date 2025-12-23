@@ -128,6 +128,7 @@ async function ensureSchema() {
   // Add missing columns
   try { await pool.query(`ALTER TABLE dh_categories ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;`); } catch {}
   try { await pool.query(`ALTER TABLE dh_categories ADD COLUMN IF NOT EXISTS marker_size INT NOT NULL DEFAULT 32;`); } catch {}
+  try { await pool.query(`ALTER TABLE dh_categories ADD COLUMN IF NOT EXISTS assign_to_controls BOOLEAN NOT NULL DEFAULT false;`); } catch {}
 
   // Items (similar to equipments but simpler)
   await pool.query(`
@@ -259,14 +260,14 @@ app.get("/api/datahub/categories", async (req, res) => {
 // Create category
 app.post("/api/datahub/categories", async (req, res) => {
   try {
-    const { name, description, color, icon, marker_size, sort_order } = req.body;
+    const { name, description, color, icon, marker_size, sort_order, assign_to_controls } = req.body;
     if (!name?.trim()) return res.status(400).json({ ok: false, error: "Name required" });
 
     const { rows } = await pool.query(`
-      INSERT INTO dh_categories (name, description, color, icon, marker_size, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO dh_categories (name, description, color, icon, marker_size, sort_order, assign_to_controls)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [name.trim(), description || null, color || '#3B82F6', icon || 'circle', marker_size || 32, sort_order || 0]);
+    `, [name.trim(), description || null, color || '#3B82F6', icon || 'circle', marker_size || 32, sort_order || 0, assign_to_controls || false]);
 
     await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: 'category', entityId: rows[0].id, details: { name } });
     res.json({ ok: true, category: rows[0] });
@@ -280,7 +281,7 @@ app.post("/api/datahub/categories", async (req, res) => {
 app.put("/api/datahub/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, color, icon, marker_size, sort_order } = req.body;
+    const { name, description, color, icon, marker_size, sort_order, assign_to_controls } = req.body;
 
     const { rows } = await pool.query(`
       UPDATE dh_categories
@@ -289,10 +290,11 @@ app.put("/api/datahub/categories/:id", async (req, res) => {
              color = COALESCE($3, color),
              icon = COALESCE($4, icon),
              marker_size = COALESCE($5, marker_size),
-             sort_order = COALESCE($6, sort_order)
-       WHERE id = $7
+             sort_order = COALESCE($6, sort_order),
+             assign_to_controls = COALESCE($7, assign_to_controls)
+       WHERE id = $8
        RETURNING *
-    `, [name, description, color, icon, marker_size, sort_order, id]);
+    `, [name, description, color, icon, marker_size, sort_order, assign_to_controls, id]);
 
     if (rows.length === 0) return res.status(404).json({ ok: false, error: "Category not found" });
 
