@@ -20,6 +20,7 @@ import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity } from "./lib/push-notify.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -1036,6 +1037,11 @@ app.post("/api/atex/equipments", async (req, res) => {
     );
     const eq = rows[0];
     eq.photo_url = null;
+
+    // 🔔 Send push notification for new equipment
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentCreated('atex', eq, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
+
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -1079,7 +1085,19 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
 app.delete("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
+
+    // Get equipment info before deletion for notification
+    const { rows } = await pool.query(`SELECT id, name, building FROM atex_equipments WHERE id=$1`, [id]);
+    const equipment = rows[0];
+
     await pool.query(`DELETE FROM atex_equipments WHERE id=$1`, [id]);
+
+    // 🔔 Send push notification for deleted equipment
+    if (equipment) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyEquipmentDeleted('atex', equipment, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
+    }
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -1469,14 +1487,15 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
     else { items = req.body.items || []; close = !!req.body.close; }
     const filesArr = (req.files||[]).map(f=>({ name:f.originalname, mime:f.mimetype, path:f.path, url:fileUrlFromPath(f.path) }));
     await pool.query(`UPDATE atex_checks SET items=$1, files=$2 WHERE id=$3`, [JSON.stringify(items), JSON.stringify(filesArr), checkId]);
+    let checkResult = null;
     if (close) {
       const values2 = await pool.query(`SELECT items FROM atex_checks WHERE id=$1`, [checkId]);
       const its = values2?.rows?.[0]?.items || [];
       const vals = (its || []).slice(0, 5).map((i) => i?.value).filter(Boolean);
-      const result = vals.includes("non_conforme") ? "non_conforme" : (vals.length ? "conforme" : null);
+      checkResult = vals.includes("non_conforme") ? "non_conforme" : (vals.length ? "conforme" : null);
       const nextDate = addMonths(new Date(), 36);
       await pool.query(`UPDATE atex_equipments SET next_check_date=$1, updated_at=now() WHERE id=$2`, [nextDate, id]);
-      await pool.query(`UPDATE atex_checks SET status='fait', result=$1, date=now() WHERE id=$2`, [result, checkId]);
+      await pool.query(`UPDATE atex_checks SET status='fait', result=$1, date=now() WHERE id=$2`, [checkResult, checkId]);
     }
     const { rows: eqR } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const equipment = eqR?.[0] || null;
@@ -1487,6 +1506,20 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
           : null;
       equipment.status = eqStatusFromDue(equipment.next_check_date);
     }
+
+    // 🔔 Send push notification when check is closed
+    if (close && equipment) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyMaintenanceCompleted('atex', equipment, { id: checkId, status: checkResult }, userId)
+        .catch(err => console.log('[ATEX] Push notify error:', err.message));
+
+      // Notify for non-conformity
+      if (checkResult === 'non_conforme') {
+        notifyNonConformity('atex', equipment, 'Contrôle non conforme')
+          .catch(err => console.log('[ATEX] Push NC notify error:', err.message));
+      }
+    }
+
     res.json({ ok:true, equipment });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });

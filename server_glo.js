@@ -16,6 +16,7 @@ import StreamZip from "node-stream-zip";
 import PDFDocument from "pdfkit";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted } from "./lib/push-notify.js";
 
 dotenv.config();
 
@@ -614,6 +615,10 @@ app.post("/api/glo/equipments", async (req, res) => {
     eq.photo_url = null;
 
     await logEvent("glo_equipment_created", { id: eq.id, name: eq.name }, u);
+
+    // 🔔 Push notification for new equipment
+    notifyEquipmentCreated('glo', eq, u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -710,11 +715,17 @@ app.delete("/api/glo/equipments/:id", async (req, res) => {
     const id = String(req.params.id);
     const u = getUser(req);
     const { rows: old } = await pool.query(
-      `SELECT name FROM glo_equipments WHERE id=$1`,
+      `SELECT id, name FROM glo_equipments WHERE id=$1`,
       [id]
     );
     await pool.query(`DELETE FROM glo_equipments WHERE id=$1`, [id]);
     await logEvent("glo_equipment_deleted", { id, name: old[0]?.name }, u);
+
+    // 🔔 Push notification for deleted equipment
+    if (old[0]) {
+      notifyEquipmentDeleted('glo', old[0], u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
+    }
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

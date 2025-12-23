@@ -537,5 +537,156 @@ export async function sendMorningBrief(userId, brief) {
   });
 }
 
+// ============================================================
+// EQUIPMENT EVENT NOTIFICATIONS
+// ============================================================
+
+// Equipment type labels in French
+const EQUIPMENT_LABELS = {
+  atex: 'ATEX',
+  vsd: 'Variateur',
+  meca: 'Équipement mécanique',
+  hv: 'Haute tension',
+  glo: 'GLO',
+  mobile: 'Équipement mobile',
+  door: 'Porte',
+  switchboard: 'Tableau électrique',
+  device: 'Appareil'
+};
+
+// Send notification when equipment is created
+export async function notifyEquipmentCreated(equipmentType, equipment, creatorUserId) {
+  const label = EQUIPMENT_LABELS[equipmentType] || equipmentType;
+  const notification = {
+    title: `✨ Nouvel équipement créé`,
+    body: `${label}: ${equipment.name || equipment.code || 'Sans nom'}`,
+    type: 'equipment_created',
+    tag: `equipment-created-${equipment.id}`,
+    data: {
+      equipmentType,
+      equipmentId: equipment.id,
+      url: getEquipmentUrl(equipmentType, equipment.id)
+    }
+  };
+
+  // Notify all users except the creator (they already know)
+  return broadcastNotificationExcept(notification, creatorUserId);
+}
+
+// Send notification when equipment is deleted
+export async function notifyEquipmentDeleted(equipmentType, equipment, deleterUserId) {
+  const label = EQUIPMENT_LABELS[equipmentType] || equipmentType;
+  const notification = {
+    title: `🗑️ Équipement supprimé`,
+    body: `${label}: ${equipment.name || equipment.code || 'Sans nom'}`,
+    type: 'equipment_deleted',
+    tag: `equipment-deleted-${equipment.id}`,
+    data: {
+      equipmentType,
+      equipmentId: equipment.id
+    }
+  };
+
+  return broadcastNotificationExcept(notification, deleterUserId);
+}
+
+// Send notification when maintenance/control is completed
+export async function notifyMaintenanceCompleted(equipmentType, equipment, check, performerUserId) {
+  const label = EQUIPMENT_LABELS[equipmentType] || equipmentType;
+  const status = check.status === 'ok' || check.status === 'conforme' ? '✅' : '⚠️';
+  const statusText = check.status === 'ok' || check.status === 'conforme' ? 'Conforme' : 'Non-conforme';
+
+  const notification = {
+    title: `${status} Contrôle terminé`,
+    body: `${label}: ${equipment.name || equipment.code} - ${statusText}`,
+    type: 'maintenance_completed',
+    tag: `maintenance-${check.id}`,
+    requireInteraction: check.status !== 'ok' && check.status !== 'conforme',
+    data: {
+      equipmentType,
+      equipmentId: equipment.id,
+      checkId: check.id,
+      status: check.status,
+      url: getEquipmentUrl(equipmentType, equipment.id)
+    }
+  };
+
+  return broadcastNotificationExcept(notification, performerUserId);
+}
+
+// Send notification for non-conformity detected
+export async function notifyNonConformity(equipmentType, equipment, check, details) {
+  const label = EQUIPMENT_LABELS[equipmentType] || equipmentType;
+
+  const notification = {
+    title: `🚨 Non-conformité détectée`,
+    body: `${label}: ${equipment.name || equipment.code}${details ? ` - ${details}` : ''}`,
+    type: 'non_conformity',
+    tag: `nc-${equipment.id}-${Date.now()}`,
+    requireInteraction: true,
+    data: {
+      equipmentType,
+      equipmentId: equipment.id,
+      checkId: check?.id,
+      url: getEquipmentUrl(equipmentType, equipment.id)
+    }
+  };
+
+  // NC notifications go to everyone
+  return broadcastNotification(notification);
+}
+
+// Send notification when equipment status changes
+export async function notifyEquipmentStatusChanged(equipmentType, equipment, oldStatus, newStatus, changerUserId) {
+  const label = EQUIPMENT_LABELS[equipmentType] || equipmentType;
+  const statusEmoji = newStatus === 'conforme' || newStatus === 'ok' ? '✅' :
+                      newStatus === 'non_conforme' || newStatus === 'nc' ? '⚠️' : '🔄';
+
+  const notification = {
+    title: `${statusEmoji} Statut modifié`,
+    body: `${label}: ${equipment.name || equipment.code} → ${newStatus}`,
+    type: 'status_changed',
+    tag: `status-${equipment.id}`,
+    data: {
+      equipmentType,
+      equipmentId: equipment.id,
+      oldStatus,
+      newStatus,
+      url: getEquipmentUrl(equipmentType, equipment.id)
+    }
+  };
+
+  return broadcastNotificationExcept(notification, changerUserId);
+}
+
+// Helper: Get URL for equipment type
+function getEquipmentUrl(type, id) {
+  const urls = {
+    atex: `/app/atex/equipment/${id}`,
+    vsd: `/app/vsd/equipment/${id}`,
+    meca: `/app/meca/equipment/${id}`,
+    hv: `/app/hv/equipment/${id}`,
+    glo: `/app/glo/equipment/${id}`,
+    mobile: `/app/mobile-equipment/${id}`,
+    door: `/app/doors/${id}`,
+    switchboard: `/app/switchboard/${id}`,
+    device: `/app/switchboard/device/${id}`
+  };
+  return urls[type] || `/dashboard`;
+}
+
+// Helper: Broadcast to all users except one
+async function broadcastNotificationExcept(notification, excludeUserId) {
+  try {
+    const result = await pool.query('SELECT DISTINCT user_id FROM push_subscriptions WHERE user_id != $1', [excludeUserId]);
+    const userIds = result.rows.map(r => r.user_id);
+    if (userIds.length === 0) return { sent: 0 };
+    return sendNotificationToUsers(userIds, notification);
+  } catch (error) {
+    console.error('[Push] Broadcast except error:', error);
+    return { sent: 0, error: error.message };
+  }
+}
+
 console.log('[Push] ✅ Push notification module loaded successfully');
 export default router;

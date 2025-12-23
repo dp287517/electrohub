@@ -25,6 +25,7 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { createAuditTrail, AUDIT_ACTIONS } from './lib/audit-trail.js';
 import { extractTenantFromRequest, getTenantFilter } from './lib/tenant-filter.js';
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notify } from './lib/push-notify.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -3063,6 +3064,19 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
         `, [record.id, nextDate, schedule_id]);
       }
     }
+
+    // 🔔 Push notification for completed control
+    const isConform = status === 'conform' || status === 'ok' || status === 'conforme';
+    notify(
+      isConform ? '✅ Contrôle terminé' : '⚠️ Contrôle avec NC',
+      `${detectedType.toUpperCase()} - ${isConform ? 'Conforme' : 'Non-conforme'}`,
+      {
+        type: 'control_completed',
+        requireInteraction: !isConform,
+        data: { recordId: record.id, status },
+        excludeUserId: performedByEmail
+      }
+    ).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
 
     res.json({ record, message: 'Control completed successfully' });
   } catch (e) {
