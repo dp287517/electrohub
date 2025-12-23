@@ -394,11 +394,7 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
 export default function DatahubMap() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const focusItemId = searchParams.get("item");
-  const urlPlanKey = searchParams.get("plan");
 
-  // Track if we've handled URL params on initial load
-  const urlParamsHandledRef = useRef(false);
   const targetItemIdRef = useRef(null);
 
   // Core data
@@ -421,6 +417,7 @@ export default function DatahubMap() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [toast, setToast] = useState(null);
+  const [pdfReady, setPdfReady] = useState(false);
 
   // Creation mode
   const [createMode, setCreateMode] = useState(false);
@@ -480,34 +477,46 @@ export default function DatahubMap() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Restore last plan or use URL param
+  // Handle URL params for navigation from list page
+  useEffect(() => {
+    const urlPlanKey = searchParams.get("plan");
+    const focusItemId = searchParams.get("item");
+
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        if (focusItemId) targetItemIdRef.current = focusItemId;
+
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          // Different plan - PDF will reload and set pdfReady when done
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+        } else {
+          // Same plan - just need to trigger highlight
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams]);
+
+  // Initial plan selection from localStorage
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
+      const urlPlanKey = searchParams.get("plan");
+      if (urlPlanKey) return; // URL params effect will handle this
+
       let planToSelect = null;
+      const saved = localStorage.getItem(STORAGE_KEY_PLAN);
+      planToSelect = plans.find(p => p.logical_name === saved || p.id === saved);
 
-      // Priority 1: URL parameter (from navigation with specific item)
-      if (urlPlanKey && !urlParamsHandledRef.current) {
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (focusItemId) {
-          targetItemIdRef.current = focusItemId;
-        }
-        urlParamsHandledRef.current = true;
-        // Clear URL params after reading
-        setSearchParams({}, { replace: true });
-      }
-
-      // Priority 2: Saved plan from localStorage
-      if (!planToSelect) {
-        const saved = localStorage.getItem(STORAGE_KEY_PLAN);
-        planToSelect = plans.find(p => p.logical_name === saved || p.id === saved);
-      }
-
-      // Fallback: First plan
       setSelectedPlan(planToSelect || plans[0]);
       const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
-      setPageIndex(urlPlanKey ? 0 : savedPage); // Reset to page 0 if coming from URL
+      setPageIndex(savedPage);
     }
-  }, [plans, selectedPlan, urlPlanKey, focusItemId, setSearchParams]);
+  }, [plans, selectedPlan, searchParams]);
 
   // Save selected plan
   useEffect(() => {
@@ -816,6 +825,8 @@ export default function DatahubMap() {
     positionsRef.current = positions;
     if (mapRef.current && imgSizeRef.current.w > 0) {
       drawMarkers();
+      // Mark PDF as ready after markers are drawn
+      setPdfReady(true);
     }
   }, [positions, items, categories, selectedCategories, drawMarkers]);
 
@@ -828,32 +839,14 @@ export default function DatahubMap() {
     }
   }, [selectedItem, drawMarkers]);
 
-  // Focus on item from URL - with delay to ensure map is ready
+  // Focus on item from URL - triggered when pdfReady becomes true
   useEffect(() => {
-    // Use targetItemIdRef if set (from URL navigation), otherwise use focusItemId
-    const itemIdToFocus = targetItemIdRef.current || focusItemId;
-    if (!itemIdToFocus || items.length === 0 || positions.length === 0) return;
-
-    const item = items.find(i => i.id === itemIdToFocus);
-    if (item) {
-      setSelectedItem(item);
-      const pos = positions.find(p => p.item_id === itemIdToFocus);
-      if (pos) {
-        setSelectedPosition(pos);
-        // Clear the target after use
-        if (targetItemIdRef.current) {
-          targetItemIdRef.current = null;
-        }
-        // Delay to ensure map and markers are fully initialized, then flash the marker
-        const timer = setTimeout(() => {
-          if (mapRef.current && overlayRef.current) {
-            highlightMarker(itemIdToFocus);
-          }
-        }, 500);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [focusItemId, items, positions, highlightMarker]);
+    if (!pdfReady || !targetItemIdRef.current) return;
+    const targetId = targetItemIdRef.current;
+    targetItemIdRef.current = null;
+    // Small delay to ensure markers are rendered in DOM
+    setTimeout(() => highlightMarker(targetId), 300);
+  }, [pdfReady, highlightMarker]);
 
   // Filter items
   const filteredItems = useMemo(() => {

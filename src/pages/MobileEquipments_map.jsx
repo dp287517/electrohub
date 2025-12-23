@@ -628,7 +628,6 @@ export default function MobileEquipmentsMap() {
   const viewerRef = useRef(null);
   const creatingRef = useRef(false);
   const targetEquipmentIdRef = useRef(null);
-  const urlParamsHandledRef = useRef(false);
   const [pdfReady, setPdfReady] = useState(false);
 
   // Handle resize for mobile detection
@@ -723,7 +722,7 @@ export default function MobileEquipmentsMap() {
     }
   }, []);
 
-  // Load plans and equipments
+  // Load plans and equipments (once on mount)
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -733,41 +732,8 @@ export default function MobileEquipmentsMap() {
           api.mobileEquipment.list(),
         ]);
 
-        const plansList = plansRes.plans || [];
-        setPlans(plansList);
+        setPlans(plansRes.plans || []);
         setEquipments(equipRes.items || equipRes.equipments || equipRes.data || []);
-
-        // Handle URL params first (like High Voltage)
-        const urlEquipmentId = searchParams.get('equipment');
-        const urlPlanKey = searchParams.get('plan');
-
-        let planToSelect = null;
-        let pageIdx = 0;
-
-        if (urlPlanKey && !urlParamsHandledRef.current) {
-          planToSelect = plansList.find(p => p.logical_name === urlPlanKey);
-          if (urlEquipmentId) targetEquipmentIdRef.current = urlEquipmentId;
-          urlParamsHandledRef.current = true;
-          setSearchParams({}, { replace: true });
-        }
-
-        // Fallback to localStorage
-        if (!planToSelect) {
-          const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-          const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
-          if (savedPlanKey) planToSelect = plansList.find(p => p.logical_name === savedPlanKey || String(p.id) === savedPlanKey);
-          if (planToSelect) pageIdx = savedPage;
-        }
-
-        // Default to first plan
-        if (!planToSelect && plansList.length > 0) planToSelect = plansList[0];
-
-        if (planToSelect) {
-          setSelectedPlan(planToSelect);
-          setPageIndex(pageIdx);
-        }
-
-        // Load control statuses
         loadControlStatuses();
       } catch (e) {
         console.error("[MobileEquipmentsMap] Load error:", e);
@@ -775,7 +741,54 @@ export default function MobileEquipmentsMap() {
         setLoading(false);
       }
     })();
-  }, [loadControlStatuses, searchParams, setSearchParams]);
+  }, [loadControlStatuses]);
+
+  // Handle URL params for navigation from list page
+  useEffect(() => {
+    const urlEquipmentId = searchParams.get('equipment');
+    const urlPlanKey = searchParams.get('plan');
+
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        if (urlEquipmentId) targetEquipmentIdRef.current = urlEquipmentId;
+
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+        } else {
+          // Same plan - just trigger highlight
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams]);
+
+  // Initial plan selection from localStorage (only when no plan selected and no URL params)
+  useEffect(() => {
+    if (plans.length > 0 && !selectedPlan) {
+      const urlPlanKey = searchParams.get('plan');
+      if (urlPlanKey) return; // URL params effect will handle this
+
+      let planToSelect = null;
+      let pageIdx = 0;
+
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
+      if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey || String(p.id) === savedPlanKey);
+      if (planToSelect) pageIdx = savedPage;
+
+      if (!planToSelect && plans.length > 0) planToSelect = plans[0];
+
+      if (planToSelect) {
+        setSelectedPlan(planToSelect);
+        setPageIndex(pageIdx);
+      }
+    }
+  }, [plans, selectedPlan, searchParams]);
 
   // Load positions when plan changes
   useEffect(() => {
@@ -819,14 +832,13 @@ export default function MobileEquipmentsMap() {
     const planParam = searchParams.get('plan');
 
     // Only handle if we have equipment but no plan (equipment not placed yet)
-    if (!equipmentIdParam || planParam || !equipments.length || urlParamsHandledRef.current) return;
+    if (!equipmentIdParam || planParam || !equipments.length) return;
 
     const eq = equipments.find(e => String(e.id) === equipmentIdParam);
     if (eq) {
       setSelectedEquipment(eq);
       // Enter placement mode so user can place it
       setPlacementMode(eq);
-      urlParamsHandledRef.current = true;
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, equipments, setSearchParams]);

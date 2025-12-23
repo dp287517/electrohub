@@ -940,7 +940,6 @@ export default function HighVoltageMap() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const urlParamsHandledRef = useRef(false);
   const targetEquipmentIdRef = useRef(null);
 
   // Plans
@@ -1040,28 +1039,48 @@ export default function HighVoltageMap() {
     }
   };
 
-  // Restore plan from URL params or localStorage
+  // Handle URL params for navigation from list page (separate effect to always process new params)
+  useEffect(() => {
+    const urlHvId = searchParams.get('hv');
+    const urlPlanKey = searchParams.get('plan');
+
+    // If we have URL params and plans are loaded, process them
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        // Store the equipment ID for highlighting later
+        if (urlHvId) targetEquipmentIdRef.current = Number(urlHvId);
+
+        // Switch to the target plan if different from current
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+          refreshPositions(targetPlan, 0).then(positions => setInitialPoints(positions || []));
+        } else {
+          // Same plan - just need to trigger highlight after a small delay
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      // Clear URL params after processing
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams, refreshPositions]);
+
+  // Initial plan selection from localStorage (only when no plan selected and no URL params)
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const urlHvId = searchParams.get('hv');
       const urlPlanKey = searchParams.get('plan');
+      if (urlPlanKey) return; // URL params effect will handle this
 
       let planToSelect = null;
       let pageIdx = 0;
 
-      if (urlPlanKey && !urlParamsHandledRef.current) {
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlHvId) targetEquipmentIdRef.current = Number(urlHvId);
-        urlParamsHandledRef.current = true;
-        setSearchParams({}, { replace: true });
-      }
-
-      if (!planToSelect) {
-        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-        if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
-        if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
-      }
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+      if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
 
       if (!planToSelect) planToSelect = plans[0];
 
@@ -1073,7 +1092,7 @@ export default function HighVoltageMap() {
         refreshPositions(planToSelect, pageIdx).then(positions => setInitialPoints(positions || []));
       }
     }
-  }, [plans, searchParams, setSearchParams, refreshPositions]);
+  }, [plans, selectedPlan, searchParams, refreshPositions]);
 
   useEffect(() => {
     if (selectedPlan?.logical_name) localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);
