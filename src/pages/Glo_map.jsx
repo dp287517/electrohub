@@ -1054,8 +1054,8 @@ export default function GloMap() {
   const refreshPlacedIds = async () => {
     try {
       const res = await api.gloMaps.placedIds();
-      // Keep IDs as-is (don't convert to Number - IDs might be UUIDs or strings)
-      const ids = res?.placed_ids || [];
+      // Convert all IDs to String for consistent comparison
+      const ids = (res?.placed_ids || []).map(id => String(id));
       const details = res?.placed_details || {};
       setPlacedIds(new Set(ids));
       setPlacedDetails(details);
@@ -1259,13 +1259,13 @@ export default function GloMap() {
         eq.category_name?.toLowerCase().includes(q)
       );
     }
-    if (filterMode === "placed") list = list.filter(eq => placedIds.has(eq.id));
-    else if (filterMode === "unplaced") list = list.filter(eq => !placedIds.has(eq.id));
+    if (filterMode === "placed") list = list.filter(eq => placedIds.has(String(eq.id)));
+    else if (filterMode === "unplaced") list = list.filter(eq => !placedIds.has(String(eq.id)));
     return list;
   }, [equipments, searchQuery, filterMode, placedIds]);
 
   const currentPositions = getLatestPositions();
-  const currentPlacedHere = useMemo(() => new Set(currentPositions.map(p => p.equipment_id)), [currentPositions]);
+  const currentPlacedHere = useMemo(() => new Set(currentPositions.map(p => String(p.equipment_id))), [currentPositions]);
 
   return (
     <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
@@ -1389,10 +1389,10 @@ export default function GloMap() {
                   <GloCard
                     key={eq.id}
                     equipment={eq}
-                    isPlacedHere={currentPlacedHere.has(eq.id)}
-                    isPlacedSomewhere={placedIds.has(eq.id)}
-                    isPlacedElsewhere={placedIds.has(eq.id) && !currentPlacedHere.has(eq.id)}
-                    isSelected={selectedEquipmentId === eq.id}
+                    isPlacedHere={currentPlacedHere.has(String(eq.id))}
+                    isPlacedSomewhere={placedIds.has(String(eq.id))}
+                    isPlacedElsewhere={placedIds.has(String(eq.id)) && !currentPlacedHere.has(String(eq.id))}
+                    isSelected={String(selectedEquipmentId) === String(eq.id)}
                     onClick={() => handleEquipmentClick(eq)}
                     onPlace={handlePlaceEquipment}
                   />
