@@ -171,6 +171,21 @@ const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel, isLoading })
         </button>
       ))}
     </div>
+    {/* Assign to Controls checkbox */}
+    <div className="flex items-center gap-3 p-3 bg-amber-50 rounded-xl border border-amber-200">
+      <input
+        type="checkbox"
+        id="assign_to_controls"
+        checked={form.assign_to_controls || false}
+        onChange={e => setForm(f => ({ ...f, assign_to_controls: e.target.checked }))}
+        className="w-5 h-5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+      />
+      <label htmlFor="assign_to_controls" className="flex-1 cursor-pointer">
+        <span className="text-sm font-medium text-amber-800">Assigner à Controls</span>
+        <p className="text-xs text-amber-600 mt-0.5">Les équipements de cette catégorie seront disponibles dans Switchboard Controls</p>
+      </label>
+      <Zap size={20} className="text-amber-500" />
+    </div>
     <div className="flex gap-2">
       <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
       <button onClick={onSave} disabled={isLoading}
@@ -185,10 +200,10 @@ const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel, isLoading })
 const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange, showToast }) => {
   const [localCategories, setLocalCategories] = useState([]);
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32 });
+  const [editForm, setEditForm] = useState({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32, assign_to_controls: false });
   const [isLoading, setIsLoading] = useState(false);
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newCategory, setNewCategory] = useState({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32 });
+  const [newCategory, setNewCategory] = useState({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32, assign_to_controls: false });
 
   useEffect(() => { if (categories) setLocalCategories([...categories]); }, [categories]);
   useEffect(() => { if (!isOpen) { setEditingId(null); setShowNewForm(false); } }, [isOpen]);
@@ -257,7 +272,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
 
           {showNewForm && (
             <CategoryForm form={newCategory} setForm={setNewCategory} onSave={handleCreate}
-              onCancel={() => { setShowNewForm(false); setNewCategory({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32 }); }}
+              onCancel={() => { setShowNewForm(false); setNewCategory({ name: '', description: '', color: '#3B82F6', icon: 'circle', marker_size: 32, assign_to_controls: false }); }}
               saveLabel="Creer" isLoading={isLoading} />
           )}
 
@@ -283,13 +298,20 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
                         })()}
                       </div>
                       <div>
-                        <h4 className="font-medium text-gray-900">{cat.name}</h4>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-medium text-gray-900">{cat.name}</h4>
+                          {cat.assign_to_controls && (
+                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded-full flex items-center gap-1">
+                              <Zap size={10} /> Controls
+                            </span>
+                          )}
+                        </div>
                         {cat.description && <p className="text-sm text-gray-500">{cat.description}</p>}
                         <span className="text-xs text-gray-400">{cat.item_count || 0} items • {cat.marker_size}px • {ICON_PRESETS.find(i => i.id === cat.icon)?.label || 'Cercle'}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => { setEditingId(cat.id); setEditForm({ name: cat.name, description: cat.description || '', color: cat.color, icon: cat.icon, marker_size: cat.marker_size }); }}
+                      <button onClick={() => { setEditingId(cat.id); setEditForm({ name: cat.name, description: cat.description || '', color: cat.color, icon: cat.icon, marker_size: cat.marker_size, assign_to_controls: cat.assign_to_controls || false }); }}
                         className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-purple-600"><Edit3 size={16} /></button>
                       <button onClick={() => handleDelete(cat.id, cat.name)}
                         className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-red-600"><Trash2 size={16} /></button>

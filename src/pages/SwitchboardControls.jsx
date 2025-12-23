@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
-import { Zap, Cpu, Settings, Truck, Battery, Grid3X3, Package, PlusSquare } from "lucide-react";
+import { Zap, Cpu, Settings, Truck, Battery, Grid3X3, Package, PlusSquare, Database } from "lucide-react";
 
 // ============================================================
 // ANIMATIONS CSS
@@ -57,6 +57,7 @@ const EQUIPMENT_ICONS = {
   hv: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },               // Lightning bolt
   mobile: { Icon: Cpu, color: 'text-cyan-500', bg: 'bg-cyan-100' },             // CPU/chip icon
   glo: { Icon: Battery, color: 'text-emerald-500', bg: 'bg-emerald-100' },      // Battery icon
+  datahub: { Icon: Database, color: 'text-purple-500', bg: 'bg-purple-100' },   // Database icon for datahub
   device: { Icon: Grid3X3, color: 'text-gray-500', bg: 'bg-gray-100' },
   switchboard: { Icon: Zap, color: 'text-amber-500', bg: 'bg-amber-100' },
   unknown: { Icon: Package, color: 'text-gray-500', bg: 'bg-gray-100' },
@@ -112,6 +113,16 @@ const getEquipmentDisplay = (item) => {
       icon: <Icon size={16} className={color} />,
       link: `/app/glo?glo=${item.glo_equipment_id}`,
       category: item.glo_category || item.category || ''
+    };
+  }
+  if (item.datahub_equipment_id) {
+    const { Icon, color } = EQUIPMENT_ICONS.datahub;
+    return {
+      name: item.datahub_equipment_name || item.equipment_name || `Datahub #${item.datahub_equipment_id}`,
+      type: 'datahub',
+      icon: <Icon size={16} className={color} />,
+      link: `/app/datahub?item=${item.datahub_equipment_id}`,
+      category: item.datahub_category_name || ''
     };
   }
   if (item.device_id) {
@@ -1591,6 +1602,7 @@ function TemplateModal({ template, onClose, onSave }) {
                 <option value="mobile_equipment">🚜 Équip. Mobile</option>
                 <option value="hv">⚡ Haute Tension (HT)</option>
                 <option value="glo">🔋 Équip. GLO</option>
+                <option value="datahub">📦 Datahub</option>
               </select>
             </div>
             <div>
@@ -1715,6 +1727,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [mobileEquipments, setMobileEquipments] = useState([]);
   const [hvEquipments, setHvEquipments] = useState([]);
   const [gloEquipments, setGloEquipments] = useState([]);
+  const [datahubEquipments, setDatahubEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
 
   // Device-specific states
@@ -1725,7 +1738,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
 
   // Load equipment when target type changes
   useEffect(() => {
-    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo') {
+    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo' || targetType === 'datahub') {
       setLoadingEquipments(true);
       api.switchboardControls.listEquipment(targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType)
         .then(res => {
@@ -1734,6 +1747,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           else if (targetType === 'mobile_equipment') setMobileEquipments(res.mobile_equipment || []);
           else if (targetType === 'hv') setHvEquipments(res.hv || []);
           else if (targetType === 'glo') setGloEquipments(res.glo || []);
+          else if (targetType === 'datahub') setDatahubEquipments(res.datahub || []);
         })
         .catch(e => console.warn('Load equipment error:', e))
         .finally(() => setLoadingEquipments(false));
@@ -1803,6 +1817,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     if (targetType === 'mobile_equipment') return mobileEquipments;
     if (targetType === 'hv') return hvEquipments;
     if (targetType === 'glo') return gloEquipments;
+    if (targetType === 'datahub') return datahubEquipments;
     return [];
   };
 
@@ -1875,6 +1890,8 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       case 'meca': return 'équipements mécaniques';
       case 'mobile_equipment': return 'équipements mobiles';
       case 'hv': return 'équipements haute tension';
+      case 'glo': return 'équipements GLO';
+      case 'datahub': return 'équipements Datahub';
       default: return 'équipements';
     }
   };
@@ -2025,6 +2042,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID, not Number
           else if (targetType === 'hv') payload.hv_equipment_id = Number(ids[i]);
           else if (targetType === 'glo') payload.glo_equipment_id = String(ids[i]); // UUID
+          else if (targetType === 'datahub') payload.datahub_equipment_id = String(ids[i]); // UUID
 
           await onSave(payload, i === ids.length - 1); // Only reload on last item
           successCount++;
@@ -2075,6 +2093,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
               <option value="mobile_equipment">🚜 Équip. Mobile</option>
               <option value="hv">⚡ Haute Tension (HT)</option>
               <option value="glo">🔋 Équip. GLO</option>
+              <option value="datahub">📦 Datahub</option>
             </select>
           </div>
 

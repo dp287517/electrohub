@@ -679,6 +679,9 @@ async function ensureSchema() {
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'glo_equipment_id') THEN
         ALTER TABLE control_schedules ADD COLUMN glo_equipment_id UUID;
       END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'datahub_equipment_id') THEN
+        ALTER TABLE control_schedules ADD COLUMN datahub_equipment_id UUID;
+      END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_schedules' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_schedules ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
       END IF;
@@ -712,6 +715,9 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'glo_equipment_id') THEN
         ALTER TABLE control_records ADD COLUMN glo_equipment_id UUID;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'datahub_equipment_id') THEN
+        ALTER TABLE control_records ADD COLUMN datahub_equipment_id UUID;
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_records' AND column_name = 'equipment_type') THEN
         ALTER TABLE control_records ADD COLUMN equipment_type TEXT DEFAULT 'switchboard';
@@ -2720,13 +2726,13 @@ app.delete('/api/switchboard/controls/templates/:id', async (req, res) => {
 
 // --- SCHEDULES ---
 
-// List schedules (with filters) - EXTENDED for VSD, MECA, Mobile Equipment, HV
+// List schedules (with filters) - EXTENDED for VSD, MECA, Mobile Equipment, HV, Datahub
 app.get('/api/switchboard/controls/schedules', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type, status, overdue } = req.query;
+    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type, status, overdue } = req.query;
 
     let sql = `
       SELECT cs.*,
@@ -2737,7 +2743,9 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
              hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building, hv.regime_neutral as hv_regime_neutral,
-             glo.name as glo_equipment_name, glo.tag as glo_equipment_code, glo.building as glo_equipment_building
+             glo.name as glo_equipment_name, glo.tag as glo_equipment_code, glo.building as glo_equipment_building,
+             dh.name as datahub_equipment_name, dh.code as datahub_equipment_code, dh.building as datahub_equipment_building,
+             dhc.name as datahub_category_name, dhc.color as datahub_category_color, dhc.icon as datahub_category_icon
       FROM control_schedules cs
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
@@ -2747,6 +2755,8 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cs.hv_equipment_id::text = hv.id::text
       LEFT JOIN glo_equipments glo ON cs.glo_equipment_id::text = glo.id::text
+      LEFT JOIN dh_items dh ON cs.datahub_equipment_id::text = dh.id::text
+      LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
       WHERE cs.site = $1
     `;
     const params = [site];
@@ -2780,6 +2790,10 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       sql += ` AND cs.glo_equipment_id::text = $${idx++}`;
       params.push(String(glo_equipment_id));
     }
+    if (datahub_equipment_id) {
+      sql += ` AND cs.datahub_equipment_id::text = $${idx++}`;
+      params.push(String(datahub_equipment_id));
+    }
     if (equipment_type) {
       sql += ` AND cs.equipment_type = $${idx++}`;
       params.push(equipment_type);
@@ -2811,18 +2825,19 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
   }
 });
 
-// Create schedule (assign control to any equipment type) - EXTENDED with HV
+// Create schedule (assign control to any equipment type) - EXTENDED with HV and Datahub
 app.post('/api/switchboard/controls/schedules', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type, next_due_date } = req.body;
+    const { template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type, next_due_date } = req.body;
     if (!template_id) return res.status(400).json({ error: 'Template ID required' });
 
     // Determine equipment type based on which ID is provided
     let detectedType = equipment_type || 'switchboard';
-    if (glo_equipment_id) detectedType = 'glo';
+    if (datahub_equipment_id) detectedType = 'datahub';
+    else if (glo_equipment_id) detectedType = 'glo';
     else if (hv_equipment_id) detectedType = 'hv';
     else if (vsd_equipment_id) detectedType = 'vsd';
     else if (meca_equipment_id) detectedType = 'meca';
@@ -2830,8 +2845,8 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     else if (device_id) detectedType = 'device';
     else if (switchboard_id) detectedType = 'switchboard';
 
-    if (!switchboard_id && !device_id && !vsd_equipment_id && !meca_equipment_id && !mobile_equipment_id && !hv_equipment_id && !glo_equipment_id) {
-      return res.status(400).json({ error: 'Equipment ID required (switchboard, device, vsd, meca, mobile_equipment, hv, or glo)' });
+    if (!switchboard_id && !device_id && !vsd_equipment_id && !meca_equipment_id && !mobile_equipment_id && !hv_equipment_id && !glo_equipment_id && !datahub_equipment_id) {
+      return res.status(400).json({ error: 'Equipment ID required (switchboard, device, vsd, meca, mobile_equipment, hv, glo, or datahub)' });
     }
 
     // Check if schedule already exists for this template and equipment
@@ -2847,6 +2862,7 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     if (mobile_equipment_id) { conditions.push(`mobile_equipment_id::text = $${pIdx++}`); existingParams.push(String(mobile_equipment_id)); }
     if (hv_equipment_id) { conditions.push(`hv_equipment_id::text = $${pIdx++}`); existingParams.push(String(hv_equipment_id)); }
     if (glo_equipment_id) { conditions.push(`glo_equipment_id::text = $${pIdx++}`); existingParams.push(String(glo_equipment_id)); }
+    if (datahub_equipment_id) { conditions.push(`datahub_equipment_id::text = $${pIdx++}`); existingParams.push(String(datahub_equipment_id)); }
 
     existingCheck += conditions.join(' OR ') + ')';
 
@@ -2856,10 +2872,10 @@ app.post('/api/switchboard/controls/schedules', async (req, res) => {
     }
 
     const { rows } = await quickQuery(`
-      INSERT INTO control_schedules (site, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type, next_due_date, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')
+      INSERT INTO control_schedules (site, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type, next_due_date, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending')
       RETURNING *
-    `, [site, template_id, switchboard_id || null, device_id || null, vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, glo_equipment_id || null, detectedType, next_due_date || new Date()]);
+    `, [site, template_id, switchboard_id || null, device_id || null, vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, glo_equipment_id || null, datahub_equipment_id || null, detectedType, next_due_date || new Date()]);
 
     res.json({ schedule: rows[0] });
   } catch (e) {
@@ -2891,7 +2907,7 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type, limit = 50 } = req.query;
+    const { switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type, limit = 50 } = req.query;
 
     let sql = `
       SELECT cr.*,
@@ -2902,7 +2918,9 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
              hv.name as hv_equipment_name, hv.code as hv_equipment_code, hv.building_code as hv_equipment_building, hv.regime_neutral as hv_regime_neutral,
-             glo.name as glo_equipment_name, glo.tag as glo_equipment_code, glo.building as glo_equipment_building
+             glo.name as glo_equipment_name, glo.tag as glo_equipment_code, glo.building as glo_equipment_building,
+             dh.name as datahub_equipment_name, dh.code as datahub_equipment_code, dh.building as datahub_equipment_building,
+             dhc.name as datahub_category_name, dhc.color as datahub_category_color, dhc.icon as datahub_category_icon
       FROM control_records cr
       LEFT JOIN control_templates ct ON cr.template_id = ct.id
       LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
@@ -2912,6 +2930,8 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
       LEFT JOIN me_equipments me ON cr.mobile_equipment_id::text = me.id::text
       LEFT JOIN hv_equipments hv ON cr.hv_equipment_id::text = hv.id::text
       LEFT JOIN glo_equipments glo ON cr.glo_equipment_id::text = glo.id::text
+      LEFT JOIN dh_items dh ON cr.datahub_equipment_id::text = dh.id::text
+      LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
       WHERE cr.site = $1
     `;
     const params = [site];
@@ -2944,6 +2964,10 @@ app.get('/api/switchboard/controls/records', async (req, res) => {
     if (glo_equipment_id) {
       sql += ` AND cr.glo_equipment_id::text = $${idx++}`;
       params.push(String(glo_equipment_id));
+    }
+    if (datahub_equipment_id) {
+      sql += ` AND cr.datahub_equipment_id::text = $${idx++}`;
+      params.push(String(datahub_equipment_id));
     }
     if (equipment_type) {
       sql += ` AND cr.equipment_type = $${idx++}`;
@@ -3003,13 +3027,13 @@ app.get('/api/switchboard/controls/records/:id', async (req, res) => {
   }
 });
 
-// Create control record (complete a control) - EXTENDED for all equipment types including HV
+// Create control record (complete a control) - EXTENDED for all equipment types including HV and Datahub
 app.post('/api/switchboard/controls/records', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type,
+    const { schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type,
             checklist_results, global_notes, signature_base64, status } = req.body;
 
     const performedBy = req.headers['x-user-name'] || 'unknown';
@@ -3017,7 +3041,8 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
 
     // Determine equipment type
     let detectedType = equipment_type || 'switchboard';
-    if (glo_equipment_id) detectedType = 'glo';
+    if (datahub_equipment_id) detectedType = 'datahub';
+    else if (glo_equipment_id) detectedType = 'glo';
     else if (hv_equipment_id) detectedType = 'hv';
     else if (vsd_equipment_id) detectedType = 'vsd';
     else if (meca_equipment_id) detectedType = 'meca';
@@ -3027,12 +3052,12 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
     // Insert record
     const { rows } = await quickQuery(`
       INSERT INTO control_records
-        (site, schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, equipment_type,
+        (site, schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type,
          performed_by, performed_by_email, checklist_results, global_notes, signature_base64, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *
     `, [site, schedule_id || null, template_id || null, switchboard_id || null, device_id || null,
-        vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, glo_equipment_id || null, detectedType,
+        vsd_equipment_id || null, meca_equipment_id || null, mobile_equipment_id || null, hv_equipment_id || null, glo_equipment_id || null, datahub_equipment_id || null, detectedType,
         performedBy, performedByEmail, JSON.stringify(checklist_results || []),
         global_notes || null, signature_base64 || null, status || 'conform']);
 
@@ -3329,6 +3354,24 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
         results.glo = gloRes.rows;
       } catch (e) {
         results.glo = [];
+      }
+    }
+
+    // Datahub Equipment - items from categories with assign_to_controls = true
+    if (!type || type === 'datahub' || type === 'all') {
+      try {
+        const datahubRes = await quickQuery(`
+          SELECT i.id, i.name, i.code, i.building, i.floor, i.location, i.description,
+                 c.name as category_name, c.color as category_color, c.icon as category_icon
+          FROM dh_items i
+          INNER JOIN dh_categories c ON c.id = i.category_id
+          WHERE c.assign_to_controls = true
+          ORDER BY c.name, i.name
+        `, []);
+        results.datahub = datahubRes.rows;
+      } catch (e) {
+        console.log('[CONTROLS] Datahub equipment query error (table may not exist):', e.message);
+        results.datahub = [];
       }
     }
 
