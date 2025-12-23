@@ -1097,7 +1097,7 @@ export default function DatahubMap() {
                               // Close sidebar on mobile so user can see the map animation
                               if (isMobile) setShowSidebar(false);
                               // Small delay to let the sidebar close and effect redraw first
-                              setTimeout(() => highlightMarker(item.id), isMobile ? 150 : 50);
+                              setTimeout(() => highlightMarker(String(item.id)), isMobile ? 150 : 50);
                             }
                           }}
                           className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
