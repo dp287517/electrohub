@@ -3362,7 +3362,7 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
       try {
         const datahubRes = await quickQuery(`
           SELECT i.id, i.name, i.code, i.building, i.floor, i.location, i.description,
-                 c.name as category_name, c.color as category_color, c.icon as category_icon
+                 i.category_id, c.name as category_name, c.color as category_color, c.icon as category_icon
           FROM dh_items i
           INNER JOIN dh_categories c ON c.id = i.category_id
           WHERE c.assign_to_controls = true
