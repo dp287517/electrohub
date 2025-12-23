@@ -520,7 +520,8 @@ export default function DatahubMap() {
   const selectedItemIdRef = useRef(null); // Track selected item for marker drawing
   const positionsRef = useRef([]); // Keep positions for redrawing
   const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
-  const currentPlanKeyRef = useRef(null); // Track current plan to prevent stale data
+  const currentPlanKeyRef = useRef(null); // Track current plan being loaded
+  const externalPositionsPlanKeyRef = useRef(null); // Track which plan external positions belong to
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
@@ -715,6 +716,8 @@ export default function DatahubMap() {
       });
 
       console.log('[Datahub] External positions loaded for', requestKey, ':', newTotals);
+      // Track which plan these positions belong to
+      externalPositionsPlanKeyRef.current = requestKey;
       setExternalPositions(newPositions);
       setExternalTotals(newTotals);
 
@@ -745,9 +748,15 @@ export default function DatahubMap() {
 
   useEffect(() => {
     if (selectedPlan) {
-      // Clear external positions immediately to avoid showing old markers on new plan
-      setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
-      setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+      // Update current plan key ref FIRST before any loading
+      const newPlanKey = `${selectedPlan.logical_name || selectedPlan.id}:${pageIndex}`;
+      currentPlanKeyRef.current = newPlanKey;
+
+      // Clear external positions ref to prevent stale markers on wrong plan
+      // The ref check in drawMarkers will skip drawing until new positions arrive
+      externalPositionsPlanKeyRef.current = null;
+
+      console.log('[Datahub] Plan changed to:', newPlanKey);
 
       loadPdf();
       loadPositions();
@@ -906,39 +915,53 @@ export default function DatahubMap() {
     });
 
     // Draw external equipment markers (VSD, HV, MECA, GLO, Mobile, Switchboards)
-    console.log('[Datahub] Drawing external markers, visible categories:', visibleExternalCategories);
-    Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
-      // Skip if this external category is not visible
-      if (!visibleExternalCategories.includes(catKey)) return;
+    // CRITICAL: Only draw if external positions match current plan to prevent stale markers
+    const currentKey = `${selectedPlan?.logical_name || selectedPlan?.id}:${pageIndex}`;
+    const positionsMatchPlan = externalPositionsPlanKeyRef.current === currentKey;
 
-      const positions = externalPositions[catKey] || [];
-      if (positions.length > 0) {
-        console.log(`[Datahub] Drawing ${positions.length} ${catKey} markers`);
-      }
-      const icon = makeExternalMarkerIcon(extCat);
-
-      positions.forEach(pos => {
-        const lat = boundsH * (1 - pos.y_frac);
-        const lng = boundsW * pos.x_frac;
-        const marker = L.marker([lat, lng], { icon, draggable: false, riseOnHover: true }).addTo(map);
-        marker.__meta = { id: pos.id, equipment_id: pos.equipment_id, type: catKey, lat, lng };
-
-        // External markers are read-only (no drag, no click selection)
-        // But we show tooltip with equipment info
-        const tooltipContent = `
-          <div style="text-align:center;">
-            <strong style="color:${extCat.color}">${extCat.name}</strong><br/>
-            <span>${pos.name || 'Equipement'}</span>
-            ${pos.details ? `<br/><small style="color:#888">${pos.details}</small>` : ''}
-          </div>
-        `;
-        marker.bindTooltip(tooltipContent, {
-          direction: "top", offset: [0, -ICON_PX / 2], className: "datahub-tooltip"
-        });
-
-        markersRef.current.push(marker);
-      });
+    console.log('[Datahub] Drawing external markers check:', {
+      currentPlan: currentKey,
+      positionsPlan: externalPositionsPlanKeyRef.current,
+      match: positionsMatchPlan,
+      visibleCategories: visibleExternalCategories
     });
+
+    if (!positionsMatchPlan) {
+      console.log('[Datahub] Skipping external markers - positions are for different plan');
+    } else {
+      Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
+        // Skip if this external category is not visible
+        if (!visibleExternalCategories.includes(catKey)) return;
+
+        const positions = externalPositions[catKey] || [];
+        if (positions.length > 0) {
+          console.log(`[Datahub] Drawing ${positions.length} ${catKey} markers for plan ${currentKey}`);
+        }
+        const icon = makeExternalMarkerIcon(extCat);
+
+        positions.forEach(pos => {
+          const lat = boundsH * (1 - pos.y_frac);
+          const lng = boundsW * pos.x_frac;
+          const marker = L.marker([lat, lng], { icon, draggable: false, riseOnHover: true }).addTo(map);
+          marker.__meta = { id: pos.id, equipment_id: pos.equipment_id, type: catKey, lat, lng };
+
+          // External markers are read-only (no drag, no click selection)
+          // But we show tooltip with equipment info
+          const tooltipContent = `
+            <div style="text-align:center;">
+              <strong style="color:${extCat.color}">${extCat.name}</strong><br/>
+              <span>${pos.name || 'Equipement'}</span>
+              ${pos.details ? `<br/><small style="color:#888">${pos.details}</small>` : ''}
+            </div>
+          `;
+          marker.bindTooltip(tooltipContent, {
+            direction: "top", offset: [0, -ICON_PX / 2], className: "datahub-tooltip"
+          });
+
+          markersRef.current.push(marker);
+        });
+      });
+    }
   }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon, externalPositions, visibleExternalCategories, makeExternalMarkerIcon]);
 
   // Highlight marker with flash animation (for navigation)
