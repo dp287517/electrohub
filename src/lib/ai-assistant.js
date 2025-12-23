@@ -697,6 +697,68 @@ Comment puis-je vous aider plus précisément ?`,
     contextCache = null;
     contextCacheTime = null;
   }
+
+  /**
+   * Text-to-Speech avec OpenAI (voix naturelle IA)
+   * Retourne un blob audio MP3 ou null si fallback nécessaire
+   */
+  async textToSpeech(text, voice = 'nova') {
+    try {
+      const response = await fetch(`${this.baseUrl}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice })
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        if (error.fallback) {
+          // Use browser fallback
+          return null;
+        }
+        throw new Error(error.message || 'TTS failed');
+      }
+
+      const audioBlob = await response.blob();
+      return audioBlob;
+    } catch (error) {
+      console.error('[TTS] Error:', error);
+      return null; // Return null to trigger browser fallback
+    }
+  }
+
+  /**
+   * Récupère le brief du matin avec stats et insights IA
+   */
+  async getMorningBrief() {
+    try {
+      const data = await get(`${this.baseUrl}/morning-brief`);
+      return data;
+    } catch (error) {
+      console.error('[MorningBrief] Error:', error);
+      return {
+        success: false,
+        error: error.message,
+        // Fallback data
+        greeting: this.getGreeting(),
+        healthScore: 75,
+        status: { emoji: '🟡', text: 'Données partielles', color: 'yellow' },
+        stats: { totalEquipment: 0, controls: { overdue: 0, thisWeek: 0 } },
+        priorityActions: [],
+        aiInsight: 'Chargement des données en cours...'
+      };
+    }
+  }
+
+  /**
+   * Helper pour le greeting
+   */
+  getGreeting() {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Bonjour';
+    if (hour < 18) return 'Bon après-midi';
+    return 'Bonsoir';
+  }
 }
 
 // Export singleton

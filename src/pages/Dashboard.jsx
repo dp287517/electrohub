@@ -11,6 +11,7 @@ import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
 import WeatherBackground from '../components/WeatherBackground';
 import { api } from '../lib/api';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
+import MorningBrief from '../components/MorningBrief';
 
 // Icon mapping for apps
 const iconMap = {
@@ -777,6 +778,11 @@ export default function Dashboard() {
           </div>
         </div>
       </WeatherBackground>
+
+      {/* Morning Brief Section */}
+      <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-4 -mt-8 relative z-20 transition-all duration-1000 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+        <MorningBrief userName={user?.name?.split(' ')[0]} />
+      </div>
 
       {/* Main Content */}
       <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>

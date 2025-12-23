@@ -301,31 +301,78 @@ Comment puis-je vous aider avec cet équipement ?`,
     if (newMuted) stopSpeaking();
   };
 
-  // Speech synthesis
-  const speak = useCallback((text) => {
-    if (isMuted || !('speechSynthesis' in window)) return;
+  // Audio ref for OpenAI TTS
+  const audioRef = useRef(null);
 
-    window.speechSynthesis.cancel();
-    const cleanText = text
-      .replace(/\*\*/g, '')
-      .replace(/\*/g, '')
-      .replace(/•/g, '')
-      .replace(/\n+/g, '. ');
+  // Speech synthesis with OpenAI TTS (fallback to browser)
+  const speak = useCallback(async (text) => {
+    if (isMuted) return;
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = 'fr-FR';
-    utterance.rate = 1.0;
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
+    // Stop any current audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+
+    setIsSpeaking(true);
+
+    try {
+      // Try OpenAI TTS first (natural AI voice)
+      const audioBlob = await aiAssistant.textToSpeech(text, 'nova');
+
+      if (audioBlob) {
+        // Use OpenAI audio
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+        audio.onerror = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        await audio.play();
+        return;
+      }
+    } catch (e) {
+      console.log('[TTS] OpenAI failed, using browser fallback');
+    }
+
+    // Fallback to browser TTS
+    if ('speechSynthesis' in window) {
+      const cleanText = text
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/•/g, '')
+        .replace(/\n+/g, '. ');
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'fr-FR';
+      utterance.rate = 1.0;
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setIsSpeaking(false);
+    }
   }, [isMuted]);
 
   const stopSpeaking = () => {
+    // Stop OpenAI audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    // Stop browser TTS
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
+    setIsSpeaking(false);
   };
 
   // Voice recognition
@@ -622,9 +669,16 @@ Comment puis-je vous aider avec cet équipement ?`,
                             content: result.success
                               ? `✅ **Action exécutée:** ${result.message}`
                               : `❌ **Erreur:** ${result.message}`,
-                            timestamp: new Date()
+                            timestamp: new Date(),
+                            sources: result.sources || [], // Include PDF sources
+                            matchingEquipments: result.matchingEquipments || []
                           };
                           setMessages(prev => [...prev, resultMessage]);
+
+                          // Auto-speak result if not muted
+                          if (!isMuted && result.message) {
+                            speak(result.message);
+                          }
                         } catch (e) {
                           console.error('Action error:', e);
                         }
@@ -638,24 +692,60 @@ Comment puis-je vous aider avec cet équipement ?`,
                   </div>
                 )}
 
-                {/* Sources */}
+                {/* Sources - PDF Links */}
                 {message.sources && message.sources.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-200">
-                    <p className="text-xs font-medium text-gray-500 mb-1">Sources :</p>
-                    <div className="flex flex-wrap gap-1">
+                    <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+                      <Download className="w-3 h-3" />
+                      Documents trouvés ({message.sources.length}) :
+                    </p>
+                    <div className="space-y-1.5">
                       {message.sources.map((source, i) => (
                         <a
                           key={i}
                           href={source.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className={`inline-flex items-center gap-1 px-2 py-1 bg-white rounded text-xs ${config.textColor} border hover:bg-gray-50`}
+                          className={`flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg text-sm text-blue-700 border border-blue-200 hover:from-blue-100 hover:to-indigo-100 transition-all group`}
                         >
-                          <FileText className="w-3 h-3" />
-                          {source.title || 'Document'}
+                          <FileText className="w-4 h-4 flex-shrink-0" />
+                          <span className="flex-1 truncate font-medium">{source.title || 'Document'}</span>
+                          {source.manufacturer && (
+                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full">
+                              {source.manufacturer}
+                            </span>
+                          )}
+                          <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                         </a>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Matching Equipments */}
+                {message.matchingEquipments && message.matchingEquipments.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+                      <Cog className="w-3 h-3" />
+                      Équipements correspondants ({message.matchingEquipments.length}) :
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {message.matchingEquipments.slice(0, 6).map((eq, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 rounded-lg text-xs border border-amber-200"
+                        >
+                          <MapPin className="w-3 h-3 text-amber-500" />
+                          <span className="truncate font-medium text-amber-800">{eq.name}</span>
+                          <span className="text-amber-600 uppercase text-[10px]">{eq.type}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {message.matchingEquipments.length > 6 && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        + {message.matchingEquipments.length - 6} autres équipements
+                      </p>
+                    )}
                   </div>
                 )}
 
