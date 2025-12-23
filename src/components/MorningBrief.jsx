@@ -5,7 +5,7 @@ import {
   Zap, Cog, Battery, Shield, Flame, Activity, RefreshCw, Mic, MicOff,
   ChevronRight, ChevronDown, Sparkles, Building2, Calendar, Target,
   BarChart3, PieChart, Bell, BellOff, ExternalLink, Volume2, Image,
-  LineChart, ArrowUpRight, ArrowDownRight, Minus
+  LineChart, ArrowUpRight, ArrowDownRight, Minus, Play
 } from 'lucide-react';
 import { Doughnut, Bar, Line } from 'react-chartjs-2';
 import {
@@ -225,7 +225,7 @@ const StatCard = ({ icon: Icon, value, label, color = 'blue', onClick }) => (
 );
 
 // Main MorningBrief component - Clean Design
-export default function MorningBrief({ userName }) {
+export default function MorningBrief({ userName, onStoryClick }) {
   const navigate = useNavigate();
   const [brief, setBrief] = useState(null);
   const [historical, setHistorical] = useState(null);
@@ -442,6 +442,16 @@ export default function MorningBrief({ userName }) {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Story Mode Button */}
+            {onStoryClick && (
+              <button
+                onClick={onStoryClick}
+                className="p-2 rounded-lg bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 text-white hover:opacity-90 transition-all hover:scale-105 shadow-lg shadow-purple-500/25"
+                title="Mode Story"
+              >
+                <Play size={18} className="fill-current" />
+              </button>
+            )}
             <button
               onClick={toggleNotifications}
               className={`p-2 rounded-lg transition-colors ${

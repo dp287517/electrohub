@@ -12,6 +12,7 @@ import WeatherBackground from '../components/WeatherBackground';
 import { api } from '../lib/api';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
 import MorningBrief from '../components/MorningBrief';
+import StoryBrief from '../components/StoryBrief';
 
 // Icon mapping for apps
 const iconMap = {
@@ -475,6 +476,7 @@ export default function Dashboard() {
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
   const [controlStats, setControlStats] = useState({ overdue: 0, pending: 0 });
+  const [showStoryBrief, setShowStoryBrief] = useState(false);
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
@@ -715,6 +717,17 @@ export default function Dashboard() {
                   <Calendar size={14} />
                   {currentDate}
                 </p>
+                {/* Story Brief Button */}
+                <button
+                  onClick={() => setShowStoryBrief(true)}
+                  className="mt-3 group flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-full hover:bg-white/30 transition-all duration-300 hover:scale-105"
+                >
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center animate-pulse">
+                    <Sparkles size={12} className="text-white" />
+                  </div>
+                  <span className="text-white text-sm font-medium">Brief du matin</span>
+                  <ChevronRight size={14} className="text-white/70 group-hover:translate-x-1 transition-transform" />
+                </button>
               </div>
             </div>
 
@@ -781,7 +794,7 @@ export default function Dashboard() {
 
       {/* Morning Brief Section */}
       <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-4 -mt-8 relative z-20 transition-all duration-1000 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
-        <MorningBrief userName={user?.name?.split(' ')[0]} />
+        <MorningBrief userName={user?.name?.split(' ')[0]} onStoryClick={() => setShowStoryBrief(true)} />
       </div>
 
       {/* Main Content */}
@@ -854,6 +867,16 @@ export default function Dashboard() {
       <div className="sm:hidden">
         <FloatingAssistant />
       </div>
+
+      {/* Story Brief Modal */}
+      {showStoryBrief && (
+        <StoryBrief
+          userName={user?.name?.split(' ')[0]}
+          onClose={() => setShowStoryBrief(false)}
+          autoPlay={true}
+          slideDuration={6000}
+        />
+      )}
     </div>
   );
 }
