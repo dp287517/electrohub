@@ -1173,10 +1173,14 @@ export default function GloMap() {
   };
 
   // Smart navigation: navigate to the correct plan and highlight the equipment marker
+  // Note: We only highlight the marker, we DON'T auto-open the detail panel
+  // User must click on the marker to open the detail panel
   const handleEquipmentClick = useCallback(
     async (eq) => {
       setContextMenu(null);
-      setSelectedEquipment(eq);
+      // Clear any existing selection - user must click marker to see details
+      setSelectedPosition(null);
+      setSelectedEquipment(null);
 
       // Check if this equipment is placed somewhere
       const details = placedDetails[eq.id];
@@ -1193,39 +1197,26 @@ export default function GloMap() {
             setPdfReady(false);
             setInitialPoints([]);
 
-            // Wait for plan to load, then highlight
+            // Wait for plan to load, then highlight (zoom + flash only, no modal)
             const positions = await refreshPositions(targetPlan, 0);
             setInitialPoints(positions || []);
 
-            // Small delay to let viewer render
+            // Small delay to let viewer render, then just highlight
             setTimeout(() => {
               viewerRef.current?.highlightMarker(eq.id);
-              // Also set as selected
-              const pos = positions?.find(p => Number(p.equipment_id) === Number(eq.id));
-              if (pos) {
-                setSelectedPosition(pos);
-                setSelectedEquipment(eq);
-              }
             }, 500);
           } else {
-            // Same plan - just highlight and select
+            // Same plan - just highlight (zoom + flash), no modal
             viewerRef.current?.highlightMarker(eq.id);
-            const positions = getLatestPositions();
-            const pos = positions.find(p => Number(p.equipment_id) === Number(eq.id));
-            if (pos) {
-              handleClickMarker(pos);
-            }
           }
         }
-      } else {
-        // Not placed - just show equipment info
-        setSelectedPosition(null);
-        setSelectedEquipment(eq);
       }
+      // If not placed, do nothing - no modal to show
 
+      // On mobile, close sidebar so user can see the map
       if (isMobile) setShowSidebar(false);
     },
-    [plans, stableSelectedPlan, placedDetails, refreshPositions, getLatestPositions, handleClickMarker, isMobile]
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, isMobile]
   );
 
   const filteredEquipments = useMemo(() => {

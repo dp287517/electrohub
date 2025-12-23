@@ -377,6 +377,23 @@ const LeafletViewer = forwardRef(({
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
   useEffect(() => { placementActiveRef.current = placementActive; }, [placementActive]);
 
+  // Highlight a specific marker (for navigation from sidebar)
+  const highlightMarker = useCallback((equipmentId) => {
+    const mk = markersMapRef.current.get(equipmentId);
+    if (!mk || !mapRef.current) return;
+
+    // Center on marker with animation
+    const ll = mk.getLatLng();
+    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
+
+    // Flash animation
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("mobile-marker-flash");
+      setTimeout(() => el.classList.remove("mobile-marker-flash"), 2000);
+    }
+  }, []);
+
   useImperativeHandle(ref, () => ({
     flyTo: (x, y, zoom = 2) => {
       if (!mapRef.current || imgSize.w === 0) return;
@@ -385,7 +402,8 @@ const LeafletViewer = forwardRef(({
       mapRef.current.flyTo([lat, lng], zoom, { duration: 0.5 });
     },
     getMap: () => mapRef.current,
-  }), [imgSize]);
+    highlightMarker,
+  }), [imgSize, highlightMarker]);
 
   // Initialize map
   useEffect(() => {
@@ -979,10 +997,17 @@ export default function MobileEquipmentsMap() {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.6; }
         }
+        @keyframes flash-marker {
+          0%, 100% { transform: scale(1); filter: brightness(1); }
+          25% { transform: scale(1.3); filter: brightness(1.3); }
+          50% { transform: scale(1); filter: brightness(1); }
+          75% { transform: scale(1.3); filter: brightness(1.3); }
+        }
         .animate-slideUp { animation: slideUp 0.3s ease-out forwards; }
         .mobile-marker-inline { background: transparent !important; border: none !important; }
         .mobile-marker-selected > div { animation: pulse-selected 1.5s ease-in-out infinite; }
         .mobile-marker-overdue > div { animation: blink-overdue 1s ease-in-out infinite; }
+        .mobile-marker-flash > div { animation: flash-marker 2s ease-in-out; }
         .safe-area-top { padding-top: env(safe-area-inset-top, 0); }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
         .overscroll-contain { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -1189,7 +1214,15 @@ export default function MobileEquipmentsMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
                     isSelected={selectedEquipment?.id === eq.id}
-                    onClick={() => handleSelectEquipment(eq)}
+                    onClick={() => {
+                      // Only highlight (zoom + flash), don't auto-open modal
+                      setSelectedPosition(null);
+                      setSelectedEquipment(null);
+                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        viewerRef.current?.highlightMarker(eq.id);
+                      }
+                    }}
                     onPlace={handleStartPlacement}
                   />
                 ))
@@ -1292,8 +1325,15 @@ export default function MobileEquipmentsMap() {
                     isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
                     isSelected={selectedEquipment?.id === eq.id}
                     onClick={() => {
-                      handleSelectEquipment(eq);
+                      // Only highlight (zoom + flash), don't auto-open modal
+                      setSelectedPosition(null);
+                      setSelectedEquipment(null);
                       setSidebarOpen(false);
+                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
+                      if (pos) {
+                        // Small delay to let sidebar close first
+                        setTimeout(() => viewerRef.current?.highlightMarker(eq.id), 150);
+                      }
                     }}
                     onPlace={(e) => {
                       handleStartPlacement(e);

@@ -1105,9 +1105,11 @@ export default function DatahubMap() {
                       <div className="flex gap-2 mt-2">
                         <button
                           onClick={() => {
-                            setSelectedItem(item);
+                            // Only highlight (zoom + flash), don't auto-open modal
+                            // User must click on marker to see details
+                            setSelectedItem(null);
+                            setSelectedPosition(null);
                             const pos = positions.find(p => p.item_id === item.id);
-                            setSelectedPosition(pos || null);
                             // Animate to marker if placed
                             if (pos) {
                               // Close sidebar on mobile so user can see the map animation
@@ -1118,7 +1120,7 @@ export default function DatahubMap() {
                           }}
                           className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
                         >
-                          <Eye size={12} />Details
+                          <MapPin size={12} />Voir sur le plan
                         </button>
                         {placed ? (
                           <button
