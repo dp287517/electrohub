@@ -945,7 +945,10 @@ export default function DatahubMap() {
         const icon = makeExternalMarkerIcon(extCat);
 
         positions.forEach(pos => {
-          const lat = boundsH * (1 - pos.y_frac);
+          // External equipment uses direct y_frac (not inverted like Datahub items)
+          // Switchboard/VSD/etc save: y_frac = lat / h (direct)
+          // Datahub saves: y_frac = 1 - lat / h (inverted)
+          const lat = boundsH * pos.y_frac;
           const lng = boundsW * pos.x_frac;
           const marker = L.marker([lat, lng], { icon, draggable: false, riseOnHover: true }).addTo(map);
           marker.__meta = { id: pos.id, equipment_id: pos.equipment_id, type: catKey, lat, lng };
