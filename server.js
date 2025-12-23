@@ -794,18 +794,81 @@ async function searchWebForDocumentation(query, equipmentInfo = {}) {
   }
 
   // Special handling for Altivar (Schneider VSD)
-  if (query.toLowerCase().includes('altivar') || model.toLowerCase().includes('atv')) {
+  const queryLower = query.toLowerCase();
+  const modelLower = model.toLowerCase();
+
+  if (queryLower.includes('altivar') || modelLower.includes('atv')) {
+    // Detect specific Altivar series
+    let series = 'ATV320';
+    let seriesUrl = '62129-altivar-machine-atv320';
+
+    if (queryLower.includes('atv212') || modelLower.includes('atv212')) {
+      series = 'ATV212';
+      seriesUrl = '1741-altivar-212';
+      results.pdfLinks.push({
+        title: `Altivar 212 - Manuel de programmation (PDF)`,
+        url: `https://download.schneider-electric.com/files?p_Doc_Ref=ATV212_Programming_Manual`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
+      results.pdfLinks.push({
+        title: `Altivar 212 - Manuel d'installation (PDF)`,
+        url: `https://download.schneider-electric.com/files?p_Doc_Ref=ATV212_Installation_Manual`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
+    } else if (queryLower.includes('atv320') || modelLower.includes('atv320')) {
+      series = 'ATV320';
+      seriesUrl = '62129-altivar-machine-atv320';
+    } else if (queryLower.includes('atv630') || queryLower.includes('atv930') || modelLower.includes('atv630')) {
+      series = 'ATV630/930';
+      seriesUrl = '62125-altivar-process-atv600';
+    } else if (queryLower.includes('atv71') || modelLower.includes('atv71')) {
+      series = 'ATV71';
+      seriesUrl = '1746-altivar-71';
+    }
+
     results.pdfLinks.push({
-      title: `Altivar ${model} - Fiche technique`,
-      url: `https://www.se.com/ww/en/product-range/62129-altivar-machine-atv320/#documents`,
+      title: `Altivar ${series} - Page produit Schneider`,
+      url: `https://www.se.com/fr/fr/product-range/${seriesUrl}/`,
+      manufacturer: 'Schneider Electric',
+      type: 'web'
+    });
+    results.pdfLinks.push({
+      title: `Altivar ${series} - Documents et téléchargements`,
+      url: `https://www.se.com/fr/fr/product-range/${seriesUrl}/#documents`,
       manufacturer: 'Schneider Electric',
       type: 'pdf'
     });
+  }
+
+  // ABB drives
+  if (queryLower.includes('abb') || queryLower.includes('acs') || modelLower.includes('acs')) {
     results.pdfLinks.push({
-      title: `Altivar ${model} - Manuel utilisateur`,
-      url: `https://www.se.com/ww/en/faqs/FA345853/`,
-      manufacturer: 'Schneider Electric',
-      type: 'manual'
+      title: 'ABB Drives - Documentation center',
+      url: 'https://new.abb.com/drives/documents',
+      manufacturer: 'ABB',
+      type: 'web'
+    });
+  }
+
+  // Siemens
+  if (queryLower.includes('siemens') || queryLower.includes('sinamics') || modelLower.includes('sinamics')) {
+    results.pdfLinks.push({
+      title: 'Siemens SINAMICS - Documentation',
+      url: 'https://support.industry.siemens.com/cs/document/109745527',
+      manufacturer: 'Siemens',
+      type: 'web'
+    });
+  }
+
+  // Danfoss
+  if (queryLower.includes('danfoss') || queryLower.includes('vlt') || modelLower.includes('vlt')) {
+    results.pdfLinks.push({
+      title: 'Danfoss VLT - Documentation',
+      url: 'https://www.danfoss.com/en/products/dds/low-voltage-drives/vlt-drives/',
+      manufacturer: 'Danfoss',
+      type: 'web'
     });
   }
 
@@ -1820,6 +1883,15 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       // Append action result to message
       if (actionResult.success) {
         parsed.message += `\n\n---\n**Action exécutée:** ${actionResult.message}`;
+
+        // For searchDoc action, append the actual PDF links to the message
+        if (parsed.action === 'searchDoc' && actionResult.sources && actionResult.sources.length > 0) {
+          parsed.message += `\n\n📄 **Documents disponibles:**`;
+          actionResult.sources.forEach((source, i) => {
+            parsed.message += `\n${i + 1}. [${source.title}](${source.url})`;
+            if (source.manufacturer) parsed.message += ` - ${source.manufacturer}`;
+          });
+        }
       } else {
         parsed.message += `\n\n---\n**Erreur d'exécution:** ${actionResult.message}`;
       }
@@ -3018,16 +3090,15 @@ app.get("/api/ai-assistant/historical-stats", async (req, res) => {
       ORDER BY date ASC
     `);
 
-    // Get daily ATEX NC closures (resolved checks)
+    // Get daily ATEX conforming checks (as "resolved" indicator)
     const ncClosedRes = await pool.query(`
       SELECT
-        DATE(updated_at) as date,
+        DATE(date) as date,
         COUNT(*) as count
       FROM atex_checks
-      WHERE result = 'non_conforme'
-      AND status = 'resolved'
-      AND updated_at >= CURRENT_DATE - INTERVAL '${days} days'
-      GROUP BY DATE(updated_at)
+      WHERE result = 'conforme'
+      AND date >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(date)
       ORDER BY date ASC
     `);
 
@@ -3165,21 +3236,15 @@ app.get("/api/ai-assistant/suggestions", async (req, res) => {
       });
     }
 
-    // 5. Documentation check (VSD equipment without docs)
-    const docsRes = await pool.query(`
-      SELECT COUNT(*) as count FROM vsd_equipments
-      WHERE (documentation_url IS NULL OR documentation_url = '')
-      AND manufacturer IS NOT NULL
-    `);
-    const withoutDocs = parseInt(docsRes.rows[0]?.count || 0);
-
-    if (withoutDocs > 10) {
+    // 5. Documentation tip (general suggestion, no DB query needed)
+    // Show occasionally to encourage documentation
+    if (dayOfWeek === 3 && hour >= 10 && hour <= 14) { // Wednesday midday
       suggestions.push({
         type: 'tip',
         icon: '📚',
-        title: `${withoutDocs} équipements sans documentation`,
-        message: 'Je peux rechercher automatiquement la documentation pour ces équipements.',
-        action: { type: 'command', command: 'autoDocSearch' },
+        title: 'Documentation technique',
+        message: 'Besoin de documentation? Je peux rechercher les manuels et fiches techniques pour vos équipements.',
+        action: { type: 'command', command: 'searchDoc' },
         priority: 4
       });
     }
