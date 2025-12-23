@@ -608,7 +608,10 @@ export default function MobileEquipmentsMap() {
 
   const [equipments, setEquipments] = useState([]);
   const [positions, setPositions] = useState([]);
-  const [allPositions, setAllPositions] = useState([]);
+
+  // Placement state (like Meca_map)
+  const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // equipment_id -> { plans: [...] }
 
   const [selectedEquipment, setSelectedEquipment] = useState(null);
   const [selectedPosition, setSelectedPosition] = useState(null);
@@ -645,7 +648,6 @@ export default function MobileEquipmentsMap() {
   }, [sidebarOpen]);
 
   // Derived
-  const placedIds = useMemo(() => new Set(allPositions.map(p => p.equipment_id)), [allPositions]);
   const placedHereIds = useMemo(() => new Set(positions.map(p => p.equipment_id)), [positions]);
 
   const filteredEquipments = useMemo(() => {
@@ -681,22 +683,21 @@ export default function MobileEquipmentsMap() {
     }
   }, []);
 
-  // Function to load all positions for "placed elsewhere" check
-  const loadAllPositions = useCallback(async () => {
-    if (!plans.length) return;
+  // Function to load placement info (like Meca_map)
+  const refreshPlacedIds = useCallback(async () => {
     try {
-      const allPos = [];
-      for (const plan of plans) {
-        const res = await api.mobileEquipment.maps.positionsAuto(plan, 0);
-        if (res.positions) {
-          allPos.push(...res.positions.map(p => ({ ...p, planId: plan.id })));
-        }
-      }
-      setAllPositions(allPos);
+      const res = await api.mobileEquipment.maps.placedIds();
+      // Keep IDs as strings (equipment_id can be UUID)
+      const ids = res?.placed_ids || [];
+      const details = res?.placed_details || {};
+      setPlacedIds(new Set(ids.map(String)));
+      setPlacedDetails(details);
     } catch (e) {
-      console.error("[MobileEquipmentsMap] Load all positions error:", e);
+      console.error("[MobileEquipmentsMap] Load placements error:", e);
+      setPlacedIds(new Set());
+      setPlacedDetails({});
     }
-  }, [plans]);
+  }, []);
 
   // Load control statuses from dashboard API
   const loadControlStatuses = useCallback(async () => {
@@ -813,10 +814,12 @@ export default function MobileEquipmentsMap() {
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [selectedPlan, pageIndex]);
 
-  // Load all positions when plans change
+  // Load placements when plans and equipments are loaded (like Meca_map)
   useEffect(() => {
-    loadAllPositions();
-  }, [loadAllPositions]);
+    if (plans.length > 0 && equipments.length > 0) {
+      refreshPlacedIds();
+    }
+  }, [plans, equipments, refreshPlacedIds]);
 
   // Highlight equipment after PDF is ready (like High Voltage)
   useEffect(() => {
@@ -863,49 +866,53 @@ export default function MobileEquipmentsMap() {
     setSelectedPosition(null);
   }, []);
 
-  // Smart navigation: switch plan if needed, then highlight marker
+  // Smart navigation: switch plan if needed, then highlight marker (like Meca_map)
   const handleEquipmentClick = useCallback(
     async (eq) => {
+      setContextMenu(null);
+      // Clear any existing selection - user must click marker to see details
       setSelectedPosition(null);
       setSelectedEquipment(null);
       setPlacementMode(null);
 
-      // Check if equipment is placed somewhere
-      const position = allPositions.find(p => p.equipment_id === eq.id);
-      if (position) {
-        // Find the plan where this equipment is placed
-        const planKey = position.planId || position.logical_name;
-        const targetPlan = plans.find(p => p.id === planKey || p.logical_name === planKey);
+      // Check if this equipment is placed somewhere using placedDetails
+      const details = placedDetails[eq.id] || placedDetails[String(eq.id)];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0]; // First plan where it's placed
 
+        // Find the plan
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey || p.id === targetPlanKey);
         if (targetPlan) {
-          // If on a different plan, switch to it first
-          const currentPlanId = selectedPlan?.id || selectedPlan?.logical_name;
-          const targetPlanId = targetPlan.id || targetPlan.logical_name;
-
-          if (currentPlanId !== targetPlanId) {
+          // If we're not on that plan, switch to it
+          const currentPlanKey = selectedPlan?.logical_name || selectedPlan?.id;
+          if (currentPlanKey !== targetPlanKey) {
             setSelectedPlan(targetPlan);
-            setPageIndex(position.page_index || 0);
-            // Wait for plan to load then highlight
+            setPageIndex(0);
+            setPdfReady(false);
+
+            // Wait for plan to load, then highlight
             setTimeout(() => {
               viewerRef.current?.highlightMarker(eq.id);
             }, 500);
           } else {
-            // Same plan - just highlight
+            // Same plan - just highlight (zoom + flash)
             viewerRef.current?.highlightMarker(eq.id);
           }
         }
       } else {
-        // Not placed anywhere - check if on current plan (shouldn't happen but just in case)
+        // Equipment might be placed on current plan but placedDetails might not be populated
+        // Try to highlight if on current plan
         const pos = positions.find(p => p.equipment_id === eq.id);
         if (pos) {
           viewerRef.current?.highlightMarker(eq.id);
         }
       }
+      // If not placed, do nothing - no modal to show
 
       // Close sidebar on mobile
       if (isMobile) setSidebarOpen(false);
     },
-    [allPositions, plans, selectedPlan, positions, isMobile]
+    [plans, selectedPlan, placedDetails, positions, isMobile]
   );
 
   const handleCreatePosition = useCallback(async (x, y) => {
@@ -924,12 +931,15 @@ export default function MobileEquipmentsMap() {
       const res = await api.mobileEquipment.maps.positionsAuto(selectedPlan, pageIndex);
       setPositions(res.positions || []);
 
+      // Update placement info for navigation
+      await refreshPlacedIds();
+
       setPlacementMode(null);
     } catch (e) {
       console.error("[MobileEquipmentsMap] Create position error:", e);
       alert("Erreur lors du placement");
     }
-  }, [placementMode, selectedPlan, pageIndex]);
+  }, [placementMode, selectedPlan, pageIndex, refreshPlacedIds]);
 
   // Create a new mobile equipment directly from the plan
   const createEquipmentAtFrac = useCallback(async (x, y) => {
@@ -972,7 +982,7 @@ export default function MobileEquipmentsMap() {
 
       // Reload data in background (don't await to make it faster)
       loadEquipments();
-      loadAllPositions();
+      refreshPlacedIds();
 
       // Select the new equipment to show details panel
       setSelectedEquipment(newEquipment);
@@ -982,12 +992,12 @@ export default function MobileEquipmentsMap() {
       alert("Erreur lors de la création de l'équipement mobile");
       // Reload to check if it was actually created
       loadEquipments();
-      loadAllPositions();
+      refreshPlacedIds();
     } finally {
       creatingRef.current = false;
       setCreateMode(false);
     }
-  }, [selectedPlan, pageIndex, loadEquipments, loadAllPositions]);
+  }, [selectedPlan, pageIndex, loadEquipments, refreshPlacedIds]);
 
   const handleMovePosition = useCallback(async (equipmentId, x, y) => {
     if (!selectedPlan) return;
@@ -1026,11 +1036,14 @@ export default function MobileEquipmentsMap() {
       setPositions(prev => prev.filter(p => p.equipment_id !== pos.equipment_id));
       setSelectedPosition(null);
       setConfirmDelete(null);
+
+      // Update placement info for navigation
+      await refreshPlacedIds();
     } catch (e) {
       console.error("[MobileEquipmentsMap] Delete position error:", e);
       alert("Erreur lors de la suppression");
     }
-  }, []);
+  }, [refreshPlacedIds]);
 
   const handleNavigateToEquipment = useCallback((equipmentId) => {
     navigate(`/app/mobile-equipments?equipment=${equipmentId}`);
