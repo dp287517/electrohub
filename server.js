@@ -1836,10 +1836,12 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     const dbContext = await getAIContext(site);
     const contextPrompt = formatContextForAI(dbContext);
 
-    // Check if user wants document search
-    const needsDocs = /document|manuel|fiche|norme|pdf|technique|spécification|datasheet/i.test(message);
+    // Check if user wants document search (with product/manufacturer name)
+    const needsDocs = /document|manuel|fiche|norme|pdf|technique|spécification|datasheet|documentation/i.test(message);
+    const hasProduct = /altivar|atv|abb|acs|siemens|sinamics|danfoss|vlt|schneider|sef|legrand/i.test(message);
     let docContext = '';
     let docSources = [];
+    let webDocResults = null;
 
     if (needsDocs) {
       console.log('[AI] 📄 Searching documents...');
@@ -1849,6 +1851,34 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           `${i + 1}. **${d.title}** (pertinence: ${Math.round((d.score || 0) * 100)}%)\n   ${d.excerpt}`
         ).join('\n\n')}`;
         docSources = docResults.results.map(d => ({ title: d.title, page: d.page }));
+      }
+
+      // If user mentions a specific product, automatically search web documentation
+      if (hasProduct) {
+        console.log('[AI] 🌐 Auto-searching web documentation for product...');
+        try {
+          webDocResults = await searchWebForDocumentation(message, { name: message, manufacturer: '', model: '' });
+          if (webDocResults.pdfLinks && webDocResults.pdfLinks.length > 0) {
+            docContext += `\n\n## 📄 Documentation fabricant trouvée\n`;
+            webDocResults.pdfLinks.forEach((link, i) => {
+              docContext += `${i + 1}. [${link.title}](${link.url})`;
+              if (link.manufacturer) docContext += ` - ${link.manufacturer}`;
+              docContext += `\n`;
+            });
+            // Add to sources
+            docSources = [...docSources, ...webDocResults.pdfLinks.map(l => ({
+              title: l.title,
+              url: l.url,
+              type: l.type,
+              manufacturer: l.manufacturer
+            }))];
+          }
+          if (webDocResults.summary) {
+            docContext += `\n\n**Résumé technique:**\n${webDocResults.summary.substring(0, 1000)}`;
+          }
+        } catch (e) {
+          console.error('[AI] Web doc search error:', e.message);
+        }
       }
     }
 
@@ -1894,6 +1924,18 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         }
       } else {
         parsed.message += `\n\n---\n**Erreur d'exécution:** ${actionResult.message}`;
+      }
+    }
+
+    // If we auto-searched web docs and found results, append to message
+    if (webDocResults && webDocResults.pdfLinks && webDocResults.pdfLinks.length > 0) {
+      // Check if the AI response doesn't already contain the links
+      if (!parsed.message.includes('schneider-electric.com') && !parsed.message.includes('se.com')) {
+        parsed.message += `\n\n📄 **Documentation disponible:**`;
+        webDocResults.pdfLinks.forEach((link, i) => {
+          parsed.message += `\n${i + 1}. [${link.title}](${link.url})`;
+          if (link.manufacturer) parsed.message += ` - ${link.manufacturer}`;
+        });
       }
     }
 
