@@ -4,14 +4,13 @@ import {
   Zap, Recycle, Puzzle, TrendingUp, AlertTriangle, RefreshCw,
   GitBranch, CreditCard, Cog, Flame, Wrench, Users, MessageCircle,
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles, Building,
-  Calendar, ChevronDown, Grid3X3, X, Check, Edit3, MapPin, Briefcase,
-  Shield, Globe, Crown, Star, RefreshCcw, Repeat, Battery, Database
+  Calendar, ChevronDown, X, Check, Edit3, MapPin, Briefcase,
+  Shield, Globe, Crown, Star, Battery, Database, Play, ArrowRight,
+  Clock, CheckCircle, Target, Building2, Layers, Grid3X3
 } from 'lucide-react';
 import { getAllowedApps, ADMIN_EMAILS } from '../lib/permissions';
-import WeatherBackground from '../components/WeatherBackground';
 import { api } from '../lib/api';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
-import MorningBrief from '../components/MorningBrief';
 import StoryBrief from '../components/StoryBrief';
 
 // Icon mapping for apps
@@ -22,444 +21,224 @@ const iconMap = {
   '📋': ClipboardCheck, '🔋': Battery, '🗄️': Database, '🔌': Zap,
 };
 
+// All apps with categories
+const allApps = {
+  electrical: [
+    { id: 'switchboards', label: 'Tableaux', to: '/app/switchboards', icon: '⚡', color: 'from-amber-400 to-orange-500' },
+    { id: 'vsd', label: 'VSD', to: '/app/vsd', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
+    { id: 'meca', label: 'Méca', to: '/app/meca', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
+    { id: 'hv', label: 'Haute Tension', to: '/app/hv', icon: '⚡', color: 'from-yellow-400 to-amber-500' },
+    { id: 'glo', label: 'GLO', to: '/app/glo', icon: '🔋', color: 'from-emerald-400 to-teal-500' },
+    { id: 'mobile', label: 'Mobile', to: '/app/mobile-equipments', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
+    { id: 'datahub', label: 'DataHub', to: '/app/datahub', icon: '🗄️', color: 'from-indigo-400 to-purple-500' },
+  ],
+  analysis: [
+    { id: 'obsolescence', label: 'Obsolescence', to: '/app/obsolescence', icon: '♻️', color: 'from-emerald-400 to-teal-500' },
+    { id: 'selectivity', label: 'Sélectivité', to: '/app/selectivity', icon: '🧩', color: 'from-purple-400 to-indigo-500' },
+    { id: 'fault-level', label: 'Icc', to: '/app/fault-level', icon: '📈', color: 'from-blue-400 to-cyan-500' },
+    { id: 'arc-flash', label: 'Arc Flash', to: '/app/arc-flash', icon: '⚠️', color: 'from-red-400 to-rose-500' },
+    { id: 'loopcalc', label: 'Boucle IS', to: '/app/loopcalc', icon: '🔄', color: 'from-sky-400 to-blue-500' },
+  ],
+  tools: [
+    { id: 'controls', label: 'Contrôles', to: '/app/switchboard-controls', icon: '📋', color: 'from-blue-400 to-indigo-500' },
+    { id: 'projects', label: 'Projets', to: '/app/projects', icon: '💳', color: 'from-green-400 to-emerald-500' },
+    { id: 'atex', label: 'ATEX', to: '/app/atex', icon: '🧯', color: 'from-orange-400 to-red-500' },
+    { id: 'doors', label: 'Portes Feu', to: '/app/doors', icon: '🚪', color: 'from-rose-400 to-pink-500' },
+    { id: 'comp-ext', label: 'Contractors', to: '/app/comp-ext', icon: '🤝', color: 'from-teal-400 to-cyan-500' },
+    { id: 'ask-veeva', label: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 to-purple-500' },
+    { id: 'dcf', label: 'DCF', to: '/app/dcf', icon: '📊', color: 'from-emerald-400 to-green-500' },
+    { id: 'learn-ex', label: 'Formation', to: '/app/learn_ex', icon: '📊', color: 'from-amber-400 to-yellow-500' },
+  ]
+};
 
-// Electrical Controls apps
-const electricalApps = [
-  { label: 'Electrical Switchboards', to: '/app/switchboards', description: 'Model boards by building/floor/room; manage devices & studies', icon: '⚡', color: 'from-amber-400 to-orange-500' },
-  { label: 'Obsolescence', to: '/app/obsolescence', description: 'Lifecycles, replacements, criticality', icon: '♻️', color: 'from-emerald-400 to-teal-500' },
-  { label: 'Selectivity', to: '/app/selectivity', description: 'Protection coordination & settings', icon: '🧩', color: 'from-purple-400 to-indigo-500' },
-  { label: 'Fault Level Assessment', to: '/app/fault-level', description: 'Short-circuit & fault current studies', icon: '📈', color: 'from-blue-400 to-cyan-500' },
-  { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️', color: 'from-red-400 to-rose-500' },
-  { label: 'Loop Calculation', to: '/app/loopcalc', description: 'Intrinsic safety loop calculations & compliance', icon: '🔄', color: 'from-sky-400 to-blue-500' },
-  { label: 'High Voltage Equipment', to: '/app/hv', description: 'Manage HV cells, cables, transformers, busbars & analyses', icon: '⚡', color: 'from-yellow-400 to-amber-500' },
-  { label: 'Project', to: '/app/projects', description: 'Financial project management: business case, PIP, WBS, offers', icon: '💳', color: 'from-green-400 to-emerald-500' },
-  { label: 'Variable Speed Drives', to: '/app/vsd', description: 'VSD maintenance: frequency inverters, power ratings, checks', icon: '⚙️', color: 'from-slate-400 to-gray-500' },
-  { label: 'Mechanical Equipments', to: '/app/meca', description: 'Maintenance of pumps, fans, motors & mechanical assets', icon: '⚙️', color: 'from-zinc-400 to-stone-500' },
-  { label: 'Mobile Equipments', to: '/app/mobile-equipments', description: 'Electrical controls for mobile equipment: drills, angle grinders...', icon: '🔌', color: 'from-cyan-400 to-blue-500' },
-  { label: 'Global Electrical Equipments', to: '/app/glo', description: 'UPS, compensation batteries & emergency lighting management', icon: '🔋', color: 'from-emerald-400 to-teal-500' },
-  { label: 'Datahub', to: '/app/datahub', description: 'Custom data management with category markers on VSD plans', icon: '🗄️', color: 'from-indigo-400 to-purple-500' },
-];
-
-// Other apps
-const otherApps = [
-  { label: 'ATEX', to: '/app/atex', description: 'Explosive atmospheres equipment management', icon: '🧯', color: 'from-orange-400 to-red-500' },
-  { label: 'External Contractors', to: '/app/comp-ext', description: 'Vendors offers, JSA, prevention plan, access, visits', icon: '🤝', color: 'from-teal-400 to-cyan-500' },
-  { label: 'Ask Veeva', to: '/app/ask-veeva', description: 'Upload documents, index them, and ask questions with AI', icon: '💬', color: 'from-violet-400 to-purple-500' },
-  { label: 'Fire Doors', to: '/app/doors', description: 'Annual checks, QR codes, nonconformities & SAP follow-ups', icon: '🚪', color: 'from-rose-400 to-pink-500' },
-  { label: 'Dcf', to: '/app/dcf', description: 'SAP Support', icon: '📊', color: 'from-emerald-400 to-green-500' },
-  { label: 'Formation ATEX', to: '/app/learn_ex', description: 'Formation ATEX Niveau 0', icon: '📊', color: 'from-amber-400 to-yellow-500' },
-];
-
-// Enhanced App Card with staggered animation and control status
-function AppCard({ label, to, description, icon, color, index, controlStats, navigate }) {
+// Compact App Card
+function AppCard({ label, to, icon, color, badge, navigate }) {
   const IconComponent = iconMap[icon] || Zap;
-  const hasOverdue = controlStats?.overdue > 0;
-  const hasPending = controlStats?.pending > 0;
-  const hasBadges = hasOverdue || hasPending;
 
   return (
-    <div
-      className="group relative bg-white rounded-xl sm:rounded-2xl p-3 sm:p-4 shadow-sm hover:shadow-2xl border border-gray-100 hover:border-transparent transition-all duration-500 hover:-translate-y-2 opacity-0 animate-slideUp"
-      style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'forwards' }}
-    >
-      {/* Hover glow effect */}
-      <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 rounded-xl sm:rounded-2xl transition-opacity duration-500`} />
-
-      {/* Control status badges - absolute top right, small z-index */}
-      {hasBadges && (
-        <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 flex items-center gap-1 z-10">
-          {hasOverdue && (
-            <button
-              onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=overdue'); }}
-              className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full flex items-center gap-0.5 hover:bg-red-200 transition-colors animate-pulse shadow-sm"
-              title={`${controlStats.overdue} contrôle(s) en retard`}
-            >
-              <AlertTriangle size={8} />
-              {controlStats.overdue}
-            </button>
-          )}
-          {hasPending && (
-            <button
-              onClick={(e) => { e.stopPropagation(); navigate('/app/switchboard-controls?tab=schedules'); }}
-              className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[9px] rounded-full flex items-center gap-0.5 hover:bg-blue-200 transition-colors shadow-sm"
-              title={`${controlStats.pending} contrôle(s) planifié(s)`}
-            >
-              <ClipboardCheck size={8} />
-              {controlStats.pending}
-            </button>
-          )}
-        </div>
-      )}
-
-      <Link to={to} className="relative flex items-start gap-3 sm:gap-4">
-        <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 flex-shrink-0`}>
-          <IconComponent size={18} className="sm:hidden" />
-          <IconComponent size={22} className="hidden sm:block" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-1 sm:gap-2">
-            <h3 className="font-semibold text-sm sm:text-base text-gray-900 group-hover:text-brand-600 transition-colors truncate">
-              {label}
-            </h3>
-            <ChevronRight size={16} className="text-gray-400 group-hover:text-brand-500 group-hover:translate-x-2 transition-all duration-300 flex-shrink-0 sm:w-[18px] sm:h-[18px]" />
-          </div>
-          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1 line-clamp-2 group-hover:text-gray-600 transition-colors">{description}</p>
-        </div>
-      </Link>
-    </div>
-  );
-}
-
-// Role Badge component with icons and colors
-function RoleBadge({ role }) {
-  const roleConfig = {
-    superadmin: {
-      label: 'Super Admin',
-      icon: Crown,
-      color: 'from-amber-400 to-yellow-500',
-      textColor: 'text-amber-900',
-      bgColor: 'bg-gradient-to-r from-amber-100 to-yellow-100',
-      borderColor: 'border-amber-300',
-    },
-    admin: {
-      label: 'Admin',
-      icon: Shield,
-      color: 'from-purple-400 to-indigo-500',
-      textColor: 'text-purple-900',
-      bgColor: 'bg-gradient-to-r from-purple-100 to-indigo-100',
-      borderColor: 'border-purple-300',
-    },
-    global: {
-      label: 'Global',
-      icon: Globe,
-      color: 'from-emerald-400 to-teal-500',
-      textColor: 'text-emerald-900',
-      bgColor: 'bg-gradient-to-r from-emerald-100 to-teal-100',
-      borderColor: 'border-emerald-300',
-    },
-    site: {
-      label: 'Site',
-      icon: MapPin,
-      color: 'from-blue-400 to-cyan-500',
-      textColor: 'text-blue-900',
-      bgColor: 'bg-gradient-to-r from-blue-100 to-cyan-100',
-      borderColor: 'border-blue-300',
-    },
-  };
-
-  const config = roleConfig[role] || roleConfig.site;
-  const Icon = config.icon;
-
-  return (
-    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full ${config.bgColor} ${config.textColor} border ${config.borderColor} text-xs font-medium shadow-sm`}>
-      <div className={`w-4 h-4 rounded-full bg-gradient-to-br ${config.color} flex items-center justify-center text-white`}>
-        <Icon size={10} />
-      </div>
-      <span>{config.label}</span>
-    </div>
-  );
-}
-
-// Site Switcher for Global/Admin users
-function SiteSwitcher({ currentSite, sites, companyId, onSiteChange }) {
-  const [isOpen, setIsOpen] = useState(false);
-
-  // Filter sites by company if companyId is provided
-  const availableSites = companyId
-    ? sites.filter(s => s.company_id === companyId)
-    : sites;
-
-  if (availableSites.length <= 1) return null;
-
-  const handleSiteChange = (site) => {
-    setIsOpen(false);
-    onSiteChange(site);
-  };
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl shadow-lg hover:from-emerald-600 hover:to-teal-600 transition-all"
-      >
-        <Globe size={16} />
-        <span className="font-medium">{currentSite || 'Choisir un site'}</span>
-        <ChevronDown size={16} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-
-      {isOpen && (
-        <>
-          {/* Backdrop */}
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-
-          {/* Dropdown */}
-          <div className="absolute top-full mt-2 left-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-100 min-w-[200px] max-h-[300px] overflow-auto animate-scaleIn">
-            <div className="p-2">
-              <p className="text-xs text-gray-500 px-3 py-2 font-medium uppercase tracking-wide">
-                Changer de site ({availableSites.length})
-              </p>
-              {availableSites.map(site => (
-                <button
-                  key={site.id}
-                  onClick={() => handleSiteChange(site)}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 transition-all ${
-                    site.name === currentSite
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'hover:bg-gray-50 text-gray-700'
-                  }`}
-                >
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                    site.name === currentSite
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-gray-100 text-gray-500'
-                  }`}>
-                    <MapPin size={14} />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-medium">{site.name}</p>
-                    {site.company_name && (
-                      <p className="text-xs text-gray-400">{site.company_name}</p>
-                    )}
-                  </div>
-                  {site.name === currentSite && (
-                    <Check size={16} className="text-emerald-500" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Section Header component
-function SectionHeader({ icon: Icon, title, count, isOpen, onToggle, color }) {
-  return (
-    <button
-      onClick={onToggle}
-      className="w-full flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm border border-gray-100 hover:shadow-lg hover:border-gray-200 transition-all duration-300 group"
+    <Link
+      to={to}
+      className="group relative bg-white rounded-xl p-3 shadow-sm hover:shadow-lg border border-gray-100 hover:border-gray-200 transition-all duration-300 hover:-translate-y-1"
     >
       <div className="flex items-center gap-3">
-        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-lg group-hover:scale-105 transition-transform`}>
-          <Icon size={22} />
+        <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-md group-hover:scale-110 transition-transform`}>
+          <IconComponent size={18} />
         </div>
-        <div className="text-left">
-          <h2 className="font-bold text-lg text-gray-900 group-hover:text-brand-700 transition-colors">{title}</h2>
-          <p className="text-sm text-gray-500">{count} {count > 1 ? 'applications' : 'application'}</p>
-        </div>
+        <span className="font-medium text-gray-800 group-hover:text-gray-900 text-sm flex-1 truncate">
+          {label}
+        </span>
+        {badge && (
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+            badge.type === 'danger' ? 'bg-red-100 text-red-700' :
+            badge.type === 'warning' ? 'bg-amber-100 text-amber-700' :
+            'bg-blue-100 text-blue-700'
+          }`}>
+            {badge.value}
+          </span>
+        )}
+        <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-1 transition-all" />
       </div>
-      <div className={`w-10 h-10 rounded-xl bg-gray-100 group-hover:bg-brand-50 flex items-center justify-center transition-all duration-300 ${isOpen ? 'rotate-180 bg-brand-50' : ''}`}>
-        <ChevronDown size={20} className={`text-gray-600 group-hover:text-brand-600 transition-colors ${isOpen ? 'text-brand-600' : ''}`} />
-      </div>
+    </Link>
+  );
+}
+
+// Quick Stat Pill
+function StatPill({ icon: Icon, value, label, color = 'blue', onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-2 rounded-xl bg-${color}-50 hover:bg-${color}-100 transition-colors group`}
+    >
+      <Icon size={16} className={`text-${color}-500`} />
+      <span className={`font-bold text-${color}-700`}>{value}</span>
+      <span className="text-gray-500 text-sm hidden sm:inline">{label}</span>
     </button>
   );
 }
 
-// Profile Edit Modal - saves to database with department_id and site_id
+// Role Badge component
+function RoleBadge({ role }) {
+  const config = {
+    superadmin: { label: 'Super Admin', icon: Crown, color: 'from-amber-400 to-yellow-500', bg: 'bg-amber-50', text: 'text-amber-700' },
+    admin: { label: 'Admin', icon: Shield, color: 'from-purple-400 to-indigo-500', bg: 'bg-purple-50', text: 'text-purple-700' },
+    global: { label: 'Global', icon: Globe, color: 'from-emerald-400 to-teal-500', bg: 'bg-emerald-50', text: 'text-emerald-700' },
+    site: { label: 'Site', icon: MapPin, color: 'from-blue-400 to-cyan-500', bg: 'bg-blue-50', text: 'text-blue-700' },
+  }[role] || { label: 'Site', icon: MapPin, color: 'from-blue-400 to-cyan-500', bg: 'bg-blue-50', text: 'text-blue-700' };
+
+  const Icon = config.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full ${config.bg} ${config.text} text-xs font-medium`}>
+      <Icon size={12} />
+      {config.label}
+    </span>
+  );
+}
+
+// Profile Modal
 function ProfileModal({ user, departments, sites, onClose, onSave }) {
-  // Use actual DB data only - no fallbacks with fake IDs
   const availableSites = sites || [];
   const availableDepts = departments || [];
-
-  // Initialize with existing values or find by name from actual data
-  const initialSiteId = user?.site_id || availableSites.find(s => s.name === user?.site)?.id || null;
-  const initialDeptId = user?.department_id || availableDepts.find(d => d.name === user?.department)?.id || null;
-
-  const [siteId, setSiteId] = useState(initialSiteId);
-  const [departmentId, setDepartmentId] = useState(initialDeptId);
+  const [siteId, setSiteId] = useState(user?.site_id || availableSites.find(s => s.name === user?.site)?.id || null);
+  const [departmentId, setDepartmentId] = useState(user?.department_id || availableDepts.find(d => d.name === user?.department)?.id || null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
-    setError(null);
-    setSuccess(false);
-
-    console.log('[ProfileModal] Saving profile:', { siteId, departmentId });
-
     try {
-      // Save to database via API
       const token = localStorage.getItem('eh_token');
-      console.log('[ProfileModal] Token exists:', !!token);
-
       const response = await fetch('/api/user/profile', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
         credentials: 'include',
         body: JSON.stringify({ department_id: departmentId, site_id: siteId })
       });
-
-      console.log('[ProfileModal] Response status:', response.status);
-
       const data = await response.json();
-      console.log('[ProfileModal] Response data:', data);
+      if (!response.ok) throw new Error(data.error || 'Failed to save');
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to save profile');
-      }
-
-      // Update local user with new data
       const selectedDept = availableDepts.find(d => d.id === departmentId);
       const selectedSite = availableSites.find(s => s.id === siteId);
-      const updatedUser = {
+      if (data.jwt) localStorage.setItem('eh_token', data.jwt);
+
+      onSave({
         ...user,
         department_id: departmentId,
         site_id: siteId,
         department: selectedDept?.name || user?.department,
         site: selectedSite?.name || user?.site,
-      };
-
-      console.log('[ProfileModal] Updated user:', updatedUser);
-
-      // Save new token if provided
-      if (data.jwt) {
-        localStorage.setItem('eh_token', data.jwt);
-        console.log('[ProfileModal] New JWT saved');
-      }
-
-      setSuccess(true);
-      setTimeout(() => {
-        onSave(updatedUser);
-      }, 500);
+      });
     } catch (err) {
-      console.error('[ProfileModal] Error:', err);
-      setError(err.message || 'Failed to save profile');
+      setError(err.message);
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 animate-scaleIn">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">Edit Profile</h2>
-          <button
-            onClick={onClose}
-            className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors"
-          >
-            <X size={20} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 animate-scaleIn">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-gray-900">Mon Profil</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <X size={18} />
           </button>
         </div>
 
-        {/* Avatar */}
-        <div className="flex justify-center mb-6">
-          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white text-2xl font-bold shadow-xl">
+        <div className="flex items-center gap-3 mb-5 pb-4 border-b">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold">
             {user?.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
+          </div>
+          <div>
+            <p className="font-semibold text-gray-900">{user?.name || 'Unknown'}</p>
+            <p className="text-sm text-gray-500">{user?.email}</p>
           </div>
         </div>
 
-        {/* Name (read-only) */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
-          <div className="px-4 py-3 bg-gray-50 rounded-xl text-gray-600">{user?.name || 'Unknown'}</div>
-        </div>
-
-        {/* Email (read-only) */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-          <div className="px-4 py-3 bg-gray-50 rounded-xl text-gray-600 text-sm">{user?.email || 'No email'}</div>
-        </div>
-
-        {/* Site Select */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <MapPin size={16} />
-            Site
-          </label>
-          {availableSites.length > 0 ? (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Site</label>
             <select
               value={siteId || ''}
               onChange={(e) => setSiteId(e.target.value ? Number(e.target.value) : null)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
+              className="w-full px-3 py-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
             >
-              <option value="">Select site...</option>
+              <option value="">Sélectionner...</option>
               {availableSites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-          ) : (
-            <div className="px-4 py-3 bg-amber-50 text-amber-700 rounded-xl text-sm">
-              No sites available. Contact admin to add sites.
-            </div>
-          )}
-        </div>
+          </div>
 
-        {/* Department Select */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Briefcase size={16} />
-            Department
-          </label>
-          {availableDepts.length > 0 ? (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Département</label>
             <select
               value={departmentId || ''}
               onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : null)}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:ring-4 focus:ring-brand-100 focus:border-brand-400 outline-none transition-all"
+              className="w-full px-3 py-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
             >
-              <option value="">Select department...</option>
+              <option value="">Sélectionner...</option>
               {availableDepts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
-          ) : (
-            <div className="px-4 py-3 bg-amber-50 text-amber-700 rounded-xl text-sm">
-              No departments available. Contact admin to add departments.
-            </div>
-          )}
+          </div>
         </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm flex items-center gap-2">
-            <AlertTriangle size={16} />
-            {error}
-          </div>
-        )}
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
-        {success && (
-          <div className="mb-4 p-3 bg-green-50 text-green-600 rounded-xl text-sm flex items-center gap-2">
-            <Check size={16} />
-            Profile saved successfully!
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex gap-3">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-3 rounded-xl border border-gray-200 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-          >
-            Cancel
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-gray-700 font-medium hover:bg-gray-50">
+            Annuler
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || success}
-            className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-brand-600 to-brand-700 text-white font-medium hover:from-brand-700 hover:to-brand-800 transition-all shadow-lg shadow-brand-500/25 disabled:opacity-50 flex items-center justify-center gap-2"
+            disabled={saving}
+            className="flex-1 px-4 py-2.5 rounded-lg bg-brand-600 text-white font-medium hover:bg-brand-700 disabled:opacity-50"
           >
-            {saving ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : success ? (
-              <>
-                <Check size={18} />
-                Saved!
-              </>
-            ) : (
-              <>
-                <Check size={18} />
-                Save Changes
-              </>
-            )}
+            {saving ? 'Enregistrement...' : 'Enregistrer'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Category Section
+function AppSection({ title, apps, controlStats, navigate }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1">{title}</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        {apps.map((app) => (
+          <AppCard
+            key={app.id}
+            {...app}
+            navigate={navigate}
+            badge={
+              app.id === 'controls' && controlStats?.overdue > 0
+                ? { type: 'danger', value: controlStats.overdue }
+                : app.id === 'controls' && controlStats?.pending > 0
+                ? { type: 'warning', value: controlStats.pending }
+                : null
+            }
+          />
+        ))}
       </div>
     </div>
   );
@@ -468,180 +247,76 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState({});
-  const [showElectrical, setShowElectrical] = useState(false);
-  const [showOther, setShowOther] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [greeting, setGreeting] = useState('');
+  const [showStoryBrief, setShowStoryBrief] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
-  const [controlStats, setControlStats] = useState({ overdue: 0, pending: 0 });
-  const [showStoryBrief, setShowStoryBrief] = useState(false);
+  const [controlStats, setControlStats] = useState({ overdue: 0, pending: 0, completed: 0 });
+  const [briefData, setBriefData] = useState(null);
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
     setUser(storedUser);
+    setTimeout(() => setMounted(true), 50);
 
-    const hour = new Date().getHours();
-    if (hour < 12) setGreeting('Bonjour');
-    else if (hour < 18) setGreeting('Bon après-midi');
-    else setGreeting('Bonsoir');
-
-    // Trigger mount animations
-    setTimeout(() => setMounted(true), 100);
-
-    // Fetch departments and sites for profile modal (public endpoints)
-    // AND refresh user permissions from DB (in case admin changed allowed_apps)
+    // Load data
     Promise.all([
       fetch('/api/departments').then(r => r.json()).catch(() => ({ departments: [] })),
       fetch('/api/sites').then(r => r.json()).catch(() => ({ sites: [] })),
-      fetch('/api/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null)
-    ]).then(([deptsRes, sitesRes, meRes]) => {
+      fetch('/api/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      api.switchboardControls.dashboard().catch(() => null)
+    ]).then(([deptsRes, sitesRes, meRes, controlsRes]) => {
       setDepartments(deptsRes.departments || []);
       setSites(sitesRes.sites || []);
 
-      // Update user with fresh data from DB (syncs allowed_apps changes)
       if (meRes?.ok && meRes.user) {
         const currentUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
         const updatedUser = { ...currentUser, ...meRes.user };
         localStorage.setItem('eh_user', JSON.stringify(updatedUser));
         setUser(updatedUser);
-        console.log('[Dashboard] Refreshed user permissions from DB');
+      }
+
+      if (controlsRes) {
+        setControlStats({
+          overdue: controlsRes.stats?.overdue || controlsRes.overdue_count || 0,
+          pending: controlsRes.stats?.pending || controlsRes.pending_count || 0,
+          completed: controlsRes.stats?.completed_this_week || 0
+        });
       }
     });
-
-    // Fetch control dashboard stats
-    api.switchboardControls.dashboard().then(res => {
-      if (res) {
-        const overdue = res.stats?.overdue || res.overdue_count || res.overdue?.length || res.overdue_list?.length || 0;
-        const pending = res.stats?.pending || res.pending_count || res.pending?.length || res.upcoming?.length || 0;
-        setControlStats({ overdue, pending });
-      }
-    }).catch(() => {});
   }, []);
 
   const site = user?.site || '';
-  const isAdmin = ADMIN_EMAILS.includes(user?.email);
+  const userRole = user?.role || 'site';
+  const greeting = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Bonjour';
+    if (hour < 18) return 'Bon après-midi';
+    return 'Bonsoir';
+  }, []);
 
-  // Get display names for department and site (using ID if name not available)
-  const departmentName = useMemo(() => {
-    if (user?.department) return user.department;
-    if (user?.department_id && departments.length) {
-      const dept = departments.find(d => d.id === user.department_id);
-      return dept?.name || null;
-    }
-    return null;
-  }, [user?.department, user?.department_id, departments]);
-
-  const siteName = useMemo(() => {
-    if (user?.site) return user.site;
-    if (user?.site_id && sites.length) {
-      const s = sites.find(s => s.id === user.site_id);
-      return s?.name || null;
-    }
-    return null;
-  }, [user?.site, user?.site_id, sites]);
-
-  // Get company name from the user's site
-  const companyName = useMemo(() => {
-    if (user?.company) return user.company;
-    if (user?.site_id && sites.length) {
-      const s = sites.find(s => s.id === user.site_id);
-      return s?.company_name || null;
-    }
-    // Try to find company from site name match
-    if (siteName && sites.length) {
-      const s = sites.find(s => s.name === siteName);
-      return s?.company_name || null;
-    }
-    return null;
-  }, [user?.company, user?.site_id, siteName, sites]);
-
-  // Get user role - defaults to 'site' for normal users
-  const userRole = useMemo(() => {
-    return user?.role || 'site';
-  }, [user?.role]);
-
-  // Check if user can switch sites (global or admin role)
-  const canSwitchSites = userRole === 'global' || userRole === 'admin' || userRole === 'superadmin';
-
-  // Get company_id for filtering sites
-  const userCompanyId = useMemo(() => {
-    if (user?.company_id) return user.company_id;
-    if (user?.site_id && sites.length) {
-      const s = sites.find(s => s.id === user.site_id);
-      return s?.company_id || null;
-    }
-    return null;
-  }, [user?.company_id, user?.site_id, sites]);
-
-  // Handle site change for Global users
-  const handleSiteChange = (newSite) => {
-    const updatedUser = {
-      ...user,
-      site: newSite.name,
-      site_id: newSite.id,
-    };
-    setUser(updatedUser);
-    localStorage.setItem('eh_user', JSON.stringify(updatedUser));
-
-    // Update the JWT token with new site
-    const token = localStorage.getItem('eh_token');
-    if (token) {
-      // Call API to update site preference
-      fetch('/api/user/profile', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ site_id: newSite.id })
-      }).catch(console.error);
-    }
-  };
-
-  // Get allowed apps for current user
-  const allowedApps = useMemo(() => {
-    return getAllowedApps(user?.email);
-  }, [user?.email]);
-
-  // Filter apps based on user permissions
-  const filterByPermissions = (apps) => {
-    return apps.filter(app => {
-      const appId = allowedApps.find(a => a.route === app.to)?.id;
-      return allowedApps.some(a => a.route === app.to);
-    });
-  };
-
-  // OIBT card (only for Nyon site)
-  const oibtCard = {
-    label: 'OIBT',
-    to: '/app/oibt',
-    description: "Avis d'installation, protocoles de mesure, rapports & contrôles",
-    icon: '📋',
-    color: 'from-indigo-400 to-blue-500',
-  };
-
-  // Filter electrical apps by permissions, then add OIBT if Nyon
-  const filteredElectricalApps = filterByPermissions(electricalApps);
-  const visibleElectricalApps = site === 'Nyon' && allowedApps.some(a => a.id === 'oibt')
-    ? [...filteredElectricalApps, oibtCard]
-    : filteredElectricalApps;
-
-  // Filter other apps by permissions
-  const visibleOtherApps = filterByPermissions(otherApps);
-
-  const getInitials = (name) => {
-    if (!name) return '?';
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-  };
-
-  const currentDate = new Date().toLocaleDateString('en-US', {
+  const currentDate = new Date().toLocaleDateString('fr-FR', {
     weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
+    day: 'numeric',
+    month: 'long'
   });
+
+  // Filter apps by permissions
+  const allowedApps = useMemo(() => getAllowedApps(user?.email), [user?.email]);
+  const filterApps = (apps) => apps.filter(app => allowedApps.some(a => a.route === app.to));
+
+  const filteredElectrical = filterApps(allApps.electrical);
+  const filteredAnalysis = filterApps(allApps.analysis);
+  const filteredTools = filterApps(allApps.tools);
+
+  // Add OIBT for Nyon
+  const oibtApp = { id: 'oibt', label: 'OIBT', to: '/app/oibt', icon: '📋', color: 'from-indigo-400 to-blue-500' };
+  if (site === 'Nyon' && allowedApps.some(a => a.id === 'oibt')) {
+    filteredTools.push(oibtApp);
+  }
+
+  const totalApps = filteredElectrical.length + filteredAnalysis.length + filteredTools.length;
 
   const handleSaveProfile = (updatedUser) => {
     setUser(updatedUser);
@@ -649,208 +324,144 @@ export default function Dashboard() {
     setShowProfileModal(false);
   };
 
+  const getInitials = (name) => name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '?';
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-brand-50/30">
+    <div className="min-h-screen bg-gray-50">
       {/* CSS Animations */}
       <style>{`
-        @keyframes slideUp {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes scaleIn {
-          from { opacity: 0; transform: scale(0.95); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        @keyframes float {
-          0%, 100% { transform: translateY(0px) rotate(0deg); }
-          50% { transform: translateY(-20px) rotate(5deg); }
-        }
-        @keyframes pulse-glow {
-          0%, 100% { opacity: 0.3; transform: scale(1); }
-          50% { opacity: 0.6; transform: scale(1.1); }
-        }
-        @keyframes shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-        .animate-slideUp { animation: slideUp 0.5s ease-out; }
-        .animate-scaleIn { animation: scaleIn 0.3s ease-out; }
-        .animate-float { animation: float 6s ease-in-out infinite; }
-        .animate-float-delayed { animation: float 6s ease-in-out 2s infinite; }
-        .animate-pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
-        .animate-shimmer {
-          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
-          background-size: 200% 100%;
-          animation: shimmer 2s infinite;
-        }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        .animate-slideUp { animation: slideUp 0.4s ease-out; }
+        .animate-scaleIn { animation: scaleIn 0.2s ease-out; }
       `}</style>
 
-      {/* Hero Section with Weather Background */}
-      <WeatherBackground site={site}>
-        <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
-            {/* Welcome message */}
-            <div className="flex items-center gap-5">
+      {/* Compact Header */}
+      <header className="bg-gradient-to-r from-brand-600 via-brand-700 to-indigo-700 text-white">
+        <div className={`max-w-6xl mx-auto px-4 py-6 transition-all duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
+          <div className="flex items-center justify-between gap-4">
+            {/* Left: User Info */}
+            <div className="flex items-center gap-4">
               <button
                 onClick={() => setShowProfileModal(true)}
-                className="relative group"
+                className="w-12 h-12 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center text-lg font-bold transition-colors"
               >
-                <div className="w-18 h-18 sm:w-24 sm:h-24 rounded-2xl bg-white/20 backdrop-blur-sm border border-white/30 flex items-center justify-center text-white text-2xl sm:text-4xl font-bold shadow-xl group-hover:scale-105 group-hover:bg-white/30 transition-all duration-300">
-                  {getInitials(user?.name)}
-                </div>
-                <div className="absolute -bottom-1 -right-1 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-all duration-300 group-hover:scale-110">
-                  <Edit3 size={14} className="text-brand-600" />
-                </div>
+                {getInitials(user?.name)}
               </button>
               <div>
-                <p className="text-white/80 text-sm sm:text-base flex items-center gap-2">
-                  <Sparkles size={16} className="text-yellow-300 animate-pulse" />
-                  {greeting}
-                </p>
-                <div className="flex items-center gap-3 mt-1">
-                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white drop-shadow-lg">
-                    {user?.name || 'Bienvenue'}
-                  </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg font-semibold">{greeting}, {user?.name?.split(' ')[0] || 'Utilisateur'}</h1>
                   <RoleBadge role={userRole} />
                 </div>
-                <p className="text-white/70 mt-1 flex items-center gap-2">
-                  <Calendar size={14} />
+                <p className="text-white/70 text-sm flex items-center gap-1.5">
+                  <Calendar size={12} />
                   {currentDate}
+                  {site && (
+                    <>
+                      <span className="mx-1">•</span>
+                      <MapPin size={12} />
+                      {site}
+                    </>
+                  )}
                 </p>
-                {/* Story Brief Button */}
-                <button
-                  onClick={() => setShowStoryBrief(true)}
-                  className="mt-3 group flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm border border-white/30 rounded-full hover:bg-white/30 transition-all duration-300 hover:scale-105"
-                >
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center animate-pulse">
-                    <Sparkles size={12} className="text-white" />
-                  </div>
-                  <span className="text-white text-sm font-medium">Brief du matin</span>
-                  <ChevronRight size={14} className="text-white/70 group-hover:translate-x-1 transition-transform" />
-                </button>
               </div>
             </div>
 
-            {/* User info cards */}
-            <div className="flex flex-wrap gap-3">
-              {/* Company card (read-only) */}
-              {/* Company card */}
-              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px]">
-                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
-                  <Briefcase size={14} />
-                  Société
-                </div>
-                <p className="text-white font-semibold text-sm truncate max-w-[140px]">{companyName || '—'}</p>
+            {/* Right: Story Button */}
+            <button
+              onClick={() => setShowStoryBrief(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/30 backdrop-blur-sm border border-white/30 rounded-xl transition-all hover:scale-105 group"
+            >
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center">
+                <Play size={14} className="text-white fill-white" />
               </div>
-
-              {/* Site selector - Different for Global vs Site users */}
-              {canSwitchSites ? (
-                <div className="flex flex-col gap-1">
-                  <SiteSwitcher
-                    currentSite={site}
-                    sites={sites}
-                    companyId={userCompanyId}
-                    onSiteChange={handleSiteChange}
-                  />
-                  <span className="text-white/50 text-[10px] text-center">
-                    Cliquez pour changer de site
-                  </span>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowProfileModal(true)}
-                  className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
-                >
-                  <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
-                    <Building size={14} />
-                    Site
-                    <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </div>
-                  <p className="text-white font-semibold text-sm">{site || '—'}</p>
-                </button>
-              )}
-              <button
-                onClick={() => setShowProfileModal(true)}
-                className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[120px] hover:bg-black/30 hover:border-white/30 transition-all duration-300 group text-left"
-              >
-                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
-                  <Users size={14} />
-                  Département
-                  <Edit3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-                <p className="text-white font-semibold text-sm">{departmentName || '—'}</p>
-              </button>
-              <div className="bg-black/20 backdrop-blur-md border border-white/20 rounded-xl px-4 py-3 min-w-[100px]">
-                <div className="flex items-center gap-2 text-white/70 text-xs mb-1">
-                  <Grid3X3 size={14} />
-                  Applis
-                </div>
-                <p className="text-white font-semibold text-sm">{visibleElectricalApps.length + visibleOtherApps.length}</p>
+              <div className="text-left hidden sm:block">
+                <p className="text-sm font-medium">Brief du matin</p>
+                <p className="text-xs text-white/70">Vue immersive</p>
               </div>
-            </div>
+              <ChevronRight size={16} className="text-white/50 group-hover:translate-x-1 transition-transform" />
+            </button>
           </div>
         </div>
-      </WeatherBackground>
+      </header>
 
-      {/* Morning Brief Section */}
-      <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-4 -mt-8 relative z-20 transition-all duration-1000 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
-        <MorningBrief userName={user?.name?.split(' ')[0]} onStoryClick={() => setShowStoryBrief(true)} />
+      {/* Quick Stats Bar */}
+      <div className={`bg-white border-b shadow-sm transition-all duration-500 delay-100 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
+        <div className="max-w-6xl mx-auto px-4 py-3">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            <StatPill
+              icon={AlertTriangle}
+              value={controlStats.overdue}
+              label="en retard"
+              color="red"
+              onClick={() => navigate('/app/switchboard-controls?tab=overdue')}
+            />
+            <StatPill
+              icon={Clock}
+              value={controlStats.pending}
+              label="à faire"
+              color="amber"
+              onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
+            />
+            <StatPill
+              icon={CheckCircle}
+              value={controlStats.completed}
+              label="cette semaine"
+              color="emerald"
+              onClick={() => navigate('/app/switchboard-controls')}
+            />
+            <div className="h-6 w-px bg-gray-200 mx-1" />
+            <StatPill
+              icon={Layers}
+              value={totalApps}
+              label="applications"
+              color="blue"
+            />
+          </div>
+        </div>
       </div>
 
       {/* Main Content */}
-      <div className={`max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8 py-8 -mt-4 relative z-10 transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
-        {/* Utilities Section */}
-        {visibleOtherApps.length > 0 && (
-          <div className="mb-6">
-            <SectionHeader
-              icon={Wrench}
-              title="Utilitaires & Outils"
-              count={visibleOtherApps.length}
-              isOpen={showOther}
-              onToggle={() => setShowOther(v => !v)}
-              color="from-teal-500 to-cyan-600"
-            />
+      <main className={`max-w-6xl mx-auto px-4 py-6 space-y-6 transition-all duration-500 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
 
-            <div className={`transition-all duration-500 ease-out ${showOther ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4 pb-2">
-                {visibleOtherApps.map((app, index) => (
-                  <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
-                ))}
-              </div>
-            </div>
-          </div>
+        {/* Equipment Section */}
+        {filteredElectrical.length > 0 && (
+          <AppSection
+            title="Équipements"
+            apps={filteredElectrical}
+            controlStats={controlStats}
+            navigate={navigate}
+          />
         )}
 
-        {/* Electrical Controls Section */}
-        {visibleElectricalApps.length > 0 && (
-          <div className="mb-6">
-            <SectionHeader
-              icon={Zap}
-              title="Contrôles Électriques"
-              count={visibleElectricalApps.length}
-              isOpen={showElectrical}
-              onToggle={() => setShowElectrical(v => !v)}
-              color="from-amber-500 to-orange-600"
-            />
+        {/* Analysis Section */}
+        {filteredAnalysis.length > 0 && (
+          <AppSection
+            title="Analyses & Études"
+            apps={filteredAnalysis}
+            controlStats={controlStats}
+            navigate={navigate}
+          />
+        )}
 
-            <div className={`transition-all duration-500 ease-out ${showElectrical ? 'max-h-[2000px] opacity-100 mt-4' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4 pb-2">
-                {visibleElectricalApps.map((app, index) => (
-                  <AppCard key={app.label} {...app} index={index} controlStats={app.to === '/app/switchboards' ? controlStats : null} navigate={navigate} />
-                ))}
-              </div>
-            </div>
-          </div>
+        {/* Tools Section */}
+        {filteredTools.length > 0 && (
+          <AppSection
+            title="Outils & Utilitaires"
+            apps={filteredTools}
+            controlStats={controlStats}
+            navigate={navigate}
+          />
         )}
 
         {/* Footer */}
-        <div className={`text-center py-10 transition-all duration-1000 delay-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur rounded-full shadow-sm border border-gray-100">
-            <Zap size={16} className="text-brand-500" />
-            <span className="text-gray-500 text-sm">ElectroHub — Votre plateforme centralisée de gestion électrique</span>
-          </div>
+        <div className="pt-6 pb-8 text-center">
+          <p className="text-gray-400 text-sm flex items-center justify-center gap-2">
+            <Zap size={14} />
+            ElectroHub — Gestion électrique centralisée
+          </p>
         </div>
-      </div>
+      </main>
 
       {/* Profile Modal */}
       {showProfileModal && (
@@ -863,12 +474,7 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Floating Assistant - Mobile only (hidden on desktop, Navbar handles it) */}
-      <div className="sm:hidden">
-        <FloatingAssistant />
-      </div>
-
-      {/* Story Brief Modal */}
+      {/* Story Brief */}
       {showStoryBrief && (
         <StoryBrief
           userName={user?.name?.split(' ')[0]}
@@ -877,6 +483,11 @@ export default function Dashboard() {
           slideDuration={6000}
         />
       )}
+
+      {/* Floating Assistant - Mobile */}
+      <div className="sm:hidden">
+        <FloatingAssistant />
+      </div>
     </div>
   );
 }
