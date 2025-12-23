@@ -973,18 +973,26 @@ export default function GloMap() {
   useEffect(() => {
     const urlGloId = searchParams.get('glo');
     const urlPlanKey = searchParams.get('plan');
+    console.log('[GLO_MAP] URL params useEffect:', { urlGloId, urlPlanKey, plansCount: plans.length });
 
     if (urlPlanKey && plans.length > 0) {
       const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      console.log('[GLO_MAP] Found target plan:', targetPlan?.logical_name);
+
       if (targetPlan) {
-        if (urlGloId) targetEquipmentIdRef.current = urlGloId;
+        if (urlGloId) {
+          targetEquipmentIdRef.current = urlGloId;
+          console.log('[GLO_MAP] Set targetEquipmentIdRef to:', urlGloId);
+        }
 
         if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          console.log('[GLO_MAP] Switching to target plan');
           setPdfReady(false);
           setSelectedPlan(targetPlan);
           setPageIndex(0);
           refreshPositions(targetPlan, 0).then(positions => setInitialPoints(positions || []));
         } else {
+          console.log('[GLO_MAP] Already on target plan, triggering highlight');
           setPdfReady(false);
           setTimeout(() => setPdfReady(true), 100);
         }
@@ -1028,13 +1036,16 @@ export default function GloMap() {
 
   // Auto-highlight equipment from URL params after PDF is ready
   useEffect(() => {
+    console.log('[GLO_MAP] pdfReady useEffect:', { pdfReady, targetId: targetEquipmentIdRef.current });
     if (!pdfReady || !targetEquipmentIdRef.current) return;
 
     const targetId = targetEquipmentIdRef.current;
     targetEquipmentIdRef.current = null;
+    console.log('[GLO_MAP] Triggering highlight for:', targetId);
 
     // Small delay to ensure markers are rendered
     setTimeout(() => {
+      console.log('[GLO_MAP] Calling highlightMarker now');
       viewerRef.current?.highlightMarker(targetId);
     }, 300);
   }, [pdfReady, getLatestPositions]);
