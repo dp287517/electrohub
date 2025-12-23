@@ -103,7 +103,8 @@ const ICON_MAP = {
 const EXTERNAL_CATEGORIES = {
   vsd: {
     id: 'vsd',
-    name: 'VSD (Variateurs)',
+    name: 'Variateurs (VSD)',
+    shortName: 'VSD',
     color: '#059669', // Emerald/Green
     icon: 'gauge',
     svgPath: SVG_PATHS.gauge
@@ -111,6 +112,7 @@ const EXTERNAL_CATEGORIES = {
   hv: {
     id: 'hv',
     name: 'Haute Tension',
+    shortName: 'HT',
     color: '#dc2626', // Red
     icon: 'zap',
     svgPath: SVG_PATHS.zap
@@ -118,6 +120,7 @@ const EXTERNAL_CATEGORIES = {
   meca: {
     id: 'meca',
     name: 'Electromecanique',
+    shortName: 'MECA',
     color: '#f59e0b', // Amber/Orange
     icon: 'wrench',
     svgPath: SVG_PATHS.wrench
@@ -125,6 +128,7 @@ const EXTERNAL_CATEGORIES = {
   glo: {
     id: 'glo',
     name: 'Equipements Globaux',
+    shortName: 'GLO',
     color: '#10b981', // Emerald
     icon: 'power',
     svgPath: SVG_PATHS.power
@@ -132,6 +136,7 @@ const EXTERNAL_CATEGORIES = {
   mobile: {
     id: 'mobile',
     name: 'Equipements Mobiles',
+    shortName: 'Mobiles',
     color: '#8b5cf6', // Violet
     icon: 'box',
     svgPath: SVG_PATHS.box
@@ -139,6 +144,7 @@ const EXTERNAL_CATEGORIES = {
   switchboards: {
     id: 'switchboards',
     name: 'Tableaux Electriques',
+    shortName: 'Tableaux',
     color: '#2563eb', // Blue
     icon: 'server',
     svgPath: SVG_PATHS.server
@@ -635,8 +641,23 @@ export default function DatahubMap() {
     if (!selectedPlan) return;
     try {
       const planKey = selectedPlan.logical_name || selectedPlan.id;
+      console.log('[Datahub] Loading external positions for plan:', planKey, 'page:', pageIndex);
       const res = await api.datahub.maps.externalPositions(planKey, pageIndex);
       if (res?.ok) {
+        console.log('[Datahub] External positions loaded:', {
+          vsd: res.positions?.vsd?.length || 0,
+          hv: res.positions?.hv?.length || 0,
+          meca: res.positions?.meca?.length || 0,
+          glo: res.positions?.glo?.length || 0,
+          mobile: res.positions?.mobile?.length || 0,
+          switchboards: res.positions?.switchboards?.length || 0
+        });
+        // Log first position of each type for debugging coordinates
+        Object.entries(res.positions || {}).forEach(([type, positions]) => {
+          if (positions && positions.length > 0) {
+            console.log(`[Datahub] First ${type} position:`, positions[0]);
+          }
+        });
         setExternalPositions(res.positions || { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
         setExternalTotals(res.totals || { vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
       }
@@ -729,15 +750,16 @@ export default function DatahubMap() {
   }, []);
 
   // Create marker icon for external equipment (VSD, HV, MECA, etc.)
+  // Same size as Datahub markers (ICON_PX = 22px) for consistency
   const makeExternalMarkerIcon = useCallback((extCategory) => {
-    const size = 18; // Slightly smaller than datahub markers
+    const size = ICON_PX; // Same size as Datahub markers (22px)
     const color = extCategory.color;
     const svgPath = extCategory.svgPath || SVG_PATHS.default;
 
     const html = `
-      <div style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:1.5px solid white;border-radius:50%;
-        box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;opacity:0.85;">
-        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <div style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
+        box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;">
+        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           ${svgPath}
         </svg>
       </div>`;
@@ -820,11 +842,15 @@ export default function DatahubMap() {
     });
 
     // Draw external equipment markers (VSD, HV, MECA, GLO, Mobile, Switchboards)
+    console.log('[Datahub] Drawing external markers, visible categories:', visibleExternalCategories);
     Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
       // Skip if this external category is not visible
       if (!visibleExternalCategories.includes(catKey)) return;
 
       const positions = externalPositions[catKey] || [];
+      if (positions.length > 0) {
+        console.log(`[Datahub] Drawing ${positions.length} ${catKey} markers`);
+      }
       const icon = makeExternalMarkerIcon(extCat);
 
       positions.forEach(pos => {
@@ -843,7 +869,7 @@ export default function DatahubMap() {
           </div>
         `;
         marker.bindTooltip(tooltipContent, {
-          direction: "top", offset: [0, -9], className: "datahub-tooltip"
+          direction: "top", offset: [0, -ICON_PX / 2], className: "datahub-tooltip"
         });
 
         markersRef.current.push(marker);
@@ -1261,7 +1287,7 @@ export default function DatahubMap() {
                 style={isActive ? { backgroundColor: extCat.color } : {}}
               >
                 <IconComp size={12} />
-                <span className="hidden sm:inline">{extCat.name.split(' ')[0]}</span>
+                <span className="hidden sm:inline">{extCat.shortName}</span>
                 {count > 0 && <span className="ml-0.5 tabular-nums">({count})</span>}
               </button>
             );
