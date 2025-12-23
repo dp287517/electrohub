@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Zap, Shield, Sparkles } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Zap, Shield, Sparkles, Bell } from 'lucide-react';
 import { ADMIN_EMAILS } from '../lib/permissions';
 import { AnimatedAvatar } from './AIAvatar/AnimatedAvatar';
 import AvatarChat from './AIAvatar/AvatarChat';
 import AvatarSelector from './AIAvatar/AvatarSelector';
+import { useNotifications } from './Notifications/NotificationProvider';
+import NotificationPreferences from './Notifications/NotificationPreferences';
 
 export default function Navbar() {
   const { pathname } = useLocation();
@@ -30,6 +32,17 @@ export default function Navbar() {
   const [showChat, setShowChat] = useState(false);
   const [showAvatarSelector, setShowAvatarSelector] = useState(false);
   const [avatarHovered, setAvatarHovered] = useState(false);
+  const [showNotificationPrefs, setShowNotificationPrefs] = useState(false);
+
+  // Notification context (with safe fallback)
+  const notificationContext = (() => {
+    try {
+      return useNotifications();
+    } catch {
+      return null;
+    }
+  })();
+  const { isSubscribed, isSupported } = notificationContext || {};
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 10);
@@ -113,6 +126,25 @@ export default function Navbar() {
                 <>
                   {/* User Info + AI Avatar */}
                   <div className="flex items-center gap-3 pl-3 border-l border-gray-200">
+                    {/* Notification Bell */}
+                    {isSupported && (
+                      <button
+                        onClick={() => setShowNotificationPrefs(true)}
+                        className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors group"
+                        title="Paramètres de notifications"
+                      >
+                        <Bell
+                          size={20}
+                          className={`transition-colors ${
+                            isSubscribed ? 'text-gray-700' : 'text-gray-400'
+                          } group-hover:text-gray-900`}
+                        />
+                        {isSubscribed && (
+                          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-emerald-500 rounded-full" />
+                        )}
+                      </button>
+                    )}
+
                     <div className="text-right">
                       <p className="text-sm font-medium text-gray-900 leading-tight">
                         {user?.name || 'User'}
@@ -240,6 +272,27 @@ export default function Navbar() {
 
           {token && (
             <>
+              {/* Notification settings in mobile */}
+              {isSupported && (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setShowNotificationPrefs(true);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-gray-50 transition-colors"
+                >
+                  <div className="relative">
+                    <Bell size={18} className={isSubscribed ? 'text-gray-700' : 'text-gray-400'} />
+                    {isSubscribed && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-500 rounded-full" />
+                    )}
+                  </div>
+                  <span className="font-medium text-gray-700">
+                    {isSubscribed ? 'Notifications activées' : 'Activer les notifications'}
+                  </span>
+                </button>
+              )}
+
               <NavLink to="/dashboard" icon={LayoutDashboard} onClick={() => setMobileMenuOpen(false)}>
                 Dashboard
               </NavLink>
@@ -292,6 +345,12 @@ export default function Navbar() {
           onClose={() => setShowAvatarSelector(false)}
         />
       )}
+
+      {/* Notification Preferences Modal */}
+      <NotificationPreferences
+        isOpen={showNotificationPrefs}
+        onClose={() => setShowNotificationPrefs(false)}
+      />
     </>
   );
 }
