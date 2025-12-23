@@ -926,11 +926,11 @@ app.get("/api/datahub/maps/external-positions", async (req, res) => {
       }));
     } catch (e) { console.log('[Datahub] GLO positions not available:', e.message); }
 
-    // Mobile Equipment
+    // Mobile Equipment (uses code instead of tag, brand/model for details)
     try {
       const { rows } = await pool.query(`
         SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
-               e.name, e.tag, e.building, e.floor, e.equipment_type
+               e.name, e.code, e.building, e.floor, e.brand, e.model
           FROM me_equipment_positions p
           JOIN me_equipments e ON e.id = p.equipment_id
          WHERE p.plan_logical_name = $1 AND p.page_index = $2
@@ -940,18 +940,18 @@ app.get("/api/datahub/maps/external-positions", async (req, res) => {
         equipment_id: r.equipment_id,
         x_frac: parseFloat(r.x_frac),
         y_frac: parseFloat(r.y_frac),
-        name: r.name || r.tag || 'Mobile',
+        name: r.name || r.code || 'Mobile',
         building: r.building,
         floor: r.floor,
-        details: r.equipment_type || ''
+        details: `${r.brand || ''} ${r.model || ''}`.trim()
       }));
     } catch (e) { console.log('[Datahub] Mobile positions not available:', e.message); }
 
-    // Switchboards (integer switchboard_id)
+    // Switchboards (uses code instead of tag, building_code for building)
     try {
       const { rows } = await pool.query(`
         SELECT p.id, p.switchboard_id as equipment_id, p.x_frac, p.y_frac, p.page_index,
-               s.name, s.tag, s.location, s.voltage
+               s.name, s.code, s.building_code, s.floor, s.regime_neutral
           FROM switchboard_positions p
           JOIN switchboards s ON s.id = p.switchboard_id
          WHERE p.logical_name = $1 AND p.page_index = $2
@@ -961,10 +961,10 @@ app.get("/api/datahub/maps/external-positions", async (req, res) => {
         equipment_id: r.equipment_id,
         x_frac: parseFloat(r.x_frac),
         y_frac: parseFloat(r.y_frac),
-        name: r.name || r.tag || 'Switchboard',
-        building: r.location,
-        floor: '',
-        details: r.voltage || ''
+        name: r.name || r.code || 'Switchboard',
+        building: r.building_code,
+        floor: r.floor || '',
+        details: r.regime_neutral || ''
       }));
     } catch (e) { console.log('[Datahub] Switchboard positions not available:', e.message); }
 
