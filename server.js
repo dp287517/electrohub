@@ -778,18 +778,31 @@ async function searchWebForDocumentation(query, equipmentInfo = {}) {
 
   // Detect manufacturer from query or equipment info
   const manufacturer = (equipmentInfo.manufacturer || query || '').toLowerCase();
-  const model = equipmentInfo.model || query || '';
 
-  // Generate direct PDF links based on known manufacturers
-  for (const [key, portal] of Object.entries(MANUFACTURER_PORTALS)) {
-    if (manufacturer.includes(key) || query.toLowerCase().includes(key)) {
-      results.pdfLinks.push({
-        title: `Documentation ${portal.name} - ${model}`,
-        url: portal.pdfPattern(model),
-        manufacturer: portal.name,
-        type: 'pdf'
-      });
-      break;
+  // Extract actual model number from query (e.g., "ATV212WD22N4" from "documentation schneider ATV212WD22N4")
+  // Common patterns: ATV123..., ACS123..., 6SL123..., VLT123..., etc.
+  const modelMatch = query.match(/\b(ATV\d{2,3}[A-Z0-9]+|ACS\d{3}[A-Z0-9-]+|6SL\d{4}[A-Z0-9-]+|VLT\d{4}[A-Z0-9-]+|[A-Z]{2,4}\d{3,}[A-Z0-9-]*)\b/i);
+  const extractedModel = modelMatch ? modelMatch[1].toUpperCase() : '';
+  const model = equipmentInfo.model || extractedModel || '';
+
+  console.log(`[AI] Extracted model: "${model}" from query`);
+
+  // Skip generic portal links for Altivar - we add specific ones below
+  const isAltivar = query.toLowerCase().includes('altivar') || model.toLowerCase().includes('atv');
+
+  // Generate direct PDF links based on known manufacturers (skip if no valid model or if Altivar)
+  if (model && !isAltivar) {
+    for (const [key, portal] of Object.entries(MANUFACTURER_PORTALS)) {
+      if (key === 'altivar') continue; // Skip altivar, handled separately below
+      if (manufacturer.includes(key) || query.toLowerCase().includes(key)) {
+        results.pdfLinks.push({
+          title: `Documentation ${portal.name} - ${model}`,
+          url: portal.pdfPattern(model),
+          manufacturer: portal.name,
+          type: 'pdf'
+        });
+        break;
+      }
     }
   }
 
@@ -805,27 +818,58 @@ async function searchWebForDocumentation(query, equipmentInfo = {}) {
     if (queryLower.includes('atv212') || modelLower.includes('atv212')) {
       series = 'ATV212';
       seriesUrl = '1741-altivar-212';
+      // Direct link to ATV212 documentation page on Schneider
       results.pdfLinks.push({
-        title: `Altivar 212 - Manuel de programmation (PDF)`,
-        url: `https://download.schneider-electric.com/files?p_Doc_Ref=ATV212_Programming_Manual`,
+        title: `Altivar 212 - Guide de démarrage rapide (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/S1A72710/`,
         manufacturer: 'Schneider Electric',
         type: 'pdf'
       });
       results.pdfLinks.push({
-        title: `Altivar 212 - Manuel d'installation (PDF)`,
-        url: `https://download.schneider-electric.com/files?p_Doc_Ref=ATV212_Installation_Manual`,
+        title: `Altivar 212 - Manuel de programmation (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/S1A72711/`,
         manufacturer: 'Schneider Electric',
         type: 'pdf'
+      });
+      results.pdfLinks.push({
+        title: `Altivar ATV212 - Fiche produit ${model || 'ATV212'}`,
+        url: `https://www.se.com/fr/fr/product/${model || 'ATV212HD22N4'}/`,
+        manufacturer: 'Schneider Electric',
+        type: 'web'
       });
     } else if (queryLower.includes('atv320') || modelLower.includes('atv320')) {
       series = 'ATV320';
       seriesUrl = '62129-altivar-machine-atv320';
+      results.pdfLinks.push({
+        title: `Altivar ATV320 - Guide de démarrage (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/NVE41295/`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
+      results.pdfLinks.push({
+        title: `Altivar ATV320 - Manuel de programmation (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/NVE41297/`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
     } else if (queryLower.includes('atv630') || queryLower.includes('atv930') || modelLower.includes('atv630')) {
       series = 'ATV630/930';
       seriesUrl = '62125-altivar-process-atv600';
+      results.pdfLinks.push({
+        title: `Altivar ATV630/930 - Guide de démarrage (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/NVE61507/`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
     } else if (queryLower.includes('atv71') || modelLower.includes('atv71')) {
       series = 'ATV71';
       seriesUrl = '1746-altivar-71';
+      results.pdfLinks.push({
+        title: `Altivar 71 - Manuel de programmation (PDF)`,
+        url: `https://www.se.com/fr/fr/download/document/1755847/`,
+        manufacturer: 'Schneider Electric',
+        type: 'pdf'
+      });
     }
 
     results.pdfLinks.push({
