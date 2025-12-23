@@ -98,56 +98,72 @@ const ICON_MAP = {
   file: File, clock: Clock, calendar: Calendar, bell: Bell
 };
 
+// SVG paths for external equipment icons (matching UnifiedEquipmentMap)
+const EXTERNAL_SVG_ICONS = {
+  // VSD: CPU/chip icon (electronic component)
+  vsd: `<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>`,
+  // HV: outlined lightning polygon
+  hv: `<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>`,
+  // MECA: sun/gear with radiating lines
+  meca: `<circle cx="12" cy="12" r="3" fill="white"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/>`,
+  // GLO: battery icon
+  glo: `<rect x="1" y="6" width="18" height="12" rx="2"/><path d="M23 10v4"/><path d="M7 10v4M11 10v4"/>`,
+  // Mobile: CPU/chip icon (same as VSD)
+  mobile: `<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>`,
+  // Switchboards: filled lightning bolt
+  switchboards: `<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="white"/>`,
+};
+
 // External equipment categories with distinctive colors and icons
-// These represent equipment from other modules (VSD, HV, MECA, GLO, Mobile, Switchboards)
+// Colors and icons matching UnifiedEquipmentMap for consistency
 const EXTERNAL_CATEGORIES = {
   vsd: {
     id: 'vsd',
     name: 'Variateurs (VSD)',
     shortName: 'VSD',
-    color: '#059669', // Emerald/Green
-    icon: 'gauge',
-    svgPath: SVG_PATHS.gauge
+    color: '#10b981', // Emerald (same as UnifiedEquipmentMap)
+    gradient: 'radial-gradient(circle at 30% 30%, #34d399, #059669)',
+    svgPath: EXTERNAL_SVG_ICONS.vsd
   },
   hv: {
     id: 'hv',
     name: 'Haute Tension',
     shortName: 'HT',
-    color: '#dc2626', // Red
-    icon: 'zap',
-    svgPath: SVG_PATHS.zap
+    color: '#f59e0b', // Amber (same as UnifiedEquipmentMap HV)
+    gradient: 'radial-gradient(circle at 30% 30%, #f59e0b, #ea580c)',
+    svgPath: EXTERNAL_SVG_ICONS.hv
   },
   meca: {
     id: 'meca',
     name: 'Electromecanique',
     shortName: 'MECA',
-    color: '#f59e0b', // Amber/Orange
-    icon: 'wrench',
-    svgPath: SVG_PATHS.wrench
+    color: '#3b82f6', // Blue (same as UnifiedEquipmentMap)
+    gradient: 'radial-gradient(circle at 30% 30%, #3b82f6, #2563eb)',
+    svgPath: EXTERNAL_SVG_ICONS.meca
   },
   glo: {
     id: 'glo',
     name: 'Equipements Globaux',
     shortName: 'GLO',
-    color: '#10b981', // Emerald
-    icon: 'power',
-    svgPath: SVG_PATHS.power
+    color: '#34d399', // Emerald (same as UnifiedEquipmentMap)
+    gradient: 'radial-gradient(circle at 30% 30%, #34d399, #059669)',
+    svgPath: EXTERNAL_SVG_ICONS.glo
   },
   mobile: {
     id: 'mobile',
     name: 'Equipements Mobiles',
     shortName: 'Mobiles',
-    color: '#8b5cf6', // Violet
-    icon: 'box',
-    svgPath: SVG_PATHS.box
+    color: '#06b6d4', // Cyan (same as UnifiedEquipmentMap)
+    gradient: 'linear-gradient(to bottom right, #22d3ee, #2563eb)',
+    svgPath: EXTERNAL_SVG_ICONS.mobile
   },
   switchboards: {
     id: 'switchboards',
     name: 'Tableaux Electriques',
     shortName: 'Tableaux',
-    color: '#2563eb', // Blue
-    icon: 'server',
-    svgPath: SVG_PATHS.server
+    color: '#f59e0b', // Amber (same as UnifiedEquipmentMap)
+    gradient: 'radial-gradient(circle at 30% 30%, #facc15, #f59e0b)',
+    svgPath: EXTERNAL_SVG_ICONS.switchboards
   }
 };
 
@@ -638,6 +654,7 @@ export default function DatahubMap() {
   }, [selectedPlan, pageIndex]);
 
   // Load external equipment positions (VSD, HV, MECA, GLO, Mobile, Switchboards)
+  // Uses individual equipment APIs like UnifiedEquipmentMap for reliability
   const loadExternalPositions = useCallback(async () => {
     if (!selectedPlan) return;
     const planKey = selectedPlan.logical_name || selectedPlan.id;
@@ -647,31 +664,63 @@ export default function DatahubMap() {
     currentPlanKeyRef.current = requestKey;
     console.log('[Datahub] Loading external positions for:', requestKey);
 
-    try {
-      const res = await api.datahub.maps.externalPositions(planKey, pageIndex);
+    // Define equipment type loaders (same pattern as UnifiedEquipmentMap)
+    const loaders = [
+      { type: 'vsd', apiCall: () => api.vsdMaps?.positionsAuto?.(planKey, pageIndex) },
+      { type: 'hv', apiCall: () => api.hvMaps?.positionsAuto?.(planKey, pageIndex) },
+      { type: 'meca', apiCall: () => api.mecaMaps?.positionsAuto?.(planKey, pageIndex) },
+      { type: 'glo', apiCall: () => api.gloMaps?.positionsAuto?.(planKey, pageIndex) },
+      { type: 'mobile', apiCall: () => api.mobileEquipment?.maps?.positionsAuto?.(planKey, pageIndex) },
+      { type: 'switchboards', apiCall: () => api.switchboardMaps?.positionsAuto?.(planKey, pageIndex) },
+    ];
 
-      // CRITICAL: Check if plan changed while we were loading
+    try {
+      // Load all positions in parallel
+      const results = await Promise.allSettled(loaders.map(async ({ type, apiCall }) => {
+        try {
+          const res = await apiCall();
+          return { type, positions: res?.positions || [] };
+        } catch (e) {
+          console.log(`[Datahub] ${type} positions not available:`, e.message);
+          return { type, positions: [] };
+        }
+      }));
+
+      // Check if plan changed while we were loading
       if (currentPlanKeyRef.current !== requestKey) {
         console.log('[Datahub] Ignoring stale external positions for:', requestKey, '(current:', currentPlanKeyRef.current, ')');
-        return; // Ignore stale response
+        return;
       }
 
-      if (res?.ok) {
-        console.log('[Datahub] External positions loaded for', requestKey, ':', {
-          vsd: res.positions?.vsd?.length || 0,
-          hv: res.positions?.hv?.length || 0,
-          meca: res.positions?.meca?.length || 0,
-          glo: res.positions?.glo?.length || 0,
-          mobile: res.positions?.mobile?.length || 0,
-          switchboards: res.positions?.switchboards?.length || 0
-        });
-        setExternalPositions(res.positions || { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
-        setExternalTotals(res.totals || { vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
-      }
+      // Build positions object by type
+      const newPositions = { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] };
+      const newTotals = { vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 };
+
+      results.forEach(result => {
+        if (result.status === 'fulfilled' && result.value) {
+          const { type, positions } = result.value;
+          // Map positions to include equipment info for tooltips
+          newPositions[type] = positions.map(p => ({
+            id: p.id,
+            equipment_id: type === 'switchboards' ? p.switchboard_id : p.equipment_id,
+            x_frac: parseFloat(p.x_frac),
+            y_frac: parseFloat(p.y_frac),
+            name: p.name || p.tag || p.code || type.toUpperCase(),
+            building: p.building || p.building_code,
+            floor: p.floor,
+            details: p.manufacturer ? `${p.manufacturer} ${p.model || ''}`.trim() : (p.equipment_type || '')
+          }));
+          newTotals[type] = newPositions[type].length;
+        }
+      });
+
+      console.log('[Datahub] External positions loaded for', requestKey, ':', newTotals);
+      setExternalPositions(newPositions);
+      setExternalTotals(newTotals);
+
     } catch (e) {
-      // Only update state if this is still the current request
       if (currentPlanKeyRef.current === requestKey) {
-        console.log('[Datahub] External positions not available for', requestKey, ':', e.message);
+        console.log('[Datahub] External positions error:', e.message);
         setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
         setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
       }
@@ -763,16 +812,18 @@ export default function DatahubMap() {
   }, []);
 
   // Create marker icon for external equipment (VSD, HV, MECA, etc.)
-  // Same size as Datahub markers (ICON_PX = 22px) for consistency
+  // Same size and style as UnifiedEquipmentMap for consistency
   const makeExternalMarkerIcon = useCallback((extCategory) => {
     const size = ICON_PX; // Same size as Datahub markers (22px)
-    const color = extCategory.color;
+    const bgGradient = extCategory.gradient || `radial-gradient(circle at 30% 30%, ${extCategory.color}cc, ${extCategory.color})`;
     const svgPath = extCategory.svgPath || SVG_PATHS.default;
+    // Switchboards use 0.55 size like UnifiedEquipmentMap, others use 0.5
+    const iconSize = extCategory.id === 'switchboards' ? size * 0.55 : size * 0.5;
 
     const html = `
-      <div style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
-        box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;">
-        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <div style="width:${size}px;height:${size}px;background:${bgGradient};border:2px solid white;border-radius:9999px;
+        box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
+        <svg viewBox="0 0 24 24" width="${iconSize}" height="${iconSize}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           ${svgPath}
         </svg>
       </div>`;
@@ -781,7 +832,7 @@ export default function DatahubMap() {
       className: "datahub-marker-external",
       html,
       iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2]
+      iconAnchor: [Math.round(size / 2), Math.round(size / 2)]
     });
   }, []);
 
