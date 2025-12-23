@@ -514,7 +514,8 @@ const GloLeafletViewer = forwardRef(({
       });
 
       mk.addTo(g);
-      markersMapRef.current.set(p.equipment_id, mk);
+      // Store with String key for consistent lookup (URL params are always strings)
+      markersMapRef.current.set(String(p.equipment_id), mk);
 
       setTimeout(() => {
         const el = mk.getElement();
@@ -973,20 +974,10 @@ export default function GloMap() {
     const urlGloId = searchParams.get('glo');
     const urlPlanKey = searchParams.get('plan');
 
-    // Clear URL params early to avoid re-triggering
-    if (urlGloId || urlPlanKey) {
-      setSearchParams({}, { replace: true });
-    }
-
     if (urlPlanKey && plans.length > 0) {
       const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
       if (targetPlan) {
         if (urlGloId) targetEquipmentIdRef.current = urlGloId;
-
-        // On mobile, close sidebar so user can see the map
-        if (window.innerWidth < 768) {
-          setShowSidebar(false);
-        }
 
         if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
           setPdfReady(false);
@@ -994,19 +985,11 @@ export default function GloMap() {
           setPageIndex(0);
           refreshPositions(targetPlan, 0).then(positions => setInitialPoints(positions || []));
         } else {
-          // Same plan - just trigger the highlight via pdfReady cycle
           setPdfReady(false);
           setTimeout(() => setPdfReady(true), 100);
         }
       }
-    } else if (urlGloId && plans.length > 0 && !urlPlanKey) {
-      // Equipment ID provided but no plan - equipment not placed yet
-      // Store the ID so we can potentially show it in the sidebar
-      targetEquipmentIdRef.current = urlGloId;
-      // On mobile, keep sidebar visible to show the equipment
-      if (window.innerWidth >= 768) {
-        setShowSidebar(true);
-      }
+      setSearchParams({}, { replace: true });
     }
   }, [searchParams, plans, selectedPlan, setSearchParams, refreshPositions]);
 
