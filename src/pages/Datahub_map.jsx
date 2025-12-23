@@ -687,7 +687,8 @@ export default function DatahubMap() {
       });
 
       markersRef.current.push(marker);
-      markersMapRef.current.set(pos.item_id, marker);
+      // Store with String key for consistent lookup (URL params are always strings)
+      markersMapRef.current.set(String(pos.item_id), marker);
     });
   }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon]);
 
