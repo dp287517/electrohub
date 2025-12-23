@@ -1708,16 +1708,21 @@ export default function SwitchboardMap() {
   );
 
   // Navigate to switchboard's plan (from sidebar click)
+  // Smart navigation: navigate to the correct plan and highlight the marker
+  // Note: We only highlight the marker, we DON'T auto-open the detail panel
+  // User must click on the marker to open the detail panel
   const handleSwitchboardClick = useCallback(
     async (board) => {
       setContextMenu(null);
-      setSelectedBoard(board);
-      
+      // Clear any existing selection - user must click marker to see details
+      setSelectedPosition(null);
+      setSelectedBoard(null);
+
       // Check if this switchboard is placed somewhere
       const details = placedDetails[board.id];
       if (details?.plans?.length > 0) {
         const targetPlanKey = details.plans[0]; // First plan where it's placed
-        
+
         // Find the plan
         const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
         if (targetPlan) {
@@ -1727,40 +1732,27 @@ export default function SwitchboardMap() {
             setPageIndex(0);
             setPdfReady(false);
             setInitialPoints([]);
-            
-            // Wait for plan to load, then highlight
+
+            // Wait for plan to load, then highlight (zoom + flash only, no modal)
             const positions = await refreshPositions(targetPlan, 0);
             setInitialPoints(positions || []);
-            
-            // Small delay to let viewer render
+
+            // Small delay to let viewer render, then just highlight
             setTimeout(() => {
               viewerRef.current?.highlightMarker(board.id);
-              // Also set as selected
-              const pos = positions?.find(p => Number(p.switchboard_id) === Number(board.id));
-              if (pos) {
-                setSelectedPosition(pos);
-                api.switchboard.getBoard(board.id).then(setSelectedBoard).catch(() => {});
-              }
             }, 500);
           } else {
-            // Same plan - just highlight and select
+            // Same plan - just highlight (zoom + flash), no modal
             viewerRef.current?.highlightMarker(board.id);
-            const positions = getLatestPositions();
-            const pos = positions.find(p => Number(p.switchboard_id) === Number(board.id));
-            if (pos) {
-              handlePositionClick(pos);
-            }
           }
         }
-      } else {
-        // Not placed - just show board info
-        setSelectedPosition(null);
-        setSelectedBoard(board);
       }
-      
+      // If not placed, do nothing - no modal to show
+
+      // On mobile, close sidebar so user can see the map
       if (isMobile) setShowSidebar(false);
     },
-    [plans, stableSelectedPlan, placedDetails, refreshPositions, getLatestPositions, handlePositionClick, isMobile]
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, isMobile]
   );
 
   return (

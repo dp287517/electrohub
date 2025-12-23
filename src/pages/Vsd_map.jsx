@@ -1360,12 +1360,14 @@ export default function VsdMap() {
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
                     onClick={() => {
+                      // Only highlight (zoom + flash), don't auto-open modal
+                      setSelectedPosition(null);
+                      setSelectedEquipment(null);
                       const pos = initialPoints.find(p => p.equipment_id === eq.id);
                       if (pos) {
-                        setSelectedPosition(pos);
-                        setSelectedEquipment(eq);
                         viewerRef.current?.highlightMarker(eq.id);
                       }
+                      if (isMobile) setShowSidebar(false);
                     }}
                     onPlace={(equipment) => setPlacementMode(equipment)}
                   />
@@ -1561,10 +1563,11 @@ export default function VsdMap() {
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
                     onClick={() => {
+                      // Only highlight (zoom + flash), don't auto-open modal
+                      setSelectedPosition(null);
+                      setSelectedEquipment(null);
                       const pos = initialPoints.find(p => p.equipment_id === eq.id);
                       if (pos) {
-                        setSelectedPosition(pos);
-                        setSelectedEquipment(eq);
                         viewerRef.current?.highlightMarker(eq.id);
                       }
                       setShowSidebar(false);
