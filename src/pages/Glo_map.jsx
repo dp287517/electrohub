@@ -222,12 +222,11 @@ function ContextMenu({ x, y, onDelete, onClose }) {
 }
 
 /* ----------------------------- Sidebar Card ----------------------------- */
-const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
+const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace, onViewOnMap }) => {
   return (
     <div
-      className={`p-3 rounded-xl border transition-all cursor-pointer group
+      className={`p-3 rounded-xl border transition-all group
         ${isSelected ? "bg-emerald-50 border-emerald-300 shadow-sm" : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}
-      onClick={onClick}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -265,16 +264,30 @@ const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere
               Non place
             </span>
           )}
-
-          <button
-            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
-            className="px-2 py-1 bg-emerald-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-emerald-600 transition-colors"
-            title={isPlacedSomewhere ? "Deplacer sur ce plan" : "Placer sur ce plan"}
-          >
-            <Target size={12} />
-            {isPlacedSomewhere ? "Deplacer" : "Placer"}
-          </button>
         </div>
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-2 mt-2">
+        {/* "Voir sur le plan" button - only shown when placed somewhere */}
+        {isPlacedSomewhere && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onViewOnMap(equipment); }}
+            className="flex-1 py-1.5 px-2 bg-gray-100 text-gray-700 text-xs rounded-lg flex items-center justify-center gap-1 hover:bg-gray-200 transition-colors"
+          >
+            <MapPin size={12} />
+            Voir sur le plan
+          </button>
+        )}
+
+        <button
+          onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
+          className={`${isPlacedSomewhere ? 'flex-1' : 'w-full'} py-1.5 px-2 bg-emerald-500 text-white text-xs rounded-lg flex items-center justify-center gap-1 hover:bg-emerald-600 transition-colors`}
+          title={isPlacedSomewhere ? "Deplacer sur ce plan" : "Placer sur ce plan"}
+        >
+          <Target size={12} />
+          {isPlacedSomewhere ? "Deplacer" : "Placer"}
+        </button>
       </div>
     </div>
   );
@@ -1395,6 +1408,7 @@ export default function GloMap() {
                     isSelected={String(selectedEquipmentId) === String(eq.id)}
                     onClick={() => handleEquipmentClick(eq)}
                     onPlace={handlePlaceEquipment}
+                    onViewOnMap={handleEquipmentClick}
                   />
                 ))
               )}
