@@ -6,11 +6,11 @@ import {
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles,
   Calendar, X, MapPin, Briefcase, Shield, Globe, Crown, Battery, Database,
   Play, Clock, CheckCircle, ChevronDown, Building2, Layers, Activity,
-  PieChart, TrendingDown, ArrowUpRight, ArrowDownRight
+  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star
 } from 'lucide-react';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell,
-  ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid
+  AreaChart, Area, PieChart as RechartsPie, Pie, Cell,
+  ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts';
 import { getAllowedApps } from '../lib/permissions';
 import { api } from '../lib/api';
@@ -20,17 +20,6 @@ import StoryBrief from '../components/StoryBrief';
 import { aiAssistant } from '../lib/ai-assistant';
 
 // Chart colors
-const COLORS = {
-  primary: '#3b82f6',
-  success: '#10b981',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  purple: '#8b5cf6',
-  pink: '#ec4899',
-  cyan: '#06b6d4',
-  slate: '#64748b'
-};
-
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 // Icon mapping
@@ -41,137 +30,197 @@ const iconMap = {
   '📋': ClipboardCheck, '🔋': Battery, '🗄️': Database, '🔌': Zap,
 };
 
-// All apps
+// All apps with full names
 const allApps = {
   equipment: [
-    { id: 'switchboards', label: 'Tableaux Élec.', to: '/app/switchboards', icon: '⚡', color: 'from-amber-400 to-orange-500', desc: 'Gestion tableaux' },
-    { id: 'vsd', label: 'VSD', to: '/app/vsd', icon: '⚙️', color: 'from-slate-400 to-gray-600', desc: 'Variateurs' },
-    { id: 'meca', label: 'Mécanique', to: '/app/meca', icon: '⚙️', color: 'from-zinc-400 to-stone-600', desc: 'Équipements méca' },
-    { id: 'hv', label: 'Haute Tension', to: '/app/hv', icon: '⚡', color: 'from-yellow-400 to-amber-600', desc: 'Équip. HT' },
-    { id: 'glo', label: 'GLO', to: '/app/glo', icon: '🔋', color: 'from-emerald-400 to-teal-600', desc: 'UPS, batteries' },
-    { id: 'mobile', label: 'Mobile', to: '/app/mobile-equipments', icon: '🔌', color: 'from-cyan-400 to-blue-600', desc: 'Équip. mobiles' },
-    { id: 'datahub', label: 'DataHub', to: '/app/datahub', icon: '🗄️', color: 'from-indigo-400 to-purple-600', desc: 'Données custom' },
+    { id: 'switchboards', label: 'Tableaux Électriques', shortLabel: 'Tableaux', to: '/app/switchboards', icon: '⚡', color: 'from-amber-400 via-orange-500 to-red-500', glow: 'shadow-orange-500/30' },
+    { id: 'vsd', label: 'Variateurs de Vitesse', shortLabel: 'VSD', to: '/app/vsd', icon: '⚙️', color: 'from-slate-400 via-gray-500 to-zinc-600', glow: 'shadow-gray-500/30' },
+    { id: 'meca', label: 'Équipements Mécaniques', shortLabel: 'Mécanique', to: '/app/meca', icon: '⚙️', color: 'from-zinc-400 via-stone-500 to-neutral-600', glow: 'shadow-stone-500/30' },
+    { id: 'hv', label: 'Haute Tension', shortLabel: 'HT', to: '/app/hv', icon: '⚡', color: 'from-yellow-400 via-amber-500 to-orange-600', glow: 'shadow-amber-500/30' },
+    { id: 'glo', label: 'UPS & Batteries', shortLabel: 'GLO', to: '/app/glo', icon: '🔋', color: 'from-emerald-400 via-teal-500 to-cyan-600', glow: 'shadow-teal-500/30' },
+    { id: 'mobile', label: 'Équipements Mobiles', shortLabel: 'Mobile', to: '/app/mobile-equipments', icon: '🔌', color: 'from-cyan-400 via-blue-500 to-indigo-600', glow: 'shadow-blue-500/30' },
+    { id: 'datahub', label: 'DataHub Custom', shortLabel: 'DataHub', to: '/app/datahub', icon: '🗄️', color: 'from-indigo-400 via-purple-500 to-pink-600', glow: 'shadow-purple-500/30' },
   ],
   analysis: [
-    { id: 'obsolescence', label: 'Obsolescence', to: '/app/obsolescence', icon: '♻️', color: 'from-emerald-400 to-teal-600' },
-    { id: 'selectivity', label: 'Sélectivité', to: '/app/selectivity', icon: '🧩', color: 'from-purple-400 to-indigo-600' },
-    { id: 'fault-level', label: 'Icc', to: '/app/fault-level', icon: '📈', color: 'from-blue-400 to-cyan-600' },
-    { id: 'arc-flash', label: 'Arc Flash', to: '/app/arc-flash', icon: '⚠️', color: 'from-red-400 to-rose-600' },
-    { id: 'loopcalc', label: 'Boucle IS', to: '/app/loopcalc', icon: '🔄', color: 'from-sky-400 to-blue-600' },
+    { id: 'obsolescence', label: 'Obsolescence', shortLabel: 'Obsolescence', to: '/app/obsolescence', icon: '♻️', color: 'from-emerald-400 via-green-500 to-teal-600', glow: 'shadow-green-500/30' },
+    { id: 'selectivity', label: 'Sélectivité', shortLabel: 'Sélectivité', to: '/app/selectivity', icon: '🧩', color: 'from-purple-400 via-violet-500 to-indigo-600', glow: 'shadow-violet-500/30' },
+    { id: 'fault-level', label: 'Courant de Court-Circuit', shortLabel: 'Icc', to: '/app/fault-level', icon: '📈', color: 'from-blue-400 via-cyan-500 to-teal-600', glow: 'shadow-cyan-500/30' },
+    { id: 'arc-flash', label: 'Arc Flash', shortLabel: 'Arc Flash', to: '/app/arc-flash', icon: '⚠️', color: 'from-red-400 via-rose-500 to-pink-600', glow: 'shadow-rose-500/30' },
+    { id: 'loopcalc', label: 'Boucle Sécurité Intrinsèque', shortLabel: 'Boucle IS', to: '/app/loopcalc', icon: '🔄', color: 'from-sky-400 via-blue-500 to-indigo-600', glow: 'shadow-blue-500/30' },
   ],
   tools: [
-    { id: 'controls', label: 'Contrôles', to: '/app/switchboard-controls', icon: '📋', color: 'from-blue-400 to-indigo-600' },
-    { id: 'projects', label: 'Projets', to: '/app/projects', icon: '💳', color: 'from-green-400 to-emerald-600' },
-    { id: 'atex', label: 'ATEX', to: '/app/atex', icon: '🧯', color: 'from-orange-400 to-red-600' },
-    { id: 'doors', label: 'Portes Feu', to: '/app/doors', icon: '🚪', color: 'from-rose-400 to-pink-600' },
-    { id: 'comp-ext', label: 'Contractors', to: '/app/comp-ext', icon: '🤝', color: 'from-teal-400 to-cyan-600' },
-    { id: 'ask-veeva', label: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 to-purple-600' },
-    { id: 'dcf', label: 'DCF', to: '/app/dcf', icon: '📊', color: 'from-emerald-400 to-green-600' },
-    { id: 'learn-ex', label: 'Formation', to: '/app/learn_ex', icon: '📊', color: 'from-amber-400 to-yellow-600' },
+    { id: 'controls', label: 'Contrôles Périodiques', shortLabel: 'Contrôles', to: '/app/switchboard-controls', icon: '📋', color: 'from-blue-400 via-indigo-500 to-purple-600', glow: 'shadow-indigo-500/30' },
+    { id: 'projects', label: 'Gestion Projets', shortLabel: 'Projets', to: '/app/projects', icon: '💳', color: 'from-green-400 via-emerald-500 to-teal-600', glow: 'shadow-emerald-500/30' },
+    { id: 'atex', label: 'Zones ATEX', shortLabel: 'ATEX', to: '/app/atex', icon: '🧯', color: 'from-orange-400 via-red-500 to-rose-600', glow: 'shadow-red-500/30' },
+    { id: 'doors', label: 'Portes Coupe-Feu', shortLabel: 'Portes Feu', to: '/app/doors', icon: '🚪', color: 'from-rose-400 via-pink-500 to-fuchsia-600', glow: 'shadow-pink-500/30' },
+    { id: 'comp-ext', label: 'Sous-Traitants', shortLabel: 'Contractors', to: '/app/comp-ext', icon: '🤝', color: 'from-teal-400 via-cyan-500 to-blue-600', glow: 'shadow-cyan-500/30' },
+    { id: 'ask-veeva', label: 'Ask Veeva AI', shortLabel: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 via-purple-500 to-fuchsia-600', glow: 'shadow-purple-500/30' },
+    { id: 'dcf', label: 'Support SAP', shortLabel: 'DCF', to: '/app/dcf', icon: '📊', color: 'from-emerald-400 via-green-500 to-lime-600', glow: 'shadow-green-500/30' },
+    { id: 'learn-ex', label: 'Formation ATEX', shortLabel: 'Formation', to: '/app/learn_ex', icon: '📊', color: 'from-amber-400 via-yellow-500 to-orange-600', glow: 'shadow-yellow-500/30' },
   ]
 };
 
-// Animated number counter
-function AnimatedNumber({ value, duration = 1000 }) {
-  const [display, setDisplay] = useState(0);
-  useEffect(() => {
-    let start = 0;
-    const end = parseInt(value) || 0;
-    if (start === end) return;
-    const timer = setInterval(() => {
-      start += Math.ceil(end / 20);
-      if (start >= end) { setDisplay(end); clearInterval(timer); }
-      else setDisplay(start);
-    }, duration / 20);
-    return () => clearInterval(timer);
-  }, [value, duration]);
-  return <span>{display}</span>;
+// Spectacular App Card - Full visibility on mobile
+function AppCard({ label, shortLabel, to, icon, color, glow, badge, index = 0 }) {
+  const IconComponent = iconMap[icon] || Zap;
+
+  return (
+    <Link
+      to={to}
+      className={`group relative overflow-hidden rounded-2xl transition-all duration-500 hover:scale-[1.02] active:scale-[0.98] animate-slideUp`}
+      style={{ animationDelay: `${index * 50}ms` }}
+    >
+      {/* Glassmorphism background */}
+      <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-90`} />
+      <div className="absolute inset-0 bg-white/10 backdrop-blur-sm" />
+
+      {/* Animated glow on hover */}
+      <div className={`absolute -inset-1 bg-gradient-to-r ${color} opacity-0 group-hover:opacity-50 blur-xl transition-opacity duration-500`} />
+
+      {/* Shine effect */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700">
+        <div className="absolute inset-0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      </div>
+
+      {/* Content */}
+      <div className="relative p-4 sm:p-5 flex flex-col items-center text-center min-h-[120px] sm:min-h-[140px] justify-center">
+        {/* Icon with 3D effect */}
+        <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center mb-3 shadow-lg ${glow} group-hover:scale-110 group-hover:rotate-3 transition-all duration-500`}>
+          <IconComponent size={24} className="text-white drop-shadow-lg sm:w-7 sm:h-7" />
+        </div>
+
+        {/* Label - Full on mobile */}
+        <h3 className="text-white font-bold text-sm sm:text-base leading-tight drop-shadow-lg">
+          {label}
+        </h3>
+
+        {/* Badge */}
+        {badge > 0 && (
+          <div className="absolute top-2 right-2 px-2.5 py-1 bg-white rounded-full shadow-lg animate-bounce">
+            <span className="text-xs font-bold text-red-600">{badge}</span>
+          </div>
+        )}
+
+        {/* Arrow indicator */}
+        <div className="absolute bottom-2 right-2 w-6 h-6 rounded-full bg-white/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 group-hover:translate-x-1">
+          <ChevronRight size={14} className="text-white" />
+        </div>
+      </div>
+    </Link>
+  );
 }
 
-// Stat Card with animation
-function StatCard({ icon: Icon, value, label, trend, trendValue, color, onClick, delay = 0 }) {
-  const isPositive = trend === 'up';
-  const TrendIcon = isPositive ? ArrowUpRight : ArrowDownRight;
+// Animated Stat Card with 3D effect
+function StatCard({ icon: Icon, value, label, trend, trendValue, color, glow, onClick, index = 0 }) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const end = parseInt(value) || 0;
+    const duration = 1500;
+    const steps = 30;
+    const increment = end / steps;
+    let current = 0;
+
+    const timer = setInterval(() => {
+      current += increment;
+      if (current >= end) {
+        setCount(end);
+        clearInterval(timer);
+      } else {
+        setCount(Math.floor(current));
+      }
+    }, duration / steps);
+
+    return () => clearInterval(timer);
+  }, [value]);
 
   return (
     <button
       onClick={onClick}
-      className="group relative bg-white rounded-2xl p-4 shadow-sm hover:shadow-xl border border-gray-100 transition-all duration-500 hover:-translate-y-1 text-left w-full overflow-hidden animate-fadeIn"
-      style={{ animationDelay: `${delay}ms` }}
+      className={`group relative overflow-hidden bg-white rounded-2xl p-4 sm:p-5 shadow-lg hover:shadow-2xl ${glow} border border-gray-100/50 transition-all duration-500 hover:-translate-y-2 hover:rotate-1 text-left w-full animate-slideUp`}
+      style={{ animationDelay: `${index * 100}ms` }}
     >
-      <div className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br ${color} opacity-5 rounded-full -translate-y-16 translate-x-16 group-hover:scale-150 transition-transform duration-700`} />
+      {/* Background gradient on hover */}
+      <div className={`absolute inset-0 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-5 transition-opacity duration-500`} />
+
+      {/* Floating particles effect */}
+      <div className="absolute top-0 right-0 w-32 h-32 opacity-10">
+        <div className={`absolute w-2 h-2 rounded-full bg-gradient-to-r ${color} animate-float`} style={{ top: '20%', right: '30%' }} />
+        <div className={`absolute w-1.5 h-1.5 rounded-full bg-gradient-to-r ${color} animate-float-delayed`} style={{ top: '50%', right: '20%' }} />
+        <div className={`absolute w-1 h-1 rounded-full bg-gradient-to-r ${color} animate-float`} style={{ top: '70%', right: '40%' }} />
+      </div>
+
       <div className="relative">
         <div className="flex items-start justify-between mb-3">
-          <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center shadow-lg`}>
-            <Icon size={20} className="text-white" />
+          <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-br ${color} flex items-center justify-center shadow-lg ${glow} group-hover:scale-110 group-hover:rotate-6 transition-all duration-500`}>
+            <Icon size={22} className="text-white sm:w-6 sm:h-6" />
           </div>
           {trend && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
-              isPositive ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
-            }`}>
-              <TrendIcon size={12} />
+            <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+              trend === 'up' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+            } animate-pulse`}>
+              {trend === 'up' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
               {trendValue}
             </div>
           )}
         </div>
-        <p className="text-3xl font-bold text-gray-900 mb-1">
-          <AnimatedNumber value={value} />
+
+        <p className="text-3xl sm:text-4xl font-black text-gray-900 mb-1 tabular-nums">
+          {count}
         </p>
-        <p className="text-sm text-gray-500">{label}</p>
+        <p className="text-sm text-gray-500 font-medium">{label}</p>
       </div>
     </button>
   );
 }
 
-// Mini Chart Card
-function ChartCard({ title, children, className = '' }) {
+// Mini Chart with animation
+function MiniChart({ data, color }) {
+  if (!data?.length) return <div className="h-16 flex items-center justify-center text-gray-300">—</div>;
+
   return (
-    <div className={`bg-white rounded-2xl p-4 shadow-sm border border-gray-100 ${className}`}>
-      <h3 className="text-sm font-semibold text-gray-700 mb-3">{title}</h3>
-      {children}
+    <div className="h-16">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={`gradient-${color}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={2}
+            fill={`url(#gradient-${color})`}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
 
-// App Card - Compact
-function AppCard({ label, to, icon, color, badge }) {
-  const IconComponent = iconMap[icon] || Zap;
-  return (
-    <Link
-      to={to}
-      className="group flex items-center gap-3 bg-white rounded-xl p-3 shadow-sm hover:shadow-lg border border-gray-100 transition-all duration-300 hover:-translate-y-0.5"
-    >
-      <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-white shadow-md group-hover:scale-110 transition-transform`}>
-        <IconComponent size={18} />
-      </div>
-      <span className="font-medium text-gray-800 text-sm flex-1 truncate">{label}</span>
-      {badge > 0 && (
-        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 animate-pulse">
-          {badge}
-        </span>
-      )}
-      <ChevronRight size={16} className="text-gray-300 group-hover:text-gray-500 group-hover:translate-x-1 transition-all" />
-    </Link>
-  );
-}
-
-// Role Badge
+// Role Badge with glow
 function RoleBadge({ role }) {
   const cfg = {
-    superadmin: { icon: Crown, bg: 'bg-amber-100', text: 'text-amber-700', label: 'Super Admin' },
-    admin: { icon: Shield, bg: 'bg-purple-100', text: 'text-purple-700', label: 'Admin' },
-    global: { icon: Globe, bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Global' },
-    site: { icon: MapPin, bg: 'bg-blue-100', text: 'text-blue-700', label: 'Site' },
-  }[role] || { icon: MapPin, bg: 'bg-blue-100', text: 'text-blue-700', label: 'Site' };
+    superadmin: { icon: Crown, color: 'from-amber-400 to-yellow-500', text: 'Super Admin' },
+    admin: { icon: Shield, color: 'from-purple-400 to-indigo-500', text: 'Admin' },
+    global: { icon: Globe, color: 'from-emerald-400 to-teal-500', text: 'Global' },
+    site: { icon: MapPin, color: 'from-blue-400 to-cyan-500', text: 'Site' },
+  }[role] || { icon: MapPin, color: 'from-blue-400 to-cyan-500', text: 'Site' };
+
   const Icon = cfg.icon;
+
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.text} text-xs font-medium`}>
-      <Icon size={10} /> {cfg.label}
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r ${cfg.color} text-white text-xs font-bold shadow-lg`}>
+      <Icon size={12} />
+      {cfg.text}
     </span>
   );
 }
 
-// Profile Modal
+// Profile Modal with glassmorphism
 function ProfileModal({ user, departments, sites, onClose, onSave }) {
   const [siteId, setSiteId] = useState(user?.site_id || sites?.find(s => s.name === user?.site)?.id);
   const [deptId, setDeptId] = useState(user?.department_id || departments?.find(d => d.name === user?.department)?.id);
@@ -190,8 +239,7 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
       const data = await res.json();
       if (data.jwt) localStorage.setItem('eh_token', data.jwt);
       onSave({
-        ...user,
-        site_id: siteId, department_id: deptId,
+        ...user, site_id: siteId, department_id: deptId,
         site: sites?.find(s => s.id === siteId)?.name,
         department: departments?.find(d => d.id === deptId)?.name
       });
@@ -200,63 +248,61 @@ function ProfileModal({ user, departments, sites, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 animate-scaleIn">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-bold">Mon Profil</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
-        </div>
-        <div className="flex items-center gap-3 mb-5 pb-4 border-b">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg">
-            {user?.name?.charAt(0) || '?'}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+      <div className="relative bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl w-full max-w-sm p-6 animate-scaleIn border border-white/50">
+        <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-3xl opacity-20 blur-xl" />
+
+        <div className="relative">
+          <div className="flex justify-between items-center mb-5">
+            <h2 className="text-xl font-black text-gray-900">Mon Profil</h2>
+            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+              <X size={20} />
+            </button>
           </div>
-          <div>
-            <p className="font-semibold">{user?.name}</p>
-            <p className="text-sm text-gray-500">{user?.email}</p>
+
+          <div className="flex items-center gap-4 mb-6 pb-5 border-b">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 flex items-center justify-center text-white font-black text-2xl shadow-xl">
+              {user?.name?.charAt(0) || '?'}
+            </div>
+            <div>
+              <p className="font-bold text-lg text-gray-900">{user?.name}</p>
+              <p className="text-sm text-gray-500">{user?.email}</p>
+            </div>
           </div>
-        </div>
-        <div className="space-y-4 mb-5">
-          <div>
-            <label className="block text-sm font-medium mb-1.5">Site</label>
-            <select value={siteId || ''} onChange={e => setSiteId(+e.target.value || null)}
-              className="w-full px-3 py-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500">
-              <option value="">Sélectionner...</option>
-              {sites?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+
+          <div className="space-y-4 mb-6">
+            <div>
+              <label className="block text-sm font-bold text-gray-700 mb-2">Site</label>
+              <select value={siteId || ''} onChange={e => setSiteId(+e.target.value || null)}
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all font-medium">
+                <option value="">Sélectionner...</option>
+                {sites?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-gray-700 mb-2">Département</label>
+              <select value={deptId || ''} onChange={e => setDeptId(+e.target.value || null)}
+                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all font-medium">
+                <option value="">Sélectionner...</option>
+                {departments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium mb-1.5">Département</label>
-            <select value={deptId || ''} onChange={e => setDeptId(+e.target.value || null)}
-              className="w-full px-3 py-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500">
-              <option value="">Sélectionner...</option>
-              {departments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
+
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 py-3 rounded-xl border-2 border-gray-200 font-bold text-gray-700 hover:bg-gray-50 transition-colors">
+              Annuler
+            </button>
+            <button onClick={handleSave} disabled={saving}
+              className="flex-1 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:shadow-xl hover:scale-[1.02] transition-all disabled:opacity-50">
+              {saving ? 'Enregistrement...' : 'Enregistrer'}
+            </button>
           </div>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg border hover:bg-gray-50">Annuler</button>
-          <button onClick={handleSave} disabled={saving}
-            className="flex-1 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
-            {saving ? 'Enregistrement...' : 'Enregistrer'}
-          </button>
         </div>
       </div>
     </div>
   );
 }
-
-// Custom Tooltip for charts
-const CustomTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-white px-3 py-2 rounded-lg shadow-lg border text-sm">
-      <p className="font-medium text-gray-900">{label}</p>
-      {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color }}>{p.name}: {p.value}</p>
-      ))}
-    </div>
-  );
-};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -268,23 +314,21 @@ export default function Dashboard() {
   const [sites, setSites] = useState([]);
   const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0 });
   const [briefData, setBriefData] = useState(null);
-  const [historicalData, setHistoricalData] = useState([]);
+  const [chartData, setChartData] = useState([]);
   const [equipmentData, setEquipmentData] = useState([]);
-  const [showAllApps, setShowAllApps] = useState(false);
 
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem('eh_user') || '{}');
     setUser(stored);
-    setTimeout(() => setMounted(true), 50);
+    setTimeout(() => setMounted(true), 100);
 
-    // Load all data
     Promise.all([
       fetch('/api/departments').then(r => r.json()).catch(() => ({})),
       fetch('/api/sites').then(r => r.json()).catch(() => ({})),
       fetch('/api/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
       api.switchboardControls.dashboard().catch(() => null),
       aiAssistant.getMorningBrief().catch(() => null),
-      aiAssistant.getHistoricalStats(14).catch(() => null)
+      aiAssistant.getHistoricalStats(7).catch(() => null)
     ]).then(([depts, sitesRes, me, controls, brief, historical]) => {
       setDepartments(depts.departments || []);
       setSites(sitesRes.sites || []);
@@ -306,7 +350,6 @@ export default function Dashboard() {
 
       if (brief) {
         setBriefData(brief);
-        // Equipment distribution for pie chart
         if (brief.charts?.equipmentDistribution) {
           setEquipmentData(brief.charts.equipmentDistribution.map((d, i) => ({
             name: d.name, value: d.value, color: PIE_COLORS[i % PIE_COLORS.length]
@@ -314,14 +357,8 @@ export default function Dashboard() {
         }
       }
 
-      // Historical data for area chart
-      if (historical?.labels && historical?.datasets) {
-        const data = historical.labels.slice(-7).map((label, i) => ({
-          name: new Date(label).toLocaleDateString('fr-FR', { weekday: 'short' }),
-          completed: historical.datasets.controlsCompleted?.[i] || 0,
-          nc: historical.datasets.ncCreated?.[i] || 0
-        }));
-        setHistoricalData(data);
+      if (historical?.datasets?.controlsCompleted) {
+        setChartData(historical.datasets.controlsCompleted.slice(-7).map((v, i) => ({ value: v })));
       }
     });
   }, []);
@@ -340,250 +377,217 @@ export default function Dashboard() {
   const analysis = filterApps(allApps.analysis);
   const tools = filterApps(allApps.tools);
 
-  // Add OIBT for Nyon
   if (site === 'Nyon' && allowedApps.some(a => a.id === 'oibt')) {
-    tools.push({ id: 'oibt', label: 'OIBT', to: '/app/oibt', icon: '📋', color: 'from-indigo-400 to-blue-600' });
+    tools.push({ id: 'oibt', label: 'Contrôles OIBT', shortLabel: 'OIBT', to: '/app/oibt', icon: '📋', color: 'from-indigo-400 via-blue-500 to-cyan-600', glow: 'shadow-blue-500/30' });
   }
 
   const allFilteredApps = [...equipment, ...analysis, ...tools];
   const healthScore = briefData?.healthScore || 85;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-blue-50/30">
+      {/* Spectacular CSS */}
       <style>{`
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 1; } 100% { transform: scale(2); opacity: 0; } }
-        .animate-fadeIn { animation: fadeIn 0.5s ease-out forwards; opacity: 0; }
-        .animate-scaleIn { animation: scaleIn 0.3s ease-out; }
-        .animate-pulse-ring { animation: pulse-ring 2s ease-out infinite; }
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(30px) scale(0.95); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes scaleIn {
+          from { opacity: 0; transform: scale(0.9); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-10px); }
+        }
+        @keyframes float-delayed {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-15px); }
+        }
+        @keyframes pulse-glow {
+          0%, 100% { opacity: 0.5; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.5); }
+        }
+        @keyframes shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        .animate-slideUp {
+          animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          opacity: 0;
+        }
+        .animate-scaleIn { animation: scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+        .animate-float { animation: float 4s ease-in-out infinite; }
+        .animate-float-delayed { animation: float-delayed 5s ease-in-out infinite 1s; }
+        .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
       `}</style>
 
       {/* Hero with Weather */}
       <WeatherBackground site={site}>
-        <div className={`max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 transition-all duration-700 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            {/* User Info */}
+        <div className={`max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+            {/* User greeting */}
             <div className="flex items-center gap-4">
               <button onClick={() => setShowProfile(true)}
-                className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white text-xl font-bold hover:bg-white/30 transition-all hover:scale-105 shadow-xl">
+                className="relative group w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white/20 backdrop-blur-xl border-2 border-white/40 flex items-center justify-center text-white text-2xl sm:text-3xl font-black hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
                 {user?.name?.charAt(0) || '?'}
-                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full border-2 border-white flex items-center justify-center">
-                  <CheckCircle size={10} className="text-white" />
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-gradient-to-r from-emerald-400 to-teal-500 rounded-full border-3 border-white flex items-center justify-center shadow-lg">
+                  <CheckCircle size={12} className="text-white" />
                 </div>
+                {/* Glow effect */}
+                <div className="absolute inset-0 rounded-2xl bg-white/30 opacity-0 group-hover:opacity-100 blur-xl transition-opacity" />
               </button>
+
               <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-xl sm:text-2xl font-bold text-white drop-shadow-lg">
+                <div className="flex items-center gap-3 flex-wrap mb-1">
+                  <h1 className="text-2xl sm:text-3xl font-black text-white drop-shadow-lg">
                     {greeting}, {user?.name?.split(' ')[0] || 'Utilisateur'}
                   </h1>
                   <RoleBadge role={role} />
                 </div>
-                <p className="text-white/80 text-sm flex items-center gap-2 mt-1">
-                  <Calendar size={14} />
+                <p className="text-white/80 text-sm sm:text-base flex items-center gap-2">
+                  <Calendar size={16} />
                   {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                  {site && <><span className="mx-1">•</span><MapPin size={14} />{site}</>}
+                  {site && <><span className="mx-1">•</span><MapPin size={16} />{site}</>}
                 </p>
               </div>
             </div>
 
-            {/* Story Button */}
+            {/* Story Button - Spectacular */}
             <button onClick={() => setShowStory(true)}
-              className="group flex items-center gap-3 px-5 py-3 bg-white/20 backdrop-blur-md border border-white/30 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-xl">
+              className="group relative overflow-hidden flex items-center gap-4 px-6 py-4 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
+              {/* Animated background */}
+              <div className="absolute inset-0 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+
+              {/* Pulsing ring */}
               <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-ring" />
-                <div className="relative w-10 h-10 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center">
-                  <Play size={16} className="text-white fill-white ml-0.5" />
+                <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-glow" />
+                <div className="relative w-12 h-12 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
+                  <Play size={20} className="text-white fill-white ml-0.5" />
                 </div>
               </div>
-              <div className="text-left">
-                <p className="text-white font-semibold text-sm">Brief du matin</p>
-                <p className="text-white/70 text-xs">Voir la story</p>
+
+              <div className="text-left relative">
+                <p className="text-white font-bold text-base sm:text-lg">Brief du matin</p>
+                <p className="text-white/70 text-sm">Voir la story</p>
               </div>
-              <ChevronRight size={18} className="text-white/60 group-hover:translate-x-1 transition-transform" />
+
+              <ChevronRight size={24} className="text-white/60 group-hover:translate-x-2 transition-transform" />
             </button>
           </div>
         </div>
       </WeatherBackground>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 -mt-6 relative z-10 pb-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 -mt-8 relative z-10 pb-10">
 
-        {/* Stats Grid */}
-        <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 transition-all duration-700 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+        {/* Stats Grid - Spectacular */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
           <StatCard
             icon={AlertTriangle}
             value={stats.overdue}
-            label="Contrôles en retard"
-            color="from-red-400 to-rose-600"
+            label="En retard"
+            color="from-red-400 via-rose-500 to-pink-600"
+            glow="hover:shadow-rose-500/30"
             onClick={() => navigate('/app/switchboard-controls?tab=overdue')}
-            delay={100}
+            index={0}
           />
           <StatCard
             icon={Clock}
             value={stats.pending}
             label="À planifier"
-            color="from-amber-400 to-orange-600"
+            color="from-amber-400 via-orange-500 to-red-600"
+            glow="hover:shadow-orange-500/30"
             onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
-            delay={200}
+            index={1}
           />
           <StatCard
             icon={CheckCircle}
             value={stats.completed}
-            label="Complétés (semaine)"
-            trend="up" trendValue="+12%"
-            color="from-emerald-400 to-teal-600"
+            label="Complétés"
+            trend="up"
+            trendValue="+12%"
+            color="from-emerald-400 via-green-500 to-teal-600"
+            glow="hover:shadow-emerald-500/30"
             onClick={() => navigate('/app/switchboard-controls')}
-            delay={300}
+            index={2}
           />
           <StatCard
             icon={Activity}
             value={healthScore}
-            label="Score de santé"
-            color="from-blue-400 to-indigo-600"
+            label="Score santé"
+            color="from-blue-400 via-indigo-500 to-purple-600"
+            glow="hover:shadow-indigo-500/30"
             onClick={() => setShowStory(true)}
-            delay={400}
+            index={3}
           />
         </div>
 
-        {/* Charts Row */}
-        <div className={`grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6 transition-all duration-700 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-          {/* Area Chart - Trend */}
-          <ChartCard title="Activité des 7 derniers jours" className="lg:col-span-2">
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={historicalData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorCompleted" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={COLORS.success} stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor={COLORS.success} stopOpacity={0}/>
-                    </linearGradient>
-                    <linearGradient id="colorNc" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={COLORS.danger} stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor={COLORS.danger} stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="completed" name="Complétés" stroke={COLORS.success} fill="url(#colorCompleted)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="nc" name="NC créées" stroke={COLORS.danger} fill="url(#colorNc)" strokeWidth={2} strokeDasharray="5 5" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex items-center gap-4 mt-2 text-xs">
-              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-emerald-500 rounded" />Contrôles complétés</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-red-500 rounded border-dashed" style={{ borderStyle: 'dashed' }} />NC créées</span>
-            </div>
-          </ChartCard>
-
-          {/* Pie Chart - Equipment */}
-          <ChartCard title="Répartition équipements">
-            <div className="h-48 flex items-center justify-center">
-              {equipmentData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <RechartsPie>
-                    <Pie
-                      data={equipmentData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={40}
-                      outerRadius={70}
-                      paddingAngle={2}
-                      dataKey="value"
-                    >
-                      {equipmentData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </RechartsPie>
-                </ResponsiveContainer>
-              ) : (
-                <div className="text-gray-400 text-sm">Chargement...</div>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2 mt-2 justify-center">
-              {equipmentData.slice(0, 4).map((d, i) => (
-                <span key={i} className="flex items-center gap-1 text-xs text-gray-600">
-                  <span className="w-2 h-2 rounded-full" style={{ background: d.color }} />
-                  {d.name}
-                </span>
-              ))}
-            </div>
-          </ChartCard>
-        </div>
-
-        {/* Apps Section */}
-        <div className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6 transition-all duration-700 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                <Layers size={18} className="text-white" />
+        {/* Apps Section - Full names visible */}
+        <div className="space-y-8">
+          {/* Equipment */}
+          {equipment.length > 0 && (
+            <section className="animate-slideUp" style={{ animationDelay: '400ms' }}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
+                  <Zap size={20} className="text-white" />
+                </div>
+                <h2 className="text-xl font-black text-gray-900">Équipements</h2>
+                <span className="text-sm text-gray-400 font-medium">{equipment.length} apps</span>
               </div>
-              <div>
-                <h2 className="font-bold text-gray-900">Mes Applications</h2>
-                <p className="text-sm text-gray-500">{allFilteredApps.length} apps disponibles</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+                {equipment.map((app, i) => (
+                  <AppCard key={app.id} {...app} index={i} badge={app.id === 'switchboards' ? stats.overdue : 0} />
+                ))}
               </div>
-            </div>
-            <button
-              onClick={() => setShowAllApps(!showAllApps)}
-              className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"
-            >
-              {showAllApps ? 'Réduire' : 'Voir tout'}
-              <ChevronDown size={16} className={`transition-transform ${showAllApps ? 'rotate-180' : ''}`} />
-            </button>
-          </div>
+            </section>
+          )}
 
-          {/* Quick Access - Always visible */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 sm:gap-3">
-            {(showAllApps ? allFilteredApps : allFilteredApps.slice(0, 10)).map(app => (
-              <AppCard
-                key={app.id}
-                {...app}
-                badge={app.id === 'controls' ? stats.overdue : 0}
-              />
-            ))}
-          </div>
+          {/* Analysis */}
+          {analysis.length > 0 && (
+            <section className="animate-slideUp" style={{ animationDelay: '500ms' }}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-400 to-indigo-500 flex items-center justify-center shadow-lg">
+                  <BarChart3 size={20} className="text-white" />
+                </div>
+                <h2 className="text-xl font-black text-gray-900">Analyses & Études</h2>
+                <span className="text-sm text-gray-400 font-medium">{analysis.length} apps</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+                {analysis.map((app, i) => (
+                  <AppCard key={app.id} {...app} index={i} />
+                ))}
+              </div>
+            </section>
+          )}
 
-          {/* Collapsed sections when expanded */}
-          {showAllApps && (
-            <div className="mt-6 pt-6 border-t space-y-4">
-              {equipment.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Équipements</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {equipment.map(a => <AppCard key={a.id} {...a} />)}
-                  </div>
+          {/* Tools */}
+          {tools.length > 0 && (
+            <section className="animate-slideUp" style={{ animationDelay: '600ms' }}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center shadow-lg">
+                  <Wrench size={20} className="text-white" />
                 </div>
-              )}
-              {analysis.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Analyses</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {analysis.map(a => <AppCard key={a.id} {...a} />)}
-                  </div>
-                </div>
-              )}
-              {tools.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Outils</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {tools.map(a => <AppCard key={a.id} {...a} badge={a.id === 'controls' ? stats.overdue : 0} />)}
-                  </div>
-                </div>
-              )}
-            </div>
+                <h2 className="text-xl font-black text-gray-900">Outils & Utilitaires</h2>
+                <span className="text-sm text-gray-400 font-medium">{tools.length} apps</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+                {tools.map((app, i) => (
+                  <AppCard key={app.id} {...app} index={i} badge={app.id === 'controls' ? stats.overdue : 0} />
+                ))}
+              </div>
+            </section>
           )}
         </div>
 
         {/* Footer */}
-        <div className="text-center py-8">
-          <p className="text-gray-400 text-sm flex items-center justify-center gap-2">
-            <Zap size={14} className="text-blue-500" />
-            ElectroHub — Votre plateforme de gestion électrique
-          </p>
+        <div className="text-center py-10 animate-slideUp" style={{ animationDelay: '700ms' }}>
+          <div className="inline-flex items-center gap-3 px-6 py-3 bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-100">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center justify-center">
+              <Zap size={16} className="text-white" />
+            </div>
+            <span className="text-gray-600 font-medium">ElectroHub — Gestion électrique centralisée</span>
+          </div>
         </div>
       </main>
 
