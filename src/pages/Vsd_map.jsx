@@ -897,7 +897,6 @@ export default function VsdMap() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const urlParamsHandledRef = useRef(false);
   const targetEquipmentIdRef = useRef(null);
 
   // Plans
@@ -993,29 +992,43 @@ export default function VsdMap() {
     }
   };
 
-  // Restore plan from URL params or localStorage
+  // Handle URL params for navigation from list page
+  useEffect(() => {
+    const urlVsdId = searchParams.get('vsd');
+    const urlPlanKey = searchParams.get('plan');
+
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        if (urlVsdId) targetEquipmentIdRef.current = urlVsdId;
+
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+          refreshPositions(targetPlan, 0).then(positions => setInitialPoints(positions || []));
+        } else {
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams, refreshPositions]);
+
+  // Initial plan selection from localStorage
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const urlVsdId = searchParams.get('vsd');
       const urlPlanKey = searchParams.get('plan');
+      if (urlPlanKey) return;
 
       let planToSelect = null;
       let pageIdx = 0;
 
-      if (urlPlanKey && !urlParamsHandledRef.current) {
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        // Keep as-is - IDs might be strings or numbers depending on the equipment type
-        if (urlVsdId) targetEquipmentIdRef.current = urlVsdId;
-        urlParamsHandledRef.current = true;
-        setSearchParams({}, { replace: true });
-      }
-
-      if (!planToSelect) {
-        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-        if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
-        if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
-      }
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+      if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
 
       if (!planToSelect) planToSelect = plans[0];
 
@@ -1026,7 +1039,7 @@ export default function VsdMap() {
         refreshPositions(planToSelect, pageIdx).then(positions => setInitialPoints(positions || []));
       }
     }
-  }, [plans, searchParams, setSearchParams]);
+  }, [plans, selectedPlan, searchParams, refreshPositions]);
 
   useEffect(() => {
     if (selectedPlan?.logical_name) localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);

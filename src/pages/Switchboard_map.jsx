@@ -1213,8 +1213,6 @@ export default function SwitchboardMap() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Track if we've handled URL params on initial load
-  const urlParamsHandledRef = useRef(false);
   const targetSwitchboardIdRef = useRef(null);
 
   // Plans
@@ -1304,56 +1302,54 @@ export default function SwitchboardMap() {
     loadControlStatuses();
   }, []);
 
-  // Restore plan from URL params or localStorage after plans loaded
+  // Handle URL params for navigation from list page
+  useEffect(() => {
+    const urlSwitchboardId = searchParams.get('switchboard');
+    const urlPlanKey = searchParams.get('plan');
+
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        if (urlSwitchboardId) targetSwitchboardIdRef.current = Number(urlSwitchboardId);
+
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+          refreshPositions(targetPlan, 0).then(positions => setInitialPoints(positions || []));
+        } else {
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams, refreshPositions]);
+
+  // Initial plan selection from localStorage
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      // Priority 1: URL params (navigation from Switchboards page)
-      const urlSwitchboardId = searchParams.get('switchboard');
       const urlPlanKey = searchParams.get('plan');
+      if (urlPlanKey) return;
 
       let planToSelect = null;
       let pageIdx = 0;
 
-      if (urlPlanKey && !urlParamsHandledRef.current) {
-        // Use URL param for plan
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlSwitchboardId) {
-          targetSwitchboardIdRef.current = Number(urlSwitchboardId);
-        }
-        urlParamsHandledRef.current = true;
-        // Clear URL params after reading
-        setSearchParams({}, { replace: true });
-      }
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+      if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
 
-      // Priority 2: localStorage (returning to page)
-      if (!planToSelect) {
-        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-
-        if (savedPlanKey) {
-          planToSelect = plans.find(p => p.logical_name === savedPlanKey);
-        }
-        if (planToSelect && savedPageIndex) {
-          pageIdx = Number(savedPageIndex) || 0;
-        }
-      }
-
-      // Fallback: first plan
-      if (!planToSelect) {
-        planToSelect = plans[0];
-      }
+      if (!planToSelect) planToSelect = plans[0];
 
       setSelectedPlan(planToSelect);
       setPageIndex(pageIdx);
 
-      // Load positions
       if (planToSelect) {
-        refreshPositions(planToSelect, pageIdx).then(positions => {
-          setInitialPoints(positions || []);
-        });
+        refreshPositions(planToSelect, pageIdx).then(positions => setInitialPoints(positions || []));
       }
     }
-  }, [plans, searchParams, setSearchParams]);
+  }, [plans, selectedPlan, searchParams, refreshPositions]);
 
   // Save plan to localStorage
   useEffect(() => {
