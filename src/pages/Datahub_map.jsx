@@ -406,6 +406,7 @@ export default function DatahubMap() {
   const [categories, setCategories] = useState([]);
   const [positions, setPositions] = useState([]);
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // item_id -> { plans: [...] }
 
   // UI state
   const [selectedItem, setSelectedItem] = useState(null);
@@ -470,6 +471,7 @@ export default function DatahubMap() {
       setItems(itemsRes?.items || []);
       setCategories(catsRes?.categories || []);
       setPlacedIds(new Set((placedRes?.placed_ids || []).map(String)));
+      setPlacedDetails(placedRes?.placed_details || {});
     } catch (e) {
       console.error("Load error:", e);
     }
@@ -712,6 +714,50 @@ export default function DatahubMap() {
     }
   }, []);
 
+  // Smart navigation: navigate to the correct plan and highlight the item marker
+  // Similar to GLO's handleEquipmentClick
+  const handleViewOnMap = useCallback(
+    async (item) => {
+      // Clear any existing selection - user must click marker to see details
+      setSelectedItem(null);
+      setSelectedPosition(null);
+      setPlacementMode(null);
+      setCreateMode(false);
+
+      // Check if this item is placed somewhere (keys are strings)
+      const details = placedDetails[String(item.id)];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0]; // First plan where it's placed
+
+        // Find the plan
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+        if (targetPlan) {
+          // If we're not on that plan, switch to it
+          if (selectedPlan?.logical_name !== targetPlanKey) {
+            // Store the target item ID for highlighting after plan loads
+            targetItemIdRef.current = String(item.id);
+            setSelectedPlan(targetPlan);
+            setPageIndex(0);
+            setPdfReady(false);
+          } else {
+            // Same plan - just highlight after a small delay to ensure map is ready
+            setTimeout(() => highlightMarker(String(item.id)), 100);
+          }
+        }
+      } else {
+        // Item is on current plan, just highlight it
+        const pos = positions.find(p => String(p.item_id) === String(item.id));
+        if (pos) {
+          highlightMarker(String(item.id));
+        }
+      }
+
+      // On mobile, close sidebar so user can see the map
+      if (isMobile) setShowSidebar(false);
+    },
+    [plans, selectedPlan, placedDetails, positions, highlightMarker, isMobile]
+  );
+
   // Handle map click
   const handleMapClick = async (e) => {
     const bounds = overlayRef.current?.getBounds();
@@ -854,6 +900,9 @@ export default function DatahubMap() {
     placed: items.filter(i => placedIds.has(String(i.id))).length,
     unplaced: items.filter(i => !placedIds.has(String(i.id))).length,
   }), [items, placedIds]);
+
+  // IDs of items placed on the current plan (for "placed elsewhere" badge)
+  const currentPlacedHere = useMemo(() => new Set(positions.map(p => String(p.item_id))), [positions]);
 
   // Category toggle
   const toggleCategory = (catId) => {
@@ -1050,6 +1099,8 @@ export default function DatahubMap() {
                 ) : filteredItems.map(item => {
                   const cat = categories.find(c => c.id === item.category_id);
                   const placed = placedIds.has(String(item.id));
+                  const isPlacedHere = currentPlacedHere.has(String(item.id));
+                  const isPlacedElsewhere = placed && !isPlacedHere;
                   const isSelected = String(selectedItem?.id) === String(item.id);
                   const isPlacing = String(placementMode?.id) === String(item.id);
                   const IconComp = ICON_MAP[cat?.icon] || Circle;
@@ -1071,39 +1122,34 @@ export default function DatahubMap() {
                           <IconComp size={16} className="text-white" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-gray-900 truncate text-sm">{item.name}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium text-gray-900 truncate text-sm">{item.name}</p>
+                            {isPlacedElsewhere && <Badge variant="purple">Placé ailleurs</Badge>}
+                          </div>
                           <p className="text-xs text-gray-500 truncate">{cat?.name || 'Sans categorie'}</p>
                           <p className="text-xs text-gray-400 truncate">{item.building || '-'} • {item.floor || '-'}</p>
                         </div>
                         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          {placed ? (
-                            <Badge variant="success"><CheckCircle size={10} className="mr-1" />Place</Badge>
+                          {isPlacedHere ? (
+                            <Badge variant="success"><CheckCircle size={10} className="mr-1" />Placé</Badge>
+                          ) : placed ? (
+                            <Badge variant="purple"><CheckCircle size={10} className="mr-1" />Ailleurs</Badge>
                           ) : (
-                            <Badge variant="warning"><AlertCircle size={10} className="mr-1" />Non place</Badge>
+                            <Badge variant="warning"><AlertCircle size={10} className="mr-1" />Non placé</Badge>
                           )}
                         </div>
                       </div>
 
                       <div className="flex gap-2 mt-2">
-                        <button
-                          onClick={() => {
-                            // Only highlight (zoom + flash), don't auto-open modal
-                            // User must click on marker to see details
-                            setSelectedItem(null);
-                            setSelectedPosition(null);
-                            const pos = positions.find(p => String(p.item_id) === String(item.id));
-                            // Animate to marker if placed
-                            if (pos) {
-                              // Close sidebar on mobile so user can see the map animation
-                              if (isMobile) setShowSidebar(false);
-                              // Small delay to let the sidebar close and effect redraw first
-                              setTimeout(() => highlightMarker(String(item.id)), isMobile ? 150 : 50);
-                            }
-                          }}
-                          className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
-                        >
-                          <MapPin size={12} />Voir sur le plan
-                        </button>
+                        {/* "Voir sur le plan" button - only shown when placed somewhere */}
+                        {placed && (
+                          <button
+                            onClick={() => handleViewOnMap(item)}
+                            className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
+                          >
+                            <MapPin size={12} />Voir sur le plan
+                          </button>
+                        )}
                         {placed ? (
                           <button
                             onClick={() => setPlacementMode(item)}
@@ -1114,7 +1160,7 @@ export default function DatahubMap() {
                         ) : (
                           <button
                             onClick={() => setPlacementMode(item)}
-                            className="flex-1 py-1.5 px-2 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 flex items-center justify-center gap-1"
+                            className="w-full py-1.5 px-2 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 flex items-center justify-center gap-1"
                           >
                             <Target size={12} />Placer
                           </button>
