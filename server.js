@@ -3948,7 +3948,9 @@ app.use("/api/admin", adminRouter);
 /* ================================================================
    🔔 Push Notifications API Routes
    ================================================================ */
+console.log('[Push] Mounting push router at /api/push');
 app.use("/api/push", pushRouter);
+console.log('[Push] Push router mounted');
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");

@@ -1,6 +1,8 @@
 // server_push.js - Push Notification Server Module
 // Handles VAPID keys, subscriptions, and sending push notifications
 
+console.log('[Push] 🔔 Loading push notification module...');
+
 import express from 'express';
 import webpush from 'web-push';
 import jwt from 'jsonwebtoken';
@@ -8,6 +10,8 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
+console.log('[Push] VAPID_PUBLIC_KEY exists:', !!process.env.VAPID_PUBLIC_KEY);
+console.log('[Push] VAPID_PRIVATE_KEY exists:', !!process.env.VAPID_PRIVATE_KEY);
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
@@ -507,4 +511,5 @@ export async function sendMorningBrief(userId, brief) {
   });
 }
 
+console.log('[Push] ✅ Push notification module loaded successfully');
 export default router;
