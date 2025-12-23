@@ -53,8 +53,13 @@ const authenticateToken = (req, res, next) => {
 // ============================================================
 // DATABASE INITIALIZATION
 // ============================================================
+let tablesInitialized = false;
+
 async function initPushTables() {
+  if (tablesInitialized) return true;
+
   try {
+    // Create tables one by one with error handling
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id SERIAL PRIMARY KEY,
@@ -68,6 +73,7 @@ async function initPushTables() {
         last_used_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    console.log('[Push] push_subscriptions table ready');
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_preferences (
@@ -82,6 +88,7 @@ async function initPushTables() {
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    console.log('[Push] push_preferences table ready');
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_history (
@@ -95,14 +102,29 @@ async function initPushTables() {
         status TEXT DEFAULT 'sent'
       )
     `);
+    console.log('[Push] push_history table ready');
 
-    console.log('[Push] Database tables initialized');
+    tablesInitialized = true;
+    console.log('[Push] All database tables initialized');
+    return true;
   } catch (error) {
-    console.error('[Push] Failed to initialize tables:', error);
+    console.error('[Push] Failed to initialize tables:', error.message);
+    return false;
   }
 }
 
-// Initialize tables on startup
+// Middleware to ensure tables exist before handling requests
+const ensureTablesExist = async (req, res, next) => {
+  if (!tablesInitialized) {
+    const success = await initPushTables();
+    if (!success) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+  }
+  next();
+};
+
+// Initialize tables on startup (non-blocking)
 initPushTables();
 
 // ============================================================
@@ -118,7 +140,7 @@ router.get('/vapid-public-key', (req, res) => {
 });
 
 // Subscribe to push notifications
-router.post('/subscribe', authenticateToken, async (req, res) => {
+router.post('/subscribe', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const { subscription, userAgent, platform } = req.body;
     const userId = req.user.userId;
@@ -156,7 +178,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 });
 
 // Unsubscribe from push notifications
-router.post('/unsubscribe', authenticateToken, async (req, res) => {
+router.post('/unsubscribe', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const { endpoint } = req.body;
     const userId = req.user.userId;
@@ -174,7 +196,7 @@ router.post('/unsubscribe', authenticateToken, async (req, res) => {
 });
 
 // Get notification preferences
-router.get('/preferences', authenticateToken, async (req, res) => {
+router.get('/preferences', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
@@ -211,7 +233,7 @@ router.get('/preferences', authenticateToken, async (req, res) => {
 });
 
 // Update notification preferences
-router.put('/preferences', authenticateToken, async (req, res) => {
+router.put('/preferences', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
     const {
@@ -249,7 +271,7 @@ router.put('/preferences', authenticateToken, async (req, res) => {
 });
 
 // Send test notification
-router.post('/test', authenticateToken, async (req, res) => {
+router.post('/test', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
