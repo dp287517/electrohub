@@ -772,13 +772,23 @@ const GloLeafletViewer = forwardRef(({
     onClickPoint?.(it);
   }, [onClickPoint]);
 
+  const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
+  const wrapperHeight = Math.max(
+    320,
+    Math.min(imgSize.h || 720, viewportH - 180)
+  );
+
   return (
-    <div className="relative flex-1 flex flex-col">
-      <div className="flex items-center justify-end gap-2 p-2 border-b bg-white">
-        <Btn variant="ghost" onClick={adjust}>Ajuster</Btn>
+    <div className="mt-3 relative">
+      <div className="flex items-center justify-end gap-2 mb-2">
+        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>Ajuster</Btn>
       </div>
 
-      <div ref={wrapRef} className="flex-1 w-full bg-gray-100" style={{ minHeight: 400 }} />
+      <div
+        ref={wrapRef}
+        className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+        style={{ height: wrapperHeight }}
+      />
 
       {picker && (
         <div
@@ -885,6 +895,7 @@ export default function GloMap() {
   const [equipments, setEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // equipment_id -> { plans: [...] }
   const [controlStatuses, setControlStatuses] = useState({});
 
   const [selectedPosition, setSelectedPosition] = useState(null);
@@ -1015,8 +1026,15 @@ export default function GloMap() {
   const refreshPlacedIds = async () => {
     try {
       const res = await api.gloMaps.placedIds();
-      setPlacedIds(new Set(res?.placed_ids || []));
-    } catch {}
+      const ids = (res?.placed_ids || []).map((id) => Number(id));
+      const details = res?.placed_details || {};
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(details);
+    } catch (e) {
+      console.error("Erreur chargement placements GLO:", e);
+      setPlacedIds(new Set());
+      setPlacedDetails({});
+    }
   };
 
   const loadEquipments = async () => {
@@ -1154,6 +1172,62 @@ export default function GloMap() {
     setContextMenu({ ...meta, ...coords });
   };
 
+  // Smart navigation: navigate to the correct plan and highlight the equipment marker
+  const handleEquipmentClick = useCallback(
+    async (eq) => {
+      setContextMenu(null);
+      setSelectedEquipment(eq);
+
+      // Check if this equipment is placed somewhere
+      const details = placedDetails[eq.id];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0]; // First plan where it's placed
+
+        // Find the plan
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+        if (targetPlan) {
+          // If we're not on that plan, switch to it
+          if (stableSelectedPlan?.logical_name !== targetPlanKey) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(0);
+            setPdfReady(false);
+            setInitialPoints([]);
+
+            // Wait for plan to load, then highlight
+            const positions = await refreshPositions(targetPlan, 0);
+            setInitialPoints(positions || []);
+
+            // Small delay to let viewer render
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(eq.id);
+              // Also set as selected
+              const pos = positions?.find(p => Number(p.equipment_id) === Number(eq.id));
+              if (pos) {
+                setSelectedPosition(pos);
+                setSelectedEquipment(eq);
+              }
+            }, 500);
+          } else {
+            // Same plan - just highlight and select
+            viewerRef.current?.highlightMarker(eq.id);
+            const positions = getLatestPositions();
+            const pos = positions.find(p => Number(p.equipment_id) === Number(eq.id));
+            if (pos) {
+              handleClickMarker(pos);
+            }
+          }
+        }
+      } else {
+        // Not placed - just show equipment info
+        setSelectedPosition(null);
+        setSelectedEquipment(eq);
+      }
+
+      if (isMobile) setShowSidebar(false);
+    },
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, getLatestPositions, handleClickMarker, isMobile]
+  );
+
   const filteredEquipments = useMemo(() => {
     let list = equipments;
     if (searchQuery) {
@@ -1174,20 +1248,31 @@ export default function GloMap() {
   const currentPlacedHere = useMemo(() => new Set(currentPositions.map(p => p.equipment_id)), [currentPositions]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
       <style>{`
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideRight { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
         @keyframes blink-overdue { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
-        .glo-marker-selected { animation: pulse 1.5s infinite; }
+        .animate-slideRight { animation: slideRight .3s ease-out forwards; }
+        .glo-marker-selected { animation: pulse-selected 1.5s ease-in-out infinite; }
         .glo-marker-overdue { animation: blink-overdue 1s ease-in-out infinite; }
-        .glo-marker-flash { animation: flash 0.5s ease-out 3; }
-        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
-        @keyframes flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .glo-marker-flash > div { animation: flash-marker 2s ease-in-out; }
+        @keyframes pulse-selected {
+          0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); }
+          50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(139, 92, 246, 0); }
+        }
+        @keyframes flash-marker {
+          0%, 100% { transform: scale(1); filter: brightness(1); }
+          25% { transform: scale(1.3); filter: brightness(1.3); }
+          50% { transform: scale(1); filter: brightness(1); }
+          75% { transform: scale(1.3); filter: brightness(1.3); }
+        }
+        .glo-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}
-      <div className="bg-white border-b shadow-sm">
+      <div className="bg-white border-b shadow-sm z-20">
         <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <button onClick={() => navigate('/app/glo')} className="p-2 hover:bg-gray-100 rounded-lg">
@@ -1242,7 +1327,7 @@ export default function GloMap() {
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
         {showSidebar && (
-          <div className="w-80 bg-white border-r flex flex-col">
+          <div className="w-full max-w-[360px] bg-white border-r shadow-sm flex flex-col animate-slideRight">
             <div className="p-3 border-b space-y-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -1288,13 +1373,7 @@ export default function GloMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !currentPlacedHere.has(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      const pos = currentPositions.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        handleClickMarker(pos);
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={handlePlaceEquipment}
                   />
                 ))
@@ -1304,40 +1383,55 @@ export default function GloMap() {
         )}
 
         {/* Map Area */}
-        <div className="flex-1 relative">
-          {!stableFileUrl ? (
-            <EmptyState
-              icon={MapPin}
-              title="Aucun plan disponible"
-              description="Importez des plans depuis la page Admin"
-              action={
-                <button onClick={() => navigate('/app/admin')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-600 flex items-center gap-2">
-                  Gérer les plans
-                </button>
-              }
-            />
-          ) : (
-            <GloLeafletViewer
-              ref={viewerRef}
-              fileUrl={stableFileUrl}
-              pageIndex={pageIndex}
-              initialPoints={initialPoints}
-              selectedId={selectedEquipmentId}
-              controlStatuses={controlStatuses}
-              onReady={() => setPdfReady(true)}
-              onClickPoint={handleClickMarker}
-              onMovePoint={handleMoveMarker}
-              onCreatePoint={(xFrac, yFrac) => {
-                if (createMode) {
-                  createEquipmentAtFrac(xFrac, yFrac);
-                } else if (placementMode) {
-                  handleCreatePosition(xFrac, yFrac);
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Leaflet viewer */}
+          <div className="relative flex-1 p-3 overflow-hidden">
+            {!stableFileUrl || loadingPlans ? (
+              <EmptyState
+                icon={MapPin}
+                title="Aucun plan disponible"
+                description="Importez des plans depuis la page Admin"
+                action={
+                  <button onClick={() => navigate('/app/admin')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-600 flex items-center gap-2">
+                    Gérer les plans
+                  </button>
                 }
-              }}
-              onContextMenu={handleContextMenu}
-              placementActive={!!placementMode || createMode}
-            />
-          )}
+              />
+            ) : (
+              <div className="relative h-full">
+                {/* Loading overlay */}
+                {!pdfReady && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none rounded-2xl">
+                    <div className="flex flex-col items-center gap-3 text-gray-700">
+                      <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-emerald-600"></div>
+                      <div className="text-sm font-medium">Chargement du plan...</div>
+                    </div>
+                  </div>
+                )}
+
+                <GloLeafletViewer
+                  ref={viewerRef}
+                  key={stableSelectedPlan?.logical_name || "none"}
+                  fileUrl={stableFileUrl}
+                  pageIndex={pageIndex}
+                  initialPoints={initialPoints}
+                  selectedId={selectedEquipmentId}
+                  controlStatuses={controlStatuses}
+                  placementActive={!!placementMode || createMode}
+                  onReady={() => setPdfReady(true)}
+                  onClickPoint={handleClickMarker}
+                  onMovePoint={handleMoveMarker}
+                  onCreatePoint={(xFrac, yFrac) => {
+                    if (createMode) {
+                      createEquipmentAtFrac(xFrac, yFrac);
+                    } else if (placementMode) {
+                      handleCreatePosition(xFrac, yFrac);
+                    }
+                  }}
+                  onContextMenu={handleContextMenu}
+                />
+              </div>
+            )}
 
           {/* Floating Toolbar */}
           {stableFileUrl && (
@@ -1381,6 +1475,16 @@ export default function GloMap() {
 
           {placementMode && <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />}
 
+          {/* Context Menu */}
+          {contextMenu && (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              onDelete={() => setConfirmState({ open: true, position: contextMenu })}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
+
           {selectedPosition && !placementMode && !createMode && (
             <DetailPanel
               position={selectedPosition}
@@ -1390,18 +1494,9 @@ export default function GloMap() {
               onDelete={(pos) => setConfirmState({ open: true, position: pos })}
             />
           )}
+          </div>
         </div>
       </div>
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onDelete={() => setConfirmState({ open: true, position: contextMenu })}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
 
       {/* Confirm Modal */}
       <ConfirmModal
