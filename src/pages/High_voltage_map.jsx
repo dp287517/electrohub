@@ -955,6 +955,7 @@ export default function HighVoltageMap() {
   const [equipments, setEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // equipment_id -> { plans: [...] }
 
   // Control statuses
   const [controlStatuses, setControlStatuses] = useState({});
@@ -1103,10 +1104,15 @@ export default function HighVoltageMap() {
   const refreshPlacedIds = async () => {
     try {
       const res = await api.hvMaps.placedIds();
+      // Keep IDs as-is (don't convert to Number - IDs might be UUIDs or strings)
       const ids = res?.placed_ids || res?.ids || [];
+      const details = res?.placed_details || {};
       setPlacedIds(new Set(ids));
+      setPlacedDetails(details);
     } catch (e) {
       console.error("Erreur chargement placements HV:", e);
+      setPlacedIds(new Set());
+      setPlacedDetails({});
     }
   };
 
@@ -1228,6 +1234,51 @@ export default function HighVoltageMap() {
   const isPlacedHere = (equipmentId) => {
     return initialPoints.some(p => p.equipment_id === equipmentId);
   };
+
+  // Smart navigation: switch plan if needed, then highlight marker
+  const handleEquipmentClick = useCallback(
+    async (eq) => {
+      setContextMenu(null);
+      setSelectedPosition(null);
+      setSelectedEquipment(null);
+
+      // Check if equipment is placed somewhere
+      const details = placedDetails[eq.id];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0];
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+
+        if (targetPlan) {
+          // If on a different plan, switch to it first
+          if (stableSelectedPlan?.logical_name !== targetPlanKey) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(0);
+            setPdfReady(false);
+            setInitialPoints([]);
+            const positions = await refreshPositions(targetPlan, 0);
+            setInitialPoints(positions || []);
+            // Wait for PDF to load then highlight
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(eq.id);
+            }, 500);
+          } else {
+            // Same plan - just highlight
+            viewerRef.current?.highlightMarker(eq.id);
+          }
+        }
+      } else {
+        // Not placed anywhere - just try to highlight if on current plan
+        const pos = initialPoints.find(p => p.equipment_id === eq.id);
+        if (pos) {
+          viewerRef.current?.highlightMarker(eq.id);
+        }
+      }
+
+      // Close sidebar on mobile
+      if (isMobile) setShowSidebar(false);
+    },
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, isMobile, initialPoints]
+  );
 
   const stats = useMemo(() => ({
     total: equipments.length,
@@ -1386,16 +1437,7 @@ export default function HighVoltageMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                      if (isMobile) setShowSidebar(false);
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={(equipment) => setPlacementMode(equipment)}
                   />
                 ))
@@ -1590,16 +1632,7 @@ export default function HighVoltageMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                      setShowSidebar(false);
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
                   />
                 ))

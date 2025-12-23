@@ -837,6 +837,51 @@ export default function MobileEquipmentsMap() {
     setSelectedPosition(null);
   }, []);
 
+  // Smart navigation: switch plan if needed, then highlight marker
+  const handleEquipmentClick = useCallback(
+    async (eq) => {
+      setSelectedPosition(null);
+      setSelectedEquipment(null);
+      setPlacementMode(null);
+
+      // Check if equipment is placed somewhere
+      const position = allPositions.find(p => p.equipment_id === eq.id);
+      if (position) {
+        // Find the plan where this equipment is placed
+        const planKey = position.planId || position.logical_name;
+        const targetPlan = plans.find(p => p.id === planKey || p.logical_name === planKey);
+
+        if (targetPlan) {
+          // If on a different plan, switch to it first
+          const currentPlanId = selectedPlan?.id || selectedPlan?.logical_name;
+          const targetPlanId = targetPlan.id || targetPlan.logical_name;
+
+          if (currentPlanId !== targetPlanId) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(position.page_index || 0);
+            // Wait for plan to load then highlight
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(eq.id);
+            }, 500);
+          } else {
+            // Same plan - just highlight
+            viewerRef.current?.highlightMarker(eq.id);
+          }
+        }
+      } else {
+        // Not placed anywhere - check if on current plan (shouldn't happen but just in case)
+        const pos = positions.find(p => p.equipment_id === eq.id);
+        if (pos) {
+          viewerRef.current?.highlightMarker(eq.id);
+        }
+      }
+
+      // Close sidebar on mobile
+      if (isMobile) setSidebarOpen(false);
+    },
+    [allPositions, plans, selectedPlan, positions, isMobile]
+  );
+
   const handleCreatePosition = useCallback(async (x, y) => {
     if (!placementMode || !selectedPlan) return;
 
@@ -1214,15 +1259,7 @@ export default function MobileEquipmentsMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
                     isSelected={selectedEquipment?.id === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={handleStartPlacement}
                   />
                 ))
@@ -1324,17 +1361,7 @@ export default function MobileEquipmentsMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
                     isSelected={selectedEquipment?.id === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      setSidebarOpen(false);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        // Small delay to let sidebar close first
-                        setTimeout(() => viewerRef.current?.highlightMarker(eq.id), 150);
-                      }
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={(e) => {
                       handleStartPlacement(e);
                       setSidebarOpen(false);

@@ -911,6 +911,7 @@ export default function MecaMap() {
   const [equipments, setEquipments] = useState([]);
   const [loadingEquipments, setLoadingEquipments] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({}); // equipment_id -> { plans: [...] }
 
   // Control statuses for equipment markers { equipment_id: { status: 'overdue'|'upcoming'|'done' } }
   const [controlStatuses, setControlStatuses] = useState({});
@@ -1052,18 +1053,16 @@ export default function MecaMap() {
 
   const refreshPlacedIds = async () => {
     try {
-      const placed = new Set();
-      for (const plan of plans) {
-        try {
-          const positions = await api.mecaMaps.positionsAuto(plan.logical_name, 0).catch(() => ({}));
-          (positions?.positions || []).forEach(p => {
-            if (p.equipment_id) placed.add(p.equipment_id);
-          });
-        } catch {}
-      }
-      setPlacedIds(placed);
+      const res = await api.mecaMaps.placedIds();
+      // Keep IDs as-is (don't convert to Number - IDs might be UUIDs or strings)
+      const ids = res?.placed_ids || [];
+      const details = res?.placed_details || {};
+      setPlacedIds(new Set(ids));
+      setPlacedDetails(details);
     } catch (e) {
       console.error("Erreur chargement placements MECA:", e);
+      setPlacedIds(new Set());
+      setPlacedDetails({});
     }
   };
 
@@ -1190,6 +1189,60 @@ export default function MecaMap() {
   const isPlacedHere = (equipmentId) => {
     return initialPoints.some(p => p.equipment_id === equipmentId);
   };
+
+  // Smart navigation: navigate to the correct plan and highlight the equipment marker
+  // Note: We only highlight the marker, we DON'T auto-open the detail panel
+  // User must click on the marker to open the detail panel
+  const handleEquipmentClick = useCallback(
+    async (eq) => {
+      setContextMenu(null);
+      // Clear any existing selection - user must click marker to see details
+      setSelectedPosition(null);
+      setSelectedEquipment(null);
+
+      // Check if this equipment is placed somewhere
+      const details = placedDetails[eq.id];
+      if (details?.plans?.length > 0) {
+        const targetPlanKey = details.plans[0]; // First plan where it's placed
+
+        // Find the plan
+        const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+        if (targetPlan) {
+          // If we're not on that plan, switch to it
+          if (stableSelectedPlan?.logical_name !== targetPlanKey) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(0);
+            setPdfReady(false);
+            setInitialPoints([]);
+
+            // Wait for plan to load, then highlight (zoom + flash only, no modal)
+            const positions = await refreshPositions(targetPlan, 0);
+            setInitialPoints(positions || []);
+
+            // Small delay to let viewer render, then just highlight
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(eq.id);
+            }, 500);
+          } else {
+            // Same plan - just highlight (zoom + flash), no modal
+            viewerRef.current?.highlightMarker(eq.id);
+          }
+        }
+      } else {
+        // Equipment is placed on current plan but placedDetails might not be populated
+        // Try to highlight if on current plan
+        const pos = initialPoints.find(p => p.equipment_id === eq.id);
+        if (pos) {
+          viewerRef.current?.highlightMarker(eq.id);
+        }
+      }
+      // If not placed, do nothing - no modal to show
+
+      // On mobile, close sidebar so user can see the map
+      if (isMobile) setShowSidebar(false);
+    },
+    [plans, stableSelectedPlan, placedDetails, refreshPositions, isMobile, initialPoints]
+  );
 
   const stats = useMemo(() => ({
     total: equipments.length,
@@ -1367,17 +1420,7 @@ export default function MecaMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      // User must click on marker to see details
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                      if (isMobile) setShowSidebar(false);
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={(equipment) => setPlacementMode(equipment)}
                   />
                 ))
@@ -1571,16 +1614,7 @@ export default function MecaMap() {
                     isPlacedSomewhere={placedIds.has(eq.id)}
                     isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
                     isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => {
-                      // Only highlight (zoom + flash), don't auto-open modal
-                      setSelectedPosition(null);
-                      setSelectedEquipment(null);
-                      const pos = initialPoints.find(p => p.equipment_id === eq.id);
-                      if (pos) {
-                        viewerRef.current?.highlightMarker(eq.id);
-                      }
-                      setShowSidebar(false);
-                    }}
+                    onClick={() => handleEquipmentClick(eq)}
                     onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
                   />
                 ))
