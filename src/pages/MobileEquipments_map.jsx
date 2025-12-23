@@ -735,6 +735,14 @@ export default function MobileEquipmentsMap() {
 
         setPlans(plansRes.plans || []);
         setEquipments(equipRes.items || equipRes.equipments || equipRes.data || []);
+
+        // Load placements immediately (like Meca_map) - no latency
+        const placementsRes = await api.mobileEquipment.maps.placedIds();
+        const ids = placementsRes?.placed_ids || [];
+        const details = placementsRes?.placed_details || {};
+        setPlacedIds(new Set(ids.map(String)));
+        setPlacedDetails(details);
+
         loadControlStatuses();
       } catch (e) {
         console.error("[MobileEquipmentsMap] Load error:", e);
@@ -813,13 +821,6 @@ export default function MobileEquipmentsMap() {
     localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name || String(selectedPlan.id));
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [selectedPlan, pageIndex]);
-
-  // Load placements when plans and equipments are loaded (like Meca_map)
-  useEffect(() => {
-    if (plans.length > 0 && equipments.length > 0) {
-      refreshPlacedIds();
-    }
-  }, [plans, equipments, refreshPlacedIds]);
 
   // Highlight equipment after PDF is ready (like High Voltage)
   useEffect(() => {
