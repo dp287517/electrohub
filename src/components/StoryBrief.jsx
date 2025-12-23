@@ -55,7 +55,7 @@ const AnimatedNumber = ({ value, duration = 1000 }) => {
 
 // Progress bar for story navigation
 const StoryProgress = ({ current, total, progress }) => (
-  <div className="flex gap-1 px-3 pt-3 pb-2">
+  <div className="flex gap-1 px-3 pt-3 pb-2 safe-area-top">
     {Array.from({ length: total }).map((_, i) => (
       <div key={i} className="flex-1 h-1 bg-white/30 rounded-full overflow-hidden">
         <div
@@ -666,7 +666,7 @@ export default function StoryBrief({
 
   if (isLoading) {
     return (
-      <div className="fixed inset-0 z-50 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center">
+      <div className="fixed inset-0 z-50 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center safe-area-top">
         <div className="text-center text-white">
           <RefreshCw size={32} className="animate-spin mx-auto mb-4" />
           <p className="text-lg">Préparation du brief...</p>
