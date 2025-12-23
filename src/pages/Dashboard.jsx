@@ -481,6 +481,92 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 -mt-8 relative z-10 pb-10">
 
+        {/* Quick Access - Switchboard Controls */}
+        {stats.overdue > 0 && (
+          <Link
+            to="/app/switchboard-controls?tab=overdue"
+            className="group block mb-6 animate-slideUp"
+          >
+            <div className="relative overflow-hidden bg-gradient-to-r from-red-500 via-rose-500 to-pink-500 rounded-2xl p-4 sm:p-5 shadow-xl shadow-red-500/20 hover:shadow-2xl hover:shadow-red-500/30 transition-all hover:scale-[1.01]">
+              {/* Animated background pattern */}
+              <div className="absolute inset-0 opacity-20">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.3),transparent_50%)]" />
+              </div>
+
+              <div className="relative flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center animate-pulse">
+                    <AlertTriangle size={24} className="text-white sm:w-7 sm:h-7" />
+                  </div>
+                  <div>
+                    <p className="text-white font-bold text-lg sm:text-xl">
+                      {stats.overdue} contrôle{stats.overdue > 1 ? 's' : ''} en retard
+                    </p>
+                    <p className="text-white/80 text-sm">
+                      Action requise — Cliquez pour voir les détails
+                    </p>
+                  </div>
+                </div>
+                <div className="hidden sm:flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm rounded-xl text-white font-semibold group-hover:bg-white/30 transition-colors">
+                  <ClipboardCheck size={18} />
+                  <span>Voir les contrôles</span>
+                  <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                </div>
+                <ChevronRight size={24} className="sm:hidden text-white/80 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          </Link>
+        )}
+
+        {/* Quick Access Card - Always visible */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 animate-slideUp" style={{ animationDelay: '200ms' }}>
+          <Link
+            to="/app/switchboard-controls"
+            className="group relative overflow-hidden bg-white rounded-2xl p-5 shadow-lg hover:shadow-xl border border-gray-100 transition-all hover:scale-[1.01]"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-purple-500/5 to-pink-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-500/30 group-hover:scale-110 group-hover:rotate-3 transition-all">
+                <ClipboardCheck size={26} className="text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-gray-900 text-lg">Contrôles Périodiques</h3>
+                <p className="text-gray-500 text-sm">Gérer les vérifications des tableaux</p>
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                {stats.overdue > 0 && (
+                  <span className="px-2.5 py-1 bg-red-100 text-red-600 rounded-full text-xs font-bold">
+                    {stats.overdue} en retard
+                  </span>
+                )}
+                {stats.pending > 0 && (
+                  <span className="px-2.5 py-1 bg-amber-100 text-amber-600 rounded-full text-xs font-bold">
+                    {stats.pending} à planifier
+                  </span>
+                )}
+              </div>
+              <ChevronRight size={20} className="text-gray-400 group-hover:text-gray-600 group-hover:translate-x-1 transition-all" />
+            </div>
+          </Link>
+
+          <Link
+            to="/app/datahub"
+            className="group relative overflow-hidden bg-white rounded-2xl p-5 shadow-lg hover:shadow-xl border border-gray-100 transition-all hover:scale-[1.01]"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-violet-500/5 via-purple-500/5 to-fuchsia-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 via-purple-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/30 group-hover:scale-110 group-hover:rotate-3 transition-all">
+                <Database size={26} className="text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-gray-900 text-lg">DataHub</h3>
+                <p className="text-gray-500 text-sm">Vos équipements personnalisés</p>
+              </div>
+              <ChevronRight size={20} className="text-gray-400 group-hover:text-gray-600 group-hover:translate-x-1 transition-all" />
+            </div>
+          </Link>
+        </div>
+
         {/* Stats Grid - Spectacular */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
           <StatCard
