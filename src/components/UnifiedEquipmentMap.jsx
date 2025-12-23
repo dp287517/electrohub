@@ -737,6 +737,18 @@ export default function UnifiedEquipmentMap({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all"); // all, overdue, upcoming
 
+  // Add datahub categories to visible types when they are loaded (visible by default like other types)
+  useEffect(() => {
+    if (datahubCategories.length > 0) {
+      const newCategoryTypes = datahubCategories.map(cat => `datahub_cat_${cat.id}`);
+      setVisibleTypes(prev => {
+        // Add only new category types that aren't already in the list
+        const toAdd = newCategoryTypes.filter(t => !prev.includes(t));
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+  }, [datahubCategories]);
+
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -907,8 +919,13 @@ export default function UnifiedEquipmentMap({
             if (type === "datahub" && p.category_id) {
               equipmentType = `datahub_cat_${p.category_id}`;
             }
+            // Datahub uses inverted Y coordinates (y_frac = 1 - lat/h),
+            // while other equipment types use direct coordinates (y_frac = lat/h)
+            // Convert datahub to match the standard convention
+            const y_frac = type === "datahub" ? (1 - (p.y_frac || 0)) : p.y_frac;
             return {
               ...p,
+              y_frac,
               equipment_type: equipmentType,
               equipment_id: getEquipmentIdFromPosition(type, p),
             };
