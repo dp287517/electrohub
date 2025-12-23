@@ -126,23 +126,26 @@ export default function Navbar() {
                 <>
                   {/* User Info + AI Avatar */}
                   <div className="flex items-center gap-3 pl-3 border-l border-gray-200">
-                    {/* Notification Bell */}
+                    {/* Notification Bell / Activate Button */}
                     {isSupported && (
-                      <button
-                        onClick={() => setShowNotificationPrefs(true)}
-                        className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors group"
-                        title="Paramètres de notifications"
-                      >
-                        <Bell
-                          size={20}
-                          className={`transition-colors ${
-                            isSubscribed ? 'text-gray-700' : 'text-gray-400'
-                          } group-hover:text-gray-900`}
-                        />
-                        {isSubscribed && (
+                      isSubscribed ? (
+                        <button
+                          onClick={() => setShowNotificationPrefs(true)}
+                          className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors group"
+                          title="Paramètres de notifications"
+                        >
+                          <Bell size={20} className="text-gray-700 group-hover:text-gray-900" />
                           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-emerald-500 rounded-full" />
-                        )}
-                      </button>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => notificationContext?.showPermissionModal?.()}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors"
+                        >
+                          <Bell size={16} />
+                          <span>Activer</span>
+                        </button>
+                      )
                     )}
 
                     <div className="text-right">

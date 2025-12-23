@@ -20,6 +20,7 @@ export default function NotificationProvider({ children }) {
   const [permission, setPermission] = useState('default');
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [preferences, setPreferences] = useState({
     controlReminders: true,
@@ -34,20 +35,32 @@ export default function NotificationProvider({ children }) {
   // Initialize push notification service
   useEffect(() => {
     const init = async () => {
-      setIsSupported(pushNotifications.isSupported);
-      setPermission(pushNotifications.getPermissionStatus());
+      console.log('[Notifications] Initializing...');
+      const supported = pushNotifications.isSupported;
+      setIsSupported(supported);
+      console.log('[Notifications] Supported:', supported);
 
-      if (pushNotifications.isSupported) {
+      if (supported) {
+        const perm = pushNotifications.getPermissionStatus();
+        setPermission(perm);
+        console.log('[Notifications] Permission:', perm);
+
         await pushNotifications.registerServiceWorker();
         const subscription = await pushNotifications.getSubscription();
         setIsSubscribed(!!subscription);
+        console.log('[Notifications] Subscribed:', !!subscription);
 
         // Load preferences
-        const prefs = await pushNotifications.getPreferences();
-        if (prefs) {
-          setPreferences(prev => ({ ...prev, ...prefs }));
+        try {
+          const prefs = await pushNotifications.getPreferences();
+          if (prefs) {
+            setPreferences(prev => ({ ...prev, ...prefs }));
+          }
+        } catch (e) {
+          console.log('[Notifications] Could not load preferences');
         }
       }
+      setIsInitialized(true);
     };
 
     init();
@@ -55,19 +68,46 @@ export default function NotificationProvider({ children }) {
 
   // Check if we should prompt for notifications
   useEffect(() => {
-    const shouldPrompt = () => {
-      if (!isSupported) return false;
-      if (permission !== 'default') return false;
-      if (isSubscribed) return false;
+    if (!isInitialized) return;
 
-      // Check if user has dismissed recently
+    const shouldPrompt = () => {
+      // Must be supported
+      if (!isSupported) {
+        console.log('[Notifications] Not prompting: not supported');
+        return false;
+      }
+
+      // Already subscribed? No need to prompt
+      if (isSubscribed) {
+        console.log('[Notifications] Not prompting: already subscribed');
+        return false;
+      }
+
+      // If permission is denied, don't auto-prompt (user can still click bell)
+      if (permission === 'denied') {
+        console.log('[Notifications] Not prompting: permission denied');
+        return false;
+      }
+
+      // Check if user has dismissed recently (only 1 day cooldown now)
       const lastDismissed = localStorage.getItem('eh_notification_prompt_dismissed');
       if (lastDismissed) {
         const dismissedDate = new Date(lastDismissed);
-        const daysSince = (Date.now() - dismissedDate.getTime()) / (1000 * 60 * 60 * 24);
-        if (daysSince < 7) return false; // Don't prompt for 7 days after dismiss
+        const hoursSince = (Date.now() - dismissedDate.getTime()) / (1000 * 60 * 60);
+        if (hoursSince < 24) {
+          console.log('[Notifications] Not prompting: dismissed', Math.round(hoursSince), 'hours ago');
+          return false;
+        }
       }
 
+      // Must be logged in
+      const token = localStorage.getItem('eh_token');
+      if (!token) {
+        console.log('[Notifications] Not prompting: not logged in');
+        return false;
+      }
+
+      console.log('[Notifications] Will prompt for notifications');
       return true;
     };
 
@@ -76,10 +116,10 @@ export default function NotificationProvider({ children }) {
       if (shouldPrompt()) {
         setShowPermissionModal(true);
       }
-    }, 5000); // Show after 5 seconds
+    }, 3000); // Show after 3 seconds
 
     return () => clearTimeout(timer);
-  }, [isSupported, permission, isSubscribed]);
+  }, [isInitialized, isSupported, permission, isSubscribed]);
 
   // Subscribe to push notifications
   const subscribe = useCallback(async () => {
@@ -164,6 +204,12 @@ export default function NotificationProvider({ children }) {
     setShowPermissionModal(false);
   };
 
+  // Reset dismissed state and show modal
+  const promptForNotifications = useCallback(() => {
+    localStorage.removeItem('eh_notification_prompt_dismissed');
+    setShowPermissionModal(true);
+  }, []);
+
   const value = {
     isSupported,
     permission,
@@ -172,7 +218,7 @@ export default function NotificationProvider({ children }) {
     subscribe,
     unsubscribe,
     updatePreferences,
-    showPermissionModal: () => setShowPermissionModal(true),
+    showPermissionModal: promptForNotifications,
     toast,
     sendTestNotification: pushNotifications.sendTestNotification.bind(pushNotifications)
   };
