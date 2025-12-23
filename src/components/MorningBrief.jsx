@@ -234,7 +234,18 @@ export default function MorningBrief({ userName }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [showHistorical, setShowHistorical] = useState(false);
   const [period, setPeriod] = useState(30);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(Notification?.permission === 'granted');
+  const [error, setError] = useState(null);
+
+  // Safe check for Notification API (not available on all mobile browsers)
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    try {
+      return typeof window !== 'undefined' &&
+             typeof Notification !== 'undefined' &&
+             Notification.permission === 'granted';
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     loadData();
@@ -248,24 +259,36 @@ export default function MorningBrief({ userName }) {
 
   const loadData = async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const [briefData, suggestionsData] = await Promise.all([
-        aiAssistant.getMorningBrief(),
-        aiAssistant.getSuggestions()
+        aiAssistant.getMorningBrief().catch(e => {
+          console.error('Morning brief error:', e);
+          return null;
+        }),
+        aiAssistant.getSuggestions().catch(e => {
+          console.error('Suggestions error:', e);
+          return { suggestions: [] };
+        })
       ]);
       setBrief(briefData);
       setSuggestions(suggestionsData?.suggestions || []);
-    } catch (error) {
-      console.error('Failed to load morning brief:', error);
+    } catch (err) {
+      console.error('Failed to load morning brief:', err);
+      setError(err.message);
     } finally {
       setIsLoading(false);
     }
   };
 
   const loadHistorical = async () => {
-    const data = await aiAssistant.getHistoricalStats(period);
-    if (data?.success) {
-      setHistorical(data);
+    try {
+      const data = await aiAssistant.getHistoricalStats(period);
+      if (data?.success) {
+        setHistorical(data);
+      }
+    } catch (err) {
+      console.error('Historical stats error:', err);
     }
   };
 
@@ -278,14 +301,24 @@ export default function MorningBrief({ userName }) {
   };
 
   const toggleNotifications = async () => {
-    if (notificationsEnabled) {
-      setNotificationsEnabled(false);
-    } else {
-      const granted = await aiAssistant.requestNotificationPermission();
-      if (granted) {
-        setNotificationsEnabled(true);
-        aiAssistant.scheduleMorningBrief();
+    try {
+      // Check if Notification API is available
+      if (typeof Notification === 'undefined') {
+        console.warn('Notifications not supported');
+        return;
       }
+
+      if (notificationsEnabled) {
+        setNotificationsEnabled(false);
+      } else {
+        const granted = await aiAssistant.requestNotificationPermission();
+        if (granted) {
+          setNotificationsEnabled(true);
+          aiAssistant.scheduleMorningBrief?.();
+        }
+      }
+    } catch (err) {
+      console.error('Notification toggle error:', err);
     }
   };
 
@@ -300,7 +333,23 @@ export default function MorningBrief({ userName }) {
     );
   }
 
-  if (!brief) return null;
+  if (error || !brief) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <div className="flex flex-col items-center gap-3 text-center py-4">
+          <AlertTriangle size={24} className="text-amber-500" />
+          <p className="text-slate-600 text-sm">Impossible de charger le brief</p>
+          <button
+            onClick={loadData}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2"
+          >
+            <RefreshCw size={14} />
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Clean chart colors
   const equipmentColors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
