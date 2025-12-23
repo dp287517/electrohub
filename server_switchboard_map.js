@@ -51,6 +51,7 @@ app.use(
         "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],
         "connect-src": ["*"],
+        "media-src": ["'self'", "data:", "blob:"],
       },
     },
     crossOriginResourcePolicy: { policy: "cross-origin" },
