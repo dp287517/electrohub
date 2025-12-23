@@ -39,6 +39,7 @@ import {
   Cpu,
   Wrench,
   Battery,
+  Database,
   AlertTriangle,
   Clock,
   CheckCircle,
@@ -107,6 +108,15 @@ const EQUIPMENT_TYPES = {
     api: api.gloMaps,
     link: (id) => `/app/glo?glo=${id}`,
     mapLink: (id, plan) => `/app/glo/map?glo=${id}&plan=${plan}`,
+  },
+  datahub: {
+    label: "Datahub",
+    icon: Database,
+    color: "#8b5cf6", // purple (like Datahub_map)
+    gradient: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)", // purple gradient
+    api: api.datahub?.maps,
+    link: (id) => `/app/datahub?item=${id}`,
+    mapLink: (id, plan) => `/app/datahub?item=${id}&plan=${plan}`,
   },
 };
 
@@ -417,6 +427,8 @@ const UnifiedLeafletViewer = forwardRef(({
       hv: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`,
       // GLO: battery icon
       glo: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="6" width="18" height="12" rx="2"/><path d="M23 10v4"/><path d="M7 10v4M11 10v4"/></svg>`,
+      // Datahub: database icon
+      datahub: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
     };
     return svgs[equipmentType] || svgs.switchboard;
   }
@@ -802,6 +814,7 @@ export default function UnifiedEquipmentMap({
     if (item.mobile_equipment_id) return `mobile_${item.mobile_equipment_id}`;
     if (item.hv_equipment_id) return `hv_${item.hv_equipment_id}`;
     if (item.glo_equipment_id) return `glo_${item.glo_equipment_id}`;
+    if (item.datahub_equipment_id) return `datahub_${item.datahub_equipment_id}`;
     return null;
   }
 
@@ -826,12 +839,14 @@ export default function UnifiedEquipmentMap({
       { type: "glo", api: api.gloMaps },
       { type: "hv", api: api.hvMaps },
       { type: "mobile", api: api.mobileEquipment?.maps },
+      { type: "datahub", api: api.datahub?.maps },
     ];
 
     // Map type to the correct ID field name from API
-    // Switchboard uses switchboard_id, all other types use equipment_id
+    // Switchboard uses switchboard_id, datahub uses item_id, all other types use equipment_id
     const getEquipmentIdFromPosition = (type, p) => {
       if (type === "switchboard") return p.switchboard_id;
+      if (type === "datahub") return p.item_id || p.id;
       return p.equipment_id || p.id;
     };
 
