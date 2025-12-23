@@ -905,8 +905,10 @@ export default function Datahub() {
     const details = placedDetails[String(itemId)];
     console.log('[DATAHUB] Found details:', details);
 
-    if (details?.plans?.length > 0) {
-      const planKey = details.plans[0];
+    // Handle both formats: { plans: [...] } or { logical_name: "...", page_index: 0 }
+    const planKey = details?.plans?.[0] || details?.logical_name;
+
+    if (planKey) {
       const url = `/app/datahub/map?item=${itemId}&plan=${encodeURIComponent(planKey)}`;
       console.log('[DATAHUB] Navigating to:', url);
       navigate(url);
