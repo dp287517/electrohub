@@ -64,10 +64,11 @@ async function initPushTables() {
 
   try {
     // Create tables one by one with error handling
+    // Using TEXT for user_id to support both numeric IDs and email-based IDs
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
         endpoint TEXT NOT NULL UNIQUE,
         keys_p256dh TEXT NOT NULL,
         keys_auth TEXT NOT NULL,
@@ -77,11 +78,18 @@ async function initPushTables() {
         last_used_at TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // Migrate user_id column from INTEGER to TEXT if needed
+    await pool.query(`
+      ALTER TABLE push_subscriptions
+      ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT
+    `).catch(() => {}); // Ignore if already TEXT
+
     console.log('[Push] push_subscriptions table ready');
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_preferences (
-        user_id INTEGER PRIMARY KEY,
+        user_id TEXT PRIMARY KEY,
         control_reminders BOOLEAN DEFAULT TRUE,
         morning_brief BOOLEAN DEFAULT TRUE,
         overdue_alerts BOOLEAN DEFAULT TRUE,
@@ -92,12 +100,19 @@ async function initPushTables() {
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // Migrate user_id column from INTEGER to TEXT if needed
+    await pool.query(`
+      ALTER TABLE push_preferences
+      ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT
+    `).catch(() => {}); // Ignore if already TEXT
+
     console.log('[Push] push_preferences table ready');
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS push_history (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
         title TEXT NOT NULL,
         body TEXT,
         type TEXT,
@@ -106,6 +121,13 @@ async function initPushTables() {
         status TEXT DEFAULT 'sent'
       )
     `);
+
+    // Migrate user_id column from INTEGER to TEXT if needed
+    await pool.query(`
+      ALTER TABLE push_history
+      ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT
+    `).catch(() => {}); // Ignore if already TEXT
+
     console.log('[Push] push_history table ready');
 
     tablesInitialized = true;
