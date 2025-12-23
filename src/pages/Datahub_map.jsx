@@ -492,7 +492,11 @@ export default function DatahubMap() {
   const [pdfReady, setPdfReady] = useState(false);
 
   // External equipment categories (VSD, HV, MECA, GLO, Mobile, Switchboards)
-  const [externalPositions, setExternalPositions] = useState({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+  // Store plan key WITH positions to ensure synchronization (prevents stale data issues)
+  const [externalPositions, setExternalPositions] = useState({
+    planKey: null,
+    positions: { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] }
+  });
   const [externalTotals, setExternalTotals] = useState({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
   const [visibleExternalCategories, setVisibleExternalCategories] = useState(() => {
     try {
@@ -520,8 +524,7 @@ export default function DatahubMap() {
   const selectedItemIdRef = useRef(null); // Track selected item for marker drawing
   const positionsRef = useRef([]); // Keep positions for redrawing
   const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
-  const currentPlanKeyRef = useRef(null); // Track current plan being loaded
-  const externalPositionsPlanKeyRef = useRef(null); // Track which plan external positions belong to
+  const currentPlanKeyRef = useRef(null); // Track current plan being loaded (for stale response detection)
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
@@ -716,15 +719,17 @@ export default function DatahubMap() {
       });
 
       console.log('[Datahub] External positions loaded for', requestKey, ':', newTotals);
-      // Track which plan these positions belong to
-      externalPositionsPlanKeyRef.current = requestKey;
-      setExternalPositions(newPositions);
+      // Store planKey WITH positions in state for atomic synchronization
+      setExternalPositions({ planKey: requestKey, positions: newPositions });
       setExternalTotals(newTotals);
 
     } catch (e) {
       if (currentPlanKeyRef.current === requestKey) {
         console.log('[Datahub] External positions error:', e.message);
-        setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+        setExternalPositions({
+          planKey: requestKey,
+          positions: { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] }
+        });
         setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
       }
     }
@@ -751,10 +756,6 @@ export default function DatahubMap() {
       // Update current plan key ref FIRST before any loading
       const newPlanKey = `${selectedPlan.logical_name || selectedPlan.id}:${pageIndex}`;
       currentPlanKeyRef.current = newPlanKey;
-
-      // Clear external positions ref to prevent stale markers on wrong plan
-      // The ref check in drawMarkers will skip drawing until new positions arrive
-      externalPositionsPlanKeyRef.current = null;
 
       console.log('[Datahub] Plan changed to:', newPlanKey);
 
@@ -915,25 +916,25 @@ export default function DatahubMap() {
     });
 
     // Draw external equipment markers (VSD, HV, MECA, GLO, Mobile, Switchboards)
-    // CRITICAL: Only draw if external positions match current plan to prevent stale markers
+    // CRITICAL: Check planKey stored WITH positions in state (not ref) for atomic synchronization
     const currentKey = `${selectedPlan?.logical_name || selectedPlan?.id}:${pageIndex}`;
-    const positionsMatchPlan = externalPositionsPlanKeyRef.current === currentKey;
+    const positionsMatchPlan = externalPositions.planKey === currentKey;
 
     console.log('[Datahub] Drawing external markers check:', {
       currentPlan: currentKey,
-      positionsPlan: externalPositionsPlanKeyRef.current,
+      positionsPlanKey: externalPositions.planKey,
       match: positionsMatchPlan,
       visibleCategories: visibleExternalCategories
     });
 
     if (!positionsMatchPlan) {
-      console.log('[Datahub] Skipping external markers - positions are for different plan');
+      console.log('[Datahub] Skipping external markers - positions are for different plan (state.planKey:', externalPositions.planKey, ')');
     } else {
       Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
         // Skip if this external category is not visible
         if (!visibleExternalCategories.includes(catKey)) return;
 
-        const positions = externalPositions[catKey] || [];
+        const positions = externalPositions.positions[catKey] || [];
         if (positions.length > 0) {
           console.log(`[Datahub] Drawing ${positions.length} ${catKey} markers for plan ${currentKey}`);
         }
