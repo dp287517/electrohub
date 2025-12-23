@@ -893,18 +893,28 @@ export default function Datahub() {
 
   const handleNavigateToMap = (item) => {
     const itemId = item?.id;
+    console.log('[DATAHUB] handleNavigateToMap called', { itemId, itemName: item?.name });
+    console.log('[DATAHUB] placedDetails keys:', Object.keys(placedDetails));
+    console.log('[DATAHUB] Looking for key:', String(itemId));
+
     if (!itemId) {
       navigate('/app/datahub/map');
       return;
     }
 
     const details = placedDetails[String(itemId)];
+    console.log('[DATAHUB] Found details:', details);
+
     if (details?.plans?.length > 0) {
       const planKey = details.plans[0];
-      navigate(`/app/datahub/map?item=${itemId}&plan=${encodeURIComponent(planKey)}`);
+      const url = `/app/datahub/map?item=${itemId}&plan=${encodeURIComponent(planKey)}`;
+      console.log('[DATAHUB] Navigating to:', url);
+      navigate(url);
     } else {
       // Pass item ID so user can position it on map
-      navigate(`/app/datahub/map?item=${itemId}`);
+      const url = `/app/datahub/map?item=${itemId}`;
+      console.log('[DATAHUB] Item not placed, navigating to:', url);
+      navigate(url);
     }
   };
 

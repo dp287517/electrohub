@@ -483,19 +483,27 @@ export default function DatahubMap() {
   useEffect(() => {
     const urlPlanKey = searchParams.get("plan");
     const focusItemId = searchParams.get("item");
+    console.log('[DATAHUB_MAP] URL params useEffect:', { focusItemId, urlPlanKey, plansCount: plans.length });
 
     if (urlPlanKey && plans.length > 0) {
       const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      console.log('[DATAHUB_MAP] Found target plan:', targetPlan?.logical_name);
+
       if (targetPlan) {
-        if (focusItemId) targetItemIdRef.current = focusItemId;
+        if (focusItemId) {
+          targetItemIdRef.current = focusItemId;
+          console.log('[DATAHUB_MAP] Set targetItemIdRef to:', focusItemId);
+        }
 
         if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
           // Different plan - PDF will reload and set pdfReady when done
+          console.log('[DATAHUB_MAP] Switching to target plan');
           setPdfReady(false);
           setSelectedPlan(targetPlan);
           setPageIndex(0);
         } else {
           // Same plan - just need to trigger highlight
+          console.log('[DATAHUB_MAP] Already on target plan, triggering highlight');
           setPdfReady(false);
           setTimeout(() => setPdfReady(true), 100);
         }
@@ -867,30 +875,44 @@ export default function DatahubMap() {
 
   // Focus on item from URL - triggered when pdfReady becomes true
   useEffect(() => {
+    console.log('[DATAHUB_MAP] pdfReady useEffect:', { pdfReady, targetId: targetItemIdRef.current });
     if (!pdfReady || !targetItemIdRef.current) return;
     const targetId = targetItemIdRef.current;
     targetItemIdRef.current = null;
+    console.log('[DATAHUB_MAP] Triggering highlight for:', targetId);
     // Small delay to ensure markers are rendered in DOM
-    setTimeout(() => highlightMarker(targetId), 300);
+    setTimeout(() => {
+      console.log('[DATAHUB_MAP] Calling highlightMarker now');
+      highlightMarker(targetId);
+    }, 300);
   }, [pdfReady, highlightMarker]);
 
   // Smart navigation: navigate to the correct plan and highlight the item marker
   // Clicking on card navigates + animates (like Meca_map pattern)
   const handleItemClick = useCallback(async (item) => {
+    console.log('[DATAHUB_MAP] handleItemClick called', { itemId: item.id, itemName: item.name });
+    console.log('[DATAHUB_MAP] placedDetails keys:', Object.keys(placedDetails));
+    console.log('[DATAHUB_MAP] Looking for key:', String(item.id));
+
     // Clear any existing selection
     setSelectedItem(null);
     setSelectedPosition(null);
 
     // Check if this item is placed somewhere
     const details = placedDetails[String(item.id)];
+    console.log('[DATAHUB_MAP] Found details:', details);
     if (details?.plans?.length > 0) {
       const targetPlanKey = details.plans[0]; // First plan where it's placed
+      console.log('[DATAHUB_MAP] Target plan key:', targetPlanKey);
 
       // Find the plan
       const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+      console.log('[DATAHUB_MAP] Target plan found:', targetPlan?.logical_name);
+
       if (targetPlan) {
         // If we're not on that plan, switch to it
         if (selectedPlan?.logical_name !== targetPlanKey) {
+          console.log('[DATAHUB_MAP] Switching to different plan');
           setSelectedPlan(targetPlan);
           setPageIndex(0);
           setPdfReady(false);
@@ -899,14 +921,19 @@ export default function DatahubMap() {
           targetItemIdRef.current = String(item.id);
         } else {
           // Same plan - just highlight
+          console.log('[DATAHUB_MAP] Same plan, highlighting marker:', String(item.id));
           highlightMarker(String(item.id));
         }
       }
     } else {
       // Not in placedDetails but might be on current plan
+      console.log('[DATAHUB_MAP] Not in placedDetails, checking current plan positions');
       const pos = positions.find(p => String(p.item_id) === String(item.id));
       if (pos) {
+        console.log('[DATAHUB_MAP] Found on current plan, highlighting');
         highlightMarker(String(item.id));
+      } else {
+        console.log('[DATAHUB_MAP] Item not placed anywhere');
       }
     }
 
