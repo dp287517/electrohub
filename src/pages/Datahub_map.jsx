@@ -525,6 +525,7 @@ export default function DatahubMap() {
   const positionsRef = useRef([]); // Keep positions for redrawing
   const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
   const currentPlanKeyRef = useRef(null); // Track current plan being loaded (for stale response detection)
+  const drawMarkersRef = useRef(null); // Ref to always get latest drawMarkers (avoids stale closures)
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
@@ -787,9 +788,12 @@ export default function DatahubMap() {
 
     map.on("click", handleMapClick);
 
-    // Always draw markers after map is initialized (Datahub + External)
-    // The useEffect watching externalPositions will redraw when external data arrives
-    drawMarkers();
+    // Draw initial markers after map is initialized
+    // Use ref to get latest version of drawMarkers (avoids stale closure)
+    // External markers will be redrawn when their positions load via useEffect
+    if (drawMarkersRef.current) {
+      drawMarkersRef.current();
+    }
 
     // Mark PDF as ready after map initialization
     setPdfReady(true);
@@ -965,6 +969,9 @@ export default function DatahubMap() {
     }
   }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon, externalPositions, visibleExternalCategories, makeExternalMarkerIcon]);
 
+  // Keep drawMarkersRef in sync with latest drawMarkers (synchronous update during render)
+  drawMarkersRef.current = drawMarkers;
+
   // Highlight marker with flash animation (for navigation)
   const highlightMarker = useCallback((itemId) => {
     // Try to find marker with the ID as-is first, then try with type conversion
@@ -1120,23 +1127,24 @@ export default function DatahubMap() {
   };
 
   // Keep positions ref in sync and redraw markers when positions change
+  // Uses drawMarkersRef to always call the latest version (avoids stale closures)
   useEffect(() => {
     positionsRef.current = positions;
-    if (mapRef.current && imgSizeRef.current.w > 0) {
-      drawMarkers();
+    if (mapRef.current && imgSizeRef.current.w > 0 && drawMarkersRef.current) {
+      drawMarkersRef.current();
       // Mark PDF as ready after markers are drawn
       setPdfReady(true);
     }
-  }, [positions, items, categories, selectedCategories, externalPositions, visibleExternalCategories, drawMarkers]);
+  }, [positions, items, categories, selectedCategories, externalPositions, visibleExternalCategories]);
 
   // Redraw markers when selectedItem changes (like Switchboard line 574-580)
   useEffect(() => {
     selectedItemIdRef.current = selectedItem?.id || null;
     // Redraw markers to update selection state
-    if (mapRef.current && imgSizeRef.current.w > 0) {
-      drawMarkers();
+    if (mapRef.current && imgSizeRef.current.w > 0 && drawMarkersRef.current) {
+      drawMarkersRef.current();
     }
-  }, [selectedItem, drawMarkers]);
+  }, [selectedItem]);
 
   // Focus on item from URL - triggered when pdfReady becomes true
   useEffect(() => {
