@@ -1252,9 +1252,17 @@ export default function GloMap() {
           }
         }
       } else {
-        console.log('[GLO_MAP] Equipment not placed, no highlight');
+        // Equipment might be placed on current plan but placedDetails not populated yet
+        // Try to highlight if on current plan
+        console.log('[GLO_MAP] Not in placedDetails, checking current plan positions');
+        const pos = initialPoints.find(p => String(p.equipment_id) === String(eq.id));
+        if (pos) {
+          console.log('[GLO_MAP] Found on current plan, highlighting');
+          viewerRef.current?.highlightMarker(String(eq.id));
+        } else {
+          console.log('[GLO_MAP] Equipment not placed anywhere');
+        }
       }
-      // If not placed, do nothing - no modal to show
 
       // On mobile, close sidebar so user can see the map
       if (isMobile) setShowSidebar(false);
