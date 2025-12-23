@@ -822,6 +822,170 @@ app.get("/api/datahub/maps/placed-ids", async (_req, res) => {
 });
 
 // ====================
+// EXTERNAL EQUIPMENT POSITIONS - Aggregate all equipment types on the same plan
+// ====================
+
+// Get all external equipment positions for a given plan
+// This allows Datahub to display VSD, HV, MECA, GLO, Mobile Equipment, Switchboards markers
+app.get("/api/datahub/maps/external-positions", async (req, res) => {
+  try {
+    const { logical_name, page_index = 0 } = req.query;
+    if (!logical_name) return res.status(400).json({ ok: false, error: "logical_name required" });
+
+    const pageIdx = parseInt(page_index);
+    const result = {
+      vsd: [],
+      hv: [],
+      meca: [],
+      glo: [],
+      mobile: [],
+      switchboards: []
+    };
+
+    // VSD Equipments
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
+               e.name, e.tag, e.building, e.floor, e.manufacturer, e.model, e.power_kw
+          FROM vsd_positions p
+          JOIN vsd_equipments e ON e.id = p.equipment_id
+         WHERE p.logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.vsd = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.tag || 'VSD',
+        building: r.building,
+        floor: r.floor,
+        details: `${r.manufacturer || ''} ${r.model || ''} ${r.power_kw ? r.power_kw + 'kW' : ''}`.trim()
+      }));
+    } catch (e) { console.log('[Datahub] VSD positions not available:', e.message); }
+
+    // HV Equipments (integer equipment_id)
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
+               e.name, e.code, e.building_code, e.floor
+          FROM hv_positions p
+          JOIN hv_equipments e ON e.id = p.equipment_id
+         WHERE p.logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.hv = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.code || 'HV',
+        building: r.building_code,
+        floor: r.floor,
+        details: r.code || ''
+      }));
+    } catch (e) { console.log('[Datahub] HV positions not available:', e.message); }
+
+    // MECA Equipments
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
+               e.name, e.tag, e.building, e.floor, e.equipment_type, e.power_kw
+          FROM meca_positions p
+          JOIN meca_equipments e ON e.id = p.equipment_id
+         WHERE p.logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.meca = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.tag || 'MECA',
+        building: r.building,
+        floor: r.floor,
+        details: `${r.equipment_type || ''} ${r.power_kw ? r.power_kw + 'kW' : ''}`.trim()
+      }));
+    } catch (e) { console.log('[Datahub] MECA positions not available:', e.message); }
+
+    // GLO Equipments
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
+               e.name, e.tag, e.building, e.floor, e.equipment_type, e.power_kva
+          FROM glo_positions p
+          JOIN glo_equipments e ON e.id = p.equipment_id
+         WHERE p.logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.glo = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.tag || 'GLO',
+        building: r.building,
+        floor: r.floor,
+        details: `${r.equipment_type || ''} ${r.power_kva ? r.power_kva + 'kVA' : ''}`.trim()
+      }));
+    } catch (e) { console.log('[Datahub] GLO positions not available:', e.message); }
+
+    // Mobile Equipment
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.equipment_id, p.x_frac, p.y_frac, p.page_index,
+               e.name, e.tag, e.building, e.floor, e.equipment_type
+          FROM me_equipment_positions p
+          JOIN me_equipments e ON e.id = p.equipment_id
+         WHERE p.plan_logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.mobile = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.tag || 'Mobile',
+        building: r.building,
+        floor: r.floor,
+        details: r.equipment_type || ''
+      }));
+    } catch (e) { console.log('[Datahub] Mobile positions not available:', e.message); }
+
+    // Switchboards (integer switchboard_id)
+    try {
+      const { rows } = await pool.query(`
+        SELECT p.id, p.switchboard_id as equipment_id, p.x_frac, p.y_frac, p.page_index,
+               s.name, s.tag, s.location, s.voltage
+          FROM switchboard_positions p
+          JOIN switchboards s ON s.id = p.switchboard_id
+         WHERE p.logical_name = $1 AND p.page_index = $2
+      `, [logical_name, pageIdx]);
+      result.switchboards = rows.map(r => ({
+        id: r.id,
+        equipment_id: r.equipment_id,
+        x_frac: parseFloat(r.x_frac),
+        y_frac: parseFloat(r.y_frac),
+        name: r.name || r.tag || 'Switchboard',
+        building: r.location,
+        floor: '',
+        details: r.voltage || ''
+      }));
+    } catch (e) { console.log('[Datahub] Switchboard positions not available:', e.message); }
+
+    // Count totals
+    const totals = {
+      vsd: result.vsd.length,
+      hv: result.hv.length,
+      meca: result.meca.length,
+      glo: result.glo.length,
+      mobile: result.mobile.length,
+      switchboards: result.switchboards.length
+    };
+
+    res.json({ ok: true, positions: result, totals });
+  } catch (e) {
+    console.error("[Datahub] Get external positions error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ====================
 // BULK OPERATIONS
 // ====================
 app.post("/api/datahub/bulk/rename", async (req, res) => {
