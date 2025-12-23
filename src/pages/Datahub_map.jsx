@@ -686,6 +686,10 @@ export default function DatahubMap() {
 
   useEffect(() => {
     if (selectedPlan) {
+      // Clear external positions immediately to avoid showing old markers on new plan
+      setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+      setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+
       loadPdf();
       loadPositions();
       loadExternalPositions();
