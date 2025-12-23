@@ -2556,13 +2556,304 @@ app.get("/api/ai-assistant/health", (req, res) => {
       documentSearch: true,
       chartGeneration: true,
       autonomousActions: true,
-      databaseAccess: true
+      databaseAccess: true,
+      tts: !!openai
     },
     message: providers.length > 0
       ? `🚀 AI surpuissant actif (${providers.join(' + ')})`
       : "Mode fallback intelligent avec données DB"
   });
 });
+
+// ============================================================
+// TTS - Text-to-Speech with OpenAI (natural voice)
+// ============================================================
+app.post("/api/ai-assistant/tts", express.json(), async (req, res) => {
+  const { text, voice = "nova" } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: "Text is required" });
+  }
+
+  // If no OpenAI, return error so client can fallback to browser TTS
+  if (!openai) {
+    return res.status(503).json({
+      error: "TTS not available",
+      fallback: true,
+      message: "OpenAI TTS non disponible, utilisation de la voix navigateur"
+    });
+  }
+
+  try {
+    // Clean text for TTS (remove markdown, emojis excess)
+    const cleanText = text
+      .replace(/\*\*/g, '')
+      .replace(/\*/g, '')
+      .replace(/•/g, '')
+      .replace(/#+\s/g, '')
+      .replace(/\n{2,}/g, '. ')
+      .replace(/\n/g, ' ')
+      .substring(0, 4000); // OpenAI limit
+
+    const mp3 = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: voice, // nova, alloy, echo, fable, onyx, shimmer
+      input: cleanText,
+      speed: 1.0
+    });
+
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-cache'
+    });
+
+    res.send(buffer);
+  } catch (error) {
+    console.error('[TTS] Error:', error);
+    res.status(500).json({
+      error: "TTS generation failed",
+      fallback: true,
+      message: error.message
+    });
+  }
+});
+
+// ============================================================
+// MORNING BRIEF - Daily intelligent summary with stats
+// ============================================================
+app.get("/api/ai-assistant/morning-brief", async (req, res) => {
+  try {
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    // Get comprehensive stats
+    const stats = await Promise.all([
+      // Overdue controls
+      pool.query(`
+        SELECT COUNT(*) as count,
+               string_agg(DISTINCT equipment_type, ', ') as types
+        FROM control_schedules
+        WHERE next_due < CURRENT_DATE AND status != 'completed'
+      `),
+      // Controls this week
+      pool.query(`
+        SELECT COUNT(*) as count
+        FROM control_schedules
+        WHERE next_due BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+        AND status != 'completed'
+      `),
+      // Equipment counts by type
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM switchboard) as switchboards,
+          (SELECT COUNT(*) FROM vsd_equipments) as vsd,
+          (SELECT COUNT(*) FROM meca_equipments) as meca,
+          (SELECT COUNT(*) FROM atex_equipments) as atex,
+          (SELECT COUNT(*) FROM hv_equipments) as hv,
+          (SELECT COUNT(*) FROM glo_equipments) as glo
+      `),
+      // Recent controls completed (last 7 days)
+      pool.query(`
+        SELECT COUNT(*) as count
+        FROM control_schedules
+        WHERE status = 'completed'
+        AND updated_at > CURRENT_DATE - INTERVAL '7 days'
+      `),
+      // ATEX non-conformities pending
+      pool.query(`
+        SELECT COUNT(*) as count
+        FROM atex_nc
+        WHERE date_cloture IS NULL
+      `),
+      // Equipment never controlled
+      pool.query(`
+        SELECT COUNT(*) as count FROM (
+          SELECT s.id FROM switchboard s
+          LEFT JOIN control_schedules cs ON cs.equipment_id = s.id::text
+          WHERE cs.id IS NULL
+          UNION ALL
+          SELECT v.id FROM vsd_equipments v
+          LEFT JOIN control_schedules cs ON cs.equipment_id = v.id::text
+          WHERE cs.id IS NULL
+        ) as never_controlled
+      `),
+      // Buildings with equipment
+      pool.query(`
+        SELECT COUNT(DISTINCT building) as count
+        FROM switchboard
+        WHERE building IS NOT NULL
+      `)
+    ]);
+
+    const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes] = stats;
+    const equipment = equipmentRes.rows[0];
+    const totalEquipment =
+      parseInt(equipment.switchboards || 0) +
+      parseInt(equipment.vsd || 0) +
+      parseInt(equipment.meca || 0) +
+      parseInt(equipment.atex || 0) +
+      parseInt(equipment.hv || 0) +
+      parseInt(equipment.glo || 0);
+
+    // Calculate health score (0-100)
+    const overdueCount = parseInt(overdueRes.rows[0]?.count || 0);
+    const neverControlled = parseInt(neverControlledRes.rows[0]?.count || 0);
+    const atexNc = parseInt(atexNcRes.rows[0]?.count || 0);
+    const completedWeek = parseInt(completedRes.rows[0]?.count || 0);
+
+    let healthScore = 100;
+    healthScore -= Math.min(overdueCount * 5, 30); // -5 per overdue, max -30
+    healthScore -= Math.min(atexNc * 3, 20); // -3 per NC, max -20
+    healthScore -= Math.min(neverControlled * 0.5, 20); // -0.5 per never controlled, max -20
+    healthScore += Math.min(completedWeek * 2, 15); // +2 per completion, max +15
+    healthScore = Math.max(0, Math.min(100, healthScore));
+
+    // Determine status and emoji
+    let statusEmoji, statusText, statusColor;
+    if (healthScore >= 80) {
+      statusEmoji = "🟢";
+      statusText = "Excellent";
+      statusColor = "green";
+    } else if (healthScore >= 60) {
+      statusEmoji = "🟡";
+      statusText = "Attention requise";
+      statusColor = "yellow";
+    } else if (healthScore >= 40) {
+      statusEmoji = "🟠";
+      statusText = "Action nécessaire";
+      statusColor = "orange";
+    } else {
+      statusEmoji = "🔴";
+      statusText = "Critique";
+      statusColor = "red";
+    }
+
+    // Priority actions
+    const priorityActions = [];
+    if (overdueCount > 0) {
+      priorityActions.push({
+        type: "overdue",
+        icon: "⚠️",
+        title: `${overdueCount} contrôle(s) en retard`,
+        description: overdueRes.rows[0]?.types || "Divers équipements",
+        urgency: "high",
+        action: "/app/switchboard-controls?tab=overdue"
+      });
+    }
+    if (atexNc > 0) {
+      priorityActions.push({
+        type: "atex_nc",
+        icon: "🧯",
+        title: `${atexNc} NC ATEX en attente`,
+        description: "Non-conformités à traiter",
+        urgency: atexNc > 5 ? "high" : "medium",
+        action: "/app/atex"
+      });
+    }
+    if (neverControlled > 10) {
+      priorityActions.push({
+        type: "never_controlled",
+        icon: "📋",
+        title: `${neverControlled} équipements jamais contrôlés`,
+        description: "Planifier des contrôles initiaux",
+        urgency: "medium",
+        action: "/app/switchboard-controls"
+      });
+    }
+
+    // Generate AI insights if available
+    let aiInsight = null;
+    if (openai || geminiModel) {
+      try {
+        const insightPrompt = `En tant qu'expert maintenance industrielle, donne UN conseil actionnable et motivant pour aujourd'hui basé sur ces stats:
+- Équipements: ${totalEquipment} total (${equipment.switchboards} tableaux, ${equipment.vsd} variateurs, ${equipment.meca} méca)
+- Contrôles en retard: ${overdueCount}
+- NC ATEX: ${atexNc}
+- Complétés cette semaine: ${completedWeek}
+- Score santé: ${healthScore}%
+
+Réponds en 1-2 phrases max, style direct et encourageant. Commence par une action concrète.`;
+
+        if (openai) {
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: insightPrompt }],
+            max_tokens: 100,
+            temperature: 0.7
+          });
+          aiInsight = completion.choices[0]?.message?.content;
+        } else if (geminiModel) {
+          const result = await geminiModel.generateContent(insightPrompt);
+          aiInsight = result.response.text();
+        }
+      } catch (e) {
+        console.error('[MorningBrief] AI insight error:', e);
+      }
+    }
+
+    res.json({
+      success: true,
+      date: todayStr,
+      greeting: getGreeting(),
+      healthScore: Math.round(healthScore),
+      status: {
+        emoji: statusEmoji,
+        text: statusText,
+        color: statusColor
+      },
+      stats: {
+        totalEquipment,
+        byType: {
+          switchboards: parseInt(equipment.switchboards || 0),
+          vsd: parseInt(equipment.vsd || 0),
+          meca: parseInt(equipment.meca || 0),
+          atex: parseInt(equipment.atex || 0),
+          hv: parseInt(equipment.hv || 0),
+          glo: parseInt(equipment.glo || 0)
+        },
+        controls: {
+          overdue: overdueCount,
+          thisWeek: parseInt(weekRes.rows[0]?.count || 0),
+          completedThisWeek: completedWeek,
+          neverControlled
+        },
+        atexNc,
+        buildings: parseInt(buildingsRes.rows[0]?.count || 0)
+      },
+      priorityActions,
+      aiInsight,
+      charts: {
+        equipmentDistribution: [
+          { name: 'Tableaux', value: parseInt(equipment.switchboards || 0), color: '#f59e0b' },
+          { name: 'VSD', value: parseInt(equipment.vsd || 0), color: '#6366f1' },
+          { name: 'Méca', value: parseInt(equipment.meca || 0), color: '#22c55e' },
+          { name: 'ATEX', value: parseInt(equipment.atex || 0), color: '#ef4444' },
+          { name: 'HT', value: parseInt(equipment.hv || 0), color: '#eab308' },
+          { name: 'GLO', value: parseInt(equipment.glo || 0), color: '#14b8a6' }
+        ],
+        controlsStatus: [
+          { name: 'En retard', value: overdueCount, color: '#ef4444' },
+          { name: 'Cette semaine', value: parseInt(weekRes.rows[0]?.count || 0), color: '#3b82f6' },
+          { name: 'Complétés (7j)', value: completedWeek, color: '#22c55e' }
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('[MorningBrief] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper for greeting
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Bonjour";
+  if (hour < 18) return "Bon après-midi";
+  return "Bonsoir";
+}
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
 app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));

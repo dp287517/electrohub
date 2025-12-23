@@ -199,15 +199,49 @@ Comment puis-je vous aider aujourd'hui ?`,
     }
   };
 
-  // Synthèse vocale
-  const speak = useCallback((text) => {
-    if (isMuted) return; // Ne pas parler si mute
+  // Audio ref for OpenAI TTS
+  const audioRef = useRef(null);
 
+  // Synthèse vocale avec OpenAI TTS (fallback navigateur)
+  const speak = useCallback(async (text) => {
+    if (isMuted) return;
+
+    // Arrêter tout audio en cours
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+
+    setIsSpeaking(true);
+
+    try {
+      // Essayer OpenAI TTS d'abord (voix IA naturelle)
+      const audioBlob = await aiAssistant.textToSpeech(text, 'nova');
+
+      if (audioBlob) {
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+        audio.onerror = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        await audio.play();
+        return;
+      }
+    } catch (e) {
+      console.log('[TTS] OpenAI failed, using browser fallback');
+    }
+
+    // Fallback navigateur
     if ('speechSynthesis' in window) {
-      // Annuler toute parole en cours
-      window.speechSynthesis.cancel();
-
-      // Nettoyer le texte (enlever markdown)
       const cleanText = text
         .replace(/\*\*/g, '')
         .replace(/\*/g, '')
@@ -219,21 +253,28 @@ Comment puis-je vous aider aujourd'hui ?`,
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
 
-      utterance.onstart = () => setIsSpeaking(true);
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
 
       speechSynthRef.current = utterance;
       window.speechSynthesis.speak(utterance);
+    } else {
+      setIsSpeaking(false);
     }
   }, [isMuted]);
 
   // Arrêter la parole
   const stopSpeaking = () => {
+    // Arrêter OpenAI audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    // Arrêter TTS navigateur
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
+    setIsSpeaking(false);
   };
 
   // Reconnaissance vocale
