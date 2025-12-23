@@ -147,7 +147,8 @@ router.get('/vapid-public-key', (req, res) => {
 router.post('/subscribe', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const { subscription, userAgent, platform } = req.body;
-    const userId = req.user.userId;
+    const userId = req.user.id || req.user.userId; // Support both id and userId
+    console.log('[Push] Subscribe request for userId:', userId, '| user:', req.user.email || req.user.name);
 
     if (!subscription || !subscription.endpoint || !subscription.keys) {
       return res.status(400).json({ error: 'Invalid subscription data' });
@@ -185,7 +186,7 @@ router.post('/subscribe', ensureTablesExist, authenticateToken, async (req, res)
 router.post('/unsubscribe', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
     const { endpoint } = req.body;
-    const userId = req.user.userId;
+    const userId = req.user.id || req.user.userId;
 
     await pool.query(`
       DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2
@@ -202,7 +203,7 @@ router.post('/unsubscribe', ensureTablesExist, authenticateToken, async (req, re
 // Get notification preferences
 router.get('/preferences', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id || req.user.userId;
 
     const result = await pool.query(`
       SELECT
@@ -239,7 +240,7 @@ router.get('/preferences', ensureTablesExist, authenticateToken, async (req, res
 // Update notification preferences
 router.put('/preferences', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id || req.user.userId;
     const {
       controlReminders,
       morningBrief,
@@ -277,14 +278,17 @@ router.put('/preferences', ensureTablesExist, authenticateToken, async (req, res
 // Send test notification
 router.post('/test', ensureTablesExist, authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id || req.user.userId;
+    console.log('[Push] Test notification for userId:', userId, '| user object:', JSON.stringify(req.user));
 
     const result = await pool.query(`
       SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = $1
     `, [userId]);
 
+    console.log('[Push] Found', result.rows.length, 'subscriptions for userId:', userId);
+
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'No subscription found' });
+      return res.status(404).json({ error: 'No subscription found', userId });
     }
 
     const payload = JSON.stringify({
