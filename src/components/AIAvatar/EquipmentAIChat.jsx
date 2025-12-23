@@ -318,8 +318,8 @@ Comment puis-je vous aider avec cet équipement ?`,
     setIsSpeaking(true);
 
     try {
-      // Try OpenAI TTS first (natural AI voice)
-      const audioBlob = await aiAssistant.textToSpeech(text, 'nova');
+      // Try ElevenLabs TTS first (ultra-natural voice), then OpenAI fallback
+      const audioBlob = await aiAssistant.textToSpeechPremium(text);
 
       if (audioBlob) {
         // Use OpenAI audio

@@ -12,6 +12,7 @@ import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import multer from "multer";
 
 dotenv.config();
 const { Pool } = pg;
@@ -2633,17 +2634,16 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
     const stats = await Promise.all([
       // Overdue controls
       pool.query(`
-        SELECT COUNT(*) as count,
-               string_agg(DISTINCT equipment_type, ', ') as types
+        SELECT COUNT(*) as count
         FROM control_schedules
-        WHERE next_due < CURRENT_DATE AND status != 'completed'
+        WHERE next_due_date < CURRENT_DATE AND (status IS NULL OR status != 'completed')
       `),
       // Controls this week
       pool.query(`
         SELECT COUNT(*) as count
         FROM control_schedules
-        WHERE next_due BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-        AND status != 'completed'
+        WHERE next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+        AND (status IS NULL OR status != 'completed')
       `),
       // Equipment counts by type
       pool.query(`
@@ -2668,15 +2668,11 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         FROM atex_nc
         WHERE date_cloture IS NULL
       `),
-      // Equipment never controlled
+      // Equipment never controlled (switchboards only - they have control_schedules)
       pool.query(`
         SELECT COUNT(*) as count FROM (
           SELECT s.id FROM switchboard s
-          LEFT JOIN control_schedules cs ON cs.equipment_id = s.id::text
-          WHERE cs.id IS NULL
-          UNION ALL
-          SELECT v.id FROM vsd_equipments v
-          LEFT JOIN control_schedules cs ON cs.equipment_id = v.id::text
+          LEFT JOIN control_schedules cs ON cs.switchboard_id = s.id
           WHERE cs.id IS NULL
         ) as never_controlled
       `),
@@ -2738,7 +2734,7 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         type: "overdue",
         icon: "⚠️",
         title: `${overdueCount} contrôle(s) en retard`,
-        description: overdueRes.rows[0]?.types || "Divers équipements",
+        description: "Tableaux électriques à contrôler",
         urgency: "high",
         action: "/app/switchboard-controls?tab=overdue"
       });
@@ -2854,6 +2850,394 @@ function getGreeting() {
   if (hour < 18) return "Bon après-midi";
   return "Bonsoir";
 }
+
+// ============================================================
+// ELEVENLABS TTS - Ultra-natural voice synthesis
+// ============================================================
+app.post("/api/ai-assistant/tts-elevenlabs", express.json(), async (req, res) => {
+  const { text, voice = "Rachel" } = req.body;
+  const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+
+  if (!text) {
+    return res.status(400).json({ error: "Text is required" });
+  }
+
+  // ElevenLabs voice IDs
+  const voiceIds = {
+    "Rachel": "21m00Tcm4TlvDq8ikWAM",   // Calm, professional female
+    "Domi": "AZnzlk1XvdvUeBnXmlld",      // Strong, confident female
+    "Bella": "EXAVITQu4vr4xnSDxMaL",     // Soft, warm female
+    "Antoni": "ErXwobaYiN019PkySvjV",    // Professional male
+    "Josh": "TxGEqnHWrfWFTfGW9XjX",      // Deep, warm male
+    "Arnold": "VR6AewLTigWG4xSOukaG"     // Crisp, clear male
+  };
+
+  // If no ElevenLabs key, fallback to OpenAI
+  if (!ELEVENLABS_API_KEY) {
+    console.log('[TTS] No ElevenLabs key, falling back to OpenAI');
+    if (!openai) {
+      return res.status(503).json({ error: "No TTS provider available", fallback: true });
+    }
+
+    try {
+      const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/•/g, '').substring(0, 4000);
+      const mp3 = await openai.audio.speech.create({
+        model: "tts-1-hd",
+        voice: "nova",
+        input: cleanText,
+        speed: 1.0
+      });
+      const buffer = Buffer.from(await mp3.arrayBuffer());
+      res.set({ 'Content-Type': 'audio/mpeg', 'Content-Length': buffer.length });
+      return res.send(buffer);
+    } catch (e) {
+      return res.status(500).json({ error: e.message, fallback: true });
+    }
+  }
+
+  try {
+    const voiceId = voiceIds[voice] || voiceIds["Rachel"];
+    const cleanText = text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/•/g, '').substring(0, 5000);
+
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': ELEVENLABS_API_KEY
+      },
+      body: JSON.stringify({
+        text: cleanText,
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0.5,
+          use_speaker_boost: true
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`ElevenLabs error: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': buffer.length,
+      'X-TTS-Provider': 'elevenlabs'
+    });
+    res.send(buffer);
+  } catch (error) {
+    console.error('[TTS-ElevenLabs] Error:', error);
+    // Fallback to OpenAI
+    if (openai) {
+      try {
+        const mp3 = await openai.audio.speech.create({
+          model: "tts-1-hd",
+          voice: "nova",
+          input: text.substring(0, 4000),
+          speed: 1.0
+        });
+        const buffer = Buffer.from(await mp3.arrayBuffer());
+        res.set({ 'Content-Type': 'audio/mpeg', 'X-TTS-Provider': 'openai-fallback' });
+        return res.send(buffer);
+      } catch (e) {
+        return res.status(500).json({ error: e.message, fallback: true });
+      }
+    }
+    res.status(500).json({ error: error.message, fallback: true });
+  }
+});
+
+// ============================================================
+// WHISPER STT - Speech to text transcription
+// ============================================================
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+app.post("/api/ai-assistant/stt", audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Audio file is required" });
+  }
+
+  if (!openai) {
+    return res.status(503).json({ error: "Speech-to-text not available" });
+  }
+
+  try {
+    // Create a File-like object from the buffer
+    const audioFile = new File([req.file.buffer], 'audio.webm', { type: req.file.mimetype });
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: "whisper-1",
+      language: "fr",
+      response_format: "text"
+    });
+
+    res.json({ success: true, text: transcription });
+  } catch (error) {
+    console.error('[STT] Whisper error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// HISTORICAL CHARTS - Control trends over 30/90 days
+// ============================================================
+app.get("/api/ai-assistant/historical-stats", async (req, res) => {
+  const { period = '30' } = req.query;
+  const days = parseInt(period) || 30;
+
+  try {
+    // Get daily control completions
+    const completionsRes = await pool.query(`
+      SELECT
+        DATE(updated_at) as date,
+        COUNT(*) as count
+      FROM control_schedules
+      WHERE status = 'completed'
+      AND updated_at >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(updated_at)
+      ORDER BY date ASC
+    `);
+
+    // Get daily ATEX NC creations
+    const ncCreatedRes = await pool.query(`
+      SELECT
+        DATE(created_at) as date,
+        COUNT(*) as count
+      FROM atex_nc
+      WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `);
+
+    // Get daily ATEX NC closures
+    const ncClosedRes = await pool.query(`
+      SELECT
+        DATE(date_cloture) as date,
+        COUNT(*) as count
+      FROM atex_nc
+      WHERE date_cloture IS NOT NULL
+      AND date_cloture >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(date_cloture)
+      ORDER BY date ASC
+    `);
+
+    // Get equipment added over time
+    const equipmentAddedRes = await pool.query(`
+      SELECT
+        DATE(created_at) as date,
+        COUNT(*) as count
+      FROM switchboard
+      WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+    `);
+
+    // Build date labels for the period
+    const labels = [];
+    const today = new Date();
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      labels.push(date.toISOString().split('T')[0]);
+    }
+
+    // Convert query results to maps
+    const completionsMap = new Map(completionsRes.rows.map(r => [r.date?.toISOString().split('T')[0], parseInt(r.count)]));
+    const ncCreatedMap = new Map(ncCreatedRes.rows.map(r => [r.date?.toISOString().split('T')[0], parseInt(r.count)]));
+    const ncClosedMap = new Map(ncClosedRes.rows.map(r => [r.date?.toISOString().split('T')[0], parseInt(r.count)]));
+    const equipmentMap = new Map(equipmentAddedRes.rows.map(r => [r.date?.toISOString().split('T')[0], parseInt(r.count)]));
+
+    // Build datasets
+    const datasets = {
+      controlsCompleted: labels.map(d => completionsMap.get(d) || 0),
+      ncCreated: labels.map(d => ncCreatedMap.get(d) || 0),
+      ncClosed: labels.map(d => ncClosedMap.get(d) || 0),
+      equipmentAdded: labels.map(d => equipmentMap.get(d) || 0)
+    };
+
+    // Calculate trends
+    const halfPoint = Math.floor(labels.length / 2);
+    const firstHalf = datasets.controlsCompleted.slice(0, halfPoint);
+    const secondHalf = datasets.controlsCompleted.slice(halfPoint);
+    const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length || 0;
+    const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length || 0;
+    const trend = secondAvg > firstAvg ? 'up' : secondAvg < firstAvg ? 'down' : 'stable';
+
+    res.json({
+      success: true,
+      period: days,
+      labels,
+      datasets,
+      summary: {
+        totalControlsCompleted: datasets.controlsCompleted.reduce((a, b) => a + b, 0),
+        totalNcCreated: datasets.ncCreated.reduce((a, b) => a + b, 0),
+        totalNcClosed: datasets.ncClosed.reduce((a, b) => a + b, 0),
+        avgControlsPerDay: (datasets.controlsCompleted.reduce((a, b) => a + b, 0) / days).toFixed(1),
+        trend
+      }
+    });
+  } catch (error) {
+    console.error('[HistoricalStats] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// PROACTIVE SUGGESTIONS - Context-aware recommendations
+// ============================================================
+app.get("/api/ai-assistant/suggestions", async (req, res) => {
+  const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+  try {
+    const suggestions = [];
+    const now = new Date();
+    const hour = now.getHours();
+    const dayOfWeek = now.getDay();
+
+    // 1. Check overdue controls
+    const overdueRes = await pool.query(`
+      SELECT COUNT(*) as count FROM control_schedules
+      WHERE next_due_date < CURRENT_DATE AND (status IS NULL OR status != 'completed')
+    `);
+    const overdueCount = parseInt(overdueRes.rows[0]?.count || 0);
+
+    if (overdueCount > 0) {
+      suggestions.push({
+        type: 'urgent',
+        icon: '⚠️',
+        title: `${overdueCount} contrôle(s) en retard`,
+        message: `Tu as des contrôles en retard. Veux-tu que je te prépare la liste optimisée par bâtiment?`,
+        action: { type: 'navigate', path: '/app/switchboard-controls?tab=overdue' },
+        priority: 1
+      });
+    }
+
+    // 2. Morning brief suggestion (before 10am)
+    if (hour < 10 && dayOfWeek >= 1 && dayOfWeek <= 5) {
+      suggestions.push({
+        type: 'info',
+        icon: '☀️',
+        title: 'Brief du matin disponible',
+        message: 'Consulte ton brief pour voir les priorités du jour et les contrôles à venir.',
+        action: { type: 'scroll', target: 'morning-brief' },
+        priority: 2
+      });
+    }
+
+    // 3. Check ATEX NC
+    const atexNcRes = await pool.query(`
+      SELECT COUNT(*) as count FROM atex_nc WHERE date_cloture IS NULL
+    `);
+    const atexNcCount = parseInt(atexNcRes.rows[0]?.count || 0);
+
+    if (atexNcCount > 5) {
+      suggestions.push({
+        type: 'warning',
+        icon: '🧯',
+        title: `${atexNcCount} NC ATEX en attente`,
+        message: 'Plusieurs non-conformités ATEX sont en attente de traitement.',
+        action: { type: 'navigate', path: '/app/atex?tab=nc' },
+        priority: 2
+      });
+    }
+
+    // 4. Weekly planning suggestion (Monday)
+    if (dayOfWeek === 1 && hour >= 8 && hour <= 10) {
+      suggestions.push({
+        type: 'tip',
+        icon: '📅',
+        title: 'Planification de la semaine',
+        message: 'Nouveau lundi! Veux-tu que je génère ton planning optimisé pour la semaine?',
+        action: { type: 'command', command: 'generateWeeklyPlan' },
+        priority: 3
+      });
+    }
+
+    // 5. Documentation check
+    const docsRes = await pool.query(`
+      SELECT COUNT(*) as count FROM switchboard
+      WHERE (documentation_url IS NULL OR documentation_url = '')
+      AND manufacturer IS NOT NULL
+    `);
+    const withoutDocs = parseInt(docsRes.rows[0]?.count || 0);
+
+    if (withoutDocs > 10) {
+      suggestions.push({
+        type: 'tip',
+        icon: '📚',
+        title: `${withoutDocs} équipements sans documentation`,
+        message: 'Je peux rechercher automatiquement la documentation pour ces équipements.',
+        action: { type: 'command', command: 'autoDocSearch' },
+        priority: 4
+      });
+    }
+
+    // 6. End of day suggestion (after 4pm)
+    if (hour >= 16 && hour <= 18 && dayOfWeek >= 1 && dayOfWeek <= 5) {
+      suggestions.push({
+        type: 'info',
+        icon: '📝',
+        title: 'Résumé de la journée',
+        message: 'Veux-tu un résumé de ce qui a été fait aujourd\'hui?',
+        action: { type: 'command', command: 'dailySummary' },
+        priority: 5
+      });
+    }
+
+    // Sort by priority
+    suggestions.sort((a, b) => a.priority - b.priority);
+
+    res.json({
+      success: true,
+      suggestions: suggestions.slice(0, 5),
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[Suggestions] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// EQUIPMENT IMAGE GENERATION - AI-powered visuals
+// ============================================================
+app.post("/api/ai-assistant/generate-image", express.json(), async (req, res) => {
+  const { equipment, style = 'technical' } = req.body;
+
+  if (!openai) {
+    return res.status(503).json({ error: "Image generation not available" });
+  }
+
+  try {
+    const prompt = style === 'technical'
+      ? `Technical illustration of industrial ${equipment.type || 'electrical equipment'}: ${equipment.manufacturer || ''} ${equipment.model || ''}, professional engineering diagram style, clean white background, detailed technical drawing, isometric view`
+      : `Photo-realistic image of industrial ${equipment.type || 'electrical equipment'}: ${equipment.manufacturer || ''} ${equipment.model || ''}, in a factory setting, professional lighting`;
+
+    const response = await openai.images.generate({
+      model: "dall-e-3",
+      prompt: prompt,
+      n: 1,
+      size: "1024x1024",
+      quality: "standard"
+    });
+
+    res.json({
+      success: true,
+      imageUrl: response.data[0].url,
+      revisedPrompt: response.data[0].revised_prompt
+    });
+  } catch (error) {
+    console.error('[ImageGen] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // >>> Infrastructure (plans électriques multi-zones) : re-stream pour uploads PDF
 app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));
