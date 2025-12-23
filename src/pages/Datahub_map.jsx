@@ -699,37 +699,16 @@ export default function DatahubMap() {
     if (!mk) mk = markersMapRef.current.get(Number(itemId));
     if (!mk || !mapRef.current) return;
 
+    // Center on marker
     const ll = mk.getLatLng();
-    const map = mapRef.current;
+    mapRef.current.setView(ll, mapRef.current.getZoom(), { animate: true });
 
-    // Function to apply flash animation to the marker
-    const applyFlash = () => {
-      const el = mk.getElement();
-      if (el) {
-        const innerDiv = el.querySelector('div');
-        if (innerDiv) {
-          innerDiv.classList.add("datahub-marker-flash");
-          setTimeout(() => innerDiv.classList.remove("datahub-marker-flash"), 2000);
-        }
-      }
-    };
-
-    // Wait for map to finish panning before applying flash
-    // This ensures the marker is in the viewport and rendered in DOM (especially on mobile)
-    const onMoveEnd = () => {
-      map.off('moveend', onMoveEnd);
-      // Small delay to ensure marker element is rendered in DOM
-      setTimeout(applyFlash, 100);
-    };
-
-    map.on('moveend', onMoveEnd);
-    map.setView(ll, map.getZoom(), { animate: true, duration: 0.5 });
-
-    // Fallback timeout in case moveend doesn't fire (marker already in view)
-    setTimeout(() => {
-      map.off('moveend', onMoveEnd);
-      applyFlash();
-    }, 700);
+    // Flash animation
+    const el = mk.getElement();
+    if (el) {
+      el.classList.add("datahub-marker-flash");
+      setTimeout(() => el.classList.remove("datahub-marker-flash"), 2000);
+    }
   }, []);
 
   // Handle map click
@@ -902,7 +881,13 @@ export default function DatahubMap() {
         .datahub-marker-inline { background: transparent !important; border: none !important; }
         /* Animation class on inner div (like Switchboard) */
         .datahub-marker-selected { animation: pulse-selected 1.5s ease-in-out infinite; z-index: 2000 !important; }
-        .datahub-marker-flash { animation: flash-marker 2s ease-in-out; }
+        .datahub-marker-flash > div { animation: flash-marker 2s ease-in-out; }
+        @keyframes flash-marker {
+          0%, 100% { transform: scale(1); filter: brightness(1); }
+          25% { transform: scale(1.3); filter: brightness(1.3); }
+          50% { transform: scale(1); filter: brightness(1); }
+          75% { transform: scale(1.3); filter: brightness(1.3); }
+        }
         .datahub-tooltip { font-size: 12px; padding: 8px 12px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15); z-index: 3000 !important; }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0); }
         .leaflet-pane { z-index: 400; }
