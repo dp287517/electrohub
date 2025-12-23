@@ -504,6 +504,7 @@ export default function DatahubMap() {
   const selectedItemIdRef = useRef(null); // Track selected item for marker drawing
   const positionsRef = useRef([]); // Keep positions for redrawing
   const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
+  const currentPlanKeyRef = useRef(null); // Track current plan to prevent stale data
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
@@ -639,12 +640,24 @@ export default function DatahubMap() {
   // Load external equipment positions (VSD, HV, MECA, GLO, Mobile, Switchboards)
   const loadExternalPositions = useCallback(async () => {
     if (!selectedPlan) return;
+    const planKey = selectedPlan.logical_name || selectedPlan.id;
+    const requestKey = `${planKey}:${pageIndex}`;
+
+    // Track which plan/page we're loading for
+    currentPlanKeyRef.current = requestKey;
+    console.log('[Datahub] Loading external positions for:', requestKey);
+
     try {
-      const planKey = selectedPlan.logical_name || selectedPlan.id;
-      console.log('[Datahub] Loading external positions for plan:', planKey, 'page:', pageIndex);
       const res = await api.datahub.maps.externalPositions(planKey, pageIndex);
+
+      // CRITICAL: Check if plan changed while we were loading
+      if (currentPlanKeyRef.current !== requestKey) {
+        console.log('[Datahub] Ignoring stale external positions for:', requestKey, '(current:', currentPlanKeyRef.current, ')');
+        return; // Ignore stale response
+      }
+
       if (res?.ok) {
-        console.log('[Datahub] External positions loaded:', {
+        console.log('[Datahub] External positions loaded for', requestKey, ':', {
           vsd: res.positions?.vsd?.length || 0,
           hv: res.positions?.hv?.length || 0,
           meca: res.positions?.meca?.length || 0,
@@ -652,19 +665,16 @@ export default function DatahubMap() {
           mobile: res.positions?.mobile?.length || 0,
           switchboards: res.positions?.switchboards?.length || 0
         });
-        // Log first position of each type for debugging coordinates
-        Object.entries(res.positions || {}).forEach(([type, positions]) => {
-          if (positions && positions.length > 0) {
-            console.log(`[Datahub] First ${type} position:`, positions[0]);
-          }
-        });
         setExternalPositions(res.positions || { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
         setExternalTotals(res.totals || { vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
       }
     } catch (e) {
-      console.log('[Datahub] External positions not available:', e.message);
-      setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
-      setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+      // Only update state if this is still the current request
+      if (currentPlanKeyRef.current === requestKey) {
+        console.log('[Datahub] External positions not available for', requestKey, ':', e.message);
+        setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+        setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+      }
     }
   }, [selectedPlan, pageIndex]);
 
@@ -718,10 +728,9 @@ export default function DatahubMap() {
 
     map.on("click", handleMapClick);
 
-    // Draw markers after map is initialized
-    if (positionsRef.current.length > 0) {
-      drawMarkers();
-    }
+    // Always draw markers after map is initialized (Datahub + External)
+    // The useEffect watching externalPositions will redraw when external data arrives
+    drawMarkers();
 
     // Mark PDF as ready after map initialization
     setPdfReady(true);
