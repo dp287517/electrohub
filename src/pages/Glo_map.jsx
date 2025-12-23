@@ -1230,8 +1230,10 @@ export default function GloMap() {
       const details = placedDetails[String(eq.id)];
       console.log('[GLO_MAP] Found details:', details);
 
-      if (details?.plans?.length > 0) {
-        const targetPlanKey = details.plans[0]; // First plan where it's placed
+      // Handle both formats: { plans: [...] } or { logical_name: "...", page_index: 0 }
+      const targetPlanKey = details?.plans?.[0] || details?.logical_name;
+
+      if (targetPlanKey) {
         console.log('[GLO_MAP] Target plan key:', targetPlanKey);
 
         // Find the plan
