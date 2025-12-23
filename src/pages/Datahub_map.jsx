@@ -1050,8 +1050,8 @@ export default function DatahubMap() {
                 ) : filteredItems.map(item => {
                   const cat = categories.find(c => c.id === item.category_id);
                   const placed = placedIds.has(String(item.id));
-                  const isSelected = selectedItem?.id === item.id;
-                  const isPlacing = placementMode?.id === item.id;
+                  const isSelected = String(selectedItem?.id) === String(item.id);
+                  const isPlacing = String(placementMode?.id) === String(item.id);
                   const IconComp = ICON_MAP[cat?.icon] || Circle;
 
                   return (
@@ -1091,7 +1091,7 @@ export default function DatahubMap() {
                             // User must click on marker to see details
                             setSelectedItem(null);
                             setSelectedPosition(null);
-                            const pos = positions.find(p => p.item_id === item.id);
+                            const pos = positions.find(p => String(p.item_id) === String(item.id));
                             // Animate to marker if placed
                             if (pos) {
                               // Close sidebar on mobile so user can see the map animation

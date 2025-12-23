@@ -193,7 +193,7 @@ const ShareLinkModal = ({ isOpen, onClose, equipment }) => {
 const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings, setExpandedBuildings, selectedEquipment, onSelectEquipment, placedIds }) => {
   if (!isOpen) return null;
 
-  const isPlaced = (id) => placedIds.has(id);
+  const isPlaced = (id) => placedIds.has(String(id));
 
   return (
     <div className="fixed inset-0 z-50">
@@ -1597,7 +1597,8 @@ export default function Glo() {
   const loadPlacements = useCallback(async () => {
     try {
       const response = await api.gloMaps.placedIds();
-      const ids = response?.placed_ids || [];
+      // Convert all IDs to String for consistent comparison
+      const ids = (response?.placed_ids || []).map(id => String(id));
       setPlacedIds(new Set(ids));
       setPlacedDetails(response?.placed_details || {});
     } catch (e) {
@@ -1825,8 +1826,8 @@ export default function Glo() {
 
   const stats = useMemo(() => ({
     total: equipments.length,
-    placed: equipments.filter(e => placedIds.has(e.id)).length,
-    unplaced: equipments.filter(e => !placedIds.has(e.id)).length,
+    placed: equipments.filter(e => placedIds.has(String(e.id))).length,
+    unplaced: equipments.filter(e => !placedIds.has(String(e.id))).length,
   }), [equipments, placedIds]);
 
   // Liste des bâtiments uniques pour le filtre du rapport
@@ -1991,7 +1992,7 @@ export default function Glo() {
                                 <p className="text-sm font-medium truncate">{eq.name || eq.tag || 'Equipement'}</p>
                                 <p className="text-xs text-gray-400 truncate">{eq.category_name || eq.manufacturer}</p>
                               </div>
-                              {!placedIds.has(eq.id) && (
+                              {!placedIds.has(String(eq.id)) && (
                                 <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[9px] rounded-full flex items-center gap-0.5">
                                   <MapPin size={8} />
                                 </span>
@@ -2030,7 +2031,7 @@ export default function Glo() {
                 onShare={(eq) => setShowShareModal(true)}
                 onNavigateToMap={handleNavigateToMap}
                 onPhotoUpload={handlePhotoUpload}
-                isPlaced={placedIds.has(selectedEquipment.id)}
+                isPlaced={placedIds.has(String(selectedEquipment.id))}
                 showToast={showToast}
                 controlStatuses={controlStatuses}
                 navigate={navigate}
