@@ -174,12 +174,22 @@ export default function AuditHistory({
         credentials: 'include'
       });
 
+      // 404 is normal - means no audit history exists yet for this entity
+      if (response.status === 404) {
+        setEvents([]);
+        return;
+      }
+
       if (!response.ok) throw new Error('Erreur lors du chargement');
 
       const data = await response.json();
       setEvents(data.events || []);
     } catch (e) {
-      setError(e.message);
+      // Silently ignore network errors for audit - it's not critical
+      console.warn('AuditHistory fetch warning:', e.message);
+      setEvents([]);
+      // Don't show error to user for non-critical audit data
+      // setError(e.message);
     } finally {
       setLoading(false);
     }
