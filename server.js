@@ -2648,7 +2648,7 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
       // Equipment counts by type
       pool.query(`
         SELECT
-          (SELECT COUNT(*) FROM switchboard) as switchboards,
+          (SELECT COUNT(*) FROM switchboards) as switchboards,
           (SELECT COUNT(*) FROM vsd_equipments) as vsd,
           (SELECT COUNT(*) FROM meca_equipments) as meca,
           (SELECT COUNT(*) FROM atex_equipments) as atex,
@@ -2662,25 +2662,26 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         WHERE status = 'completed'
         AND updated_at > CURRENT_DATE - INTERVAL '7 days'
       `),
-      // ATEX non-conformities pending
+      // ATEX non-conformities pending (checks with non_conforme result)
       pool.query(`
         SELECT COUNT(*) as count
-        FROM atex_nc
-        WHERE date_cloture IS NULL
+        FROM atex_checks
+        WHERE result = 'non_conforme'
+        AND (status IS NULL OR status != 'resolved')
       `),
       // Equipment never controlled (switchboards only - they have control_schedules)
       pool.query(`
         SELECT COUNT(*) as count FROM (
-          SELECT s.id FROM switchboard s
+          SELECT s.id FROM switchboards s
           LEFT JOIN control_schedules cs ON cs.switchboard_id = s.id
           WHERE cs.id IS NULL
         ) as never_controlled
       `),
       // Buildings with equipment
       pool.query(`
-        SELECT COUNT(DISTINCT building) as count
-        FROM switchboard
-        WHERE building IS NOT NULL
+        SELECT COUNT(DISTINCT building_code) as count
+        FROM switchboards
+        WHERE building_code IS NOT NULL
       `)
     ]);
 
@@ -3005,26 +3006,28 @@ app.get("/api/ai-assistant/historical-stats", async (req, res) => {
       ORDER BY date ASC
     `);
 
-    // Get daily ATEX NC creations
+    // Get daily ATEX NC creations (from atex_checks with non_conforme result)
     const ncCreatedRes = await pool.query(`
       SELECT
-        DATE(created_at) as date,
+        DATE(date) as date,
         COUNT(*) as count
-      FROM atex_nc
-      WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
-      GROUP BY DATE(created_at)
+      FROM atex_checks
+      WHERE result = 'non_conforme'
+      AND date >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(date)
       ORDER BY date ASC
     `);
 
-    // Get daily ATEX NC closures
+    // Get daily ATEX NC closures (resolved checks)
     const ncClosedRes = await pool.query(`
       SELECT
-        DATE(date_cloture) as date,
+        DATE(updated_at) as date,
         COUNT(*) as count
-      FROM atex_nc
-      WHERE date_cloture IS NOT NULL
-      AND date_cloture >= CURRENT_DATE - INTERVAL '${days} days'
-      GROUP BY DATE(date_cloture)
+      FROM atex_checks
+      WHERE result = 'non_conforme'
+      AND status = 'resolved'
+      AND updated_at >= CURRENT_DATE - INTERVAL '${days} days'
+      GROUP BY DATE(updated_at)
       ORDER BY date ASC
     `);
 
@@ -3033,7 +3036,7 @@ app.get("/api/ai-assistant/historical-stats", async (req, res) => {
       SELECT
         DATE(created_at) as date,
         COUNT(*) as count
-      FROM switchboard
+      FROM switchboards
       WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
       GROUP BY DATE(created_at)
       ORDER BY date ASC
@@ -3131,9 +3134,11 @@ app.get("/api/ai-assistant/suggestions", async (req, res) => {
       });
     }
 
-    // 3. Check ATEX NC
+    // 3. Check ATEX NC (from atex_checks with non_conforme result)
     const atexNcRes = await pool.query(`
-      SELECT COUNT(*) as count FROM atex_nc WHERE date_cloture IS NULL
+      SELECT COUNT(*) as count FROM atex_checks
+      WHERE result = 'non_conforme'
+      AND (status IS NULL OR status != 'resolved')
     `);
     const atexNcCount = parseInt(atexNcRes.rows[0]?.count || 0);
 
@@ -3160,9 +3165,9 @@ app.get("/api/ai-assistant/suggestions", async (req, res) => {
       });
     }
 
-    // 5. Documentation check
+    // 5. Documentation check (VSD equipment without docs)
     const docsRes = await pool.query(`
-      SELECT COUNT(*) as count FROM switchboard
+      SELECT COUNT(*) as count FROM vsd_equipments
       WHERE (documentation_url IS NULL OR documentation_url = '')
       AND manufacturer IS NOT NULL
     `);
