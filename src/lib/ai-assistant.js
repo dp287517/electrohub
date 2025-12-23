@@ -875,24 +875,32 @@ Comment puis-je vous aider plus précisément ?`,
    * Show a notification
    */
   showNotification(title, options = {}) {
-    if (Notification.permission !== 'granted') return;
+    // Check if Notification API is available
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      return null;
+    }
 
-    const notification = new Notification(title, {
-      icon: '/electro-icon.png',
-      badge: '/electro-badge.png',
-      vibrate: [200, 100, 200],
-      ...options
-    });
+    try {
+      const notification = new Notification(title, {
+        icon: '/electro-icon.png',
+        badge: '/electro-badge.png',
+        vibrate: [200, 100, 200],
+        ...options
+      });
 
-    notification.onclick = () => {
-      window.focus();
-      if (options.url) {
-        window.location.href = options.url;
-      }
-      notification.close();
-    };
+      notification.onclick = () => {
+        window.focus();
+        if (options.url) {
+          window.location.href = options.url;
+        }
+        notification.close();
+      };
 
-    return notification;
+      return notification;
+    } catch (err) {
+      console.error('Notification error:', err);
+      return null;
+    }
   }
 
   /**
