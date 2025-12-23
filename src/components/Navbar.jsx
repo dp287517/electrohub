@@ -89,7 +89,7 @@ export default function Navbar() {
   return (
     <>
       <header
-        className={`sticky top-0 z-50 transition-all duration-300 ${
+        className={`sticky top-0 z-50 transition-all duration-300 safe-area-header ${
           scrolled
             ? 'bg-white/95 backdrop-blur-xl shadow-lg shadow-gray-900/5'
             : 'bg-white/80 backdrop-blur-md'
@@ -232,7 +232,7 @@ export default function Navbar() {
 
       {/* Mobile Menu Panel */}
       <div
-        className={`fixed top-16 right-0 w-full sm:w-80 bg-white shadow-2xl z-50 md:hidden transition-all duration-300 ease-out ${
+        className={`fixed right-0 w-full sm:w-80 bg-white shadow-2xl z-50 md:hidden transition-all duration-300 ease-out below-safe-header ${
           mobileMenuOpen
             ? 'translate-x-0 opacity-100'
             : 'translate-x-full opacity-0 pointer-events-none'

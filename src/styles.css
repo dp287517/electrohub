@@ -27,3 +27,17 @@ body { @apply bg-gray-50 text-gray-900; }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* iOS Safe Area Support */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-area-header {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* For elements that need to account for header + safe area */
+.below-safe-header {
+  top: calc(4rem + env(safe-area-inset-top, 0px));
+}
