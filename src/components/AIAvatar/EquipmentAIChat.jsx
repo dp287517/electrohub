@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import MiniSwitchboardPreview from './MiniSwitchboardPreview';
 import {
   X, Send, Mic, MicOff, Sparkles,
   AlertTriangle, Calendar, Search, FileText,
@@ -7,7 +8,7 @@ import {
   Volume2, VolumeX, Play, Cpu, Cog, Battery,
   Shield, MapPin, Download, BookOpen, Settings,
   TrendingUp, Activity, ClipboardCheck, HelpCircle,
-  Lightbulb, Target, ChevronRight
+  Lightbulb, Target, ChevronRight, Map
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
@@ -63,7 +64,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-blue-50',
     textColor: 'text-blue-600',
     borderColor: 'border-blue-200',
+    showMapPreview: true, // Enable mini map preview for switchboards
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve ce tableau sur le plan.', isMapAction: true },
       { icon: Shield, label: 'Sécurité', prompt: 'Analyse la conformité sécurité de ce tableau électrique et identifie les risques.' },
       { icon: Activity, label: 'État général', prompt: 'Donne-moi un état général de ce tableau électrique et ses points d\'attention.' },
       { icon: Calendar, label: 'Contrôles', prompt: 'Quels contrôles sont à prévoir pour ce tableau ? Propose un planning.' },
@@ -224,6 +227,7 @@ export default function EquipmentAIChat({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
+  const [showMapPreview, setShowMapPreview] = useState(false);
   const [isMuted, setIsMuted] = useState(() => {
     return localStorage.getItem('eh_avatar_muted') === 'true';
   });
@@ -497,6 +501,22 @@ Comment puis-je vous aider avec cet équipement ?`,
 
   // Quick action
   const handleQuickAction = (action) => {
+    if (action.isMapAction) {
+      // Show mini map preview instead of sending message
+      setShowMapPreview(true);
+      setShowQuickActions(false);
+
+      // Add a message showing the map
+      const mapMessage = {
+        id: Date.now(),
+        role: 'assistant',
+        content: `📍 Voici la localisation de **${equipment?.name || equipment?.code || 'ce tableau'}** sur le plan :`,
+        showMap: true,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, mapMessage]);
+      return;
+    }
     handleSend(action.prompt);
   };
 
@@ -600,6 +620,19 @@ Comment puis-je vous aider avec cet équipement ?`,
                 {new Date(controlStatus.nextDueDate).toLocaleDateString('fr-FR')}
               </span>
             )}
+            {/* Show on Map button for switchboards */}
+            {config.showMapPreview && (
+              <button
+                onClick={() => {
+                  const mapAction = config.actions.find(a => a.isMapAction);
+                  if (mapAction) handleQuickAction(mapAction);
+                }}
+                className="ml-auto flex items-center gap-1 px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <Map className="w-3 h-3" />
+                Voir sur le plan
+              </button>
+            )}
           </div>
         )}
 
@@ -650,6 +683,21 @@ Comment puis-je vous aider avec cet équipement ?`,
 
                 {/* Chart */}
                 {message.chart && <AIChart chart={message.chart} />}
+
+                {/* Mini Switchboard Map Preview */}
+                {message.showMap && equipmentType === 'switchboard' && (
+                  <div className="mt-3">
+                    <MiniSwitchboardPreview
+                      equipment={equipment}
+                      switchboardId={equipment?.id}
+                      controlStatus={controlStatus}
+                      onNavigate={(sbId, planData) => {
+                        onClose();
+                        // Navigate will be handled by the component
+                      }}
+                    />
+                  </div>
+                )}
 
                 {/* Pending Action */}
                 {message.pendingAction && (
