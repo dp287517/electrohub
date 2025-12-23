@@ -919,8 +919,13 @@ export default function UnifiedEquipmentMap({
             if (type === "datahub" && p.category_id) {
               equipmentType = `datahub_cat_${p.category_id}`;
             }
+            // Datahub uses inverted Y coordinates (y_frac = 1 - lat/h),
+            // while other equipment types use direct coordinates (y_frac = lat/h)
+            // Convert datahub to match the standard convention
+            const y_frac = type === "datahub" ? (1 - (p.y_frac || 0)) : p.y_frac;
             return {
               ...p,
+              y_frac,
               equipment_type: equipmentType,
               equipment_id: getEquipmentIdFromPosition(type, p),
             };
