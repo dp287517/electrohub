@@ -604,6 +604,9 @@ export default function DatahubMap() {
     if (positionsRef.current.length > 0) {
       drawMarkers();
     }
+
+    // Mark PDF as ready after map initialization
+    setPdfReady(true);
   };
 
   // Create marker icon (like Switchboard's makeSwitchboardIcon)
