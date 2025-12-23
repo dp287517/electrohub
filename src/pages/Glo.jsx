@@ -1788,17 +1788,27 @@ export default function Glo() {
 
   const handleNavigateToMap = (eq) => {
     const eqId = eq?.id || selectedEquipment?.id;
+    console.log('[GLO] handleNavigateToMap called', { eqId, eqName: eq?.name });
+    console.log('[GLO] placedDetails keys:', Object.keys(placedDetails));
+    console.log('[GLO] Looking for key:', String(eqId));
+
     if (!eqId) {
       navigate('/app/glo/map');
       return;
     }
     // placedDetails keys are strings (from API)
     const details = placedDetails[String(eqId)];
+    console.log('[GLO] Found details:', details);
+
     if (details?.plans?.length > 0) {
-      navigate(`/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(details.plans[0])}`);
+      const url = `/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(details.plans[0])}`;
+      console.log('[GLO] Navigating to:', url);
+      navigate(url);
     } else {
       // Pass equipment ID so user can position it on map
-      navigate(`/app/glo/map?glo=${eqId}`);
+      const url = `/app/glo/map?glo=${eqId}`;
+      console.log('[GLO] Equipment not placed, navigating to:', url);
+      navigate(url);
     }
   };
 

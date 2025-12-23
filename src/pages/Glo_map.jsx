@@ -222,19 +222,20 @@ function ContextMenu({ x, y, onDelete, onClose }) {
 }
 
 /* ----------------------------- Sidebar Card ----------------------------- */
-const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace, onViewOnMap }) => {
+const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
   return (
     <div
-      className={`p-3 rounded-xl border transition-all group
+      className={`p-3 rounded-xl border transition-all cursor-pointer group
         ${isSelected ? "bg-emerald-50 border-emerald-300 shadow-sm" : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}
+      onClick={onClick}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className={`font-semibold text-sm ${isSelected ? "text-emerald-700" : "text-gray-900"}`}>
-              {equipment.name || equipment.tag || "Equipement"}
+              {equipment.name || equipment.tag || "Équipement"}
             </span>
-            {isPlacedElsewhere && <Badge variant="purple">Place ailleurs</Badge>}
+            {isPlacedElsewhere && <Badge variant="purple">Placé ailleurs</Badge>}
           </div>
           <p className={`text-xs truncate mt-0.5 ${isSelected ? "text-emerald-600" : "text-gray-500"}`}>
             {equipment.category_name || equipment.equipment_type || "-"} {equipment.power_kva ? `${equipment.power_kva} kVA` : ""}
@@ -251,7 +252,7 @@ const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere
           {isPlacedHere ? (
             <span className="flex items-center gap-1 text-emerald-600 text-xs">
               <CheckCircle size={14} />
-              Place
+              Placé
             </span>
           ) : isPlacedSomewhere ? (
             <span className="flex items-center gap-1 text-purple-600 text-xs">
@@ -261,33 +262,19 @@ const GloCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere
           ) : (
             <span className="flex items-center gap-1 text-amber-600 text-xs">
               <AlertCircle size={14} />
-              Non place
+              Non placé
             </span>
           )}
-        </div>
-      </div>
 
-      {/* Action buttons */}
-      <div className="flex gap-2 mt-2">
-        {/* "Voir sur le plan" button - only shown when placed somewhere */}
-        {isPlacedSomewhere && (
           <button
-            onClick={(e) => { e.stopPropagation(); onViewOnMap(equipment); }}
-            className="flex-1 py-1.5 px-2 bg-gray-100 text-gray-700 text-xs rounded-lg flex items-center justify-center gap-1 hover:bg-gray-200 transition-colors"
+            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
+            className="px-2 py-1 bg-emerald-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-emerald-600 transition-colors"
+            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
           >
-            <MapPin size={12} />
-            Voir sur le plan
+            <Target size={12} />
+            {isPlacedSomewhere ? "Déplacer" : "Placer"}
           </button>
-        )}
-
-        <button
-          onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
-          className={`${isPlacedSomewhere ? 'flex-1' : 'w-full'} py-1.5 px-2 bg-emerald-500 text-white text-xs rounded-lg flex items-center justify-center gap-1 hover:bg-emerald-600 transition-colors`}
-          title={isPlacedSomewhere ? "Deplacer sur ce plan" : "Placer sur ce plan"}
-        >
-          <Target size={12} />
-          {isPlacedSomewhere ? "Deplacer" : "Placer"}
-        </button>
+        </div>
       </div>
     </div>
   );
@@ -1219,6 +1206,10 @@ export default function GloMap() {
   // User must click on the marker to open the detail panel
   const handleEquipmentClick = useCallback(
     async (eq) => {
+      console.log('[GLO_MAP] handleEquipmentClick called', { eqId: eq.id, eqName: eq.name });
+      console.log('[GLO_MAP] placedDetails keys:', Object.keys(placedDetails));
+      console.log('[GLO_MAP] Looking for key:', String(eq.id));
+
       setContextMenu(null);
       // Clear any existing selection - user must click marker to see details
       setSelectedPosition(null);
@@ -1226,14 +1217,20 @@ export default function GloMap() {
 
       // Check if this equipment is placed somewhere (keys are strings)
       const details = placedDetails[String(eq.id)];
+      console.log('[GLO_MAP] Found details:', details);
+
       if (details?.plans?.length > 0) {
         const targetPlanKey = details.plans[0]; // First plan where it's placed
+        console.log('[GLO_MAP] Target plan key:', targetPlanKey);
 
         // Find the plan
         const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+        console.log('[GLO_MAP] Target plan found:', targetPlan?.logical_name);
+
         if (targetPlan) {
           // If we're not on that plan, switch to it
           if (stableSelectedPlan?.logical_name !== targetPlanKey) {
+            console.log('[GLO_MAP] Switching to different plan');
             setSelectedPlan(targetPlan);
             setPageIndex(0);
             setPdfReady(false);
@@ -1245,13 +1242,17 @@ export default function GloMap() {
 
             // Small delay to let viewer render, then highlight
             setTimeout(() => {
+              console.log('[GLO_MAP] Highlighting marker after plan switch:', String(eq.id));
               viewerRef.current?.highlightMarker(String(eq.id));
             }, 500);
           } else {
             // Same plan - just highlight
+            console.log('[GLO_MAP] Same plan, highlighting marker:', String(eq.id));
             viewerRef.current?.highlightMarker(String(eq.id));
           }
         }
+      } else {
+        console.log('[GLO_MAP] Equipment not placed, no highlight');
       }
       // If not placed, do nothing - no modal to show
 
@@ -1408,7 +1409,6 @@ export default function GloMap() {
                     isSelected={String(selectedEquipmentId) === String(eq.id)}
                     onClick={() => handleEquipmentClick(eq)}
                     onPlace={handlePlaceEquipment}
-                    onViewOnMap={handleEquipmentClick}
                   />
                 ))
               )}
