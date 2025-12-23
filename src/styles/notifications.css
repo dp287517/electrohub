@@ -1,0 +1,43 @@
+/* notifications.css - Global notification styles */
+
+/* Toast container positioning */
+.notification-toast-container {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: 9999;
+  padding: 1rem;
+  pointer-events: none;
+  max-width: 100%;
+}
+
+@media (min-width: 640px) {
+  .notification-toast-container {
+    max-width: 28rem;
+    padding: 1.5rem;
+  }
+}
+
+/* Dark mode support for notifications */
+@media (prefers-color-scheme: dark) {
+  .notification-modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.8);
+  }
+}
+
+/* Safe area for iOS devices */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .notification-toast-container {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .animate-slideUp,
+  .animate-ping-slow,
+  .animate-ping-slower,
+  .animate-wiggle {
+    animation: none !important;
+  }
+}

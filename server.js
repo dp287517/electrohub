@@ -10,6 +10,7 @@ import pg from "pg";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
+import pushRouter from "./server_push.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -3858,8 +3859,27 @@ app.get("/api/sites", async (req, res) => {
    ================================================================ */
 app.use("/api/admin", adminRouter);
 
+/* ================================================================
+   🔔 Push Notifications API Routes
+   ================================================================ */
+app.use("/api/push", pushRouter);
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
+const __public = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
+
+// Serve PWA files (manifest.json, sw.js, icons) with appropriate caching
+app.use(express.static(__public, {
+  maxAge: "1h",
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("sw.js")) {
+      // Service worker should not be cached
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    } else if (filePath.endsWith("manifest.json")) {
+      res.setHeader("Cache-Control", "public, max-age=3600");
+    }
+  }
+}));
 
 // Serve hashed assets with long cache (immutable)
 app.use("/assets", express.static(path.join(__dist, "assets"), {
