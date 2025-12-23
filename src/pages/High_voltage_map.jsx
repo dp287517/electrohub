@@ -561,7 +561,10 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
   }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
   const highlightMarker = useCallback((equipmentId) => {
-    const mk = markersMapRef.current.get(equipmentId);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let mk = markersMapRef.current.get(equipmentId);
+    if (!mk) mk = markersMapRef.current.get(String(equipmentId));
+    if (!mk) mk = markersMapRef.current.get(Number(equipmentId));
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();

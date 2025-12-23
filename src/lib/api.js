@@ -2270,6 +2270,48 @@ export const api = {
       },
       setPosition: (equipmentId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
         put(`/api/mobile-equipment/maps/positions/${encodeURIComponent(equipmentId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
+      placedIds: async () => {
+        // Try dedicated endpoint first, then fallback to building from plans
+        const tryDedicatedEndpoint = async () => {
+          try {
+            const res = await get("/api/mobile-equipment/maps/placed-ids");
+            if (res?.placed_ids) return res;
+            throw new Error("Invalid response");
+          } catch {
+            return null;
+          }
+        };
+
+        const buildFromPlans = async () => {
+          const placed_ids = [];
+          const placed_details = {};
+          try {
+            const plansRes = await get("/api/mobile-equipment/maps/plans").catch(() => null);
+            const plans = plansRes?.plans || plansRes || [];
+            for (const plan of plans) {
+              try {
+                const posRes = await get("/api/mobile-equipment/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+                for (const pos of (posRes?.positions || [])) {
+                  if (pos.equipment_id) {
+                    const eqId = String(pos.equipment_id);
+                    if (!placed_ids.includes(eqId)) {
+                      placed_ids.push(eqId);
+                      placed_details[eqId] = { plans: [plan.logical_name] };
+                    } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
+                      placed_details[eqId].plans.push(plan.logical_name);
+                    }
+                  }
+                }
+              } catch {}
+            }
+          } catch {}
+          return { placed_ids, placed_details };
+        };
+
+        const dedicated = await tryDedicatedEndpoint();
+        if (dedicated) return dedicated;
+        return buildFromPlans();
+      },
     },
   },
 

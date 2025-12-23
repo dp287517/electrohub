@@ -1378,6 +1378,7 @@ export default function MobileEquipments() {
 
   // Placement state
   const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
 
   // Control statuses from switchboard-controls
   const [controlStatuses, setControlStatuses] = useState({});
@@ -1490,33 +1491,17 @@ export default function MobileEquipments() {
     }
   }, []);
 
-  // Load placements - get all equipment IDs that are placed on maps
+  // Load placements - get all equipment IDs that are placed on maps (like High Voltage)
   const loadPlacements = useCallback(async () => {
     try {
-      // Get list of plans first
-      const plansRes = await api.mobileEquipment.maps.listPlans();
-      const plans = plansRes?.plans || [];
-
-      // Collect all placed equipment IDs from all plans
-      const placedSet = new Set();
-      for (const plan of plans) {
-        try {
-          const res = await api.mobileEquipment.maps.positionsAuto(plan, 0);
-          const positions = res?.positions || [];
-          positions.forEach(p => {
-            if (p.equipment_id) {
-              placedSet.add(String(p.equipment_id));
-            }
-          });
-        } catch (e) {
-          // Ignore errors for individual plans
-        }
-      }
-
-      setPlacedIds(placedSet);
+      const response = await api.mobileEquipment.maps.placedIds();
+      const ids = response?.placed_ids || [];
+      setPlacedIds(new Set(ids.map(String)));
+      setPlacedDetails(response?.placed_details || {});
     } catch (err) {
       console.error('Load placements error:', err);
       setPlacedIds(new Set());
+      setPlacedDetails({});
     }
   }, []);
 
@@ -1665,8 +1650,20 @@ export default function MobileEquipments() {
     setSettings(newSettings);
   };
 
-  const handleNavigateToMap = (e) => {
-    navigate('/app/mobile-equipments/map?equipment=' + e.id);
+  // Navigate to map with plan info (like High Voltage)
+  const handleNavigateToMap = (eq) => {
+    const eqId = eq?.id || selectedEquipment?.id;
+    if (!eqId) {
+      navigate('/app/mobile-equipments/map');
+      return;
+    }
+    const details = placedDetails[eqId] || placedDetails[String(eqId)];
+    if (details?.plans?.length > 0) {
+      navigate(`/app/mobile-equipments/map?equipment=${eqId}&plan=${encodeURIComponent(details.plans[0])}`);
+    } else {
+      // Pass equipment ID so user can position it on map
+      navigate(`/app/mobile-equipments/map?equipment=${eqId}`);
+    }
   };
 
   // Build tree structure: Building > Floor > Equipments
