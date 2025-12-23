@@ -16,6 +16,7 @@ import StreamZip from "node-stream-zip";
 import PDFDocument from "pdfkit";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted } from "./lib/push-notify.js";
 
 dotenv.config();
 
@@ -519,6 +520,10 @@ app.post("/api/meca/equipments", async (req, res) => {
     eq.photo_url = null;
 
     await logEvent("meca_equipment_created", { id: eq.id, name: eq.name }, u);
+
+    // 🔔 Push notification for new equipment
+    notifyEquipmentCreated('meca', eq, u?.email || u?.id).catch(err => console.log('[MECA] Push notify error:', err.message));
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -648,7 +653,7 @@ app.delete("/api/meca/equipments/:id", async (req, res) => {
     const id = String(req.params.id);
     const u = getUser(req);
     const { rows: old } = await pool.query(
-      `SELECT name FROM meca_equipments WHERE id=$1`,
+      `SELECT id, name FROM meca_equipments WHERE id=$1`,
       [id]
     );
     await pool.query(`DELETE FROM meca_equipments WHERE id=$1`, [id]);
@@ -657,6 +662,12 @@ app.delete("/api/meca/equipments/:id", async (req, res) => {
       { id, name: old[0]?.name },
       u
     );
+
+    // 🔔 Push notification for deleted equipment
+    if (old[0]) {
+      notifyEquipmentDeleted('meca', old[0], u?.email || u?.id).catch(err => console.log('[MECA] Push notify error:', err.message));
+    }
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

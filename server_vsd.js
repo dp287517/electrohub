@@ -17,6 +17,7 @@ import PDFDocument from "pdfkit";
 import { createCanvas } from "canvas";
 import { createRequire } from "module";
 import { getSiteFilter } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity } from "./lib/push-notify.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -513,6 +514,10 @@ app.post("/api/vsd/equipments", async (req, res) => {
     eq.status = eqStatusFromDue(eq.next_check_date);
     eq.compliance_state = "na";
     await logEvent("vsd_equipment_created", { id: eq.id, name: eq.name }, u);
+
+    // 🔔 Push notification for new equipment
+    notifyEquipmentCreated('vsd', eq, u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -601,9 +606,15 @@ app.delete("/api/vsd/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const u = getUser(req);
-    const { rows: old } = await pool.query(`SELECT name FROM vsd_equipments WHERE id=$1`, [id]);
+    const { rows: old } = await pool.query(`SELECT id, name FROM vsd_equipments WHERE id=$1`, [id]);
     await pool.query(`DELETE FROM vsd_equipments WHERE id=$1`, [id]);
     await logEvent("vsd_equipment_deleted", { id, name: old[0]?.name }, u);
+
+    // 🔔 Push notification for deleted equipment
+    if (old[0]) {
+      notifyEquipmentDeleted('vsd', old[0], u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
+    }
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
