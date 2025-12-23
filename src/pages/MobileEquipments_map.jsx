@@ -379,7 +379,10 @@ const LeafletViewer = forwardRef(({
 
   // Highlight a specific marker (for navigation from sidebar)
   const highlightMarker = useCallback((equipmentId) => {
-    const mk = markersMapRef.current.get(equipmentId);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let mk = markersMapRef.current.get(equipmentId);
+    if (!mk) mk = markersMapRef.current.get(String(equipmentId));
+    if (!mk) mk = markersMapRef.current.get(Number(equipmentId));
     if (!mk || !mapRef.current) return;
 
     // Center on marker with animation
@@ -624,6 +627,9 @@ export default function MobileEquipmentsMap() {
 
   const viewerRef = useRef(null);
   const creatingRef = useRef(false);
+  const targetEquipmentIdRef = useRef(null);
+  const urlParamsHandledRef = useRef(false);
+  const [pdfReady, setPdfReady] = useState(false);
 
   // Handle resize for mobile detection
   useEffect(() => {
@@ -727,17 +733,38 @@ export default function MobileEquipmentsMap() {
           api.mobileEquipment.list(),
         ]);
 
-        setPlans(plansRes.plans || []);
+        const plansList = plansRes.plans || [];
+        setPlans(plansList);
         setEquipments(equipRes.items || equipRes.equipments || equipRes.data || []);
 
-        // Restore or select first plan
-        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-        const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
+        // Handle URL params first (like High Voltage)
+        const urlEquipmentId = searchParams.get('equipment');
+        const urlPlanKey = searchParams.get('plan');
 
-        if (plansRes.plans?.length > 0) {
-          const found = savedPlanKey && plansRes.plans.find(p => p.logical_name === savedPlanKey || String(p.id) === savedPlanKey);
-          setSelectedPlan(found || plansRes.plans[0]);
-          setPageIndex(found ? savedPage : 0);
+        let planToSelect = null;
+        let pageIdx = 0;
+
+        if (urlPlanKey && !urlParamsHandledRef.current) {
+          planToSelect = plansList.find(p => p.logical_name === urlPlanKey);
+          if (urlEquipmentId) targetEquipmentIdRef.current = urlEquipmentId;
+          urlParamsHandledRef.current = true;
+          setSearchParams({}, { replace: true });
+        }
+
+        // Fallback to localStorage
+        if (!planToSelect) {
+          const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+          const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
+          if (savedPlanKey) planToSelect = plansList.find(p => p.logical_name === savedPlanKey || String(p.id) === savedPlanKey);
+          if (planToSelect) pageIdx = savedPage;
+        }
+
+        // Default to first plan
+        if (!planToSelect && plansList.length > 0) planToSelect = plansList[0];
+
+        if (planToSelect) {
+          setSelectedPlan(planToSelect);
+          setPageIndex(pageIdx);
         }
 
         // Load control statuses
@@ -748,11 +775,14 @@ export default function MobileEquipmentsMap() {
         setLoading(false);
       }
     })();
-  }, [loadControlStatuses]);
+  }, [loadControlStatuses, searchParams, setSearchParams]);
 
   // Load positions when plan changes
   useEffect(() => {
     if (!selectedPlan) return;
+
+    // Reset pdfReady when plan or page changes
+    setPdfReady(false);
 
     (async () => {
       try {
@@ -775,47 +805,31 @@ export default function MobileEquipmentsMap() {
     loadAllPositions();
   }, [loadAllPositions]);
 
-  // Handle URL parameter for equipment navigation from MobileEquipments page
+  // Highlight equipment after PDF is ready (like High Voltage)
+  useEffect(() => {
+    if (!pdfReady || !targetEquipmentIdRef.current) return;
+    const targetId = targetEquipmentIdRef.current;
+    targetEquipmentIdRef.current = null;
+    setTimeout(() => viewerRef.current?.highlightMarker(targetId), 300);
+  }, [pdfReady]);
+
+  // Handle equipment navigation when arriving without plan param (equipment not placed)
   useEffect(() => {
     const equipmentIdParam = searchParams.get('equipment');
-    if (!equipmentIdParam || !allPositions.length || !plans.length) return;
+    const planParam = searchParams.get('plan');
 
-    // Find the equipment in allPositions
-    const position = allPositions.find(p => String(p.equipment_id) === equipmentIdParam);
-    if (position) {
-      // Find the plan where this equipment is placed
-      const planKey = position.planId || position.logical_name;
-      const plan = plans.find(p => p.id === planKey || p.logical_name === planKey);
+    // Only handle if we have equipment but no plan (equipment not placed yet)
+    if (!equipmentIdParam || planParam || !equipments.length || urlParamsHandledRef.current) return;
 
-      if (plan && (!selectedPlan || selectedPlan.id !== plan.id)) {
-        setSelectedPlan(plan);
-        setPageIndex(position.page_index || 0);
-      }
-
-      // Find the equipment details
-      const eq = equipments.find(e => String(e.id) === equipmentIdParam);
-      if (eq) {
-        setSelectedEquipment(eq);
-        setSelectedPosition(position);
-
-        // Fly to the equipment position after a short delay to let the map render
-        setTimeout(() => {
-          viewerRef.current?.flyTo(position.x_frac, position.y_frac, 2);
-        }, 500);
-      }
-    } else {
-      // Equipment not placed yet - just find it in equipments list
-      const eq = equipments.find(e => String(e.id) === equipmentIdParam);
-      if (eq) {
-        setSelectedEquipment(eq);
-        // Enter placement mode so user can place it
-        setPlacementMode(eq);
-      }
+    const eq = equipments.find(e => String(e.id) === equipmentIdParam);
+    if (eq) {
+      setSelectedEquipment(eq);
+      // Enter placement mode so user can place it
+      setPlacementMode(eq);
+      urlParamsHandledRef.current = true;
+      setSearchParams({}, { replace: true });
     }
-
-    // Clear the URL param after handling
-    setSearchParams({}, { replace: true });
-  }, [searchParams, allPositions, plans, equipments, selectedPlan, setSearchParams]);
+  }, [searchParams, equipments, setSearchParams]);
 
   // Handlers
   const handleSelectEquipment = useCallback((eq) => {
@@ -1152,6 +1166,7 @@ export default function MobileEquipmentsMap() {
                   }
                 }}
                 onContextMenu={(pt, point) => setContextMenu({ position: pt, x: point.x, y: point.y })}
+                onReady={() => setPdfReady(true)}
               />
 
               {/* Floating toolbar inside Leaflet */}

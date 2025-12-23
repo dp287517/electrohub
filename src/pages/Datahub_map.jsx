@@ -684,7 +684,10 @@ export default function DatahubMap() {
 
   // Highlight marker with flash animation (for navigation)
   const highlightMarker = useCallback((itemId) => {
-    const mk = markersMapRef.current.get(itemId);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let mk = markersMapRef.current.get(itemId);
+    if (!mk) mk = markersMapRef.current.get(String(itemId));
+    if (!mk) mk = markersMapRef.current.get(Number(itemId));
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();

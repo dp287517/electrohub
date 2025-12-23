@@ -546,7 +546,10 @@ const DoorLeafletViewer = forwardRef(({
   }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
   const highlightMarker = useCallback((doorId) => {
-    const mk = markersMapRef.current.get(doorId);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let mk = markersMapRef.current.get(doorId);
+    if (!mk) mk = markersMapRef.current.get(String(doorId));
+    if (!mk) mk = markersMapRef.current.get(Number(doorId));
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();

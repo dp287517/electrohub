@@ -736,7 +736,10 @@ const SwitchboardLeafletViewer = forwardRef(
 
     // Highlight a specific marker (for navigation from sidebar)
     const highlightMarker = useCallback((switchboardId) => {
-      const mk = markersMapRef.current.get(switchboardId);
+      // Try to find marker with the ID as-is first, then try with type conversion
+      let mk = markersMapRef.current.get(switchboardId);
+      if (!mk) mk = markersMapRef.current.get(String(switchboardId));
+      if (!mk) mk = markersMapRef.current.get(Number(switchboardId));
       if (!mk || !mapRef.current) return;
 
       // Center on marker

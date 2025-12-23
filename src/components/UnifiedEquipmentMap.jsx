@@ -481,8 +481,17 @@ const UnifiedLeafletViewer = forwardRef(({
   }, [onClickPoint]);
 
   const highlightMarker = useCallback((equipmentId, equipmentType) => {
-    const key = `${equipmentType}_${equipmentId}`;
-    const mk = markersMapRef.current.get(key);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let key = `${equipmentType}_${equipmentId}`;
+    let mk = markersMapRef.current.get(key);
+    if (!mk) {
+      key = `${equipmentType}_${String(equipmentId)}`;
+      mk = markersMapRef.current.get(key);
+    }
+    if (!mk) {
+      key = `${equipmentType}_${Number(equipmentId)}`;
+      mk = markersMapRef.current.get(key);
+    }
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();

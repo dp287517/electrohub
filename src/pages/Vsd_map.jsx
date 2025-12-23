@@ -566,7 +566,10 @@ const VsdLeafletViewer = forwardRef(({
   }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
   const highlightMarker = useCallback((equipmentId) => {
-    const mk = markersMapRef.current.get(equipmentId);
+    // Try to find marker with the ID as-is first, then try with type conversion
+    let mk = markersMapRef.current.get(equipmentId);
+    if (!mk) mk = markersMapRef.current.get(String(equipmentId));
+    if (!mk) mk = markersMapRef.current.get(Number(equipmentId));
     if (!mk || !mapRef.current) return;
 
     // Center on marker
@@ -1001,7 +1004,8 @@ export default function VsdMap() {
 
       if (urlPlanKey && !urlParamsHandledRef.current) {
         planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlVsdId) targetEquipmentIdRef.current = Number(urlVsdId);
+        // Keep as-is - IDs might be strings or numbers depending on the equipment type
+        if (urlVsdId) targetEquipmentIdRef.current = urlVsdId;
         urlParamsHandledRef.current = true;
         setSearchParams({}, { replace: true });
       }
