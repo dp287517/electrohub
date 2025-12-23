@@ -1026,7 +1026,8 @@ export default function GloMap() {
   const refreshPlacedIds = async () => {
     try {
       const res = await api.gloMaps.placedIds();
-      const ids = (res?.placed_ids || []).map((id) => Number(id));
+      // Keep IDs as-is (don't convert to Number - IDs might be UUIDs or strings)
+      const ids = res?.placed_ids || [];
       const details = res?.placed_details || {};
       setPlacedIds(new Set(ids));
       setPlacedDetails(details);
