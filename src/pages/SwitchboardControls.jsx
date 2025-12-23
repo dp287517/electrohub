@@ -205,6 +205,7 @@ export default function SwitchboardControls() {
   const [schedules, setSchedules] = useState([]);
   const [records, setRecords] = useState([]);
   const [switchboards, setSwitchboards] = useState([]);
+  const [datahubCategories, setDatahubCategories] = useState([]); // Categories with assign_to_controls=true
 
   // Loading states
   const [loading, setLoading] = useState(true);
@@ -281,6 +282,17 @@ export default function SwitchboardControls() {
     }
   }, []);
 
+  const loadDatahubCategories = useCallback(async () => {
+    try {
+      const res = await api.datahub.listCategories();
+      // Filter only categories with assign_to_controls = true
+      const assignedCategories = (res.categories || []).filter(c => c.assign_to_controls);
+      setDatahubCategories(assignedCategories);
+    } catch (e) {
+      console.error("Datahub categories error:", e);
+    }
+  }, []);
+
   // Initial load
   useEffect(() => {
     setLoading(true);
@@ -290,8 +302,9 @@ export default function SwitchboardControls() {
       loadSchedules(),
       loadRecords(),
       loadSwitchboards(),
+      loadDatahubCategories(),
     ]).finally(() => setLoading(false));
-  }, [loadDashboard, loadTemplates, loadSchedules, loadRecords, loadSwitchboards]);
+  }, [loadDashboard, loadTemplates, loadSchedules, loadRecords, loadSwitchboards, loadDatahubCategories]);
 
   // Update URL when tab changes
   useEffect(() => {
@@ -1006,6 +1019,7 @@ export default function SwitchboardControls() {
       {showTemplateModal && (
         <TemplateModal
           template={editingTemplate}
+          datahubCategories={datahubCategories}
           onClose={() => { setShowTemplateModal(false); setEditingTemplate(null); }}
           onSave={async (data) => {
             if (editingTemplate) {
@@ -1024,6 +1038,7 @@ export default function SwitchboardControls() {
         <ScheduleModal
           templates={templates}
           switchboards={switchboards}
+          datahubCategories={datahubCategories}
           preSelectedBoardId={preSelectedBoardId}
           onClose={() => { setShowScheduleModal(false); setPreSelectedBoardId(null); }}
           onSave={async (data, shouldReload = true) => {
@@ -1515,7 +1530,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
 // ============================================================
 // TEMPLATE MODAL - Responsive
 // ============================================================
-function TemplateModal({ template, onClose, onSave }) {
+function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
   const [name, setName] = useState(template?.name || "");
   const [targetType, setTargetType] = useState(template?.target_type || "switchboard");
   const [frequencyMonths, setFrequencyMonths] = useState(template?.frequency_months || 12);
@@ -1602,7 +1617,15 @@ function TemplateModal({ template, onClose, onSave }) {
                 <option value="mobile_equipment">🚜 Équip. Mobile</option>
                 <option value="hv">⚡ Haute Tension (HT)</option>
                 <option value="glo">🔋 Équip. GLO</option>
-                <option value="datahub">📦 Datahub</option>
+                {datahubCategories.length > 0 && (
+                  <optgroup label="📦 Datahub">
+                    {datahubCategories.map(cat => (
+                      <option key={cat.id} value={`datahub_${cat.id}`}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
             <div>
@@ -1698,7 +1721,7 @@ function TemplateModal({ template, onClose, onSave }) {
 // ============================================================
 // SCHEDULE MODAL - Multi-equipment support
 // ============================================================
-function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, onSave }) {
+function ScheduleModal({ templates, switchboards, datahubCategories = [], preSelectedBoardId, onClose, onSave }) {
   const [templateId, setTemplateId] = useState("");
   const [targetType, setTargetType] = useState("switchboard");
   // Initialize with pre-selected board if provided
@@ -1736,23 +1759,38 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
   const [selectedSwitchboardsForDevices, setSelectedSwitchboardsForDevices] = useState(new Set());
   const [loadingDevices, setLoadingDevices] = useState(false);
 
+  // Helper to check if targetType is a datahub category
+  const isDatahubCategory = targetType.startsWith('datahub_');
+  const datahubCategoryId = isDatahubCategory ? targetType.replace('datahub_', '') : null;
+
   // Load equipment when target type changes
   useEffect(() => {
-    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo' || targetType === 'datahub') {
+    const isDatahub = targetType.startsWith('datahub_');
+    if (targetType === 'vsd' || targetType === 'meca' || targetType === 'mobile_equipment' || targetType === 'hv' || targetType === 'glo' || isDatahub) {
       setLoadingEquipments(true);
-      api.switchboardControls.listEquipment(targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType)
+      const apiType = isDatahub ? 'datahub' : (targetType === 'mobile_equipment' ? 'mobile_equipment' : targetType);
+      api.switchboardControls.listEquipment(apiType)
         .then(res => {
           if (targetType === 'vsd') setVsdEquipments(res.vsd || []);
           else if (targetType === 'meca') setMecaEquipments(res.meca || []);
           else if (targetType === 'mobile_equipment') setMobileEquipments(res.mobile_equipment || []);
           else if (targetType === 'hv') setHvEquipments(res.hv || []);
           else if (targetType === 'glo') setGloEquipments(res.glo || []);
-          else if (targetType === 'datahub') setDatahubEquipments(res.datahub || []);
+          else if (isDatahub) {
+            // Filter by category ID
+            const categoryId = targetType.replace('datahub_', '');
+            const filtered = (res.datahub || []).filter(item =>
+              item.category_id === categoryId ||
+              (item.category_name && datahubCategories.find(c => c.id === categoryId)?.name === item.category_name)
+            );
+            setDatahubEquipments(filtered);
+          }
         })
         .catch(e => console.warn('Load equipment error:', e))
         .finally(() => setLoadingEquipments(false));
     }
-  }, [targetType]);
+    setSelectedIds(new Set()); // Reset selection when type changes
+  }, [targetType, datahubCategories]);
 
   // Load switchboard schedules when device type is selected
   useEffect(() => {
@@ -1807,7 +1845,14 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     }
   }, [targetType, selectedSwitchboardsForDevices]);
 
-  const filteredTemplates = (templates || []).filter((t) => t.target_type === targetType);
+  // Filter templates: for datahub categories, look for templates with target_type matching the category
+  const filteredTemplates = (templates || []).filter((t) => {
+    if (isDatahubCategory) {
+      // Match templates with target_type = 'datahub' or 'datahub_<categoryId>'
+      return t.target_type === targetType || t.target_type === 'datahub';
+    }
+    return t.target_type === targetType;
+  });
 
   // Get current equipment list based on type
   const getCurrentEquipmentList = () => {
@@ -1817,7 +1862,7 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
     if (targetType === 'mobile_equipment') return mobileEquipments;
     if (targetType === 'hv') return hvEquipments;
     if (targetType === 'glo') return gloEquipments;
-    if (targetType === 'datahub') return datahubEquipments;
+    if (isDatahubCategory) return datahubEquipments;
     return [];
   };
 
@@ -1891,8 +1936,12 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
       case 'mobile_equipment': return 'équipements mobiles';
       case 'hv': return 'équipements haute tension';
       case 'glo': return 'équipements GLO';
-      case 'datahub': return 'équipements Datahub';
-      default: return 'équipements';
+      default:
+        if (isDatahubCategory) {
+          const cat = datahubCategories.find(c => c.id === datahubCategoryId);
+          return cat ? `équipements ${cat.name}` : 'équipements Datahub';
+        }
+        return 'équipements';
     }
   };
 
@@ -2042,7 +2091,10 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
           else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID, not Number
           else if (targetType === 'hv') payload.hv_equipment_id = Number(ids[i]);
           else if (targetType === 'glo') payload.glo_equipment_id = String(ids[i]); // UUID
-          else if (targetType === 'datahub') payload.datahub_equipment_id = String(ids[i]); // UUID
+          else if (targetType.startsWith('datahub_')) {
+            payload.datahub_equipment_id = String(ids[i]); // UUID
+            payload.equipment_type = 'datahub'; // Store as datahub type in DB
+          }
 
           await onSave(payload, i === ids.length - 1); // Only reload on last item
           successCount++;
@@ -2093,7 +2145,15 @@ function ScheduleModal({ templates, switchboards, preSelectedBoardId, onClose, o
               <option value="mobile_equipment">🚜 Équip. Mobile</option>
               <option value="hv">⚡ Haute Tension (HT)</option>
               <option value="glo">🔋 Équip. GLO</option>
-              <option value="datahub">📦 Datahub</option>
+              {datahubCategories.length > 0 && (
+                <optgroup label="📦 Datahub">
+                  {datahubCategories.map(cat => (
+                    <option key={cat.id} value={`datahub_${cat.id}`}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
