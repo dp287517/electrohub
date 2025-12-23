@@ -216,8 +216,8 @@ Comment puis-je vous aider aujourd'hui ?`,
     setIsSpeaking(true);
 
     try {
-      // Essayer OpenAI TTS d'abord (voix IA naturelle)
-      const audioBlob = await aiAssistant.textToSpeech(text, 'nova');
+      // Essayer ElevenLabs TTS d'abord (voix ultra-naturelle), puis OpenAI en fallback
+      const audioBlob = await aiAssistant.textToSpeechPremium(text);
 
       if (audioBlob) {
         const audioUrl = URL.createObjectURL(audioBlob);

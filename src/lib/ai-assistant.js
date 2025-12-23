@@ -759,6 +759,169 @@ Comment puis-je vous aider plus précisément ?`,
     if (hour < 18) return 'Bon après-midi';
     return 'Bonsoir';
   }
+
+  /**
+   * ElevenLabs TTS - Ultra-natural voice
+   * Falls back to OpenAI if ElevenLabs unavailable
+   */
+  async textToSpeechPremium(text, voice = 'Rachel') {
+    try {
+      const response = await fetch(`${this.baseUrl}/tts-elevenlabs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice })
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        if (error.fallback) return null;
+        throw new Error(error.message || 'TTS failed');
+      }
+
+      return await response.blob();
+    } catch (error) {
+      console.error('[TTS-Premium] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Whisper STT - Speech to text transcription
+   */
+  async speechToText(audioBlob) {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'audio.webm');
+
+      const response = await fetch(`${this.baseUrl}/stt`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('STT failed');
+      }
+
+      const data = await response.json();
+      return data.text;
+    } catch (error) {
+      console.error('[STT] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get historical statistics for charts
+   */
+  async getHistoricalStats(period = 30) {
+    try {
+      const data = await get(`${this.baseUrl}/historical-stats?period=${period}`);
+      return data;
+    } catch (error) {
+      console.error('[HistoricalStats] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get proactive suggestions based on context
+   */
+  async getSuggestions() {
+    try {
+      const data = await get(`${this.baseUrl}/suggestions`);
+      return data;
+    } catch (error) {
+      console.error('[Suggestions] Error:', error);
+      return { suggestions: [] };
+    }
+  }
+
+  /**
+   * Generate equipment image with AI
+   */
+  async generateEquipmentImage(equipment, style = 'technical') {
+    try {
+      const response = await fetch(`${this.baseUrl}/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ equipment, style })
+      });
+
+      if (!response.ok) {
+        throw new Error('Image generation failed');
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('[ImageGen] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Send notification via browser push API
+   */
+  async requestNotificationPermission() {
+    if (!('Notification' in window)) {
+      console.log('Notifications not supported');
+      return false;
+    }
+
+    const permission = await Notification.requestPermission();
+    return permission === 'granted';
+  }
+
+  /**
+   * Show a notification
+   */
+  showNotification(title, options = {}) {
+    if (Notification.permission !== 'granted') return;
+
+    const notification = new Notification(title, {
+      icon: '/electro-icon.png',
+      badge: '/electro-badge.png',
+      vibrate: [200, 100, 200],
+      ...options
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      if (options.url) {
+        window.location.href = options.url;
+      }
+      notification.close();
+    };
+
+    return notification;
+  }
+
+  /**
+   * Schedule morning brief notification
+   */
+  scheduleMorningBrief() {
+    const now = new Date();
+    const target = new Date();
+    target.setHours(8, 0, 0, 0);
+
+    if (now > target) {
+      target.setDate(target.getDate() + 1);
+    }
+
+    const delay = target.getTime() - now.getTime();
+
+    setTimeout(async () => {
+      const brief = await this.getMorningBrief();
+      if (brief && Notification.permission === 'granted') {
+        this.showNotification(`${brief.greeting} ! Score: ${brief.healthScore}%`, {
+          body: brief.aiInsight || 'Consulte ton brief du matin',
+          tag: 'morning-brief',
+          url: '/dashboard'
+        });
+      }
+      // Reschedule for next day
+      this.scheduleMorningBrief();
+    }, delay);
+  }
 }
 
 // Export singleton
