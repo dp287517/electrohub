@@ -397,6 +397,24 @@ const LeafletViewer = forwardRef(({
     }
   }, []);
 
+  // Adjust view to fit bounds (like Meca_map)
+  const adjust = useCallback(() => {
+    const m = mapRef.current;
+    const layer = imageLayerRef.current;
+    if (!m || !layer) return;
+    const b = layer.getBounds();
+    try { m.scrollWheelZoom?.disable(); } catch {}
+    m.invalidateSize(false);
+    const fitZoom = m.getBoundsZoom(b, true);
+    m.setMinZoom(fitZoom - 1);
+    m.fitBounds(b, { padding: [8, 8] });
+    lastViewRef.current.center = m.getCenter();
+    lastViewRef.current.zoom = m.getZoom();
+    initialFitDoneRef.current = true;
+    userViewTouchedRef.current = false;
+    setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
+  }, []);
+
   useImperativeHandle(ref, () => ({
     flyTo: (x, y, zoom = 2) => {
       if (!mapRef.current || imgSize.w === 0) return;
@@ -406,7 +424,8 @@ const LeafletViewer = forwardRef(({
     },
     getMap: () => mapRef.current,
     highlightMarker,
-  }), [imgSize, highlightMarker]);
+    adjust,
+  }), [imgSize, highlightMarker, adjust]);
 
   // Initialize map
   useEffect(() => {
@@ -591,7 +610,13 @@ const LeafletViewer = forwardRef(({
   }, [placementActive]);
 
   return (
-    <div ref={wrapRef} className="w-full h-full bg-gray-100" style={{ minHeight: 400 }} />
+    <div className="relative flex-1 flex flex-col">
+      <div className="flex items-center justify-end gap-2 p-2 border-b bg-white">
+        <Btn variant="ghost" onClick={adjust}>Ajuster</Btn>
+      </div>
+
+      <div ref={wrapRef} className="flex-1 w-full bg-gray-100" style={{ minHeight: 400 }} />
+    </div>
   );
 });
 
@@ -1170,8 +1195,64 @@ export default function MobileEquipmentsMap() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden relative">
+        {/* Desktop Sidebar - LEFT side like Meca */}
+        {sidebarOpen && !isMobile && (
+          <div className="w-80 bg-white border-r shadow-sm flex flex-col z-10">
+            <div className="p-3 border-b space-y-2">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm bg-white text-gray-900"
+                />
+              </div>
+              <div className="flex gap-1">
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous ({equipments.length})
+                </Btn>
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés ({equipments.filter(e => !placedIds.has(e.id)).length})
+                </Btn>
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés ({placedIds.size})
+                </Btn>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {filteredEquipments.length === 0 ? (
+                <EmptyState
+                  icon={Cpu}
+                  title="Aucun équipement"
+                  description="Créez des équipements mobiles pour les voir ici"
+                />
+              ) : (
+                filteredEquipments.map((eq) => (
+                  <EquipmentCard
+                    key={eq.id}
+                    equipment={eq}
+                    isPlacedHere={placedHereIds.has(eq.id)}
+                    isPlacedSomewhere={placedIds.has(eq.id)}
+                    isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
+                    isSelected={selectedEquipment?.id === eq.id}
+                    onClick={() => handleEquipmentClick(eq)}
+                    onPlace={handleStartPlacement}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="p-3 border-t bg-gray-50 text-xs text-gray-500 text-center">
+              {placedIds.size} / {equipments.length} équipements placés
+            </div>
+          </div>
+        )}
+
         {/* Map viewer */}
-        <div className="flex-1 relative">
+        <div className="flex-1 flex flex-col relative">
           {fileUrl ? (
             <>
               <LeafletViewer
@@ -1256,62 +1337,6 @@ export default function MobileEquipmentsMap() {
             />
           )}
         </div>
-
-        {/* Desktop Sidebar */}
-        {sidebarOpen && !isMobile && (
-          <div className="w-80 bg-white border-l flex flex-col flex-shrink-0">
-            <div className="p-3 border-b space-y-2">
-              <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Rechercher..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm bg-white text-gray-900"
-                />
-              </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous ({equipments.length})
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés ({equipments.filter(e => !placedIds.has(e.id)).length})
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés ({placedIds.size})
-                </Btn>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {filteredEquipments.length === 0 ? (
-                <EmptyState
-                  icon={Cpu}
-                  title="Aucun equipement"
-                  description="Creez des equipements mobiles pour les voir ici"
-                />
-              ) : (
-                filteredEquipments.map((eq) => (
-                  <EquipmentCard
-                    key={eq.id}
-                    equipment={eq}
-                    isPlacedHere={placedHereIds.has(eq.id)}
-                    isPlacedSomewhere={placedIds.has(eq.id)}
-                    isPlacedElsewhere={placedIds.has(eq.id) && !placedHereIds.has(eq.id)}
-                    isSelected={selectedEquipment?.id === eq.id}
-                    onClick={() => handleEquipmentClick(eq)}
-                    onPlace={handleStartPlacement}
-                  />
-                ))
-              )}
-            </div>
-
-            <div className="p-3 border-t bg-gray-50 text-xs text-gray-500 text-center">
-              {placedIds.size} / {equipments.length} équipements placés
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Mobile FAB - List toggle */}
@@ -1330,38 +1355,30 @@ export default function MobileEquipmentsMap() {
         </button>
       )}
 
-      {/* Mobile Drawer */}
+      {/* Mobile Drawer - Left side like Meca */}
       {isMobile && sidebarOpen && (
-        <div className="fixed inset-0 z-50">
+        <div className="fixed inset-0 z-40">
           {/* Backdrop */}
           <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/50"
             onClick={() => setSidebarOpen(false)}
           />
 
-          {/* Drawer from bottom */}
-          <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl max-h-[80vh] flex flex-col animate-slideUp safe-area-bottom">
-            {/* Handle */}
-            <div className="flex justify-center pt-3 pb-2">
-              <div className="w-10 h-1 bg-gray-300 rounded-full" />
-            </div>
-
+          {/* Drawer from left */}
+          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl flex flex-col">
             {/* Header */}
-            <div className="px-4 pb-3 flex items-center justify-between border-b">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                <Cpu size={20} className="text-cyan-500" />
-                Équipements ({equipments.length})
-              </h3>
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
+            <div className="p-4 border-b bg-gradient-to-r from-cyan-500 to-teal-600 text-white flex items-center justify-between">
+              <h2 className="font-bold flex items-center gap-2">
+                <Cpu size={20} />
+                Équipements mobiles
+              </h2>
+              <button onClick={() => setSidebarOpen(false)} className="p-2 hover:bg-white/20 rounded-lg">
                 <X size={20} />
               </button>
             </div>
 
             {/* Search & Filters */}
-            <div className="p-3 space-y-2 border-b">
+            <div className="p-3 border-b space-y-2">
               <div className="relative">
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -1369,24 +1386,24 @@ export default function MobileEquipmentsMap() {
                   placeholder="Rechercher..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm bg-white text-gray-900"
+                  className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm bg-white text-gray-900"
                 />
               </div>
               <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("all")}>
-                  Tous ({equipments.length})
+                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                  Tous
                 </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("unplaced")}>
-                  Non placés ({equipments.filter(e => !placedIds.has(e.id)).length})
+                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                  Non placés
                 </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs py-2" onClick={() => setFilterMode("placed")}>
-                  Placés ({placedIds.size})
+                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                  Placés
                 </Btn>
               </div>
             </div>
 
             {/* Equipment List */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {filteredEquipments.length === 0 ? (
                 <EmptyState
                   icon={Cpu}
