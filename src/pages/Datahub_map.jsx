@@ -874,6 +874,46 @@ export default function DatahubMap() {
     setTimeout(() => highlightMarker(targetId), 300);
   }, [pdfReady, highlightMarker]);
 
+  // Smart navigation: navigate to the correct plan and highlight the item marker
+  // Clicking on card navigates + animates (like Meca_map pattern)
+  const handleItemClick = useCallback(async (item) => {
+    // Clear any existing selection
+    setSelectedItem(null);
+    setSelectedPosition(null);
+
+    // Check if this item is placed somewhere
+    const details = placedDetails[String(item.id)];
+    if (details?.plans?.length > 0) {
+      const targetPlanKey = details.plans[0]; // First plan where it's placed
+
+      // Find the plan
+      const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
+      if (targetPlan) {
+        // If we're not on that plan, switch to it
+        if (selectedPlan?.logical_name !== targetPlanKey) {
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+          setPdfReady(false);
+
+          // Store target ID for highlight after PDF loads
+          targetItemIdRef.current = String(item.id);
+        } else {
+          // Same plan - just highlight
+          highlightMarker(String(item.id));
+        }
+      }
+    } else {
+      // Not in placedDetails but might be on current plan
+      const pos = positions.find(p => String(p.item_id) === String(item.id));
+      if (pos) {
+        highlightMarker(String(item.id));
+      }
+    }
+
+    // On mobile, close sidebar so user can see the map
+    if (isMobile) setShowSidebar(false);
+  }, [plans, selectedPlan, placedDetails, positions, highlightMarker, isMobile]);
+
   // Filter items
   const filteredItems = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -1108,7 +1148,8 @@ export default function DatahubMap() {
                   return (
                     <div
                       key={item.id}
-                      className={`p-3 rounded-xl border transition-all ${
+                      onClick={() => handleItemClick(item)}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer group ${
                         isSelected ? 'bg-indigo-50 border-indigo-300 shadow-sm' :
                         isPlacing ? 'bg-green-50 border-green-300' :
                         'bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm'
@@ -1131,40 +1172,31 @@ export default function DatahubMap() {
                         </div>
                         <div className="flex flex-col items-end gap-1 flex-shrink-0">
                           {isPlacedHere ? (
-                            <Badge variant="success"><CheckCircle size={10} className="mr-1" />Placé</Badge>
+                            <span className="flex items-center gap-1 text-emerald-600 text-xs">
+                              <CheckCircle size={14} />
+                              Placé
+                            </span>
                           ) : placed ? (
-                            <Badge variant="purple"><CheckCircle size={10} className="mr-1" />Ailleurs</Badge>
+                            <span className="flex items-center gap-1 text-purple-600 text-xs">
+                              <CheckCircle size={14} />
+                              Ailleurs
+                            </span>
                           ) : (
-                            <Badge variant="warning"><AlertCircle size={10} className="mr-1" />Non placé</Badge>
+                            <span className="flex items-center gap-1 text-amber-600 text-xs">
+                              <AlertCircle size={14} />
+                              Non placé
+                            </span>
                           )}
-                        </div>
-                      </div>
 
-                      <div className="flex gap-2 mt-2">
-                        {/* "Voir sur le plan" button - only shown when placed somewhere */}
-                        {placed && (
                           <button
-                            onClick={() => handleViewOnMap(item)}
-                            className="flex-1 py-1.5 px-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); setPlacementMode(item); }}
+                            className="px-2 py-1 bg-indigo-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-indigo-600 transition-colors"
+                            title={placed ? "Déplacer sur ce plan" : "Placer sur ce plan"}
                           >
-                            <MapPin size={12} />Voir sur le plan
+                            <Target size={12} />
+                            {placed ? "Déplacer" : "Placer"}
                           </button>
-                        )}
-                        {placed ? (
-                          <button
-                            onClick={() => setPlacementMode(item)}
-                            className="flex-1 py-1.5 px-2 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 flex items-center justify-center gap-1"
-                          >
-                            <MapPin size={12} />Deplacer
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => setPlacementMode(item)}
-                            className="w-full py-1.5 px-2 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 flex items-center justify-center gap-1"
-                          >
-                            <Target size={12} />Placer
-                          </button>
-                        )}
+                        </div>
                       </div>
                     </div>
                   );
