@@ -1037,7 +1037,7 @@ export default function GloMap() {
     setTimeout(() => {
       viewerRef.current?.highlightMarker(targetId);
     }, 300);
-  }, [pdfReady]);
+  }, [pdfReady, getLatestPositions]);
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -1232,11 +1232,11 @@ export default function GloMap() {
 
             // Small delay to let viewer render, then highlight
             setTimeout(() => {
-              viewerRef.current?.highlightMarker(eq.id);
+              viewerRef.current?.highlightMarker(String(eq.id));
             }, 500);
           } else {
             // Same plan - just highlight
-            viewerRef.current?.highlightMarker(eq.id);
+            viewerRef.current?.highlightMarker(String(eq.id));
           }
         }
       }
