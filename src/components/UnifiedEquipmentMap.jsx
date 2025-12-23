@@ -737,6 +737,18 @@ export default function UnifiedEquipmentMap({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all"); // all, overdue, upcoming
 
+  // Add datahub categories to visible types when they are loaded (visible by default like other types)
+  useEffect(() => {
+    if (datahubCategories.length > 0) {
+      const newCategoryTypes = datahubCategories.map(cat => `datahub_cat_${cat.id}`);
+      setVisibleTypes(prev => {
+        // Add only new category types that aren't already in the list
+        const toAdd = newCategoryTypes.filter(t => !prev.includes(t));
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+      });
+    }
+  }, [datahubCategories]);
+
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [showSidebar, setShowSidebar] = useState(true);
