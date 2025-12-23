@@ -734,9 +734,11 @@ export default function DatahubMap() {
 
       // Check if this item is placed somewhere (keys are strings)
       const details = placedDetails[String(item.id)];
-      if (details?.plans?.length > 0) {
-        const targetPlanKey = details.plans[0]; // First plan where it's placed
 
+      // Handle both formats: { plans: [...] } or { logical_name: "...", page_index: 0 }
+      const targetPlanKey = details?.plans?.[0] || details?.logical_name;
+
+      if (targetPlanKey) {
         // Find the plan
         const targetPlan = plans.find(p => p.logical_name === targetPlanKey);
         if (targetPlan) {
@@ -901,8 +903,11 @@ export default function DatahubMap() {
     // Check if this item is placed somewhere
     const details = placedDetails[String(item.id)];
     console.log('[DATAHUB_MAP] Found details:', details);
-    if (details?.plans?.length > 0) {
-      const targetPlanKey = details.plans[0]; // First plan where it's placed
+
+    // Handle both formats: { plans: [...] } or { logical_name: "...", page_index: 0 }
+    const targetPlanKey = details?.plans?.[0] || details?.logical_name;
+
+    if (targetPlanKey) {
       console.log('[DATAHUB_MAP] Target plan key:', targetPlanKey);
 
       // Find the plan

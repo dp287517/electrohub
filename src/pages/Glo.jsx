@@ -1800,8 +1800,11 @@ export default function Glo() {
     const details = placedDetails[String(eqId)];
     console.log('[GLO] Found details:', details);
 
-    if (details?.plans?.length > 0) {
-      const url = `/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(details.plans[0])}`;
+    // Handle both formats: { plans: [...] } or { logical_name: "...", page_index: 0 }
+    const planKey = details?.plans?.[0] || details?.logical_name;
+
+    if (planKey) {
+      const url = `/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(planKey)}`;
       console.log('[GLO] Navigating to:', url);
       navigate(url);
     } else {
