@@ -53,8 +53,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 const STORAGE_KEY_PLAN = "unified_map_selected_plan";
 const STORAGE_KEY_PAGE = "unified_map_page_index";
 
-// Equipment type configuration
-const EQUIPMENT_TYPES = {
+// Base equipment type configuration (static types only - datahub categories are loaded dynamically)
+const BASE_EQUIPMENT_TYPES = {
   switchboard: {
     label: "Tableaux",
     icon: Zap,
@@ -109,16 +109,20 @@ const EQUIPMENT_TYPES = {
     link: (id) => `/app/glo?glo=${id}`,
     mapLink: (id, plan) => `/app/glo/map?glo=${id}&plan=${plan}`,
   },
-  datahub: {
-    label: "Datahub",
-    icon: Database,
-    color: "#8b5cf6", // purple (like Datahub_map)
-    gradient: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)", // purple gradient
-    api: api.datahub?.maps,
-    link: (id) => `/app/datahub?item=${id}`,
-    mapLink: (id, plan) => `/app/datahub?item=${id}&plan=${plan}`,
-  },
 };
+
+// Helper to create datahub category type config
+const createDatahubCategoryType = (category) => ({
+  label: category.name,
+  icon: Database,
+  color: category.color || "#8b5cf6",
+  gradient: `radial-gradient(circle at 30% 30%, ${category.color || "#a78bfa"}, ${category.color || "#7c3aed"})`,
+  api: api.datahub?.maps,
+  link: (id) => `/app/datahub?item=${id}`,
+  mapLink: (id, plan) => `/app/datahub?item=${id}&plan=${plan}`,
+  isDatahubCategory: true,
+  categoryId: category.id,
+});
 
 // Control status colors with gradients matching individual map pages
 const STATUS_COLORS = {
@@ -257,10 +261,10 @@ const ControlStatusBadge = ({ status }) => {
 };
 
 /* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, onClose, onNavigate }) => {
+const DetailPanel = ({ position, onClose, onNavigate, equipmentTypes = {} }) => {
   if (!position) return null;
 
-  const typeConfig = EQUIPMENT_TYPES[position.equipment_type] || {};
+  const typeConfig = equipmentTypes[position.equipment_type] || BASE_EQUIPMENT_TYPES[position.equipment_type] || {};
   const TypeIcon = typeConfig.icon || MapPin;
 
   return (
@@ -331,6 +335,7 @@ const UnifiedLeafletViewer = forwardRef(({
   selectedType = null,
   controlStatuses = {},
   visibleTypes = [],
+  equipmentTypes = {},
   onReady,
   onClickPoint,
   disabled = false,
@@ -349,6 +354,7 @@ const UnifiedLeafletViewer = forwardRef(({
   const selectedTypeRef = useRef(selectedType);
   const controlStatusesRef = useRef(controlStatuses);
   const visibleTypesRef = useRef(visibleTypes);
+  const equipmentTypesRef = useRef(equipmentTypes);
   const aliveRef = useRef(true);
 
   const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
@@ -362,16 +368,17 @@ const UnifiedLeafletViewer = forwardRef(({
   useEffect(() => { selectedIdRef.current = selectedId; selectedTypeRef.current = selectedType; }, [selectedId, selectedType]);
   useEffect(() => { controlStatusesRef.current = controlStatuses; }, [controlStatuses]);
   useEffect(() => { visibleTypesRef.current = visibleTypes; }, [visibleTypes]);
+  useEffect(() => { equipmentTypesRef.current = equipmentTypes; }, [equipmentTypes]);
 
   useEffect(() => {
     if (mapRef.current && imgSize.w > 0) {
       drawMarkers(positionsRef.current, imgSize.w, imgSize.h);
     }
-  }, [selectedId, selectedType, controlStatuses, visibleTypes]);
+  }, [selectedId, selectedType, controlStatuses, visibleTypes, equipmentTypes]);
 
   function makeIcon(equipmentType, isSelected = false, controlStatus = "none") {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const typeConfig = EQUIPMENT_TYPES[equipmentType] || {};
+    const typeConfig = equipmentTypes[equipmentType] || BASE_EQUIPMENT_TYPES[equipmentType] || {};
     const statusConfig = STATUS_COLORS[controlStatus] || STATUS_COLORS.none;
 
     // Determine background: selected > control status > equipment type default
@@ -430,6 +437,10 @@ const UnifiedLeafletViewer = forwardRef(({
       // Datahub: database icon
       datahub: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
     };
+    // Handle dynamic datahub category types (datahub_cat_<uuid>)
+    if (equipmentType?.startsWith("datahub_cat_")) {
+      return svgs.datahub;
+    }
     return svgs[equipmentType] || svgs.switchboard;
   }
 
@@ -708,6 +719,19 @@ export default function UnifiedEquipmentMap({
   // Control statuses for all equipment
   const [controlStatuses, setControlStatuses] = useState({});
 
+  // Datahub categories (for dynamic type filters)
+  const [datahubCategories, setDatahubCategories] = useState([]);
+
+  // Build equipment types dynamically (base types + datahub categories)
+  const equipmentTypes = useMemo(() => {
+    const types = { ...BASE_EQUIPMENT_TYPES };
+    // Add datahub categories as individual types
+    datahubCategories.forEach(cat => {
+      types[`datahub_cat_${cat.id}`] = createDatahubCategoryType(cat);
+    });
+    return types;
+  }, [datahubCategories]);
+
   // Filters
   const [visibleTypes, setVisibleTypes] = useState(initialVisibleTypes);
   const [searchQuery, setSearchQuery] = useState("");
@@ -737,11 +761,23 @@ export default function UnifiedEquipmentMap({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Load plans from VSD (primary source)
+  // Load plans from VSD (primary source) and datahub categories
   useEffect(() => {
     loadPlans();
     loadControlStatuses();
+    loadDatahubCategories();
   }, []);
+
+  // Load datahub categories with assign_to_controls enabled
+  const loadDatahubCategories = async () => {
+    try {
+      const res = await api.datahub.listCategories();
+      const categories = (res?.categories || []).filter(c => c.assign_to_controls);
+      setDatahubCategories(categories);
+    } catch (err) {
+      console.error("Error loading datahub categories:", err);
+    }
+  };
 
   const loadPlans = async () => {
     setLoadingPlans(true);
@@ -818,6 +854,15 @@ export default function UnifiedEquipmentMap({
     return null;
   }
 
+  // Get control status key for a position (handles datahub category types)
+  function getPositionStatusKey(pos) {
+    // For datahub category types (datahub_cat_<uuid>), use datahub_<equipment_id>
+    if (pos.equipment_type?.startsWith("datahub_cat_")) {
+      return `datahub_${pos.equipment_id}`;
+    }
+    return `${pos.equipment_type}_${pos.equipment_id}`;
+  }
+
   // Load positions for current plan from all equipment types
   useEffect(() => {
     if (!selectedPlan) return;
@@ -856,11 +901,18 @@ export default function UnifiedEquipmentMap({
         try {
           const fetcher = mapApi.positionsAuto || mapApi.positions;
           const res = await fetcher(key, page);
-          return (res?.positions || []).map(p => ({
-            ...p,
-            equipment_type: type,
-            equipment_id: getEquipmentIdFromPosition(type, p),
-          }));
+          return (res?.positions || []).map(p => {
+            // For datahub, use category-based type if category_id is available
+            let equipmentType = type;
+            if (type === "datahub" && p.category_id) {
+              equipmentType = `datahub_cat_${p.category_id}`;
+            }
+            return {
+              ...p,
+              equipment_type: equipmentType,
+              equipment_id: getEquipmentIdFromPosition(type, p),
+            };
+          });
         } catch {
           return [];
         }
@@ -892,7 +944,7 @@ export default function UnifiedEquipmentMap({
 
     if (statusFilter !== "all") {
       filtered = filtered.filter(p => {
-        const status = controlStatuses[`${p.equipment_type}_${p.equipment_id}`] || "none";
+        const status = controlStatuses[getPositionStatusKey(p)] || "none";
         if (statusFilter === "overdue") return status === "overdue";
         if (statusFilter === "upcoming") return status === "upcoming" || status === "overdue";
         return true;
@@ -905,22 +957,22 @@ export default function UnifiedEquipmentMap({
   // Stats
   const stats = useMemo(() => {
     const overdueCount = allPositions.filter(p =>
-      controlStatuses[`${p.equipment_type}_${p.equipment_id}`] === "overdue"
+      controlStatuses[getPositionStatusKey(p)] === "overdue"
     ).length;
     const upcomingCount = allPositions.filter(p =>
-      controlStatuses[`${p.equipment_type}_${p.equipment_id}`] === "upcoming"
+      controlStatuses[getPositionStatusKey(p)] === "upcoming"
     ).length;
 
     return {
       total: allPositions.length,
       overdue: overdueCount,
       upcoming: upcomingCount,
-      byType: Object.keys(EQUIPMENT_TYPES).reduce((acc, type) => {
+      byType: Object.keys(equipmentTypes).reduce((acc, type) => {
         acc[type] = allPositions.filter(p => p.equipment_type === type).length;
         return acc;
       }, {}),
     };
-  }, [allPositions, controlStatuses]);
+  }, [allPositions, controlStatuses, equipmentTypes]);
 
   const handleNavigate = (position) => {
     if (!position) {
@@ -928,7 +980,7 @@ export default function UnifiedEquipmentMap({
       return;
     }
 
-    const typeConfig = EQUIPMENT_TYPES[position.equipment_type];
+    const typeConfig = equipmentTypes[position.equipment_type];
 
     // Guard against undefined equipment_id to prevent navigation to /undefined pages
     if (typeConfig?.link && position.equipment_id != null) {
@@ -1120,7 +1172,8 @@ export default function UnifiedEquipmentMap({
                   Types d'équipements
                 </h3>
                 <div className="space-y-1">
-                  {Object.entries(EQUIPMENT_TYPES).map(([type, config]) => {
+                  {/* Base equipment types */}
+                  {Object.entries(BASE_EQUIPMENT_TYPES).map(([type, config]) => {
                     const Icon = config.icon;
                     const count = stats.byType[type] || 0;
                     const isActive = visibleTypes.includes(type);
@@ -1143,6 +1196,38 @@ export default function UnifiedEquipmentMap({
                       </button>
                     );
                   })}
+                  {/* Datahub categories */}
+                  {datahubCategories.length > 0 && (
+                    <>
+                      <div className="text-xs font-semibold text-gray-400 mt-3 mb-1 flex items-center gap-1">
+                        <Database size={10} />
+                        Datahub
+                      </div>
+                      {datahubCategories.map(cat => {
+                        const type = `datahub_cat_${cat.id}`;
+                        const count = stats.byType[type] || 0;
+                        const isActive = visibleTypes.includes(type);
+                        return (
+                          <button
+                            key={type}
+                            onClick={() => toggleType(type)}
+                            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors ${
+                              isActive ? "bg-gray-100" : "opacity-50"
+                            }`}
+                          >
+                            <div
+                              className="w-5 h-5 rounded-full flex items-center justify-center"
+                              style={{ background: cat.color || "#8b5cf6" }}
+                            >
+                              <Database size={12} className="text-white" />
+                            </div>
+                            <span className="flex-1 text-left">{cat.name}</span>
+                            <span className="text-xs text-gray-500">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -1157,9 +1242,9 @@ export default function UnifiedEquipmentMap({
                 <EmptyState icon={MapPin} title="Aucun équipement" description="Aucun équipement sur ce plan" />
               ) : (
                 filteredPositions.slice(0, 100).map(pos => {
-                  const typeConfig = EQUIPMENT_TYPES[pos.equipment_type] || {};
+                  const typeConfig = equipmentTypes[pos.equipment_type] || {};
                   const Icon = typeConfig.icon || MapPin;
-                  const status = controlStatuses[`${pos.equipment_type}_${pos.equipment_id}`] || "none";
+                  const status = controlStatuses[getPositionStatusKey(pos)] || "none";
                   const isSelected = selectedPosition?.equipment_id === pos.equipment_id &&
                                     selectedPosition?.equipment_type === pos.equipment_type;
 
@@ -1229,6 +1314,7 @@ export default function UnifiedEquipmentMap({
                 selectedType={selectedPosition?.equipment_type}
                 controlStatuses={controlStatuses}
                 visibleTypes={visibleTypes}
+                equipmentTypes={equipmentTypes}
                 onReady={() => setPdfReady(true)}
                 onClickPoint={(meta) => {
                   setSelectedPosition(meta);
@@ -1243,6 +1329,7 @@ export default function UnifiedEquipmentMap({
               position={selectedPosition}
               onClose={() => setSelectedPosition(null)}
               onNavigate={handleNavigate}
+              equipmentTypes={equipmentTypes}
             />
           )}
         </div>
@@ -1305,7 +1392,7 @@ export default function UnifiedEquipmentMap({
               {showTypeFilters && (
                 <div className="space-y-1">
                   <h3 className="text-xs font-semibold text-gray-500">Types d'équipements</h3>
-                  {Object.entries(EQUIPMENT_TYPES).map(([type, config]) => {
+                  {Object.entries(BASE_EQUIPMENT_TYPES).map(([type, config]) => {
                     const Icon = config.icon;
                     const count = stats.byType[type] || 0;
                     const isActive = visibleTypes.includes(type);
@@ -1323,15 +1410,39 @@ export default function UnifiedEquipmentMap({
                       </button>
                     );
                   })}
+                  {/* Datahub categories (mobile) */}
+                  {datahubCategories.length > 0 && (
+                    <>
+                      <div className="text-xs font-semibold text-gray-400 mt-2 mb-1">Datahub</div>
+                      {datahubCategories.map(cat => {
+                        const type = `datahub_cat_${cat.id}`;
+                        const count = stats.byType[type] || 0;
+                        const isActive = visibleTypes.includes(type);
+                        return (
+                          <button
+                            key={type}
+                            onClick={() => toggleType(type)}
+                            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${isActive ? "bg-gray-100" : "opacity-50"}`}
+                          >
+                            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ background: cat.color || "#8b5cf6" }}>
+                              <Database size={12} className="text-white" />
+                            </div>
+                            <span className="flex-1 text-left">{cat.name}</span>
+                            <span className="text-xs text-gray-500">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
                 </div>
               )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {filteredPositions.slice(0, 50).map(pos => {
-                const typeConfig = EQUIPMENT_TYPES[pos.equipment_type] || {};
+                const typeConfig = equipmentTypes[pos.equipment_type] || {};
                 const Icon = typeConfig.icon || MapPin;
-                const status = controlStatuses[`${pos.equipment_type}_${pos.equipment_id}`] || "none";
+                const status = controlStatuses[getPositionStatusKey(pos)] || "none";
 
                 return (
                   <div

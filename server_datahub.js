@@ -703,7 +703,8 @@ app.get("/api/datahub/maps/positions", async (req, res) => {
     if (!planKey) return res.status(400).json({ ok: false, error: "logical_name or id required" });
 
     const { rows } = await pool.query(`
-      SELECT p.*, i.name as item_name, i.code as item_code,
+      SELECT p.id, p.item_id, p.logical_name, p.page_index, p.x_frac, p.y_frac,
+             i.name, i.code, i.building, i.floor, i.location, i.category_id,
              c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size
         FROM dh_positions p
         JOIN dh_items i ON i.id = p.item_id
