@@ -995,6 +995,20 @@ export default function DatahubMap() {
     }
   }, []);
 
+  // Adjust view to fit the entire plan (like Meca, Mobile Equipment, etc.)
+  const adjust = useCallback(() => {
+    const m = mapRef.current;
+    const layer = overlayRef.current;
+    if (!m || !layer) return;
+    const b = layer.getBounds();
+    try { m.scrollWheelZoom?.disable(); } catch {}
+    m.invalidateSize(false);
+    const fitZoom = m.getBoundsZoom(b, true);
+    m.setMinZoom(fitZoom - 1);
+    m.fitBounds(b, { padding: [8, 8] });
+    setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
+  }, []);
+
   // Smart navigation: navigate to the correct plan and highlight the item marker
   // Similar to GLO's handleEquipmentClick
   const handleViewOnMap = useCallback(
@@ -1575,6 +1589,17 @@ export default function DatahubMap() {
                 title="Creer un nouvel item"
               >
                 <Plus size={24} />
+              </button>
+
+              {/* Adjust button - fit plan to view */}
+              <button
+                onClick={adjust}
+                disabled={isLoading}
+                className="absolute top-3 left-[68px] z-10 h-12 px-4 rounded-xl bg-white text-gray-700 shadow-lg flex items-center justify-center gap-2 hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200"
+                title="Ajuster la vue au plan"
+              >
+                <Compass size={18} />
+                <span className="text-sm font-medium">Ajuster</span>
               </button>
 
               {/* Create mode indicator */}
