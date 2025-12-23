@@ -1791,7 +1791,8 @@ export default function Glo() {
       navigate('/app/glo/map');
       return;
     }
-    const details = placedDetails[eqId];
+    // placedDetails keys are strings (from API)
+    const details = placedDetails[String(eqId)];
     if (details?.plans?.length > 0) {
       navigate(`/app/glo/map?glo=${eqId}&plan=${encodeURIComponent(details.plans[0])}`);
     } else {

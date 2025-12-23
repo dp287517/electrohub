@@ -547,6 +547,7 @@ const GloLeafletViewer = forwardRef(({
     });
   }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
+  // Highlight a specific marker (for navigation from sidebar or URL)
   const highlightMarker = useCallback((equipmentId) => {
     // Try to find marker with the ID as-is first, then try with type conversion
     let mk = markersMapRef.current.get(equipmentId);
@@ -554,6 +555,7 @@ const GloLeafletViewer = forwardRef(({
     if (!mk) mk = markersMapRef.current.get(Number(equipmentId));
     if (!mk || !mapRef.current) return false;
 
+    // Center on marker
     const ll = mk.getLatLng();
     const map = mapRef.current;
 
@@ -570,6 +572,7 @@ const GloLeafletViewer = forwardRef(({
       easeLinearity: 0.5
     });
 
+    // Flash animation
     const el = mk.getElement();
     if (el) {
       // Enhanced flash animation with multiple pulses
@@ -1060,26 +1063,17 @@ export default function GloMap() {
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [pageIndex]);
 
+  // Auto-highlight equipment from URL params after PDF is ready
   useEffect(() => {
     if (!pdfReady || !targetEquipmentIdRef.current) return;
+
     const targetId = targetEquipmentIdRef.current;
     targetEquipmentIdRef.current = null;
 
-    // Retry logic: markers may not be rendered immediately after pdfReady
-    // Try up to 5 times with increasing delays
-    let attempts = 0;
-    const maxAttempts = 5;
-    const tryHighlight = () => {
-      attempts++;
-      const success = viewerRef.current?.highlightMarker(targetId);
-      if (!success && attempts < maxAttempts) {
-        // Markers not ready yet, retry with increasing delay
-        setTimeout(tryHighlight, 200 * attempts);
-      }
-    };
-
-    // Initial delay to let the viewer render markers
-    setTimeout(tryHighlight, 400);
+    // Small delay to ensure markers are rendered
+    setTimeout(() => {
+      viewerRef.current?.highlightMarker(targetId);
+    }, 300);
   }, [pdfReady]);
 
   const loadPlans = async () => {
@@ -1254,8 +1248,8 @@ export default function GloMap() {
       setSelectedPosition(null);
       setSelectedEquipment(null);
 
-      // Check if this equipment is placed somewhere
-      const details = placedDetails[eq.id];
+      // Check if this equipment is placed somewhere (keys are strings)
+      const details = placedDetails[String(eq.id)];
       if (details?.plans?.length > 0) {
         const targetPlanKey = details.plans[0]; // First plan where it's placed
 
@@ -1269,23 +1263,16 @@ export default function GloMap() {
             setPdfReady(false);
             setInitialPoints([]);
 
-            // Wait for plan to load, then highlight (zoom + flash only, no modal)
+            // Wait for plan to load, then highlight
             const positions = await refreshPositions(targetPlan, 0);
             setInitialPoints(positions || []);
 
-            // Retry logic for highlighting - markers may not be rendered immediately
-            let attempts = 0;
-            const maxAttempts = 5;
-            const tryHighlight = () => {
-              attempts++;
-              const success = viewerRef.current?.highlightMarker(eq.id);
-              if (!success && attempts < maxAttempts) {
-                setTimeout(tryHighlight, 200 * attempts);
-              }
-            };
-            setTimeout(tryHighlight, 400);
+            // Small delay to let viewer render, then highlight
+            setTimeout(() => {
+              viewerRef.current?.highlightMarker(eq.id);
+            }, 500);
           } else {
-            // Same plan - just highlight (zoom + flash), no modal
+            // Same plan - just highlight
             viewerRef.current?.highlightMarker(eq.id);
           }
         }
