@@ -2419,6 +2419,9 @@ export const api = {
         if (dedicated) return dedicated;
         return buildFromPlans();
       },
+      // Get external equipment positions (VSD, HV, MECA, GLO, Mobile, Switchboards) for a plan
+      externalPositions: (logical_name, page_index = 0) =>
+        get("/api/datahub/maps/external-positions", { logical_name, page_index }),
     },
   },
 

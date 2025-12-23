@@ -98,6 +98,55 @@ const ICON_MAP = {
   file: File, clock: Clock, calendar: Calendar, bell: Bell
 };
 
+// External equipment categories with distinctive colors and icons
+// These represent equipment from other modules (VSD, HV, MECA, GLO, Mobile, Switchboards)
+const EXTERNAL_CATEGORIES = {
+  vsd: {
+    id: 'vsd',
+    name: 'VSD (Variateurs)',
+    color: '#059669', // Emerald/Green
+    icon: 'gauge',
+    svgPath: SVG_PATHS.gauge
+  },
+  hv: {
+    id: 'hv',
+    name: 'Haute Tension',
+    color: '#dc2626', // Red
+    icon: 'zap',
+    svgPath: SVG_PATHS.zap
+  },
+  meca: {
+    id: 'meca',
+    name: 'Electromecanique',
+    color: '#f59e0b', // Amber/Orange
+    icon: 'wrench',
+    svgPath: SVG_PATHS.wrench
+  },
+  glo: {
+    id: 'glo',
+    name: 'Equipements Globaux',
+    color: '#10b981', // Emerald
+    icon: 'power',
+    svgPath: SVG_PATHS.power
+  },
+  mobile: {
+    id: 'mobile',
+    name: 'Equipements Mobiles',
+    color: '#8b5cf6', // Violet
+    icon: 'box',
+    svgPath: SVG_PATHS.box
+  },
+  switchboards: {
+    id: 'switchboards',
+    name: 'Tableaux Electriques',
+    color: '#2563eb', // Blue
+    icon: 'server',
+    svgPath: SVG_PATHS.server
+  }
+};
+
+const STORAGE_KEY_EXTERNAL_VISIBLE = "datahub_map_external_visible";
+
 function userHeaders() {
   const email = localStorage.getItem("email") || "";
   const name = localStorage.getItem("name") || "";
@@ -420,6 +469,16 @@ export default function DatahubMap() {
   const [toast, setToast] = useState(null);
   const [pdfReady, setPdfReady] = useState(false);
 
+  // External equipment categories (VSD, HV, MECA, GLO, Mobile, Switchboards)
+  const [externalPositions, setExternalPositions] = useState({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+  const [externalTotals, setExternalTotals] = useState({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+  const [visibleExternalCategories, setVisibleExternalCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_EXTERNAL_VISIBLE);
+      return saved ? JSON.parse(saved) : ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards'];
+    } catch { return ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards']; }
+  });
+
   // Creation mode
   const [createMode, setCreateMode] = useState(false);
   const [placementMode, setPlacementMode] = useState(null);
@@ -571,12 +630,46 @@ export default function DatahubMap() {
     } catch { setPositions([]); }
   }, [selectedPlan, pageIndex]);
 
+  // Load external equipment positions (VSD, HV, MECA, GLO, Mobile, Switchboards)
+  const loadExternalPositions = useCallback(async () => {
+    if (!selectedPlan) return;
+    try {
+      const planKey = selectedPlan.logical_name || selectedPlan.id;
+      const res = await api.datahub.maps.externalPositions(planKey, pageIndex);
+      if (res?.ok) {
+        setExternalPositions(res.positions || { vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+        setExternalTotals(res.totals || { vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+      }
+    } catch (e) {
+      console.log('[Datahub] External positions not available:', e.message);
+      setExternalPositions({ vsd: [], hv: [], meca: [], glo: [], mobile: [], switchboards: [] });
+      setExternalTotals({ vsd: 0, hv: 0, meca: 0, glo: 0, mobile: 0, switchboards: 0 });
+    }
+  }, [selectedPlan, pageIndex]);
+
+  // Save visible external categories to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_EXTERNAL_VISIBLE, JSON.stringify(visibleExternalCategories));
+  }, [visibleExternalCategories]);
+
+  // Toggle external category visibility
+  const toggleExternalCategory = useCallback((catId) => {
+    setVisibleExternalCategories(prev => {
+      if (prev.includes(catId)) {
+        return prev.filter(id => id !== catId);
+      } else {
+        return [...prev, catId];
+      }
+    });
+  }, []);
+
   useEffect(() => {
     if (selectedPlan) {
       loadPdf();
       loadPositions();
+      loadExternalPositions();
     }
-  }, [selectedPlan, pageIndex, loadPdf, loadPositions]);
+  }, [selectedPlan, pageIndex, loadPdf, loadPositions, loadExternalPositions]);
 
   // Initialize map
   const initMap = (imageUrl, w, h) => {
@@ -629,6 +722,28 @@ export default function DatahubMap() {
 
     return L.divIcon({
       className: "datahub-marker-inline", // Neutral wrapper (like sb-marker-inline)
+      html,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2]
+    });
+  }, []);
+
+  // Create marker icon for external equipment (VSD, HV, MECA, etc.)
+  const makeExternalMarkerIcon = useCallback((extCategory) => {
+    const size = 18; // Slightly smaller than datahub markers
+    const color = extCategory.color;
+    const svgPath = extCategory.svgPath || SVG_PATHS.default;
+
+    const html = `
+      <div style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:1.5px solid white;border-radius:50%;
+        box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;opacity:0.85;">
+        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          ${svgPath}
+        </svg>
+      </div>`;
+
+    return L.divIcon({
+      className: "datahub-marker-external",
       html,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2]
@@ -703,7 +818,38 @@ export default function DatahubMap() {
       // Store with String key for consistent lookup (URL params are always strings)
       markersMapRef.current.set(String(pos.item_id), marker);
     });
-  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon]);
+
+    // Draw external equipment markers (VSD, HV, MECA, GLO, Mobile, Switchboards)
+    Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
+      // Skip if this external category is not visible
+      if (!visibleExternalCategories.includes(catKey)) return;
+
+      const positions = externalPositions[catKey] || [];
+      const icon = makeExternalMarkerIcon(extCat);
+
+      positions.forEach(pos => {
+        const lat = boundsH * (1 - pos.y_frac);
+        const lng = boundsW * pos.x_frac;
+        const marker = L.marker([lat, lng], { icon, draggable: false, riseOnHover: true }).addTo(map);
+        marker.__meta = { id: pos.id, equipment_id: pos.equipment_id, type: catKey, lat, lng };
+
+        // External markers are read-only (no drag, no click selection)
+        // But we show tooltip with equipment info
+        const tooltipContent = `
+          <div style="text-align:center;">
+            <strong style="color:${extCat.color}">${extCat.name}</strong><br/>
+            <span>${pos.name || 'Equipement'}</span>
+            ${pos.details ? `<br/><small style="color:#888">${pos.details}</small>` : ''}
+          </div>
+        `;
+        marker.bindTooltip(tooltipContent, {
+          direction: "top", offset: [0, -9], className: "datahub-tooltip"
+        });
+
+        markersRef.current.push(marker);
+      });
+    });
+  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon, externalPositions, visibleExternalCategories, makeExternalMarkerIcon]);
 
   // Highlight marker with flash animation (for navigation)
   const highlightMarker = useCallback((itemId) => {
@@ -867,7 +1013,7 @@ export default function DatahubMap() {
       // Mark PDF as ready after markers are drawn
       setPdfReady(true);
     }
-  }, [positions, items, categories, selectedCategories, drawMarkers]);
+  }, [positions, items, categories, selectedCategories, externalPositions, visibleExternalCategories, drawMarkers]);
 
   // Redraw markers when selectedItem changes (like Switchboard line 574-580)
   useEffect(() => {
@@ -1093,6 +1239,33 @@ export default function DatahubMap() {
               </button>
             </div>
           )}
+        </div>
+
+        {/* External equipment categories toggle - show all equipment types on map */}
+        <div className="px-3 md:px-4 pb-2 md:pb-3 flex items-center gap-1 flex-wrap">
+          <span className="text-xs text-gray-500 mr-1">Equipements:</span>
+          {Object.entries(EXTERNAL_CATEGORIES).map(([catKey, extCat]) => {
+            const isActive = visibleExternalCategories.includes(catKey);
+            const count = externalTotals[catKey] || 0;
+            const IconComp = ICON_MAP[extCat.icon] || Circle;
+            return (
+              <button
+                key={catKey}
+                onClick={() => toggleExternalCategory(catKey)}
+                title={`${extCat.name} (${count})`}
+                className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all ${
+                  isActive
+                    ? 'text-white shadow-sm'
+                    : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                }`}
+                style={isActive ? { backgroundColor: extCat.color } : {}}
+              >
+                <IconComp size={12} />
+                <span className="hidden sm:inline">{extCat.name.split(' ')[0]}</span>
+                {count > 0 && <span className="ml-0.5 tabular-nums">({count})</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 
