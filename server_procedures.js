@@ -855,44 +855,15 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Build conversation history
   const conversation = session.conversation || [];
 
-  // Analyze photo with gpt-4o-mini (fast like ATEX does)
-  // ATEX uses gpt-4o-mini for vision and it works without timeout
-  let photoAnalysis = null;
-  if (uploadedPhoto) {
-    try {
-      const photoPath = path.join(__dirname, 'uploads', 'procedure_photos', uploadedPhoto);
-      if (fs.existsSync(photoPath)) {
-        const photoBuffer = fs.readFileSync(photoPath);
-        const base64Image = photoBuffer.toString('base64');
-        const mimeType = uploadedPhoto.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-
-        console.log(`[PROC-VISION] Analyzing photo with gpt-4o-mini...`);
-        const startTime = Date.now();
-
-        const visionResult = await chatWithFallback([
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Décris brièvement cette photo en 1-2 phrases. Que vois-tu? Quels outils, équipements ou actions sont visibles?" },
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
-            ]
-          }
-        ], { model: "gpt-4o-mini", max_tokens: 150 });
-
-        photoAnalysis = visionResult.content;
-        console.log(`[PROC-VISION] Analysis done in ${Date.now() - startTime}ms: ${photoAnalysis.substring(0, 100)}...`);
-      }
-    } catch (visionErr) {
-      console.error(`[PROC-VISION] Error analyzing photo: ${visionErr.message}`);
-      // Continue without analysis - photo filename will still be passed
-    }
-  }
+  // NOTE: Photo analysis is SKIPPED during chat to prevent timeout
+  // With 2 API calls (vision + LIA), step 2+ exceeds the 20s Render timeout
+  // The photo filename is passed to LIA via [Photo: filename] pattern
+  // Photos will be analyzed later when generating RAMS/documents
 
   // Add user message
   const userEntry = { role: "user", content: userMessage };
   if (uploadedPhoto) {
     userEntry.photo = uploadedPhoto;
-    userEntry.photoAnalysis = photoAnalysis; // Store analysis for later use
     console.log(`[PROC] Photo attached: ${uploadedPhoto}`);
   }
   conversation.push(userEntry);
@@ -909,9 +880,9 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     },
     ...conversation.map(c => ({
       role: c.role,
-      // Put [Photo:] at START with analysis so AI knows what's in the photo
+      // Put [Photo:] at START so AI knows a photo was sent
       content: c.photo
-        ? `[Photo: ${c.photo}]${c.photoAnalysis ? ` (Contenu: ${c.photoAnalysis})` : ''}\n${c.content}`
+        ? `[Photo: ${c.photo}]\n${c.content}`
         : c.content
     }))
   ];
