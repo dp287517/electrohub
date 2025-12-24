@@ -898,7 +898,7 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   conversation.push(userEntry);
 
   // Build messages for OpenAI
-  // IMPORTANT: Always use "[Photo: filename]" format so LIA knows a photo was sent
+  // IMPORTANT: Put [Photo:] at the START of user messages so AI sees it first
   const messages = [
     { role: "system", content: PROCEDURE_CREATION_PROMPT },
     {
@@ -909,8 +909,10 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     },
     ...conversation.map(c => ({
       role: c.role,
-      // Always include [Photo: filename] when photo exists, regardless of analysis result
-      content: c.content + (c.photo ? `\n[Photo: ${c.photo}]` : "")
+      // Put [Photo:] at START so AI sees it immediately
+      content: c.photo
+        ? `[Photo: ${c.photo}]\n${c.content}`
+        : c.content
     }))
   ];
 
@@ -919,10 +921,9 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   console.log(`[PROC-DEBUG] Last user message: ${lastUserMsg?.content?.substring(0, 200)}`);
   console.log(`[PROC-DEBUG] Contains [Photo:? ${lastUserMsg?.content?.includes('[Photo:')}`);
 
-
-  // Call AI with fallback
+  // Call AI with fallback - lower temperature for more consistent responses
   const result = await chatWithFallback(messages, {
-    temperature: 0.7,
+    temperature: 0.3,
     max_tokens: 1500,
     response_format: { type: "json_object" }
   });
