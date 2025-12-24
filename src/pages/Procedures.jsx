@@ -5,7 +5,6 @@ import {
   ChevronDown, Grid, List, Clock, User, Building,
   Sparkles, X, Loader2
 } from 'lucide-react';
-import Navbar from '../components/Navbar';
 import { ProcedureCreator, ProcedureViewer } from '../components/Procedures';
 import {
   listProcedures,
@@ -192,8 +191,6 @@ export default function Procedures() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
-
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">

@@ -343,14 +343,53 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Build conversation history
   const conversation = session.conversation || [];
 
+  // If a photo was uploaded, analyze it with GPT-4o Vision
+  let photoAnalysis = null;
+  if (uploadedPhoto) {
+    try {
+      const photoPath = path.join(PHOTOS_DIR, uploadedPhoto);
+      if (fs.existsSync(photoPath)) {
+        const photoBuffer = fs.readFileSync(photoPath);
+        const base64Photo = photoBuffer.toString('base64');
+        const mimeType = 'image/jpeg';
+
+        const visionResponse = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "Tu analyses des photos pour créer des procédures de maintenance. Décris brièvement (2-3 lignes) ce que tu vois: l'action, l'équipement, le contexte. Sois direct."
+            },
+            {
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
+                { type: "text", text: userMessage || "Décris cette image pour une procédure" }
+              ]
+            }
+          ],
+          max_tokens: 200
+        });
+        photoAnalysis = visionResponse.choices[0]?.message?.content || '';
+        console.log(`[PROC] Photo analysis: ${photoAnalysis.substring(0, 100)}...`);
+      }
+    } catch (e) {
+      console.error('[PROC] Photo analysis error:', e.message);
+    }
+  }
+
   // Add user message
   const userEntry = { role: "user", content: userMessage };
   if (uploadedPhoto) {
     userEntry.photo = uploadedPhoto;
+    if (photoAnalysis) {
+      userEntry.photoAnalysis = photoAnalysis;
+    }
   }
   conversation.push(userEntry);
 
   // Build messages for OpenAI
+  const photoContext = photoAnalysis ? `\n[Photo analysée: ${photoAnalysis}]` : (uploadedPhoto ? `\n[Photo uploadée: ${uploadedPhoto}]` : "");
   const messages = [
     { role: "system", content: PROCEDURE_CREATION_PROMPT },
     {
@@ -361,7 +400,7 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     },
     ...conversation.map(c => ({
       role: c.role,
-      content: c.content + (c.photo ? `\n[Photo uploadée: ${c.photo}]` : "")
+      content: c.content + (c.photoAnalysis ? `\n[Photo: ${c.photoAnalysis}]` : (c.photo ? `\n[Photo: ${c.photo}]` : ""))
     }))
   ];
 

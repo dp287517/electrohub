@@ -230,7 +230,12 @@ class AIAssistant {
         provider,
         conversationHistory: conversationHistory.map(m => ({
           role: m.role,
-          content: m.content
+          content: m.content,
+          // Procedure session tracking
+          procedureSessionId: m.procedureSessionId,
+          procedureStep: m.procedureStep,
+          procedureMode: m.procedureMode,
+          procedureId: m.procedureId
         })),
         webSearch,
         user: this.getCurrentUser()
@@ -298,7 +303,12 @@ class AIAssistant {
         conversationHistory.map(m => ({
           role: m.role,
           content: m.content,
-          photo: m.photo ? true : false // Juste indiquer si photo, pas le contenu
+          photo: m.photo ? true : false, // Juste indiquer si photo, pas le contenu
+          // Procedure session tracking
+          procedureSessionId: m.procedureSessionId,
+          procedureStep: m.procedureStep,
+          procedureMode: m.procedureMode,
+          procedureId: m.procedureId
         }))
       ));
       formData.append('user', JSON.stringify(this.getCurrentUser()));
