@@ -2,6 +2,15 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 're
 
 // Avatars modernes et propres - style iconique
 const AVATAR_STYLES = {
+  ai: {
+    name: 'AI',
+    description: 'Intelligence Artificielle',
+    primaryColor: '#6366F1',
+    secondaryColor: '#4F46E5',
+    accentColor: '#A5B4FC',
+    icon: 'ai',
+    animated: true
+  },
   electro: {
     name: 'Electro',
     description: 'Assistant ElectroHub',
@@ -45,7 +54,7 @@ const AVATAR_STYLES = {
 };
 
 const AnimatedAvatar = forwardRef(({
-  style = 'electro',
+  style = 'ai',
   size = 'md',
   speaking = false,
   emotion = 'neutral',
@@ -106,6 +115,55 @@ const AnimatedAvatar = forwardRef(({
     const cy = 45;
 
     switch (avatar.icon) {
+      case 'ai':
+        // Icône AI moderne avec cerveau/neurones animés
+        const nodeOpacity = 0.7 + Math.sin(pulsePhase * 0.08) * 0.3;
+        const connectionOpacity = 0.4 + Math.sin(pulsePhase * 0.06) * 0.3;
+        const pulseScale = 1 + Math.sin(pulsePhase * 0.05) * 0.05;
+        return (
+          <g style={{ transform: `scale(${pulseScale})`, transformOrigin: 'center' }}>
+            {/* Connexions neuronales animées */}
+            <g opacity={connectionOpacity}>
+              <line x1="50" y1="35" x2="35" y2="50" stroke="white" strokeWidth="1.5" />
+              <line x1="50" y1="35" x2="65" y2="50" stroke="white" strokeWidth="1.5" />
+              <line x1="35" y1="50" x2="50" y2="65" stroke="white" strokeWidth="1.5" />
+              <line x1="65" y1="50" x2="50" y2="65" stroke="white" strokeWidth="1.5" />
+              <line x1="35" y1="50" x2="65" y2="50" stroke="white" strokeWidth="1" strokeDasharray="3 2" />
+              <line x1="50" y1="35" x2="50" y2="65" stroke="white" strokeWidth="1" strokeDasharray="3 2" />
+            </g>
+            {/* Nœuds du réseau neuronal */}
+            <g opacity={nodeOpacity}>
+              {/* Nœud central supérieur */}
+              <circle cx="50" cy="35" r="6" fill="white" />
+              <circle cx="50" cy="35" r="3" fill={avatar.primaryColor} />
+              {/* Nœuds latéraux */}
+              <circle cx="35" cy="50" r="5" fill="white" />
+              <circle cx="35" cy="50" r="2.5" fill={avatar.primaryColor} />
+              <circle cx="65" cy="50" r="5" fill="white" />
+              <circle cx="65" cy="50" r="2.5" fill={avatar.primaryColor} />
+              {/* Nœud central inférieur */}
+              <circle cx="50" cy="65" r="6" fill="white" />
+              <circle cx="50" cy="65" r="3" fill={avatar.primaryColor} />
+            </g>
+            {/* Pulse animé qui voyage sur les connexions */}
+            {speaking && (
+              <g>
+                <circle
+                  cx={35 + Math.sin(waveOffset * 0.5) * 15 + 15}
+                  cy={50 + Math.cos(waveOffset * 0.5) * 15}
+                  r="2"
+                  fill={avatar.accentColor}
+                />
+                <circle
+                  cx={65 - Math.sin(waveOffset * 0.7) * 15 - 15}
+                  cy={50 - Math.cos(waveOffset * 0.7) * 15}
+                  r="2"
+                  fill={avatar.accentColor}
+                />
+              </g>
+            )}
+          </g>
+        );
       case 'bolt':
         return (
           <path

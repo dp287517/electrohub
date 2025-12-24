@@ -235,8 +235,8 @@ export default function EquipmentAIChat({
   const inputRef = useRef(null);
 
   // Get avatar style
-  const avatarStyle = localStorage.getItem('eh_avatar_style') || 'electro';
-  const avatar = AVATAR_STYLES[avatarStyle] || AVATAR_STYLES.electro;
+  const avatarStyle = localStorage.getItem('eh_avatar_style') || 'ai';
+  const avatar = AVATAR_STYLES[avatarStyle] || AVATAR_STYLES.ai;
 
   // Get equipment config
   const config = EQUIPMENT_CONFIGS[equipmentType] || EQUIPMENT_CONFIGS.vsd;

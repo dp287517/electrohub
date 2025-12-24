@@ -22,12 +22,12 @@ export default function Navbar() {
   const [avatarStyle, setAvatarStyle] = useState(() => {
     const saved = localStorage.getItem('eh_avatar_style');
     // Migration des anciens styles vers les nouveaux
-    const validStyles = ['electro', 'nova', 'eco', 'spark', 'pulse'];
+    const validStyles = ['ai', 'electro', 'nova', 'eco', 'spark', 'pulse'];
     if (saved && !validStyles.includes(saved)) {
-      localStorage.setItem('eh_avatar_style', 'electro');
-      return 'electro';
+      localStorage.setItem('eh_avatar_style', 'ai');
+      return 'ai';
     }
-    return saved || 'electro';
+    return saved || 'ai';
   });
   const [showChat, setShowChat] = useState(false);
   const [showAvatarSelector, setShowAvatarSelector] = useState(false);
