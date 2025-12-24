@@ -1971,6 +1971,51 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       }
     }
 
+    // --- SEAMLESS MODE SWITCHING: Exit any procedure mode to return to normal ---
+    const wantsExitMode = (
+      msgLower.includes('menu principal') ||
+      msgLower.includes('retour menu') ||
+      msgLower.includes('mode normal') ||
+      (msgLower.includes('sortir') && (msgLower.includes('procédure') || msgLower.includes('procedure'))) ||
+      (msgLower.includes('quitter') && !msgLower.includes('application')) ||
+      msgLower.includes("c'est bon") ||
+      msgLower.includes('j\'ai fini') ||
+      msgLower.includes('terminé') ||
+      msgLower.includes('annuler')
+    );
+
+    // Check if we're in any procedure mode
+    const inProcedureMode = [...conversationHistory].reverse().find(m =>
+      m.procedureSessionId || m.procedureAssistSessionId || m.procedureEditId || m.mode?.includes('procedure')
+    );
+
+    if (wantsExitMode && inProcedureMode) {
+      console.log('[AI] 🔄 Switching back to normal mode');
+
+      return res.json({
+        message: "✅ **Mode normal activé.**\n\nJe suis prêt à t'aider. Que veux-tu faire ?\n\n" +
+                 "💡 Tu peux me demander:\n" +
+                 "- Créer une procédure\n" +
+                 "- Voir mes procédures\n" +
+                 "- Suivre/exécuter une procédure\n" +
+                 "- Modifier une procédure\n" +
+                 "- Ou toute autre question !",
+        actions: [
+          { label: "Créer procédure", prompt: "Je veux créer une nouvelle procédure" },
+          { label: "Mes procédures", prompt: "Montre-moi mes procédures" },
+          { label: "Question", prompt: "" }
+        ],
+        provider: 'system',
+        // Clear all procedure session IDs
+        procedureSessionId: null,
+        procedureAssistSessionId: null,
+        procedureEditId: null,
+        editAction: null,
+        deleteStepId: null,
+        mode: 'normal'
+      });
+    }
+
     // --- Détecter si on veut CRÉER une procédure (pas de session active) ---
     const wantsCreateProcedure = (
       (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
@@ -2044,6 +2089,205 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         procedureMode: 'analyze-report',
         expectsFile: true
       });
+    }
+
+    // --- Détecter si on veut FAIRE/EXÉCUTER une procédure (mode guidance temps réel) ---
+    const wantsExecuteProcedure = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure')) &&
+      (msgLower.includes('faire') || msgLower.includes('exécuter') || msgLower.includes('executer') ||
+       msgLower.includes('suivre') || msgLower.includes('guide') || msgLower.includes('commencer') ||
+       msgLower.includes('lancer') || msgLower.includes('démarrer') || msgLower.includes('demarrer') ||
+       msgLower.includes('effectuer') || msgLower.includes('réaliser'))
+    ) || (
+      msgLower.includes('guide') && msgLower.includes('moi') &&
+      (msgLower.includes('pour') || msgLower.includes('étape'))
+    );
+
+    if (wantsExecuteProcedure && !activeSessionId) {
+      console.log('[AI] 🎯 Procedure execution mode requested');
+
+      // Extract procedure name if mentioned
+      const procMatch = /(?:procédure|procedure)\s*[""«]?([^""»]+)[""»]?/i.exec(message) ||
+                        /(?:faire|suivre|guide.*pour)\s+(?:la\s+)?[""«]?([^""»?]+)[""»]?/i.exec(message);
+      const searchTitle = procMatch?.[1]?.trim();
+
+      try {
+        // Find the procedure
+        let procQuery = `
+          SELECT p.id, p.title, p.risk_level, p.ppe_required,
+                 (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+          FROM procedures p
+          WHERE (p.site = $1 OR p.site IS NULL OR p.site = '')
+        `;
+        const params = [site];
+
+        if (searchTitle) {
+          procQuery += ` AND LOWER(p.title) LIKE $2`;
+          params.push(`%${searchTitle.toLowerCase()}%`);
+        }
+
+        procQuery += ` ORDER BY CASE WHEN p.site = $1 THEN 0 ELSE 1 END, p.created_at DESC LIMIT 5`;
+
+        const procResult = await pool.query(procQuery, params);
+
+        if (procResult.rows.length === 0) {
+          return res.json({
+            message: "Je n'ai pas trouvé de procédure correspondante. Tu veux en créer une ou voir la liste ?",
+            actions: [
+              { label: "Voir mes procédures", prompt: "Montre-moi mes procédures" },
+              { label: "Créer une procédure", prompt: "Je veux créer une procédure" }
+            ],
+            provider: 'system'
+          });
+        }
+
+        // If multiple matches, ask user to choose
+        if (procResult.rows.length > 1 && !searchTitle) {
+          const procList = procResult.rows.map((p, i) =>
+            `${i + 1}. **${p.title}** (${p.step_count} étapes, risque ${p.risk_level})`
+          ).join('\n');
+
+          return res.json({
+            message: `**Quelle procédure veux-tu exécuter ?**\n\n${procList}\n\nDis-moi le numéro ou le nom de la procédure.`,
+            actions: procResult.rows.slice(0, 3).map(p => ({
+              label: p.title.substring(0, 25),
+              prompt: `Je veux faire la procédure "${p.title}"`
+            })),
+            provider: 'system'
+          });
+        }
+
+        // Start real-time assistance for the procedure
+        const proc = procResult.rows[0];
+        console.log(`[AI] 🚀 Starting real-time assistance for: ${proc.title}`);
+
+        const assistResult = await callProceduresMicroservice('/api/procedures/ai/assist/start', {
+          method: 'POST',
+          userEmail,
+          site,
+          body: { procedureId: proc.id, initialQuestion: message }
+        });
+
+        if (assistResult?.sessionId) {
+          let response = `## 🎯 Mode Guidance: ${proc.title}\n\n`;
+
+          // Safety warning based on risk level
+          if (proc.risk_level === 'high' || proc.risk_level === 'critical') {
+            response += `⚠️ **Attention:** Procédure à risque ${proc.risk_level === 'critical' ? 'CRITIQUE' : 'ÉLEVÉ'}\n\n`;
+          }
+
+          // PPE reminder
+          const ppe = proc.ppe_required || [];
+          if (ppe.length > 0) {
+            response += `🦺 **EPI requis:** ${ppe.join(', ')}\n\n`;
+          }
+
+          response += `---\n\n${assistResult.message}`;
+
+          // Add photo if available
+          const photoData = assistResult.currentStepPhoto ? {
+            stepPhoto: assistResult.currentStepPhoto,
+            stepNumber: 1
+          } : null;
+
+          return res.json({
+            message: response,
+            actions: [
+              { label: "C'est fait", prompt: "C'est fait, étape suivante" },
+              { label: "J'ai un problème", prompt: "J'ai un problème avec cette étape" },
+              { label: "Arrêter", prompt: "Stop, je veux arrêter la procédure" }
+            ],
+            provider: 'procedures-assist',
+            procedureAssistSessionId: assistResult.sessionId,
+            procedureId: proc.id,
+            procedureTitle: proc.title,
+            currentStep: 1,
+            totalSteps: assistResult.totalSteps,
+            stepPhotos: assistResult.stepPhotos,
+            currentStepPhoto: assistResult.currentStepPhoto,
+            mode: 'procedure-guidance'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Procedure execution error:', e);
+      }
+    }
+
+    // --- Check if we're in active ASSISTANCE mode ---
+    const lastAssistMsg = [...conversationHistory].reverse().find(m => m.procedureAssistSessionId);
+    const activeAssistSessionId = lastAssistMsg?.procedureAssistSessionId;
+
+    if (activeAssistSessionId) {
+      console.log(`[AI] 🎯 Continuing procedure guidance: ${activeAssistSessionId}`);
+
+      // Check if user wants to stop
+      const wantsStop = /^(stop|arrête|arreter|quitter|sortir|annuler)$/i.test(msgLower.trim()) ||
+                        msgLower.includes('arrêter la procédure') || msgLower.includes('quitter la procédure');
+
+      if (wantsStop) {
+        return res.json({
+          message: "✅ **Procédure interrompue.**\n\nTu peux la reprendre quand tu veux en disant \"Je veux faire la procédure X\".\n\nQue veux-tu faire maintenant ?",
+          actions: [
+            { label: "Voir mes procédures", prompt: "Montre-moi mes procédures" },
+            { label: "Autre question", prompt: "" }
+          ],
+          provider: 'system',
+          procedureAssistSessionId: null, // Clear session
+          mode: 'normal'
+        });
+      }
+
+      // Continue assistance
+      try {
+        const result = await callProceduresMicroservice(`/api/procedures/ai/assist/${activeAssistSessionId}`, {
+          method: 'POST',
+          userEmail,
+          site,
+          body: { message, action: msgLower.includes("c'est fait") ? 'next' : null }
+        });
+
+        if (result) {
+          let response = result.message;
+
+          // Add photo comparison feedback if available
+          if (result.photoAnalysis) {
+            response += `\n\n📸 **Analyse de ta photo:**\n${result.photoAnalysis}`;
+          }
+
+          // Check if procedure is complete
+          const isComplete = result.currentStepNumber > result.totalSteps || result.isComplete;
+
+          if (isComplete) {
+            return res.json({
+              message: `✅ **Procédure terminée !**\n\nBravo, tu as complété toutes les étapes.\n\n${response}`,
+              actions: [
+                { label: "Télécharger PDF", prompt: `Génère le PDF de la procédure` },
+                { label: "Autre procédure", prompt: "Montre-moi mes procédures" }
+              ],
+              provider: 'system',
+              procedureAssistSessionId: null,
+              mode: 'normal'
+            });
+          }
+
+          return res.json({
+            message: response,
+            actions: [
+              { label: "C'est fait", prompt: "C'est fait, étape suivante" },
+              { label: "Envoyer photo", prompt: "Je t'envoie une photo de ce que j'ai fait" },
+              { label: "Problème", prompt: "J'ai un problème" }
+            ],
+            provider: 'procedures-assist',
+            procedureAssistSessionId: activeAssistSessionId,
+            currentStep: result.currentStepNumber,
+            totalSteps: result.totalSteps,
+            currentStepPhoto: result.currentStepPhoto,
+            mode: 'procedure-guidance'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Procedure assistance error:', e);
+      }
     }
 
     // --- Détecter si on veut VOIR/CHERCHER une procédure ---
@@ -2156,6 +2400,300 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         }
       } catch (e) {
         console.error('[AI] Read procedure error:', e);
+      }
+    }
+
+    // --- Détecter si on veut MODIFIER une procédure ---
+    const wantsModifyProcedure = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure')) &&
+      (msgLower.includes('modifier') || msgLower.includes('éditer') || msgLower.includes('editer') ||
+       msgLower.includes('changer') || msgLower.includes('mettre à jour') || msgLower.includes('ajouter étape') ||
+       msgLower.includes('supprimer étape') || msgLower.includes('renommer'))
+    );
+
+    if (wantsModifyProcedure) {
+      // Extract procedure name from message
+      const modifyMatch = /[""«]([^""»]+)[""»]/i.exec(message);
+      const searchTitle = modifyMatch?.[1] || '';
+
+      console.log(`[AI] ✏️ Modify procedure mode: ${searchTitle}`);
+
+      try {
+        // Find the procedure
+        const procResult = await pool.query(`
+          SELECT p.*, json_agg(
+            json_build_object(
+              'id', s.id,
+              'step_number', s.step_number,
+              'title', s.title,
+              'description', s.description,
+              'instructions', s.instructions
+            )
+            ORDER BY s.step_number
+          ) as steps
+          FROM procedures p
+          LEFT JOIN procedure_steps s ON s.procedure_id = p.id
+          WHERE (p.site = $1 OR p.site IS NULL OR p.site = '') ${searchTitle ? "AND LOWER(p.title) LIKE $2" : ""}
+          GROUP BY p.id
+          ORDER BY CASE WHEN p.site = $1 THEN 0 ELSE 1 END, created_at DESC
+          LIMIT 1
+        `, searchTitle ? [site, `%${searchTitle.toLowerCase()}%`] : [site]);
+
+        if (procResult.rows.length > 0) {
+          const proc = procResult.rows[0];
+          const steps = proc.steps?.[0] ? proc.steps.filter(s => s.step_number) : [];
+
+          let response = `## ✏️ Modifier: ${proc.title}\n\n`;
+          response += `**Informations actuelles:**\n`;
+          response += `- Niveau de risque: ${proc.risk_level || 'non défini'}\n`;
+          response += `- EPI requis: ${(proc.ppe_required || []).join(', ') || 'aucun'}\n`;
+          response += `- Catégorie: ${proc.category || 'général'}\n\n`;
+
+          if (steps.length > 0) {
+            response += `**Étapes (${steps.length}):**\n`;
+            steps.forEach(s => {
+              response += `${s.step_number}. ${s.title || s.description}\n`;
+            });
+          }
+
+          response += `\n---\n**Que veux-tu modifier ?**\n`;
+          response += `- "Ajouter une étape" pour ajouter une nouvelle étape\n`;
+          response += `- "Modifier l'étape X" pour changer une étape\n`;
+          response += `- "Changer le titre" pour renommer la procédure\n`;
+          response += `- "Supprimer l'étape X" pour retirer une étape`;
+
+          return res.json({
+            message: response,
+            actions: [
+              { label: "Ajouter une étape", prompt: `Ajoute une étape à la procédure "${proc.title}"` },
+              { label: "Changer le titre", prompt: `Change le titre de la procédure "${proc.title}"` },
+              { label: "Modifier les EPI", prompt: `Modifie les EPI de la procédure "${proc.title}"` }
+            ],
+            provider: 'system',
+            procedureEditId: proc.id,
+            procedureTitle: proc.title,
+            mode: 'procedure-edit'
+          });
+        } else {
+          return res.json({
+            message: "Je n'ai pas trouvé cette procédure. Montre-moi la liste des procédures disponibles.",
+            actions: [{ label: "Voir les procédures", prompt: "Montre-moi mes procédures" }],
+            provider: 'system'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Modify procedure error:', e);
+      }
+    }
+
+    // --- Handle active edit session - ADDING a step ---
+    const wantsAddStep = msgLower.includes('ajouter') && (msgLower.includes('étape') || msgLower.includes('etape'));
+    const lastEditMsg = [...conversationHistory].reverse().find(m => m.procedureEditId);
+
+    if (wantsAddStep && lastEditMsg?.procedureEditId) {
+      console.log(`[AI] ➕ Adding step to procedure: ${lastEditMsg.procedureEditId}`);
+
+      return res.json({
+        message: "📝 **Nouvelle étape**\n\nDécris la nouvelle étape que tu veux ajouter. Je vais l'ajouter à la fin de la procédure.\n\nExemple: \"L'étape consiste à vérifier que le disjoncteur est en position OFF avant toute intervention\"",
+        actions: [
+          { label: "Annuler", prompt: "Annuler, je ne veux plus modifier" }
+        ],
+        provider: 'system',
+        procedureEditId: lastEditMsg.procedureEditId,
+        procedureTitle: lastEditMsg.procedureTitle,
+        editAction: 'add-step',
+        mode: 'procedure-edit'
+      });
+    }
+
+    // --- Handle step addition description ---
+    const lastEditAction = [...conversationHistory].reverse().find(m => m.editAction);
+
+    if (lastEditAction?.editAction === 'add-step' && lastEditAction?.procedureEditId && message.length > 10) {
+      console.log(`[AI] ✅ Creating new step for: ${lastEditAction.procedureEditId}`);
+
+      try {
+        // Get current step count
+        const countResult = await pool.query(
+          `SELECT MAX(step_number) as max_step FROM procedure_steps WHERE procedure_id = $1`,
+          [lastEditAction.procedureEditId]
+        );
+        const nextStepNumber = (countResult.rows[0]?.max_step || 0) + 1;
+
+        // Add the step
+        await pool.query(
+          `INSERT INTO procedure_steps (procedure_id, step_number, title, description, instructions)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [lastEditAction.procedureEditId, nextStepNumber, `Étape ${nextStepNumber}`, message, message]
+        );
+
+        return res.json({
+          message: `✅ **Étape ${nextStepNumber} ajoutée !**\n\n"${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"\n\nVeux-tu ajouter une autre étape ou continuer les modifications ?`,
+          actions: [
+            { label: "Ajouter une autre étape", prompt: `Ajoute une autre étape à la procédure` },
+            { label: "Voir la procédure", prompt: `Montre-moi la procédure "${lastEditAction.procedureTitle}"` },
+            { label: "Terminé", prompt: "C'est bon, j'ai fini les modifications" }
+          ],
+          provider: 'system',
+          procedureEditId: lastEditAction.procedureEditId,
+          procedureTitle: lastEditAction.procedureTitle,
+          mode: 'procedure-edit'
+        });
+      } catch (e) {
+        console.error('[AI] Add step error:', e);
+        return res.json({
+          message: "Erreur lors de l'ajout de l'étape. Réessaie.",
+          actions: [{ label: "Réessayer", prompt: "Ajoute une étape" }],
+          provider: 'system'
+        });
+      }
+    }
+
+    // --- Handle CHANGE TITLE request ---
+    const wantsChangeTitle = msgLower.includes('change') && msgLower.includes('titre');
+    if (wantsChangeTitle && lastEditMsg?.procedureEditId) {
+      return res.json({
+        message: `📝 **Nouveau titre**\n\nQuel est le nouveau titre pour "${lastEditMsg.procedureTitle}" ?\n\nÉcris simplement le nouveau titre.`,
+        actions: [{ label: "Annuler", prompt: "Annuler" }],
+        provider: 'system',
+        procedureEditId: lastEditMsg.procedureEditId,
+        procedureTitle: lastEditMsg.procedureTitle,
+        editAction: 'change-title',
+        mode: 'procedure-edit'
+      });
+    }
+
+    // Handle title change
+    if (lastEditAction?.editAction === 'change-title' && lastEditAction?.procedureEditId && message.length > 2) {
+      try {
+        await pool.query(
+          `UPDATE procedures SET title = $1, updated_at = now() WHERE id = $2`,
+          [message.trim(), lastEditAction.procedureEditId]
+        );
+
+        return res.json({
+          message: `✅ **Titre modifié !**\n\nNouveau titre: "${message.trim()}"`,
+          actions: [
+            { label: "Autres modifications", prompt: `Modifier la procédure "${message.trim()}"` },
+            { label: "Terminé", prompt: "C'est bon, j'ai fini" }
+          ],
+          provider: 'system',
+          procedureEditId: lastEditAction.procedureEditId,
+          procedureTitle: message.trim(),
+          mode: 'procedure-edit'
+        });
+      } catch (e) {
+        console.error('[AI] Change title error:', e);
+      }
+    }
+
+    // --- Handle MODIFY EPI request ---
+    const wantsModifyEPI = (msgLower.includes('modifie') || msgLower.includes('change')) &&
+                           (msgLower.includes('epi') || msgLower.includes('équipement') || msgLower.includes('protection'));
+    if (wantsModifyEPI && lastEditMsg?.procedureEditId) {
+      return res.json({
+        message: `🦺 **Équipements de Protection Individuelle**\n\nListe les EPI requis, séparés par des virgules.\n\nExemple: "Casque, Gants isolants, Lunettes de protection, Chaussures de sécurité"`,
+        actions: [
+          { label: "EPI standard", prompt: "Casque de sécurité, Gants de protection, Lunettes de sécurité, Chaussures de sécurité" },
+          { label: "Annuler", prompt: "Annuler" }
+        ],
+        provider: 'system',
+        procedureEditId: lastEditMsg.procedureEditId,
+        procedureTitle: lastEditMsg.procedureTitle,
+        editAction: 'change-ppe',
+        mode: 'procedure-edit'
+      });
+    }
+
+    // Handle PPE change
+    if (lastEditAction?.editAction === 'change-ppe' && lastEditAction?.procedureEditId && message.length > 2) {
+      try {
+        const ppeList = message.split(',').map(p => p.trim()).filter(p => p.length > 0);
+
+        await pool.query(
+          `UPDATE procedures SET ppe_required = $1, updated_at = now() WHERE id = $2`,
+          [JSON.stringify(ppeList), lastEditAction.procedureEditId]
+        );
+
+        return res.json({
+          message: `✅ **EPI mis à jour !**\n\n${ppeList.map(p => `- ${p}`).join('\n')}`,
+          actions: [
+            { label: "Autres modifications", prompt: `Modifier la procédure "${lastEditAction.procedureTitle}"` },
+            { label: "Terminé", prompt: "C'est bon, j'ai fini" }
+          ],
+          provider: 'system',
+          procedureEditId: lastEditAction.procedureEditId,
+          procedureTitle: lastEditAction.procedureTitle,
+          mode: 'procedure-edit'
+        });
+      } catch (e) {
+        console.error('[AI] Change PPE error:', e);
+      }
+    }
+
+    // --- Handle DELETE STEP request ---
+    const wantsDeleteStep = msgLower.includes('supprimer') && (msgLower.includes('étape') || msgLower.includes('etape'));
+    const stepNumMatch = /étape\s*(\d+)|etape\s*(\d+)|supprimer\s*(\d+)/i.exec(message);
+
+    if (wantsDeleteStep && lastEditMsg?.procedureEditId && stepNumMatch) {
+      const stepNum = parseInt(stepNumMatch[1] || stepNumMatch[2] || stepNumMatch[3]);
+
+      try {
+        // Get the step
+        const stepResult = await pool.query(
+          `SELECT id, title FROM procedure_steps WHERE procedure_id = $1 AND step_number = $2`,
+          [lastEditMsg.procedureEditId, stepNum]
+        );
+
+        if (stepResult.rows.length > 0) {
+          return res.json({
+            message: `⚠️ **Confirmer la suppression**\n\nVeux-tu vraiment supprimer l'étape ${stepNum}: "${stepResult.rows[0].title || 'Sans titre'}" ?\n\nCette action est irréversible.`,
+            actions: [
+              { label: "Oui, supprimer", prompt: `CONFIRMER SUPPRESSION ÉTAPE ${stepNum}` },
+              { label: "Non, annuler", prompt: "Annuler la suppression" }
+            ],
+            provider: 'system',
+            procedureEditId: lastEditMsg.procedureEditId,
+            procedureTitle: lastEditMsg.procedureTitle,
+            deleteStepId: stepResult.rows[0].id,
+            deleteStepNum: stepNum,
+            mode: 'procedure-edit'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Delete step prep error:', e);
+      }
+    }
+
+    // Handle step deletion confirmation
+    const lastDeleteMsg = [...conversationHistory].reverse().find(m => m.deleteStepId);
+    if (lastDeleteMsg?.deleteStepId && msgLower.includes('confirmer suppression')) {
+      try {
+        await pool.query(`DELETE FROM procedure_steps WHERE id = $1`, [lastDeleteMsg.deleteStepId]);
+
+        // Renumber remaining steps
+        await pool.query(`
+          WITH numbered AS (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY step_number) as new_num
+            FROM procedure_steps WHERE procedure_id = $1
+          )
+          UPDATE procedure_steps SET step_number = numbered.new_num
+          FROM numbered WHERE procedure_steps.id = numbered.id
+        `, [lastDeleteMsg.procedureEditId]);
+
+        return res.json({
+          message: `✅ **Étape ${lastDeleteMsg.deleteStepNum} supprimée !**\n\nLes étapes ont été renumérotées automatiquement.`,
+          actions: [
+            { label: "Voir la procédure", prompt: `Montre-moi la procédure "${lastDeleteMsg.procedureTitle}"` },
+            { label: "Autres modifications", prompt: `Modifier la procédure "${lastDeleteMsg.procedureTitle}"` }
+          ],
+          provider: 'system',
+          procedureEditId: lastDeleteMsg.procedureEditId,
+          procedureTitle: lastDeleteMsg.procedureTitle,
+          mode: 'procedure-edit'
+        });
+      } catch (e) {
+        console.error('[AI] Delete step error:', e);
       }
     }
 
@@ -2398,14 +2936,81 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
 
     console.log(`[AI] 📷 Photo received: ${photo.originalname}`);
 
-    // Check for active procedure session (microservice)
+    // Check for active procedure sessions (microservice)
     const lastProcMsg = [...conversationHistory].reverse().find(m => m.procedureSessionId);
     const sessionId = lastProcMsg?.procedureSessionId;
+
+    // Check for active procedure ASSISTANCE session (guidance mode)
+    const lastAssistMsg = [...conversationHistory].reverse().find(m => m.procedureAssistSessionId);
+    const assistSessionId = lastAssistMsg?.procedureAssistSessionId;
 
     // Read photo data
     const photoBuffer = fs.readFileSync(photo.path);
 
-    // If we have an active microservice session, forward the photo there
+    // Priority 1: If we have an active assistance session, forward photo for comparison
+    if (assistSessionId) {
+      console.log(`[AI] 📷 Forwarding photo to procedure ASSISTANCE session: ${assistSessionId}`);
+
+      try {
+        // Create form data for microservice
+        const FormData = (await import('form-data')).default;
+        const formData = new FormData();
+        formData.append('message', message || 'Voici ma photo');
+        formData.append('photo', photoBuffer, {
+          filename: photo.originalname,
+          contentType: photo.mimetype
+        });
+
+        // Call microservice assistance endpoint
+        const response = await fetch(`${proceduresTarget}/api/procedures/ai/assist/${assistSessionId}`, {
+          method: 'POST',
+          headers: {
+            'X-User-Email': userEmail,
+            'X-Site': site,
+            ...formData.getHeaders()
+          },
+          body: formData
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+
+          // Cleanup temp file
+          fs.unlinkSync(photo.path);
+
+          // Determine if procedure is complete
+          const isComplete = result.procedureComplete || result.currentStepNumber > result.totalSteps;
+
+          return res.json({
+            message: result.message || result.guidance,
+            photoFeedback: result.photoAnalysis,
+            actions: isComplete
+              ? [
+                  { label: "Nouvelle procédure", prompt: "Je veux suivre une autre procédure" },
+                  { label: "Retour menu", prompt: "Retourne au menu principal" }
+                ]
+              : [
+                  { label: "📷 Envoyer photo", prompt: "Voici ma photo de l'étape" },
+                  { label: "➡️ Étape suivante", prompt: "Passe à l'étape suivante" },
+                  { label: "❓ Question", prompt: "J'ai une question sur cette étape" },
+                  { label: "⚠️ Problème", prompt: "J'ai un problème" }
+                ],
+            provider: 'procedure-guidance',
+            procedureAssistSessionId: isComplete ? null : assistSessionId,
+            procedureComplete: isComplete,
+            currentStep: result.currentStepNumber,
+            totalSteps: result.totalSteps,
+            currentStepPhoto: result.currentStepPhoto,
+            safetyWarning: result.safetyWarning
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Assistance photo error:', e.message);
+        // Fall through to direct GPT-4o Vision
+      }
+    }
+
+    // Priority 2: If we have an active creation session, forward the photo there
     if (sessionId) {
       console.log(`[AI] 📷 Forwarding photo to procedure session: ${sessionId}`);
 
