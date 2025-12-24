@@ -273,13 +273,13 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               </div>
               <div className="flex-1">
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  Création guidée par IA
+                  Création rapide avec LIA
                   <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                    Recommandé
+                    ⚡ 30 sec
                   </span>
                 </h3>
                 <p className="text-sm text-gray-600 mt-1">
-                  L'assistant vous guide étape par étape : titre, EPI, étapes avec photos, contacts d'urgence...
+                  3 étapes simples : titre → décrivez vos étapes → c'est prêt ! Photos optionnelles 📷
                 </p>
               </div>
               <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-violet-600 transition-colors" />
@@ -500,14 +500,11 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               <Sparkles className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Assistant Procédure</h2>
+              <h2 className="text-lg font-semibold text-white">LIA - Création rapide</h2>
               <p className="text-sm text-white/80">
-                {currentStep === 'init' && 'Démarrage...'}
-                {currentStep === 'risks' && 'Configuration sécurité'}
-                {currentStep === 'steps' && 'Définition des étapes'}
-                {currentStep === 'contacts' && 'Contacts d\'urgence'}
-                {currentStep === 'equipment' && 'Liaison équipements'}
-                {currentStep === 'review' && 'Révision finale'}
+                {currentStep === 'init' && '1/3 - Titre'}
+                {currentStep === 'steps' && '2/3 - Étapes'}
+                {(currentStep === 'review' || currentStep === 'complete') && '3/3 - Finalisation'}
               </p>
             </div>
           </div>
@@ -519,18 +516,22 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           </button>
         </div>
 
-        {/* Progress bar */}
+        {/* Progress bar - Simplified to 3 steps */}
         <div className="mt-3 flex gap-1">
-          {['init', 'risks', 'steps', 'contacts', 'equipment', 'review'].map((step, i) => (
-            <div
-              key={step}
-              className={`h-1 flex-1 rounded-full ${
-                ['init', 'risks', 'steps', 'contacts', 'equipment', 'review'].indexOf(currentStep) >= i
-                  ? 'bg-white'
-                  : 'bg-white/30'
-              }`}
-            />
-          ))}
+          {['init', 'steps', 'review'].map((step, i) => {
+            const stepOrder = ['init', 'steps', 'review'];
+            const currentIndex = stepOrder.indexOf(currentStep);
+            const isCompleted = currentIndex > i || (currentStep === 'complete');
+            const isCurrent = currentStep === step;
+            return (
+              <div
+                key={step}
+                className={`h-1.5 flex-1 rounded-full transition-all ${
+                  isCompleted || isCurrent ? 'bg-white' : 'bg-white/30'
+                }`}
+              />
+            );
+          })}
         </div>
       </div>
 
@@ -582,40 +583,55 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
             )}
           </button>
         ) : (
-          <div className="flex gap-2">
-            {expectsPhoto && (
-              <button
-                onClick={() => photoInputRef.current?.click()}
-                className="p-3 bg-violet-100 text-violet-600 rounded-xl hover:bg-violet-200 transition-colors"
-                title="Ajouter une photo"
-              >
-                <Camera className="w-5 h-5" />
-              </button>
+          <div className="space-y-2">
+            {/* Photo hint when in steps mode */}
+            {currentStep === 'steps' && (
+              <div className="flex items-center gap-2 text-xs text-gray-500 px-1">
+                <Camera className="w-3.5 h-3.5" />
+                <span>📷 Photo optionnelle - appuyez sur l'icône caméra pour en ajouter une</span>
+              </div>
             )}
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={handlePhotoUpload}
-              className="hidden"
-            />
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-              placeholder="Votre réponse..."
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
-              disabled={isLoading}
-            />
-            <button
-              onClick={() => sendMessage()}
-              disabled={isLoading || !input.trim()}
-              className="p-3 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Send className="w-5 h-5" />
-            </button>
+            <div className="flex gap-2">
+              {/* Always show camera button in steps mode */}
+              {(expectsPhoto || currentStep === 'steps') && (
+                <button
+                  onClick={() => photoInputRef.current?.click()}
+                  className="p-3 bg-violet-100 text-violet-600 rounded-xl hover:bg-violet-200 transition-colors relative"
+                  title="Ajouter une photo (optionnel)"
+                >
+                  <Camera className="w-5 h-5" />
+                  <span className="absolute -top-1 -right-1 text-[10px] bg-gray-200 text-gray-600 px-1 rounded">opt.</span>
+                </button>
+              )}
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePhotoUpload}
+                className="hidden"
+              />
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                placeholder={
+                  currentStep === 'init' ? "Ex: Changer une ampoule, Vérifier le moteur..." :
+                  currentStep === 'steps' ? "Décrivez l'étape ou tapez 'terminé'" :
+                  "Votre réponse..."
+                }
+                className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                disabled={isLoading}
+              />
+              <button
+                onClick={() => sendMessage()}
+                disabled={isLoading || !input.trim()}
+                className="p-3 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
