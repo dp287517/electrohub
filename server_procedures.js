@@ -3626,7 +3626,6 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: true,
     autoFirstPage: true,
     info: {
       Title: `RAMS Exemple - ${data.activity}`,
@@ -4087,81 +4086,14 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
      .text(`Reduction: ${reduction}%`, sidebarX + sidebarW / 2, ry + 42);
 
-  // === SIGNATURE SECTION ===
-  // Add new page for signatures
-  doc.addPage();
-
-  // Header for signature page
-  doc.rect(0, 0, pageWidth, 40).fill(c.headerBg);
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
-     .text("SIGNATURES ET APPROBATIONS - RAMS", margin, 12, { width: pageWidth - margin * 2, align: "center" });
-  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
-     .text(`Document: ${docRef} | ${data.activity}`, margin, 28, { width: pageWidth - margin * 2, align: "center" });
-
-  let sigY = 60;
-
-  // Creator signature
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("REDACTEUR / CREATEUR", margin, sigY);
-  doc.rect(margin, sigY + 15, 350, 80).stroke(c.border);
-  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
-  doc.text("Nom:", margin + 10, sigY + 25);
-  doc.text("Fonction:", margin + 10, sigY + 45);
-  doc.text("Date:", margin + 10, sigY + 65);
-  doc.text("Signature:", margin + 180, sigY + 25);
-
-  // Approver signature
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("APPROBATEUR HSE", margin + 400, sigY);
-  doc.rect(margin + 400, sigY + 15, 350, 80).stroke(c.border);
-  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
-  doc.text("Nom:", margin + 410, sigY + 25);
-  doc.text("Fonction:", margin + 410, sigY + 45);
-  doc.text("Date:", margin + 410, sigY + 65);
-  doc.text("Signature:", margin + 580, sigY + 25);
-
-  sigY += 110;
-
-  // Technicians signatures
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("TECHNICIENS / INTERVENANTS - Prise de connaissance et engagement", margin, sigY);
-
-  sigY += 20;
-  const techBoxW = (pageWidth - margin * 2 - 30) / 3;
-
-  for (let i = 0; i < 6; i++) {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    const tx = margin + col * (techBoxW + 15);
-    const ty = sigY + row * 90;
-
-    doc.rect(tx, ty, techBoxW, 80).stroke(c.border);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text)
-       .text(`Intervenant ${i + 1}`, tx + 10, ty + 8);
-    doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
-    doc.text("Nom:", tx + 10, ty + 25);
-    doc.text("Date:", tx + 10, ty + 42);
-    doc.text("Signature:", tx + 10, ty + 59);
-    doc.text("J'ai lu et compris le RAMS", tx + techBoxW / 2, ty + 25, { width: techBoxW / 2 - 15 });
-  }
-
-  sigY += 200;
-
-  // Document linkage info
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
-     .text("DOCUMENTS LIES", margin, sigY);
-  doc.font("Helvetica").fontSize(8).fillColor(c.text);
-  doc.text(`[  ] Methode de Travail - Ref: MT-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 18);
-  doc.text(`[  ] Procedure - Ref: PROC-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 34);
-
   // === FOOTER ===
-  const footerY = pageHeight - 18;
-  doc.rect(0, footerY, pageWidth, 18).fill(c.headerBg);
+  const footerY = pageHeight - 25;
+  doc.rect(0, footerY, pageWidth, 25).fill(c.headerBg);
 
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.headerText);
-  doc.text(`${data.company} - RAMS`, margin, footerY + 4);
-  doc.text(`Document genere par IA - ${new Date().toLocaleString("fr-FR")}`, pageWidth / 2 - 100, footerY + 4, { width: 200, align: "center" });
-  doc.text(`Ref: ${docRef}`, pageWidth - margin - 180, footerY + 4, { width: 180, align: "right" });
+  doc.text(`${data.company} - RAMS`, margin, footerY + 5, { lineBreak: false });
+  doc.text(`Signatures: Redacteur __________ Approbateur HSE __________ Chef equipe __________`, margin + 200, footerY + 5, { lineBreak: false });
+  doc.text(`${new Date().toLocaleDateString("fr-FR")} | ${docRef}`, pageWidth - margin - 120, footerY + 5, { lineBreak: false });
 
   doc.end();
 
@@ -4196,7 +4128,6 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
   const doc = new PDFDocument({
     size: 'A4',
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: true,
     info: {
       Title: `Methode de Travail - ${data.title || data.activity}`,
       Author: data.company || "ElectroHub",
@@ -4360,17 +4291,6 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
   doc.text("Nom:", margin + sigW + 30, y + 25);
   doc.text("Date:", margin + sigW + 30, y + 40);
 
-  // Footer on all pages
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
-    doc.font("Helvetica").fontSize(7).fillColor(c.headerText);
-    doc.text(data.company || "ElectroHub", margin, pageHeight - 14);
-    doc.text(`Methode de Travail - ${docRef}`, pageWidth / 2 - 60, pageHeight - 14, { width: 120, align: "center" });
-    doc.text(`Page ${i + 1}/${range.count}`, pageWidth - margin - 50, pageHeight - 14, { width: 50, align: "right" });
-  }
-
   doc.end();
 
   return new Promise((resolve) => {
@@ -4404,7 +4324,6 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
   const doc = new PDFDocument({
     size: 'A4',
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: true,
     info: {
       Title: `Procedure - ${data.title || data.activity}`,
       Author: data.company || "ElectroHub",
@@ -4593,17 +4512,6 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
   doc.text("Nom:", margin + (sigW + 15) * 2 + 10, y + 25);
   doc.text("Date:", margin + (sigW + 15) * 2 + 10, y + 40);
   doc.text("Signature:", margin + (sigW + 15) * 2 + 10, y + 55);
-
-  // Footer on all pages
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
-    doc.font("Helvetica").fontSize(7).fillColor(c.headerText);
-    doc.text(data.company || "ElectroHub", margin, pageHeight - 14);
-    doc.text(`Procedure - ${docRef}`, pageWidth / 2 - 50, pageHeight - 14, { width: 100, align: "center" });
-    doc.text(`Page ${i + 1}/${range.count}`, pageWidth - margin - 50, pageHeight - 14, { width: 50, align: "right" });
-  }
 
   doc.end();
 
