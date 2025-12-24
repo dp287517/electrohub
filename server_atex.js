@@ -2839,12 +2839,20 @@ Réponds en JSON strict.`;
   console.log(`[ATEX-AI] Calling OpenAI (model: ${process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini"})...`);
   const startTime = Date.now();
 
-  const resp = await client.chat.completions.create({
-    model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
-    messages: content,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-  });
+  let resp;
+  try {
+    resp = await client.chat.completions.create({
+      model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
+      messages: content,
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+    });
+  } catch (openaiErr) {
+    const elapsed = Date.now() - startTime;
+    console.error(`[ATEX-AI] OpenAI ERROR after ${elapsed}ms:`, openaiErr.message);
+    console.error(`[ATEX-AI] Error details:`, openaiErr.status, openaiErr.code, openaiErr.type);
+    throw openaiErr;
+  }
 
   const elapsed = Date.now() - startTime;
   const rawContent = resp.choices?.[0]?.message?.content || "{}";
