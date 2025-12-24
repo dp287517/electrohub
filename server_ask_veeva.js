@@ -28,6 +28,7 @@ globalThis.fetch = _fetch;
 
 // OpenAI (embeddings + réponses)
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // ZIP streaming
 import StreamZip from "node-stream-zip";
@@ -88,6 +89,75 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBED_MODEL || "text-embedding-3-small"; // 1536 dims
 const EMBEDDING_DIMS = 1536;
 const ANSWER_MODEL = process.env.ASK_VEEVA_ANSWER_MODEL || "gpt-4o-mini";
+
+// Gemini
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log("[ASK_VEEVA] Gemini initialized");
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || "";
+  return error?.status === 429 || error?.code === "insufficient_quota" || msg.includes("429") || msg.includes("quota") || msg.includes("rate limit");
+}
+
+function convertToGeminiFormat(messages) {
+  let systemPrompt = "";
+  const contents = [];
+  for (const msg of messages) {
+    if (msg.role === "system") { systemPrompt += (systemPrompt ? "\n\n" : "") + msg.content; continue; }
+    const role = msg.role === "assistant" ? "model" : "user";
+    contents.push({ role, parts: [{ text: msg.content }] });
+  }
+  return { systemPrompt, contents };
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error("GEMINI_API_KEY not configured");
+  const model = gemini.getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 },
+  });
+  const { systemPrompt, contents } = convertToGeminiFormat(messages);
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === "user");
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+async function chatWithFallback(messages, options = {}) {
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasGemini = !!gemini;
+  if (hasOpenAI) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: options.model || ANSWER_MODEL,
+        messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.max_tokens ?? 2000,
+      });
+      return { content: response.choices[0]?.message?.content || "", provider: "openai" };
+    } catch (error) {
+      console.error("[ASK_VEEVA] OpenAI failed:", error.message);
+      if (hasGemini && isQuotaError(error)) {
+        console.log("[ASK_VEEVA] Fallback to Gemini...");
+        const content = await callGemini(messages, options);
+        return { content, provider: "gemini" };
+      }
+      throw error;
+    }
+  }
+  if (hasGemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: "gemini" };
+  }
+  throw new Error("No AI provider configured");
+}
 
 // Performances
 const EMBED_BATCH = Math.max(4, Number(process.env.ASK_VEEVA_EMBED_BATCH || 8));
@@ -1366,16 +1436,15 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       ? `INTENT: ${intent}\nQUESTION:\n${originalQuestion}\n\nContext (snippets):\n${contextBlocks}\n${evidenceBlock}\n\nConstraints:\n- ${scopeHint}\n- ${followHint}${constraintsBlock}\n- If documents disagree, flag inconsistencies and cite the relevant snippets.`
       : `INTENTION : ${intent}\nQUESTION :\n${originalQuestion}\n\nContexte (extraits) :\n${contextBlocks}\n${evidenceBlock}\n\nContraintes :\n- ${scopeHint}\n- ${followHint}${constraintsBlock}\n- Si plusieurs documents se contredisent, signale les incohérences et cite les passages concernés.`;
 
-    const out = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
+    const out = await chatWithFallback(
+      [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
-      temperature: isGuideIntent ? 0.15 : 0.2,
-    });
+      { temperature: isGuideIntent ? 0.15 : 0.2 }
+    );
 
-    const text = out.choices?.[0]?.message?.content || (qLang === "en"
+    const text = out.content || (qLang === "en"
       ? "Sorry, I can't find this information in the provided context."
       : "Désolé, je ne trouve pas cette information dans le contexte fourni.");
 
