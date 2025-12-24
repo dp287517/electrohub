@@ -2775,12 +2775,43 @@ async function atexExtractFromFiles(client, files) {
   if (!client) throw new Error("OPENAI_API_KEY missing");
   if (!files?.length) throw new Error("no files");
 
+  console.log(`[ATEX-AI] Analyzing ${files.length} photo(s)...`);
+
+  // Redimensionner les images pour OpenAI (max 1024px, qualité 80%)
   const images = await Promise.all(
-    files.map(async (f) => ({
-      name: f.originalname,
-      mime: f.mimetype,
-      data: (await fsp.readFile(f.path)).toString("base64"),
-    }))
+    files.map(async (f) => {
+      const originalBuffer = await fsp.readFile(f.path);
+      const originalSizeKB = Math.round(originalBuffer.length / 1024);
+      console.log(`[ATEX-AI] Processing: ${f.originalname} (${originalSizeKB} KB)`);
+
+      let processedBuffer = originalBuffer;
+      let mime = f.mimetype;
+
+      // Utiliser sharp pour redimensionner si disponible
+      try {
+        const sharp = require("sharp");
+        const metadata = await sharp(originalBuffer).metadata();
+        const maxDim = 1024;
+
+        if (metadata.width > maxDim || metadata.height > maxDim) {
+          processedBuffer = await sharp(originalBuffer)
+            .resize(maxDim, maxDim, { fit: "inside", withoutEnlargement: true })
+            .jpeg({ quality: 80 })
+            .toBuffer();
+          mime = "image/jpeg";
+          const newSizeKB = Math.round(processedBuffer.length / 1024);
+          console.log(`[ATEX-AI] Resized: ${originalSizeKB} KB → ${newSizeKB} KB`);
+        }
+      } catch (sharpErr) {
+        console.log(`[ATEX-AI] Sharp not available, using original image`);
+      }
+
+      return {
+        name: f.originalname,
+        mime: mime,
+        data: processedBuffer.toString("base64"),
+      };
+    })
   );
 
   const sys = `Tu es un assistant d'inspection ATEX. Extrait des photos:
@@ -2805,6 +2836,9 @@ Réponds en JSON strict.`;
     },
   ];
 
+  console.log(`[ATEX-AI] Calling OpenAI (model: ${process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini"})...`);
+  const startTime = Date.now();
+
   const resp = await client.chat.completions.create({
     model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
     messages: content,
@@ -2812,15 +2846,28 @@ Réponds en JSON strict.`;
     response_format: { type: "json_object" },
   });
 
+  const elapsed = Date.now() - startTime;
+  const rawContent = resp.choices?.[0]?.message?.content || "{}";
+  console.log(`[ATEX-AI] Response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+
   let data = {};
-  try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
-  return {
+  try {
+    data = JSON.parse(rawContent);
+  } catch (parseErr) {
+    console.error(`[ATEX-AI] JSON parse error:`, parseErr.message);
+    data = {};
+  }
+
+  const result = {
     manufacturer: String(data.manufacturer || ""),
     manufacturer_ref: String(data.manufacturer_ref || ""),
     atex_mark_gas: String(data.atex_mark_gas || ""),
     atex_mark_dust: String(data.atex_mark_dust || ""),
     type: String(data.type || ""),
   };
+
+  console.log(`[ATEX-AI] Extracted:`, result);
+  return result;
 }
 // -------------------------------------------------
 // IA
