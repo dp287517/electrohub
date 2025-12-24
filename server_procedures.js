@@ -765,18 +765,6 @@ Tu guides l'utilisateur étape par étape pour créer une procédure complète e
 5. **Équipements liés** - Demande quels équipements sont concernés
 6. **Validation** - Résume et demande confirmation
 
-## IMPORTANT: Gestion des photos
-
-Quand tu demandes "Voulez-vous ajouter une photo pour cette étape?" et que l'utilisateur répond "oui", "yes", "ok", ou toute réponse affirmative:
-- Tu DOIS répondre avec "expectsPhoto": true
-- Tu DOIS dire "Parfait, veuillez uploader la photo pour cette étape."
-- Tu NE DOIS PAS passer à l'étape suivante ou demander autre chose
-- Tu ATTENDS que l'utilisateur upload la photo (tu recevras l'analyse de la photo dans le prochain message)
-
-Quand tu reçois un message contenant "[Photo analysée:" ou "[Photo:", cela signifie que l'utilisateur a uploadé une photo. Tu peux alors:
-- Confirmer la réception de la photo
-- Passer à la question suivante (durée estimée, ou étape suivante)
-
 ## Format de réponse
 
 Réponds TOUJOURS en JSON avec cette structure:
@@ -785,7 +773,7 @@ Réponds TOUJOURS en JSON avec cette structure:
   "currentStep": "init|risks|steps|contacts|equipment|review|complete",
   "question": "La question spécifique à poser",
   "options": ["option1", "option2"], // optionnel, pour choix multiples
-  "expectsPhoto": false, // METTRE true quand on attend une photo de l'utilisateur
+  "expectsPhoto": false, // true si on attend une photo
   "collectedData": {}, // données collectées jusqu'ici
   "procedureReady": false // true quand la procédure est complète
 }
@@ -2312,7 +2300,7 @@ app.get("/api/procedures/example-all-documents", async (req, res) => {
       generateExampleProcedurePDF(baseUrl)
     ]);
 
-    // Create ZIP archive (archiver imported at top of file)
+    // Create ZIP archive (archiver imported at top)
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     res.setHeader("Content-Type", "application/zip");
@@ -3638,6 +3626,7 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
     margins: { top: margin, bottom: margin, left: margin, right: margin },
+    bufferPages: true,
     autoFirstPage: true,
     info: {
       Title: `RAMS Exemple - ${data.activity}`,
@@ -3825,17 +3814,25 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   y += tableHeaderH - 14;
 
   // === TABLE ROWS ===
-  // For example RAMS, we know it fits on 1 page - no page breaks needed
-  const maxTableY = pageHeight - 130; // Leave space for scales and signature
+  const maxTableY = pageHeight - 100;
   let rowCount = 0;
 
   for (const step of data.steps) {
-    // No page break for example - all content fits on one page
+    if (y > maxTableY - 25) {
+      // Add new page if needed
+      doc.addPage();
+      y = margin;
+      // Re-draw header on new page
+      doc.rect(margin, y, tableW, 16).fill(c.danger);
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
+         .text("ANALYSE DES RISQUES (suite)", margin + 10, y + 3);
+      y += 18;
+    }
 
     for (let hi = 0; hi < step.hazards.length; hi++) {
       const hazard = step.hazards[hi];
       const isFirst = hi === 0;
-      const rowH = 42; // Increased height for more text
+      const rowH = 28;
       const isEven = rowCount % 2 === 0;
 
       doc.rect(margin, y, tableW, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
@@ -3850,77 +3847,76 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
       }
       rx += colWidths.n;
 
-      // Task/Activity - more text allowed
-      doc.font("Helvetica-Bold").fontSize(5.5).fillColor(c.text);
+      // Task/Activity
+      doc.font("Helvetica-Bold").fontSize(5).fillColor(c.text);
       if (isFirst) {
-        doc.text(step.title, rx + 2, y + 3, { width: colWidths.task - 4, height: rowH - 6, ellipsis: true });
+        doc.text(step.title.substring(0, 35), rx + 2, y + 3, { width: colWidths.task - 4 });
       }
       rx += colWidths.task;
 
-      // Danger with checkbox - more text space
+      // Danger with checkbox (no emoji, use simple checkbox)
       doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
          .text(`[x] ${hazard.checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4 });
-      doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(hazard.danger, rx + 2, y + 12, { width: colWidths.danger - 4, height: rowH - 16, ellipsis: true });
+      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+         .text(hazard.danger.substring(0, 65), rx + 2, y + 10, { width: colWidths.danger - 4 });
       rx += colWidths.danger;
 
       // G initial
       const niri = hazard.gi * hazard.pi;
-      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.gi));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(hazard.gi), rx + 2, y + 15, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gi));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(hazard.gi), rx + 2, y + 9, { width: 20, align: "center" });
       rx += colWidths.gi;
 
       // P initial
-      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.pi));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(hazard.pi), rx + 2, y + 15, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pi));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(hazard.pi), rx + 2, y + 9, { width: 20, align: "center" });
       rx += colWidths.pi;
 
       // NIR initial
-      doc.roundedRect(rx + 1, y + 12, 26, 16, 2).fill(getRiskColor(niri));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(niri), rx + 1, y + 15, { width: 26, align: "center" });
+      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(niri));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(niri), rx + 1, y + 9, { width: 26, align: "center" });
       rx += colWidths.niri;
 
-      // Measures - more text allowed
-      doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(hazard.measures, rx + 2, y + 3, { width: colWidths.measures - 4, height: rowH - 6, ellipsis: true });
+      // Measures
+      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+         .text(hazard.measures.substring(0, 65), rx + 2, y + 3, { width: colWidths.measures - 4 });
       rx += colWidths.measures;
 
-      // PPE - show more items
-      const ppeText = hazard.ppe.slice(0, 3).join(", ");
-      doc.font("Helvetica").fontSize(5).fillColor(c.info)
-         .text(ppeText, rx + 2, y + 3, { width: colWidths.ppe - 4, height: rowH - 6, ellipsis: true });
+      // PPE
+      doc.font("Helvetica").fontSize(4.5).fillColor(c.info)
+         .text(hazard.ppe.slice(0, 2).join(", ").substring(0, 30), rx + 2, y + 3, { width: colWidths.ppe - 4 });
       rx += colWidths.ppe;
 
-      // Actions - more text allowed
-      doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(hazard.actions, rx + 2, y + 3, { width: colWidths.actions - 4, height: rowH - 6, ellipsis: true });
+      // Actions
+      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+         .text(hazard.actions.substring(0, 45), rx + 2, y + 3, { width: colWidths.actions - 4 });
       rx += colWidths.actions;
 
       // Responsible
-      doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(hazard.responsible, rx + 2, y + 15, { width: colWidths.resp - 4, align: "center" });
+      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+         .text(hazard.responsible, rx + 2, y + 10, { width: colWidths.resp - 4, align: "center" });
       rx += colWidths.resp;
 
       // G final
       const nirf = hazard.gf * hazard.pf;
-      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.gf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(hazard.gf), rx + 2, y + 15, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(hazard.gf), rx + 2, y + 9, { width: 20, align: "center" });
       rx += colWidths.gf;
 
       // P final
-      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.pf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(hazard.pf), rx + 2, y + 15, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(hazard.pf), rx + 2, y + 9, { width: 20, align: "center" });
       rx += colWidths.pf;
 
       // NIR final
-      doc.roundedRect(rx + 1, y + 12, 26, 16, 2).fill(getRiskColor(nirf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(nirf), rx + 1, y + 15, { width: 26, align: "center" });
+      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(nirf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(nirf), rx + 1, y + 9, { width: 26, align: "center" });
 
       y += rowH;
       rowCount++;
@@ -4047,8 +4043,8 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   const scH = Math.min(50, data.safetyCodes.length * 11 + 6);
   doc.rect(sidebarX, ry, sidebarW, scH).fillAndStroke(c.lightBg, c.border);
   doc.font("Helvetica").fontSize(6).fillColor(c.text);
-  data.safetyCodes.slice(0, 4).forEach((code, i) => {
-    doc.text("> " + code, sidebarX + 4, ry + 4 + i * 11, { width: sidebarW - 8, lineBreak: false });
+  data.safetyCodes.forEach((code, i) => {
+    doc.text("> " + code, sidebarX + 4, ry + 4 + i * 11, { width: sidebarW - 8 });
   });
   ry += scH + 4;
 
@@ -4057,11 +4053,11 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONTACTS URGENCE", sidebarX + 8, ry + 4);
   ry += 16;
 
-  const contactH = Math.min(data.emergencyContacts.length, 3) * 16 + 6;
+  const contactH = data.emergencyContacts.length * 16 + 6;
   doc.rect(sidebarX, ry, sidebarW, contactH).fillAndStroke("#fef2f2", c.danger);
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger);
-  data.emergencyContacts.slice(0, 3).forEach((contact, i) => {
-    doc.text(`${contact.name}: ${contact.phone}`, sidebarX + 6, ry + 4 + i * 16, { width: sidebarW - 12, lineBreak: false });
+  data.emergencyContacts.forEach((contact, i) => {
+    doc.text(`${contact.name}: ${contact.phone}`, sidebarX + 6, ry + 4 + i * 16, { width: sidebarW - 12 });
   });
   ry += contactH + 4;
 
@@ -4091,7 +4087,74 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
      .text(`Reduction: ${reduction}%`, sidebarX + sidebarW / 2, ry + 42);
 
-  // === FOOTER (on first/main page only) ===
+  // === SIGNATURE SECTION ===
+  // Add new page for signatures
+  doc.addPage();
+
+  // Header for signature page
+  doc.rect(0, 0, pageWidth, 40).fill(c.headerBg);
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
+     .text("SIGNATURES ET APPROBATIONS - RAMS", margin, 12, { width: pageWidth - margin * 2, align: "center" });
+  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
+     .text(`Document: ${docRef} | ${data.activity}`, margin, 28, { width: pageWidth - margin * 2, align: "center" });
+
+  let sigY = 60;
+
+  // Creator signature
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("REDACTEUR / CREATEUR", margin, sigY);
+  doc.rect(margin, sigY + 15, 350, 80).stroke(c.border);
+  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
+  doc.text("Nom:", margin + 10, sigY + 25);
+  doc.text("Fonction:", margin + 10, sigY + 45);
+  doc.text("Date:", margin + 10, sigY + 65);
+  doc.text("Signature:", margin + 180, sigY + 25);
+
+  // Approver signature
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("APPROBATEUR HSE", margin + 400, sigY);
+  doc.rect(margin + 400, sigY + 15, 350, 80).stroke(c.border);
+  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
+  doc.text("Nom:", margin + 410, sigY + 25);
+  doc.text("Fonction:", margin + 410, sigY + 45);
+  doc.text("Date:", margin + 410, sigY + 65);
+  doc.text("Signature:", margin + 580, sigY + 25);
+
+  sigY += 110;
+
+  // Technicians signatures
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("TECHNICIENS / INTERVENANTS - Prise de connaissance et engagement", margin, sigY);
+
+  sigY += 20;
+  const techBoxW = (pageWidth - margin * 2 - 30) / 3;
+
+  for (let i = 0; i < 6; i++) {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const tx = margin + col * (techBoxW + 15);
+    const ty = sigY + row * 90;
+
+    doc.rect(tx, ty, techBoxW, 80).stroke(c.border);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text)
+       .text(`Intervenant ${i + 1}`, tx + 10, ty + 8);
+    doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+    doc.text("Nom:", tx + 10, ty + 25);
+    doc.text("Date:", tx + 10, ty + 42);
+    doc.text("Signature:", tx + 10, ty + 59);
+    doc.text("J'ai lu et compris le RAMS", tx + techBoxW / 2, ty + 25, { width: techBoxW / 2 - 15 });
+  }
+
+  sigY += 200;
+
+  // Document linkage info
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
+     .text("DOCUMENTS LIES", margin, sigY);
+  doc.font("Helvetica").fontSize(8).fillColor(c.text);
+  doc.text(`[  ] Methode de Travail - Ref: MT-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 18);
+  doc.text(`[  ] Procedure - Ref: PROC-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 34);
+
+  // === FOOTER ===
   const footerY = pageHeight - 18;
   doc.rect(0, footerY, pageWidth, 18).fill(c.headerBg);
 
@@ -4099,28 +4162,6 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.text(`${data.company} - RAMS`, margin, footerY + 4);
   doc.text(`Document genere par IA - ${new Date().toLocaleString("fr-FR")}`, pageWidth / 2 - 100, footerY + 4, { width: 200, align: "center" });
   doc.text(`Ref: ${docRef}`, pageWidth - margin - 180, footerY + 4, { width: 180, align: "right" });
-
-  // === COMPACT SIGNATURE BOX (positioned after scales, before footer) ===
-  // Position after risk scales at bottom of table area
-  const sigBoxY = y + 40; // Below the scales
-  const sigBoxW = tableW;
-  const sigBoxH = 35;
-
-  // Only draw if it fits before footer
-  if (sigBoxY + sigBoxH < footerY - 5) {
-    doc.rect(margin, sigBoxY, sigBoxW, sigBoxH).stroke(c.border);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text)
-       .text("SIGNATURES:", margin + 5, sigBoxY + 4);
-
-    // 3 signature areas in one row
-    const sigColW = (sigBoxW - 20) / 3;
-    ["Redacteur", "Approbateur HSE", "Chef d'equipe"].forEach((role, i) => {
-      const sx = margin + 5 + i * (sigColW + 5);
-      doc.font("Helvetica").fontSize(6).fillColor(c.lightText)
-         .text(role + ":", sx, sigBoxY + 14);
-      doc.rect(sx, sigBoxY + 22, sigColW - 10, 10).stroke(c.border);
-    });
-  }
 
   doc.end();
 
@@ -4338,10 +4379,10 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 }
 
 // ====================================
-// PROCEDURE DOCUMENT PDF GENERATOR (A4)
-// Clear step-by-step procedure - NEW FORMAT
+// PROCEDURE PDF GENERATOR (A4)
+// Clear step-by-step procedure
 // ====================================
-async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
+async function generateProcedurePDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
   const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
@@ -4615,7 +4656,7 @@ async function generateExampleWorkMethodPDF(baseUrl = 'https://electrohub.app') 
 // Example Procedure PDF Generator
 async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
   const { procedure, steps } = getExampleDocumentData();
-  return generateProcedureDocPDF(procedure, steps, baseUrl);
+  return generateProcedurePDF(procedure, steps, baseUrl);
 }
 
 // ------------------------------
