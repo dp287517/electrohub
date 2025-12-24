@@ -1017,6 +1017,138 @@ app.get("/api/procedures", async (req, res) => {
   }
 });
 
+// --- CATEGORIES (MUST be before /:id route) ---
+
+// Get procedure categories
+app.get("/api/procedures/categories", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT category, COUNT(*) as count FROM procedures GROUP BY category ORDER BY category`
+    );
+
+    const defaultCategories = [
+      { id: "general", name: "Général", icon: "file-text" },
+      { id: "maintenance", name: "Maintenance", icon: "wrench" },
+      { id: "securite", name: "Sécurité", icon: "shield" },
+      { id: "mise_en_service", name: "Mise en service", icon: "play" },
+      { id: "mise_hors_service", name: "Mise hors service", icon: "power-off" },
+      { id: "urgence", name: "Urgence", icon: "alert-triangle" },
+      { id: "controle", name: "Contrôle", icon: "check-circle" },
+      { id: "formation", name: "Formation", icon: "book" },
+    ];
+
+    // Merge with counts
+    const result = defaultCategories.map((cat) => ({
+      ...cat,
+      count: rows.find((r) => r.category === cat.id)?.count || 0,
+    }));
+
+    res.json(result);
+  } catch (err) {
+    console.error("Error getting categories:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- ACTION LISTS (MUST be before /:id route) ---
+
+// Get action lists
+app.get("/api/procedures/action-lists", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM procedure_action_lists ORDER BY created_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("Error getting action lists:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- SEARCH EQUIPMENT (MUST be before /:id route) ---
+
+// Search ALL equipment types across the entire system
+app.get("/api/procedures/search-equipment", async (req, res) => {
+  try {
+    const { q, type } = req.query;
+    const searchTerm = `%${q || ""}%`;
+    const results = [];
+
+    // ALL equipment types in the system
+    const allTypes = [
+      "switchboard", "vsd", "meca", "atex", "hv", "glo",
+      "mobile", "doors", "datahub", "projects", "oibt"
+    ];
+    const types = type ? [type] : allTypes;
+
+    for (const t of types) {
+      try {
+        let sql, params;
+
+        switch (t) {
+          case "switchboard":
+            sql = `SELECT id::text, name, code, building_code as building, 'switchboard' as type, 'Armoire électrique' as type_label FROM switchboards WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "vsd":
+            sql = `SELECT id::text, name, manufacturer_ref as code, building, 'vsd' as type, 'Variateur de vitesse' as type_label FROM vsd_equipments WHERE name ILIKE $1 OR manufacturer_ref ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "meca":
+            sql = `SELECT id::text, name, tag as code, building, 'meca' as type, 'Équipement mécanique' as type_label FROM meca_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "atex":
+            sql = `SELECT id::text, name, manufacturer as code, building, 'atex' as type, 'Équipement ATEX' as type_label FROM atex_equipments WHERE name ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "hv":
+            sql = `SELECT id::text, name, tag as code, building, 'hv' as type, 'Haute Tension' as type_label FROM hv_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "glo":
+            sql = `SELECT id::text, name, tag as code, building, 'glo' as type, 'UPS/Batteries/Éclairage' as type_label FROM glo_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "mobile":
+            sql = `SELECT id::text, name, serial_number as code, location as building, 'mobile' as type, 'Équipement mobile' as type_label FROM me_equipments WHERE name ILIKE $1 OR serial_number ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "doors":
+            sql = `SELECT id::text, name, code, building, 'doors' as type, 'Porte coupe-feu' as type_label FROM doors WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "datahub":
+            sql = `SELECT i.id::text, i.name, i.code, i.building, 'datahub' as type, COALESCE(c.name, 'DataHub') as type_label FROM dh_items i LEFT JOIN dh_categories c ON i.category_id = c.id WHERE i.name ILIKE $1 OR i.code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "projects":
+            sql = `SELECT id::text, name, code, site as building, 'projects' as type, 'Projet' as type_label FROM pm_projects WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "oibt":
+            sql = `SELECT id::text, name, dossier_number as code, site as building, 'oibt' as type, 'OIBT/Périodique' as type_label FROM oibt_projects WHERE name ILIKE $1 OR dossier_number ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          default:
+            continue;
+        }
+
+        const { rows } = await pool.query(sql, params);
+        results.push(...rows.map((r) => ({ ...r, equipment_type: t })));
+      } catch (e) {
+        // Table might not exist, skip silently
+        console.log(`[Procedures] Equipment table ${t} skipped:`, e.message);
+      }
+    }
+
+    res.json(results);
+  } catch (err) {
+    console.error("Error searching equipment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get single procedure with all details
 app.get("/api/procedures/:id", async (req, res) => {
   try {
@@ -1661,19 +1793,6 @@ app.post("/api/procedures/ai/analyze-report", uploadFile.single("report"), async
   }
 });
 
-// Get action lists
-app.get("/api/procedures/action-lists", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT * FROM procedure_action_lists ORDER BY created_at DESC`
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error("Error getting action lists:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // --- PDF GENERATION ---
 
 // Generate PDF for procedure
@@ -1697,123 +1816,6 @@ app.get("/api/procedures/:id/pdf", async (req, res) => {
     res.end(pdfBuffer);
   } catch (err) {
     console.error("Error generating PDF:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- CATEGORIES ---
-
-// Get procedure categories
-app.get("/api/procedures/categories", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT category, COUNT(*) as count FROM procedures GROUP BY category ORDER BY category`
-    );
-
-    const defaultCategories = [
-      { id: "general", name: "Général", icon: "file-text" },
-      { id: "maintenance", name: "Maintenance", icon: "wrench" },
-      { id: "securite", name: "Sécurité", icon: "shield" },
-      { id: "mise_en_service", name: "Mise en service", icon: "play" },
-      { id: "mise_hors_service", name: "Mise hors service", icon: "power-off" },
-      { id: "urgence", name: "Urgence", icon: "alert-triangle" },
-      { id: "controle", name: "Contrôle", icon: "check-circle" },
-      { id: "formation", name: "Formation", icon: "book" },
-    ];
-
-    // Merge with counts
-    const result = defaultCategories.map((cat) => ({
-      ...cat,
-      count: rows.find((r) => r.category === cat.id)?.count || 0,
-    }));
-
-    res.json(result);
-  } catch (err) {
-    console.error("Error getting categories:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- SEARCH EQUIPMENT FOR LINKING ---
-
-// Search ALL equipment types across the entire system
-app.get("/api/procedures/search-equipment", async (req, res) => {
-  try {
-    const { q, type } = req.query;
-    const searchTerm = `%${q || ""}%`;
-    const results = [];
-
-    // ALL equipment types in the system
-    const allTypes = [
-      "switchboard", "vsd", "meca", "atex", "hv", "glo",
-      "mobile", "doors", "datahub", "projects", "oibt"
-    ];
-    const types = type ? [type] : allTypes;
-
-    for (const t of types) {
-      try {
-        let sql, params;
-
-        switch (t) {
-          case "switchboard":
-            sql = `SELECT id::text, name, code, building_code as building, 'switchboard' as type, 'Armoire électrique' as type_label FROM switchboards WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "vsd":
-            sql = `SELECT id::text, name, manufacturer_ref as code, building, 'vsd' as type, 'Variateur de vitesse' as type_label FROM vsd_equipments WHERE name ILIKE $1 OR manufacturer_ref ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "meca":
-            sql = `SELECT id::text, name, tag as code, building, 'meca' as type, 'Équipement mécanique' as type_label FROM meca_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "atex":
-            sql = `SELECT id::text, name, manufacturer as code, building, 'atex' as type, 'Équipement ATEX' as type_label FROM atex_equipments WHERE name ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "hv":
-            sql = `SELECT id::text, name, tag as code, building, 'hv' as type, 'Haute Tension' as type_label FROM hv_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "glo":
-            sql = `SELECT id::text, name, tag as code, building, 'glo' as type, 'UPS/Batteries/Éclairage' as type_label FROM glo_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "mobile":
-            sql = `SELECT id::text, name, serial_number as code, location as building, 'mobile' as type, 'Équipement mobile' as type_label FROM me_equipments WHERE name ILIKE $1 OR serial_number ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "doors":
-            sql = `SELECT id::text, name, code, building, 'doors' as type, 'Porte coupe-feu' as type_label FROM doors WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "datahub":
-            sql = `SELECT i.id::text, i.name, i.code, i.building, 'datahub' as type, COALESCE(c.name, 'DataHub') as type_label FROM dh_items i LEFT JOIN dh_categories c ON i.category_id = c.id WHERE i.name ILIKE $1 OR i.code ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "projects":
-            sql = `SELECT id::text, name, code, site as building, 'projects' as type, 'Projet' as type_label FROM pm_projects WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          case "oibt":
-            sql = `SELECT id::text, name, dossier_number as code, site as building, 'oibt' as type, 'OIBT/Périodique' as type_label FROM oibt_projects WHERE name ILIKE $1 OR dossier_number ILIKE $1 LIMIT 10`;
-            params = [searchTerm];
-            break;
-          default:
-            continue;
-        }
-
-        const { rows } = await pool.query(sql, params);
-        results.push(...rows.map((r) => ({ ...r, equipment_type: t })));
-      } catch (e) {
-        // Table might not exist, skip silently
-        console.log(`[Procedures] Equipment table ${t} skipped:`, e.message);
-      }
-    }
-
-    res.json(results);
-  } catch (err) {
-    console.error("Error searching equipment:", err);
     res.status(500).json({ error: err.message });
   }
 });
