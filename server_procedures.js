@@ -924,8 +924,8 @@ async function generateProcedurePDF(procedureId) {
 }
 
 // ------------------------------
-// Method Statement A3 Landscape PDF Generation
-// Professional format with QR code for AI interaction
+// RAMS - Risk Assessment Method Statement A3 PDF
+// Professional format based on industrial standards
 // ------------------------------
 async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://electrohub.app') {
   // Get procedure with all related data
@@ -940,7 +940,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
 
   const procedure = procedures[0];
 
-  // Get steps with photos (including photo_content)
+  // Get steps with photos
   const { rows: steps } = await pool.query(
     `SELECT id, step_number, title, description, instructions, warning,
             duration_minutes, requires_validation, validation_criteria,
@@ -949,506 +949,439 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     [procedureId]
   );
 
-  // Get equipment links
+  // Get equipment links with Arc Flash data if available
   const { rows: equipmentLinks } = await pool.query(
-    `SELECT * FROM procedure_equipment_links WHERE procedure_id = $1`,
+    `SELECT pel.*
+     FROM procedure_equipment_links pel
+     WHERE pel.procedure_id = $1`,
     [procedureId]
   );
 
-  // Get site settings (logo, company name) - try procedure site, then 'default', then any available
+  // Get site settings with multiple fallbacks
   let siteSettings = {};
   try {
-    // Try procedure's site first
     let { rows: settings } = await pool.query(
-      `SELECT logo, logo_mime, company_name, company_address, company_phone FROM site_settings WHERE site = $1`,
-      [procedure.site || 'default']
+      `SELECT logo, logo_mime, company_name, company_address, company_phone
+       FROM site_settings WHERE site = $1`, [procedure.site || 'default']
     );
-
-    // If not found, try 'default'
     if (settings.length === 0) {
-      const defaultRes = await pool.query(
-        `SELECT logo, logo_mime, company_name, company_address, company_phone FROM site_settings WHERE site = 'default'`
-      );
-      settings = defaultRes.rows;
+      const r = await pool.query(`SELECT logo, logo_mime, company_name, company_address, company_phone
+                                   FROM site_settings WHERE logo IS NOT NULL LIMIT 1`);
+      settings = r.rows;
     }
-
-    // If still not found, get any available settings with a logo
-    if (settings.length === 0) {
-      const anyRes = await pool.query(
-        `SELECT logo, logo_mime, company_name, company_address, company_phone FROM site_settings WHERE logo IS NOT NULL LIMIT 1`
-      );
-      settings = anyRes.rows;
-    }
-
-    if (settings.length > 0) {
-      siteSettings = settings[0];
-    }
+    if (settings.length > 0) siteSettings = settings[0];
   } catch (e) {
-    console.log("[Procedures] Could not fetch site settings:", e.message);
+    console.log("[RAMS] Site settings error:", e.message);
   }
 
-  // Generate QR Code for this procedure (links to AI Electro interaction)
-  const qrCodeUrl = `${baseUrl}/procedures?id=${procedureId}&ai=true`;
+  // Generate QR Code
   let qrCodeBuffer = null;
   try {
-    qrCodeBuffer = await QRCode.toBuffer(qrCodeUrl, {
-      width: 120,
-      margin: 1,
-      color: { dark: '#7c3aed', light: '#ffffff' }
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures?id=${procedureId}&ai=true`, {
+      width: 100, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
-    console.log("[Procedures] Could not generate QR code:", e.message);
+    console.log("[RAMS] QR code error:", e.message);
   }
 
-  // Create A3 Landscape PDF - SINGLE PAGE ONLY
-  // A3 dimensions: 420mm x 297mm = 1190.55 x 841.89 points
+  // === PDF SETUP - A3 LANDSCAPE ===
   const pageWidth = 1190.55;
   const pageHeight = 841.89;
-  const margin = 30;
-  const columnGap = 25;
-  const leftColumnWidth = (pageWidth - margin * 2 - columnGap) * 0.58; // 58% for steps/info
-  const rightColumnWidth = (pageWidth - margin * 2 - columnGap) * 0.42; // 42% for photos
+  const margin = 25;
 
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
-    margin: margin,
+    margins: { top: margin, bottom: margin, left: margin, right: margin },
+    bufferPages: false,
     autoFirstPage: true,
-    bufferPages: false, // Disable buffering to prevent extra pages
     info: {
-      Title: `Method Statement - ${procedure.title}`,
+      Title: `RAMS - ${procedure.title}`,
       Author: siteSettings.company_name || "ElectroHub",
-      Subject: "Method Statement - Procedure Operationnelle",
-      Creator: "ElectroHub Method Statement Generator",
+      Subject: "Risk Assessment Method Statement",
+      Creator: "ElectroHub RAMS Generator",
     },
   });
 
   const chunks = [];
   doc.on("data", (chunk) => chunks.push(chunk));
 
-  // Professional color scheme
-  const colors = {
+  // Colors
+  const c = {
+    headerBg: "#1e1b4b",
     primary: "#7c3aed",
-    secondary: "#a78bfa",
-    accent: "#f59e0b",
-    success: "#10b981",
-    danger: "#ef4444",
+    danger: "#dc2626",
+    warning: "#f59e0b",
+    success: "#16a34a",
+    info: "#2563eb",
     text: "#1f2937",
     lightText: "#6b7280",
     lightBg: "#f8fafc",
-    border: "#e5e7eb",
-    headerBg: "#1e1b4b",
+    border: "#d1d5db",
+    white: "#ffffff",
   };
 
-  // Risk level config with numeric values for matrix
-  const riskConfig = {
-    low: { color: colors.success, label: "FAIBLE", bgColor: "#dcfce7", gravity: 2, probability: 2 },
-    medium: { color: colors.accent, label: "MODERE", bgColor: "#fef3c7", gravity: 5, probability: 5 },
-    high: { color: colors.danger, label: "ELEVE", bgColor: "#fee2e2", gravity: 7, probability: 7 },
-    critical: { color: "#7f1d1d", label: "CRITIQUE", bgColor: "#fecaca", gravity: 9, probability: 9 },
-  };
-  const riskInfo = riskConfig[procedure.risk_level] || riskConfig.low;
+  // Risk scales based on RAMS standard
+  const gravityScale = [
+    { level: 5, label: "Catastrophique", desc: "Mortalite", color: "#7f1d1d" },
+    { level: 4, label: "Critique", desc: "Incap. perm.", color: c.danger },
+    { level: 3, label: "Grave", desc: "Incap. temp.", color: "#ea580c" },
+    { level: 2, label: "Important", desc: "Perte temps", color: c.warning },
+    { level: 1, label: "Mineure", desc: "1ers soins", color: c.success },
+  ];
 
-  // === HEADER SECTION (smaller) ===
-  const headerHeight = 80;
+  const probScale = [
+    { level: 5, label: "Tres probable", color: "#7f1d1d" },
+    { level: 4, label: "Probable", color: c.danger },
+    { level: 3, label: "Possible", color: "#ea580c" },
+    { level: 2, label: "Peu probable", color: c.warning },
+    { level: 1, label: "Improbable", color: c.success },
+  ];
 
-  // Header background
-  doc.rect(0, 0, pageWidth, headerHeight).fill(colors.headerBg);
-  doc.rect(0, headerHeight - 4, pageWidth, 4).fill(colors.primary);
+  // Get procedure risk info
+  const riskLevel = procedure.risk_level || 'low';
+  const baseGravity = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
+  const baseProb = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
+  const ppeCount = (procedure.ppe_required || []).length;
+  const safetyCount = (procedure.safety_codes || []).length;
 
-  // Logo on left
-  let logoEndX = margin + 10;
+  // Calculate risk reduction from measures
+  const measureScore = Math.min(ppeCount + safetyCount, 8);
+  const probReduction = Math.min(Math.floor(measureScore / 2), 3);
+  const residualProb = Math.max(1, baseProb - probReduction);
+  const initialRisk = baseGravity * baseProb;
+  const residualRisk = baseGravity * residualProb;
+
+  // === HEADER SECTION (60pt) ===
+  const headerH = 60;
+  doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
+
+  // Logo
+  let logoX = margin;
   if (siteSettings.logo) {
     try {
-      doc.image(siteSettings.logo, margin, 10, { width: 80, height: 55 });
-      logoEndX = margin + 95;
-    } catch (e) {
-      console.log("[Procedures] Could not add logo:", e.message);
-    }
+      doc.image(siteSettings.logo, margin, 8, { height: 44 });
+      logoX = margin + 60;
+    } catch (e) {}
   }
 
-  // Company name and document type
-  doc.fontSize(11).fillColor("#fff").font("Helvetica-Bold").text(
-    siteSettings.company_name || "ELECTROHUB",
-    logoEndX, 15, { width: 180 }
+  // Company name
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+     .text(siteSettings.company_name || "ELECTROHUB", logoX + 10, 12);
+
+  // RAMS Badge
+  doc.roundedRect(logoX + 10, 28, 130, 22, 3).fill(c.primary);
+  doc.fontSize(11).fillColor(c.white).text("METHOD STATEMENT", logoX + 18, 33);
+
+  // Title centered
+  const titleW = 500;
+  const titleX = (pageWidth - titleW) / 2;
+  doc.fontSize(16).fillColor(c.white).text(procedure.title.toUpperCase(), titleX, 12, { width: titleW, align: "center" });
+  doc.fontSize(9).fillColor("#a5b4fc").text(
+    `Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`,
+    titleX, 32, { width: titleW, align: "center" }
   );
 
-  // Document type badge
-  doc.roundedRect(logoEndX, 38, 120, 24, 4).fill(colors.primary);
-  doc.fontSize(10).fillColor("#fff").font("Helvetica-Bold").text(
-    "METHOD STATEMENT",
-    logoEndX + 8, 44, { width: 104, align: "center" }
-  );
+  // Risk badge
+  const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: "#7f1d1d" };
+  const riskLabels = { low: "FAIBLE", medium: "MODERE", high: "ELEVE", critical: "CRITIQUE" };
+  doc.roundedRect(pageWidth - 180, 10, 70, 40, 4).fill(riskColors[riskLevel] || c.success);
+  doc.fontSize(7).fillColor(c.white).text("RISQUE", pageWidth - 175, 14, { width: 60, align: "center" });
+  doc.fontSize(11).text(riskLabels[riskLevel] || "FAIBLE", pageWidth - 175, 28, { width: 60, align: "center" });
 
-  // Main title - centered
-  const titleX = logoEndX + 140;
-  const titleWidth = pageWidth - titleX - 220;
-  doc.fontSize(20).fillColor("#fff").font("Helvetica-Bold").text(
-    procedure.title.toUpperCase(),
-    titleX, 18, { width: titleWidth, align: "center" }
-  );
-
-  // Subtitle with version and date
-  doc.fontSize(9).fillColor(colors.secondary).font("Helvetica").text(
-    `Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")} | ${procedure.category || "General"}`,
-    titleX, 45, { width: titleWidth, align: "center" }
-  );
-
-  // QR Code on right
+  // QR Code
   if (qrCodeBuffer) {
     try {
-      doc.image(qrCodeBuffer, pageWidth - margin - 65, 8, { width: 60, height: 60 });
-      doc.fontSize(6).fillColor(colors.secondary).text(
-        "Scanner pour IA",
-        pageWidth - margin - 65, 68, { width: 60, align: "center" }
-      );
-    } catch (e) {
-      console.log("[Procedures] Could not add QR code to PDF:", e.message);
-    }
+      doc.image(qrCodeBuffer, pageWidth - margin - 55, 5, { width: 50 });
+    } catch (e) {}
   }
 
-  // Risk level badge (smaller)
-  doc.roundedRect(pageWidth - margin - 145, 20, 70, 40, 4).fill(riskInfo.bgColor).stroke(riskInfo.color);
-  doc.fontSize(7).fillColor(colors.lightText).text("RISQUE", pageWidth - margin - 140, 24, { width: 60, align: "center" });
-  doc.fontSize(10).fillColor(riskInfo.color).font("Helvetica-Bold").text(
-    riskInfo.label,
-    pageWidth - margin - 140, 38, { width: 60, align: "center" }
-  );
+  // === CONTENT LAYOUT ===
+  let y = headerH + 8;
+  const contentW = pageWidth - margin * 2;
+  const col1W = contentW * 0.62;
+  const col2W = contentW * 0.36;
+  const col2X = margin + col1W + 15;
 
-  // === MAIN CONTENT AREA ===
-  let yPos = headerHeight + 10;
-  const leftX = margin;
-  const rightX = margin + leftColumnWidth + columnGap;
-  const contentEndY = pageHeight - 35; // Leave space for footer
+  // === LEFT COLUMN: RISK ASSESSMENT TABLE ===
+  doc.rect(margin, y, col1W, 18).fill(c.danger);
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+     .text("ANALYSE DES RISQUES - METHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 8, y + 4);
+  y += 18;
 
-  // === LEFT COLUMN ===
-  doc.font("Helvetica");
+  // Table headers
+  const tableH = 22;
+  const cols = [35, col1W * 0.22, col1W * 0.28, 35, 35, 40, col1W * 0.25];
+  const headers = ["N", "TACHE / ACTIVITE", "DANGER - SCENARIO", "G", "P", "NIR", "MESURES PREVENTIVES"];
 
-  // ---- RISK ANALYSIS MATRIX ----
-  const riskMatrixHeight = 55;
-  doc.rect(leftX, yPos, leftColumnWidth, 18).fill(colors.danger);
-  doc.fontSize(9).fillColor("#fff").font("Helvetica-Bold").text(
-    "ANALYSE DE RISQUE",
-    leftX + 10, yPos + 5
-  );
-  yPos += 18;
+  doc.rect(margin, y, col1W, tableH).fill(c.lightBg).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text);
+  let hx = margin;
+  headers.forEach((h, i) => {
+    doc.text(h, hx + 3, y + 7, { width: cols[i] - 6, align: i < 3 ? "left" : "center" });
+    hx += cols[i];
+  });
+  y += tableH;
 
-  // Risk matrix table
-  doc.rect(leftX, yPos, leftColumnWidth, riskMatrixHeight - 18).fillAndStroke(colors.lightBg, colors.border);
+  // Table rows
+  const maxTableY = pageHeight - 170;
 
-  const matrixColWidth = leftColumnWidth / 5;
-  const matrixY = yPos + 5;
-
-  // Headers
-  doc.fontSize(7).fillColor(colors.text).font("Helvetica-Bold");
-  doc.text("Gravite", leftX + 5, matrixY, { width: matrixColWidth - 10, align: "center" });
-  doc.text("Probabilite", leftX + matrixColWidth, matrixY, { width: matrixColWidth, align: "center" });
-  doc.text("Mesures Prev.", leftX + matrixColWidth * 2, matrixY, { width: matrixColWidth, align: "center" });
-  doc.text("Resultat", leftX + matrixColWidth * 3, matrixY, { width: matrixColWidth, align: "center" });
-  doc.text("Niveau Final", leftX + matrixColWidth * 4, matrixY, { width: matrixColWidth, align: "center" });
-
-  // Calculate risk values
-  const gravity = riskInfo.gravity;
-  const probability = riskInfo.probability;
-  const preventiveMeasures = (procedure.ppe_required?.length || 0) + (procedure.safety_codes?.length || 0);
-  const preventiveScore = Math.min(10, Math.max(1, 10 - preventiveMeasures));
-  const rawRisk = (gravity * probability) / 10;
-  const finalRisk = Math.max(1, Math.round(rawRisk * (preventiveScore / 10)));
-
-  // Determine final level color
-  let finalColor = colors.success;
-  let finalLabel = "Acceptable";
-  if (finalRisk >= 7) { finalColor = "#7f1d1d"; finalLabel = "Critique"; }
-  else if (finalRisk >= 5) { finalColor = colors.danger; finalLabel = "Eleve"; }
-  else if (finalRisk >= 3) { finalColor = colors.accent; finalLabel = "Modere"; }
-
-  // Values row
-  const valuesY = matrixY + 15;
-  doc.fontSize(12).font("Helvetica-Bold");
-  doc.fillColor(colors.danger).text(String(gravity), leftX + 5, valuesY, { width: matrixColWidth - 10, align: "center" });
-  doc.fillColor(colors.accent).text(String(probability), leftX + matrixColWidth, valuesY, { width: matrixColWidth, align: "center" });
-  doc.fillColor(colors.success).text(String(preventiveScore), leftX + matrixColWidth * 2, valuesY, { width: matrixColWidth, align: "center" });
-  doc.fillColor(colors.primary).text(String(finalRisk), leftX + matrixColWidth * 3, valuesY, { width: matrixColWidth, align: "center" });
-
-  // Final level badge
-  doc.roundedRect(leftX + matrixColWidth * 4 + 5, valuesY - 3, matrixColWidth - 15, 18, 3).fill(finalColor);
-  doc.fontSize(8).fillColor("#fff").text(finalLabel, leftX + matrixColWidth * 4 + 5, valuesY, { width: matrixColWidth - 15, align: "center" });
-
-  yPos += riskMatrixHeight - 18 + 8;
-
-  // ---- STEPS TABLE ----
-  doc.rect(leftX, yPos, leftColumnWidth, 20).fill(colors.primary);
-  doc.fontSize(9).fillColor("#fff").font("Helvetica-Bold").text(
-    `ETAPES DE LA PROCEDURE (${steps.length})`,
-    leftX + 10, yPos + 6
-  );
-  yPos += 20;
-
-  // Steps table header
-  const stepNumWidth = 28;
-  const stepTitleWidth = leftColumnWidth * 0.32;
-  const stepInstrWidth = leftColumnWidth - stepNumWidth - stepTitleWidth - 20;
-
-  doc.rect(leftX, yPos, leftColumnWidth, 18).fill(colors.lightBg).stroke(colors.border);
-  doc.fontSize(7).fillColor(colors.text).font("Helvetica-Bold");
-  doc.text("N", leftX + 5, yPos + 5, { width: stepNumWidth - 5 });
-  doc.text("ETAPE", leftX + stepNumWidth + 5, yPos + 5, { width: stepTitleWidth });
-  doc.text("INSTRUCTIONS / AVERTISSEMENTS", leftX + stepNumWidth + stepTitleWidth + 10, yPos + 5, { width: stepInstrWidth });
-  yPos += 18;
-
-  // Available height for steps
-  const stepsEndY = contentEndY - 100; // Reserve space for safety section
-
-  // Steps rows (compact)
-  for (let i = 0; i < steps.length; i++) {
+  for (let i = 0; i < steps.length && y < maxTableY; i++) {
     const step = steps[i];
 
-    // Calculate compact row height
-    doc.fontSize(7);
-    const instrText = step.instructions || "-";
-    const warnText = step.warning ? ` [!] ${step.warning}` : "";
-    const fullText = instrText + warnText;
-    const textHeight = Math.min(35, doc.heightOfString(fullText, { width: stepInstrWidth - 10 }));
-    const rowHeight = Math.max(22, textHeight + 8);
+    // Auto-detect hazards
+    const hazards = [];
+    const combined = ((step.instructions || "") + " " + (step.warning || "") + " " + (step.title || "")).toLowerCase();
 
-    // Check if we have space
-    if (yPos + rowHeight > stepsEndY) {
-      doc.fontSize(7).fillColor(colors.lightText).text(
-        `... +${steps.length - i} etapes`,
-        leftX + 10, yPos + 2
-      );
-      yPos += 15;
-      break;
+    if (combined.includes("electri") || combined.includes("tension") || combined.includes("consign"))
+      hazards.push({ cat: "Electrique", danger: "Electrisation/Arc", g: 4, p: baseProb });
+    if (combined.includes("hauteur") || combined.includes("echelle") || combined.includes("nacelle"))
+      hazards.push({ cat: "Chute", danger: "Chute de hauteur", g: 4, p: baseProb });
+    if (combined.includes("atex") || combined.includes("explosion") || combined.includes("zone"))
+      hazards.push({ cat: "ATEX", danger: "Inflammation/Explosion", g: 5, p: baseProb });
+    if (combined.includes("manutention") || combined.includes("lourd"))
+      hazards.push({ cat: "Ergonomie", danger: "Manutention/TMS", g: 2, p: 3 });
+    if (combined.includes("coupure") || combined.includes("outil"))
+      hazards.push({ cat: "Mecanique", danger: "Coupure/Blessure", g: 3, p: baseProb });
+
+    if (hazards.length === 0) {
+      hazards.push({ cat: "General", danger: "Risque operationnel", g: baseGravity, p: baseProb });
     }
 
-    const isEven = i % 2 === 0;
-    doc.rect(leftX, yPos, leftColumnWidth, rowHeight).fillAndStroke(isEven ? "#fff" : colors.lightBg, colors.border);
+    // Draw row for each hazard
+    for (let h = 0; h < Math.min(hazards.length, 2) && y < maxTableY; h++) {
+      const hazard = hazards[h];
+      const isFirst = h === 0;
+      const rowH = 28;
+      const isEven = i % 2 === 0;
 
-    // Step number
-    doc.circle(leftX + 14, yPos + rowHeight / 2, 9).fill(colors.primary);
-    doc.fontSize(8).fillColor("#fff").font("Helvetica-Bold").text(
-      String(step.step_number),
-      leftX + 9, yPos + rowHeight / 2 - 4, { width: 10, align: "center" }
-    );
+      doc.rect(margin, y, col1W, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
 
-    // Step title
-    doc.fontSize(8).fillColor(colors.text).font("Helvetica-Bold").text(
-      step.title.substring(0, 45) + (step.title.length > 45 ? "..." : ""),
-      leftX + stepNumWidth + 5, yPos + 5, { width: stepTitleWidth - 5 }
-    );
+      let rx = margin;
+      doc.font("Helvetica").fontSize(7).fillColor(c.text);
 
-    // Instructions (compact)
-    doc.fontSize(7).fillColor(colors.text).font("Helvetica").text(
-      instrText.substring(0, 150) + (instrText.length > 150 ? "..." : ""),
-      leftX + stepNumWidth + stepTitleWidth + 10, yPos + 4, { width: stepInstrWidth - 10 }
-    );
-
-    // Warning inline
-    if (step.warning) {
-      const instrHeight = doc.heightOfString(instrText.substring(0, 150), { width: stepInstrWidth - 10 });
-      doc.fontSize(6).fillColor(colors.accent).text(
-        `[!] ${step.warning.substring(0, 80)}`,
-        leftX + stepNumWidth + stepTitleWidth + 10, yPos + 4 + Math.min(20, instrHeight), { width: stepInstrWidth - 10 }
-      );
-    }
-
-    yPos += rowHeight;
-  }
-
-  // ---- SAFETY & PPE SECTION ----
-  yPos = Math.max(yPos + 5, stepsEndY);
-  const safetyHeight = contentEndY - yPos - 5;
-
-  if (safetyHeight > 40) {
-    doc.rect(leftX, yPos, leftColumnWidth, 18).fill(colors.danger);
-    doc.fontSize(9).fillColor("#fff").font("Helvetica-Bold").text(
-      "SECURITE & EPI REQUIS",
-      leftX + 10, yPos + 5
-    );
-    yPos += 18;
-
-    const safetyContentHeight = safetyHeight - 18;
-    doc.rect(leftX, yPos, leftColumnWidth, safetyContentHeight).fillAndStroke(colors.lightBg, colors.border);
-
-    const ppeList = procedure.ppe_required || [];
-    const safetyCodes = procedure.safety_codes || [];
-    const thirdWidth = (leftColumnWidth - 20) / 3;
-
-    // PPE Column
-    doc.fontSize(8).fillColor(colors.text).font("Helvetica-Bold").text(
-      "EPI Obligatoires:", leftX + 8, yPos + 6, { width: thirdWidth }
-    );
-    let ppeY = yPos + 18;
-    doc.fontSize(7).font("Helvetica");
-    ppeList.slice(0, 5).forEach((ppe) => {
-      if (ppeY < yPos + safetyContentHeight - 10) {
-        doc.fillColor(colors.text).text(`- ${ppe}`, leftX + 10, ppeY, { width: thirdWidth - 5 });
-        ppeY += 10;
+      // Step number
+      if (isFirst) {
+        doc.circle(rx + 17, y + rowH/2, 10).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+           .text(String(step.step_number), rx + 10, y + rowH/2 - 4, { width: 14, align: "center" });
       }
-    });
+      rx += cols[0];
 
-    // Safety Codes Column
-    doc.fontSize(8).fillColor(colors.text).font("Helvetica-Bold").text(
-      "Codes Securite:", leftX + thirdWidth + 12, yPos + 6, { width: thirdWidth }
-    );
-    let codeY = yPos + 18;
-    doc.fontSize(7).font("Helvetica");
-    safetyCodes.slice(0, 5).forEach((code) => {
-      if (codeY < yPos + safetyContentHeight - 10) {
-        doc.fillColor(colors.text).text(`- ${code}`, leftX + thirdWidth + 14, codeY, { width: thirdWidth - 5 });
-        codeY += 10;
+      // Task
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text)
+         .text(isFirst ? step.title.substring(0, 35) : "", rx + 2, y + 4, { width: cols[1] - 4 });
+      if (isFirst && step.instructions) {
+        doc.font("Helvetica").fontSize(6).fillColor(c.lightText)
+           .text(step.instructions.substring(0, 50) + "...", rx + 2, y + 14, { width: cols[1] - 4 });
       }
-    });
+      rx += cols[1];
 
-    // Emergency Contact Column
-    const contacts = procedure.emergency_contacts || [];
-    doc.fontSize(8).fillColor(colors.danger).font("Helvetica-Bold").text(
-      "Urgence:", leftX + thirdWidth * 2 + 16, yPos + 6, { width: thirdWidth }
-    );
-    if (contacts.length > 0) {
-      doc.fontSize(7).font("Helvetica").fillColor(colors.text).text(
-        `${contacts[0].name}: ${contacts[0].phone}`,
-        leftX + thirdWidth * 2 + 16, yPos + 18, { width: thirdWidth - 10 }
-      );
+      // Hazard
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger)
+         .text(`[${hazard.cat}]`, rx + 2, y + 4, { width: cols[2] - 4 });
+      doc.font("Helvetica").fontSize(6).fillColor(c.text)
+         .text(hazard.danger + (step.warning ? ": " + step.warning.substring(0, 40) : ""), rx + 2, y + 13, { width: cols[2] - 4 });
+      rx += cols[2];
+
+      // G (Gravity)
+      const gColor = hazard.g >= 4 ? c.danger : hazard.g >= 3 ? c.warning : c.success;
+      doc.roundedRect(rx + 5, y + 6, 22, 16, 2).fill(gColor);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.g), rx + 5, y + 9, { width: 22, align: "center" });
+      rx += cols[3];
+
+      // P (Probability)
+      const pVal = Math.max(1, hazard.p - probReduction);
+      const pColor = pVal >= 4 ? c.danger : pVal >= 3 ? c.warning : c.success;
+      doc.roundedRect(rx + 5, y + 6, 22, 16, 2).fill(pColor);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(pVal), rx + 5, y + 9, { width: 22, align: "center" });
+      rx += cols[4];
+
+      // NIR
+      const nir = hazard.g * pVal;
+      const nirColor = nir >= 12 ? "#7f1d1d" : nir >= 8 ? c.danger : nir >= 4 ? c.warning : c.success;
+      doc.roundedRect(rx + 3, y + 6, 32, 16, 2).fill(nirColor);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(nir), rx + 3, y + 9, { width: 32, align: "center" });
+      rx += cols[5];
+
+      // Measures
+      const measures = [];
+      if (procedure.ppe_required?.length) measures.push("EPI: " + procedure.ppe_required.slice(0, 2).join(", "));
+      if (procedure.safety_codes?.length) measures.push(procedure.safety_codes[0]);
+      doc.font("Helvetica").fontSize(6).fillColor(c.text)
+         .text(measures.join(" | ").substring(0, 60), rx + 2, y + 8, { width: cols[6] - 6 });
+
+      y += rowH;
     }
   }
 
-  // === RIGHT COLUMN: Photos Gallery ===
-  let photoY = headerHeight + 10;
+  // === RISK SCALES ===
+  y = Math.max(y + 10, maxTableY);
+  const scaleW = (col1W - 20) / 2;
 
-  // Photos header
-  doc.rect(rightX, photoY, rightColumnWidth, 20).fill(colors.secondary);
-  doc.fontSize(9).fillColor("#fff").font("Helvetica-Bold").text(
-    "PHOTOS DES ETAPES",
-    rightX + 10, photoY + 6
-  );
-  photoY += 25;
+  // Gravity scale
+  doc.rect(margin, y, scaleW, 16).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITE (G)", margin + 5, y + 4);
+  y += 16;
 
-  // Photo grid layout
-  const photosWithContent = steps.filter(s => s.photo_content || s.photo_path);
-  const photoMargin = 8;
-  const photoColumns = 2;
-  const availablePhotoWidth = rightColumnWidth - photoMargin * 2;
-  const photoBoxWidth = (availablePhotoWidth - photoMargin) / photoColumns;
-  const photoBoxHeight = 115;
+  gravityScale.forEach((g, i) => {
+    const sw = scaleW / 5;
+    doc.rect(margin + i * sw, y, sw, 32).fillAndStroke(g.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
+       .text(String(g.level), margin + i * sw, y + 3, { width: sw, align: "center" });
+    doc.fontSize(5).text(g.label, margin + i * sw, y + 17, { width: sw, align: "center" });
+  });
 
+  // Probability scale
+  const probX = margin + scaleW + 20;
+  doc.rect(probX, y - 16, scaleW, 16).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITE (P)", probX + 5, y - 12);
+
+  probScale.forEach((p, i) => {
+    const sw = scaleW / 5;
+    doc.rect(probX + i * sw, y, sw, 32).fillAndStroke(p.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
+       .text(String(p.level), probX + i * sw, y + 3, { width: sw, align: "center" });
+    doc.fontSize(5).text(p.label, probX + i * sw, y + 17, { width: sw, align: "center" });
+  });
+
+  // === RIGHT COLUMN ===
+  let ry = headerH + 8;
+
+  // Photos section
+  doc.rect(col2X, ry, col2W, 18).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 8, ry + 4);
+  ry += 20;
+
+  const photoBoxW = (col2W - 15) / 2;
+  const photoBoxH = 95;
   let photoCol = 0;
   let photosPlaced = 0;
-  const maxPhotoRows = Math.floor((contentEndY - photoY - 10) / (photoBoxHeight + 8));
-  const maxPhotos = maxPhotoRows * photoColumns;
 
-  for (let i = 0; i < steps.length && photosPlaced < maxPhotos; i++) {
+  for (let i = 0; i < steps.length && photosPlaced < 6 && ry + photoBoxH < pageHeight - 200; i++) {
     const step = steps[i];
-    const hasPhoto = step.photo_content || step.photo_path;
+    if (!step.photo_content && !step.photo_path) continue;
 
-    if (!hasPhoto) continue;
+    const px = col2X + photoCol * (photoBoxW + 10);
+    doc.roundedRect(px, ry, photoBoxW, photoBoxH, 5).fillAndStroke(c.white, c.border);
 
-    const photoX = rightX + photoMargin + photoCol * (photoBoxWidth + photoMargin);
-
-    if (photoY + photoBoxHeight > contentEndY - 10) break;
-
-    // Photo container
-    doc.roundedRect(photoX, photoY, photoBoxWidth, photoBoxHeight, 6).fillAndStroke("#fff", colors.border);
-
-    // Step number badge
-    doc.circle(photoX + 12, photoY + 12, 10).fill(colors.primary);
-    doc.fontSize(9).fillColor("#fff").font("Helvetica-Bold").text(
-      String(step.step_number),
-      photoX + 7, photoY + 8, { width: 10, align: "center" }
-    );
+    // Step badge
+    doc.circle(px + 12, ry + 12, 9).fill(c.primary);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
+       .text(String(step.step_number), px + 7, ry + 8, { width: 10, align: "center" });
 
     // Photo
-    const imgX = photoX + 6;
-    const imgY = photoY + 25;
-    const imgWidth = photoBoxWidth - 12;
-    const imgHeight = photoBoxHeight - 45;
+    const imgX = px + 5, imgY = ry + 22, imgW = photoBoxW - 10, imgH = photoBoxH - 40;
+    let photoOk = false;
 
-    let photoAdded = false;
     if (step.photo_content) {
       try {
-        doc.image(step.photo_content, imgX, imgY, {
-          fit: [imgWidth, imgHeight],
-          align: "center",
-          valign: "center"
-        });
-        photoAdded = true;
-      } catch (e) {
-        console.log(`[Procedures] Step ${step.step_number} photo_content error:`, e.message);
-      }
+        doc.image(step.photo_content, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
+        photoOk = true;
+      } catch (e) { console.log("[RAMS] Photo content error:", e.message); }
     }
 
-    if (!photoAdded && step.photo_path) {
+    if (!photoOk && step.photo_path) {
       try {
         const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
         if (fs.existsSync(imgPath)) {
-          doc.image(imgPath, imgX, imgY, {
-            fit: [imgWidth, imgHeight],
-            align: "center",
-            valign: "center"
-          });
-          photoAdded = true;
+          doc.image(imgPath, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
+          photoOk = true;
         }
-      } catch (e) {
-        console.log(`[Procedures] Step ${step.step_number} photo_path error:`, e.message);
-      }
+      } catch (e) { console.log("[RAMS] Photo path error:", e.message); }
     }
 
-    if (!photoAdded) {
-      doc.rect(imgX, imgY, imgWidth, imgHeight).fill(colors.lightBg);
-      doc.fontSize(7).fillColor(colors.lightText).text("Photo non disponible", imgX + 5, imgY + imgHeight/2 - 5, { width: imgWidth - 10, align: "center" });
+    if (!photoOk) {
+      doc.rect(imgX, imgY, imgW, imgH).fill(c.lightBg);
+      doc.fontSize(7).fillColor(c.lightText).text("Photo N/A", imgX + 5, imgY + imgH/2 - 5);
     }
 
-    // Step title under photo
-    doc.fontSize(6).fillColor(colors.text).font("Helvetica").text(
-      step.title.substring(0, 35) + (step.title.length > 35 ? "..." : ""),
-      photoX + 4, photoY + photoBoxHeight - 15, { width: photoBoxWidth - 8, align: "center" }
-    );
+    doc.font("Helvetica").fontSize(6).fillColor(c.text)
+       .text(step.title.substring(0, 25), px + 3, ry + photoBoxH - 15, { width: photoBoxW - 6, align: "center" });
 
     photosPlaced++;
     photoCol++;
-
-    if (photoCol >= photoColumns) {
-      photoCol = 0;
-      photoY += photoBoxHeight + 8;
-    }
+    if (photoCol >= 2) { photoCol = 0; ry += photoBoxH + 8; }
   }
 
-  // If no photos available
-  if (photosWithContent.length === 0) {
-    doc.rect(rightX + photoMargin, photoY, availablePhotoWidth, 100).fillAndStroke(colors.lightBg, colors.border);
-    doc.fontSize(10).fillColor(colors.lightText).text(
-      "Aucune photo disponible",
-      rightX + photoMargin + 10, photoY + 40, { width: availablePhotoWidth - 20, align: "center" }
-    );
+  if (photosPlaced === 0) {
+    doc.rect(col2X, ry, col2W, 60).fillAndStroke(c.lightBg, c.border);
+    doc.fontSize(9).fillColor(c.lightText).text("Aucune photo", col2X + 10, ry + 25);
+    ry += 65;
+  } else if (photoCol !== 0) {
+    ry += photoBoxH + 8;
   }
+
+  // === EPI SECTION ===
+  ry += 5;
+  doc.rect(col2X, ry, col2W, 16).fill(c.warning);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 8, ry + 3);
+  ry += 16;
+
+  const ppeList = procedure.ppe_required || [];
+  const ppeH = Math.max(45, Math.min(75, ppeList.length * 11 + 10));
+  doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
+
+  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  ppeList.slice(0, 6).forEach((ppe, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    doc.text("[*] " + ppe, col2X + 5 + col * (col2W/2), ry + 5 + row * 11, { width: col2W/2 - 10 });
+  });
+  ry += ppeH + 5;
+
+  // === SAFETY CODES ===
+  doc.rect(col2X, ry, col2W, 16).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 8, ry + 3);
+  ry += 16;
+
+  const safetyCodes = procedure.safety_codes || [];
+  const scH = Math.max(35, Math.min(55, safetyCodes.length * 11 + 10));
+  doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
+
+  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  safetyCodes.slice(0, 4).forEach((code, i) => {
+    doc.text("[>] " + code, col2X + 5, ry + 5 + i * 11, { width: col2W - 10 });
+  });
+  ry += scH + 5;
+
+  // === EMERGENCY CONTACTS ===
+  const contacts = procedure.emergency_contacts || [];
+  if (contacts.length > 0) {
+    doc.rect(col2X, ry, col2W, 16).fill(c.danger);
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("URGENCES", col2X + 8, ry + 3);
+    ry += 16;
+    doc.rect(col2X, ry, col2W, 30).fillAndStroke("#fef2f2", c.danger);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger)
+       .text(contacts[0].name + ": " + contacts[0].phone, col2X + 8, ry + 8);
+    ry += 35;
+  }
+
+  // === RISK SUMMARY ===
+  const summaryY = pageHeight - 70;
+  doc.rect(col2X, summaryY, col2W, 45).fillAndStroke(c.headerBg, c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 8, summaryY + 5);
+
+  doc.fontSize(7).fillColor("#a5b4fc");
+  doc.text(`Initial: G${baseGravity} x P${baseProb} = NIR ${initialRisk}`, col2X + 8, summaryY + 18);
+  doc.text(`Mesures: ${measureScore} (EPI: ${ppeCount}, Codes: ${safetyCount})`, col2X + 8, summaryY + 28);
+  doc.text(`Residuel: G${baseGravity} x P${residualProb} = NIR ${residualRisk}`, col2X + 8, summaryY + 38);
 
   // === FOOTER ===
-  const footerY = pageHeight - 28;
+  const footerY = pageHeight - 22;
+  doc.rect(0, footerY, pageWidth, 22).fill(c.headerBg);
 
-  doc.rect(margin, footerY - 2, pageWidth - margin * 2, 1).fill(colors.border);
-
-  doc.fontSize(7).fillColor(colors.lightText).font("Helvetica");
-  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 3, { width: 200 });
-  doc.text(
-    `Method Statement | ${procedure.title} | v${procedure.version || 1}`,
-    pageWidth / 2 - 150, footerY + 3, { width: 300, align: "center" }
-  );
-  doc.text(
-    `Genere le ${new Date().toLocaleString("fr-FR")} | ID: ${procedureId.substring(0, 8)}`,
-    pageWidth - margin - 220, footerY + 3, { width: 220, align: "right" }
-  );
-
-  // QR code reminder
-  doc.fontSize(6).fillColor(colors.primary).text(
-    "Scannez le QR code pour interagir avec l'IA Electro",
-    pageWidth / 2 - 100, footerY + 14, { width: 200, align: "center" }
-  );
+  doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
+  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 7);
+  doc.text(`RAMS - ${procedure.title} - v${procedure.version || 1}`, pageWidth/2 - 100, footerY + 7, { width: 200, align: "center" });
+  doc.text(`${new Date().toLocaleString("fr-FR")} | ID: ${procedureId.substring(0, 8)}`, pageWidth - margin - 180, footerY + 7, { width: 180, align: "right" });
 
   doc.end();
 
   return new Promise((resolve) => {
-    doc.on("end", () => {
-      resolve(Buffer.concat(chunks));
-    });
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
   });
 }
 
