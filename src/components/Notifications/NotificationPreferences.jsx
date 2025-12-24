@@ -1,6 +1,7 @@
 // NotificationPreferences.jsx
 // Beautiful Uber-style notification settings panel
-import React, { useState, useEffect } from 'react';
+// Optimized for iOS/iPadOS PWA performance
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bell,
   BellOff,
@@ -36,10 +37,76 @@ export default function NotificationPreferences({ isOpen, onClose }) {
   const [localPrefs, setLocalPrefs] = useState(preferences);
   const [isLoading, setIsLoading] = useState(false);
   const [testSent, setTestSent] = useState(false);
+  const [isIOSPWA, setIsIOSPWA] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const modalRef = useRef(null);
+  const backdropClickedRef = useRef(false);
+
+  // Detect iOS/iPadOS PWA mode for performance optimizations
+  useEffect(() => {
+    const isIOSDevice = () => {
+      const ua = navigator.userAgent;
+      if (/iPad|iPhone|iPod/.test(ua)) return true;
+      if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
+      if (/Macintosh/.test(ua) && 'ontouchend' in document) return true;
+      return false;
+    };
+
+    const isPWAMode = () => {
+      if (window.navigator.standalone === true) return true;
+      if (window.matchMedia('(display-mode: standalone)').matches) return true;
+      return false;
+    };
+
+    const result = isIOSDevice() && isPWAMode();
+    setIsIOSPWA(result);
+  }, []);
+
+  // Delay visibility to prevent immediate close on iOS
+  useEffect(() => {
+    if (isOpen) {
+      const timer = setTimeout(() => {
+        setIsVisible(true);
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      setIsVisible(false);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     setLocalPrefs(preferences);
   }, [preferences]);
+
+  // Handle backdrop click with iOS-safe touch handling
+  const handleBackdropClick = useCallback((e) => {
+    if (modalRef.current && modalRef.current.contains(e.target)) {
+      return;
+    }
+    if (isVisible) {
+      onClose();
+    }
+  }, [isVisible, onClose]);
+
+  const handleBackdropTouchStart = useCallback((e) => {
+    if (modalRef.current && !modalRef.current.contains(e.target)) {
+      backdropClickedRef.current = true;
+    }
+  }, []);
+
+  const handleBackdropTouchEnd = useCallback((e) => {
+    if (backdropClickedRef.current && modalRef.current && !modalRef.current.contains(e.target)) {
+      e.preventDefault();
+      if (isVisible) {
+        onClose();
+      }
+    }
+    backdropClickedRef.current = false;
+  }, [isVisible, onClose]);
+
+  const handleModalClick = useCallback((e) => {
+    e.stopPropagation();
+  }, []);
 
   if (!isOpen) return null;
 
@@ -110,16 +177,39 @@ export default function NotificationPreferences({ isOpen, onClose }) {
     }
   ];
 
+  // Use simpler styles for iOS PWA
+  const backdropClass = isIOSPWA
+    ? 'absolute inset-0 bg-black/60 transition-opacity duration-200'
+    : 'absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300';
+
+  const animationClass = isIOSPWA
+    ? 'animate-slideUpSimple'
+    : 'animate-slideUp';
+
   return (
-    <div className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center">
+    <div
+      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center"
+      onTouchStart={handleBackdropTouchStart}
+      onTouchEnd={handleBackdropTouchEnd}
+    >
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
-        onClick={onClose}
+        className={backdropClass}
+        onClick={handleBackdropClick}
+        style={{ touchAction: 'none' }}
       />
 
       {/* Panel */}
-      <div className="relative w-full sm:max-w-lg mx-auto max-h-[90vh] bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden animate-slideUp">
+      <div
+        ref={modalRef}
+        className={`relative w-full sm:max-w-lg mx-auto max-h-[90vh] bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden ${animationClass}`}
+        onClick={handleModalClick}
+        onTouchStart={handleModalClick}
+        style={{
+          transform: 'translateZ(0)',
+          WebkitTransform: 'translateZ(0)'
+        }}
+      >
         {/* Header */}
         <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center justify-between p-4">
@@ -139,6 +229,7 @@ export default function NotificationPreferences({ isOpen, onClose }) {
             <button
               onClick={onClose}
               className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              style={{ touchAction: 'manipulation' }}
             >
               <X className="w-5 h-5 text-gray-500" />
             </button>
@@ -159,6 +250,7 @@ export default function NotificationPreferences({ isOpen, onClose }) {
                 }
                 ${!isSupported || isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-[1.02] active:scale-[0.98]'}
               `}
+              style={{ touchAction: 'manipulation' }}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -257,6 +349,7 @@ export default function NotificationPreferences({ isOpen, onClose }) {
                         relative w-12 h-7 rounded-full transition-colors duration-200
                         ${localPrefs[notif.key] ? 'bg-black dark:bg-white' : 'bg-gray-200 dark:bg-gray-700'}
                       `}
+                      style={{ touchAction: 'manipulation' }}
                     >
                       <div className={`
                         absolute top-1 w-5 h-5 bg-white dark:bg-gray-900 rounded-full shadow transition-transform duration-200
@@ -296,6 +389,7 @@ export default function NotificationPreferences({ isOpen, onClose }) {
                       relative w-12 h-7 rounded-full transition-colors duration-200
                       ${localPrefs.quietHoursEnabled ? 'bg-black dark:bg-white' : 'bg-gray-200 dark:bg-gray-700'}
                     `}
+                    style={{ touchAction: 'manipulation' }}
                   >
                     <div className={`
                       absolute top-1 w-5 h-5 bg-white dark:bg-gray-900 rounded-full shadow transition-transform duration-200
@@ -344,6 +438,7 @@ export default function NotificationPreferences({ isOpen, onClose }) {
                     : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-700'
                   }
                 `}
+                style={{ touchAction: 'manipulation' }}
               >
                 {testSent ? (
                   <>
@@ -382,8 +477,31 @@ export default function NotificationPreferences({ isOpen, onClose }) {
             transform: translateY(0);
           }
         }
+
+        @keyframes slideUpSimple {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
         .animate-slideUp {
           animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .animate-slideUpSimple {
+          animation: slideUpSimple 0.25s ease-out;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .animate-slideUp,
+          .animate-slideUpSimple {
+            animation: none !important;
+          }
         }
       `}</style>
     </div>
