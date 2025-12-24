@@ -1883,23 +1883,234 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     console.log(`[AI] 🚀 Processing: "${message.substring(0, 50)}..." for site ${site}`);
 
     // =========================================================================
-    // PROCEDURE DETECTION - Réponse directe, pas de blabla
+    // PROCEDURE SYSTEM - Création, recherche, lecture
     // =========================================================================
     const msgLower = message.toLowerCase();
-    const wantsProcedure = (
+
+    // --- Détecter si on veut CRÉER une procédure ---
+    const wantsCreateProcedure = (
       (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
       (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
        msgLower.includes('nouvelle') || msgLower.includes('ajouter') || msgLower.includes('commencer'))
     );
 
-    if (wantsProcedure) {
-      console.log('[AI] 📋 Procedure mode detected - direct response');
+    if (wantsCreateProcedure) {
+      console.log('[AI] 📋 Procedure creation mode');
       return res.json({
         message: `**C'est quoi le titre de ta procédure ?**`,
         actions: [],
         provider: 'system',
-        procedureMode: true
+        procedureMode: 'create',
+        procedureStep: 'title'
       });
+    }
+
+    // --- Détecter si on veut VOIR/CHERCHER une procédure ---
+    const wantsSearchProcedure = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure')) &&
+      (msgLower.includes('voir') || msgLower.includes('chercher') || msgLower.includes('trouver') ||
+       msgLower.includes('montre') || msgLower.includes('affiche') || msgLower.includes('liste') ||
+       msgLower.includes('quelles'))
+    );
+
+    if (wantsSearchProcedure) {
+      console.log('[AI] 🔍 Procedure search mode');
+      try {
+        const procResult = await pool.query(`
+          SELECT id, title, created_at, risk_level,
+                 (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+          FROM procedures p
+          WHERE site = $1
+          ORDER BY created_at DESC
+          LIMIT 10
+        `, [site]);
+
+        if (procResult.rows.length === 0) {
+          return res.json({
+            message: "Aucune procédure trouvée. Tu veux en créer une ?",
+            actions: [{ label: "Créer une procédure", prompt: "Je veux créer une procédure" }],
+            provider: 'system'
+          });
+        }
+
+        const procList = procResult.rows.map((p, i) =>
+          `${i + 1}. **${p.title}** (${p.step_count} étapes) - ${new Date(p.created_at).toLocaleDateString('fr-FR')}`
+        ).join('\n');
+
+        return res.json({
+          message: `**Procédures disponibles :**\n\n${procList}\n\nDis-moi laquelle tu veux voir ou "lire la procédure X"`,
+          actions: procResult.rows.slice(0, 3).map(p => ({
+            label: p.title.substring(0, 25),
+            prompt: `Montre-moi la procédure "${p.title}"`
+          })),
+          provider: 'system'
+        });
+      } catch (e) {
+        console.error('[AI] Procedure search error:', e);
+      }
+    }
+
+    // --- Détecter si on veut LIRE une procédure spécifique ---
+    const wantsReadProcedure = /(?:lire|voir|montre|affiche|ouvre).*(?:procédure|procedure)\s*[""«]?([^""»]+)[""»]?/i.exec(message);
+    if (wantsReadProcedure) {
+      const searchTitle = wantsReadProcedure[1]?.trim();
+      console.log(`[AI] 📖 Reading procedure: ${searchTitle}`);
+
+      try {
+        const procResult = await pool.query(`
+          SELECT p.*, json_agg(
+            json_build_object('step_number', s.step_number, 'title', s.title, 'description', s.description)
+            ORDER BY s.step_number
+          ) as steps
+          FROM procedures p
+          LEFT JOIN procedure_steps s ON s.procedure_id = p.id
+          WHERE p.site = $1 AND LOWER(p.title) LIKE $2
+          GROUP BY p.id
+          LIMIT 1
+        `, [site, `%${searchTitle.toLowerCase()}%`]);
+
+        if (procResult.rows.length > 0) {
+          const proc = procResult.rows[0];
+          const steps = proc.steps?.[0] ? proc.steps.filter(s => s.step_number) : [];
+
+          let response = `## 📋 ${proc.title}\n\n`;
+          if (steps.length > 0) {
+            steps.forEach((s, i) => {
+              response += `**Étape ${s.step_number}:** ${s.title || s.description}\n`;
+              if (s.description && s.title) response += `   ${s.description}\n`;
+              response += '\n';
+            });
+          }
+
+          response += `\n---\nVeux-tu que je te guide étape par étape ou télécharger le PDF ?`;
+
+          return res.json({
+            message: response,
+            actions: [
+              { label: "Guide-moi", prompt: `Guide-moi pour "${proc.title}" étape par étape` },
+              { label: "PDF", prompt: `Génère le PDF de "${proc.title}"` }
+            ],
+            provider: 'system',
+            procedureId: proc.id
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Read procedure error:', e);
+      }
+    }
+
+    // --- Détecter si on veut GÉNÉRER UN PDF ---
+    const wantsPDF = /(?:génère|genere|télécharge|telecharge|pdf|exporte?).*(?:procédure|procedure)/i.test(message) ||
+                     /(?:procédure|procedure).*(?:pdf|génère|genere)/i.test(message);
+
+    if (wantsPDF) {
+      // Extract procedure name from message or use last mentioned
+      const pdfMatch = /[""«]([^""»]+)[""»]/i.exec(message);
+      const searchTitle = pdfMatch?.[1] || '';
+
+      console.log(`[AI] 📄 Generating PDF for: ${searchTitle}`);
+
+      try {
+        // Find the procedure
+        const procResult = await pool.query(`
+          SELECT id, title FROM procedures
+          WHERE site = $1 ${searchTitle ? "AND LOWER(title) LIKE $2" : ""}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `, searchTitle ? [site, `%${searchTitle.toLowerCase()}%`] : [site]);
+
+        if (procResult.rows.length > 0) {
+          const proc = procResult.rows[0];
+          // Call the procedures microservice to generate PDF
+          const pdfUrl = `/api/procedures/${proc.id}/pdf`;
+
+          return res.json({
+            message: `✅ **PDF prêt !**\n\nProcédure: **${proc.title}**\n\n[📥 Télécharger le PDF](${pdfUrl})`,
+            actions: [{ label: "Télécharger PDF", url: pdfUrl }],
+            provider: 'system',
+            pdfUrl: pdfUrl
+          });
+        } else {
+          return res.json({
+            message: "Je n'ai pas trouvé cette procédure. Dis-moi son nom exact ou crée-en une nouvelle.",
+            actions: [{ label: "Créer une procédure", prompt: "Je veux créer une procédure" }],
+            provider: 'system'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] PDF generation error:', e);
+      }
+    }
+
+    // --- Détecter si on est en train de donner un TITRE de procédure ---
+    const lastMsg = conversationHistory[conversationHistory.length - 1];
+    const isGivingTitle = lastMsg?.content?.includes("C'est quoi le titre") ||
+                          lastMsg?.procedureStep === 'title';
+
+    if (isGivingTitle && message.length > 2 && message.length < 200) {
+      console.log(`[AI] 📝 Got procedure title: ${message}`);
+
+      try {
+        // Create the procedure in database
+        const insertResult = await pool.query(`
+          INSERT INTO procedures (site, title, status, created_by, created_at)
+          VALUES ($1, $2, 'draft', $3, NOW())
+          RETURNING id
+        `, [site, message.trim(), clientContext?.user?.email || 'unknown']);
+
+        const procedureId = insertResult.rows[0].id;
+
+        return res.json({
+          message: `✓ Procédure **"${message.trim()}"** créée !\n\n📷 **Première étape** - décris ce qu'il faut faire et envoie une photo.`,
+          actions: [],
+          provider: 'system',
+          procedureMode: 'create',
+          procedureStep: 'step1',
+          procedureId: procedureId
+        });
+      } catch (e) {
+        console.error('[AI] Create procedure error:', e);
+      }
+    }
+
+    // --- Détecter "C'est fini / terminé" pour finaliser une procédure ---
+    const isDone = /^(c'est (fini|bon|terminé|tout)|fini|terminé|stop|voilà|that's it)$/i.test(msgLower.trim()) ||
+                   msgLower.includes("c'est fini") || msgLower.includes("c'est bon") ||
+                   msgLower.includes("c'est tout") || msgLower.includes("terminé");
+
+    if (isDone && conversationHistory.some(m => m.procedureId || m.procedureMode)) {
+      // Find the procedure ID from conversation
+      const procMsg = conversationHistory.find(m => m.procedureId);
+      const procedureId = procMsg?.procedureId;
+
+      if (procedureId) {
+        try {
+          // Update status to complete
+          await pool.query(`UPDATE procedures SET status = 'complete' WHERE id = $1`, [procedureId]);
+
+          // Get procedure info
+          const procResult = await pool.query(`
+            SELECT title, (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = $1) as step_count
+            FROM procedures WHERE id = $1
+          `, [procedureId]);
+
+          const proc = procResult.rows[0];
+          const pdfUrl = `/api/procedures/${procedureId}/pdf`;
+
+          return res.json({
+            message: `✅ **Procédure terminée !**\n\n📋 **${proc?.title || 'Procédure'}**\n📝 ${proc?.step_count || 0} étapes enregistrées\n\n[📥 Télécharger le PDF](${pdfUrl})\n\nJe l'ai sauvegardée. Tu pourras me demander de la relire ou de te guider plus tard !`,
+            actions: [
+              { label: "Télécharger PDF", url: pdfUrl },
+              { label: "Voir mes procédures", prompt: "Montre-moi mes procédures" }
+            ],
+            provider: 'system',
+            pdfUrl: pdfUrl,
+            procedureComplete: true
+          });
+        } catch (e) {
+          console.error('[AI] Finalize procedure error:', e);
+        }
+      }
     }
 
     // Get real-time context from database
@@ -2085,6 +2296,8 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
   try {
     const { message } = req.body;
     const photo = req.file;
+    const conversationHistory = req.body.conversationHistory ? JSON.parse(req.body.conversationHistory) : [];
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
 
     if (!photo) {
       return res.status(400).json({ error: "Photo requise" });
@@ -2096,40 +2309,93 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
     const photoBuffer = fs.readFileSync(photo.path);
     const base64Photo = photoBuffer.toString('base64');
     const mimeType = photo.mimetype || 'image/jpeg';
-    fs.unlinkSync(photo.path); // Cleanup
 
-    // Call GPT-4o Vision directly
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `Tu aides à créer des procédures. Quand tu reçois une photo:
-- Dis "✓ Photo reçue"
-- Décris BRIÈVEMENT ce que tu vois (1 ligne max)
-- Demande "Étape suivante ?"
-SOIS TRÈS BREF.`
-        },
-        {
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
-            { type: "text", text: message || "Photo pour cette étape" }
-          ]
+    // Find active procedure from conversation history
+    const procMsg = conversationHistory.find(m => m.procedureId);
+    const procedureId = procMsg?.procedureId;
+
+    // Get current step count for this procedure
+    let stepNumber = 1;
+    if (procedureId) {
+      try {
+        const countResult = await pool.query(
+          'SELECT COALESCE(MAX(step_number), 0) + 1 as next_step FROM procedure_steps WHERE procedure_id = $1',
+          [procedureId]
+        );
+        stepNumber = countResult.rows[0].next_step;
+      } catch (e) {
+        console.error('[AI] Step count error:', e);
+      }
+    }
+
+    // Call GPT-4o Vision to analyze and describe the photo
+    let aiDescription = '';
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `Tu analyses des photos pour créer des procédures de maintenance.
+Décris BRIÈVEMENT ce que tu vois (1-2 lignes max).
+Identifie: l'action visible, l'équipement, le contexte.
+Format: description directe, pas de blabla.`
+          },
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
+              { type: "text", text: message || "Décris cette image" }
+            ]
+          }
+        ],
+        max_tokens: 100
+      });
+      aiDescription = completion.choices[0]?.message?.content || '';
+    } catch (e) {
+      console.error('[AI] Vision error:', e.message);
+      aiDescription = message || 'Étape documentée';
+    }
+
+    // Save step to database if we have a procedure
+    if (procedureId) {
+      try {
+        // Save photo to filesystem or cloud storage (for now, save base64 reference)
+        const photoPath = `/uploads/procedures/${procedureId}/step_${stepNumber}.jpg`;
+
+        // Create uploads directory if needed
+        const uploadDir = path.join(__dirname, 'uploads', 'procedures', String(procedureId));
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
         }
-      ],
-      max_tokens: 150
-    });
 
-    const aiMessage = completion.choices[0]?.message?.content || "✓ Photo reçue ! Étape suivante ?";
+        // Save the photo
+        fs.writeFileSync(path.join(uploadDir, `step_${stepNumber}.jpg`), photoBuffer);
+
+        // Insert step into database
+        await pool.query(`
+          INSERT INTO procedure_steps (procedure_id, step_number, title, description, photo_url, created_at)
+          VALUES ($1, $2, $3, $4, $5, NOW())
+        `, [procedureId, stepNumber, message || `Étape ${stepNumber}`, aiDescription, photoPath]);
+
+        console.log(`[AI] ✅ Saved step ${stepNumber} for procedure ${procedureId}`);
+      } catch (e) {
+        console.error('[AI] Save step error:', e);
+      }
+    }
+
+    // Cleanup temp file
+    fs.unlinkSync(photo.path);
 
     res.json({
-      message: aiMessage,
+      message: `✓ **Étape ${stepNumber}** enregistrée !\n\n${aiDescription ? `📝 ${aiDescription}\n\n` : ''}Étape suivante ? (ou dis "c'est fini")`,
       actions: [
-        { label: "Étape suivante", prompt: "Étape suivante" },
-        { label: "Terminer", prompt: "C'est fini" }
+        { label: "📷 Étape suivante", prompt: "Étape suivante" },
+        { label: "✅ Terminer", prompt: "C'est fini" }
       ],
-      provider: "gpt-4o-vision"
+      provider: "gpt-4o-vision",
+      procedureId: procedureId,
+      stepNumber: stepNumber
     });
 
   } catch (error) {

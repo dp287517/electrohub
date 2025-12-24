@@ -245,9 +245,12 @@ class AIAssistant {
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
         actionResult: data.actionResult || null,
-        // Procedure mode support
-        launchMode: data.launchMode || null,
-        procedureContext: data.procedureContext || null
+        // Procedure system
+        procedureId: data.procedureId || null,
+        procedureMode: data.procedureMode || null,
+        procedureStep: data.procedureStep || null,
+        pdfUrl: data.pdfUrl || null,
+        procedureComplete: data.procedureComplete || false
       };
     } catch (error) {
       console.error('Erreur chat IA:', error);
@@ -311,7 +314,10 @@ class AIAssistant {
         model: data.model,
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
-        procedureData: data.procedureData || null
+        // Procedure system
+        procedureId: data.procedureId || null,
+        procedureMode: data.procedureMode || null,
+        stepNumber: data.stepNumber || null
       };
     } catch (error) {
       console.error('Erreur chat avec photo:', error);
