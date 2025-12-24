@@ -17,6 +17,7 @@ import dotenv from "dotenv";
 import multer from "multer";
 import pg from "pg";
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import xlsx from "xlsx";
 import fs from "fs";
 import path from "path";
@@ -42,6 +43,66 @@ const pool = new Pool({
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ANSWER_MODEL = process.env.DCF_ANSWER_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o-mini";
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log("[DCF] Gemini initialized");
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || "";
+  return error?.status === 429 || error?.code === "insufficient_quota" || msg.includes("429") || msg.includes("quota") || msg.includes("rate limit");
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error("GEMINI_API_KEY not configured");
+  const model = gemini.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 } });
+  let systemPrompt = "", contents = [];
+  for (const msg of messages) {
+    if (msg.role === "system") { systemPrompt += (systemPrompt ? "\n\n" : "") + msg.content; continue; }
+    contents.push({ role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] });
+  }
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === "user");
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+async function chatWithFallback(messages, options = {}) {
+  if (openai && process.env.OPENAI_API_KEY) {
+    try {
+      const response = await openai.chat.completions.create({ model: options.model || ANSWER_MODEL, messages, temperature: options.temperature ?? 0.7, max_tokens: options.max_tokens ?? 2000, ...(options.response_format && { response_format: options.response_format }) });
+      return { content: response.choices[0]?.message?.content || "", provider: "openai" };
+    } catch (error) {
+      console.error("[DCF] OpenAI failed:", error.message);
+      if (gemini && isQuotaError(error)) {
+        console.log("[DCF] Fallback to Gemini...");
+        const content = await callGemini(messages, options);
+        return { content, provider: "gemini" };
+      }
+      throw error;
+    }
+  }
+  if (gemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: "gemini" };
+  }
+  throw new Error("No AI provider configured");
+}
+
+function parseAIJson(text) {
+  let cleaned = text.trim();
+  if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
+  if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
+  if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
+  return JSON.parse(cleaned.trim());
+}
 
 // Paths
 const DROPDOWN_CSV_PATH = process.env.DCF_DROPDOWN_CSV_PATH || path.join(process.cwd(), "Listes_deroulantes__data_validation_.csv");
@@ -395,9 +456,8 @@ async function extractSAPDataFromImages(images = []) {
 
       console.log(`[Vision] Analyse image (${mime})...`);
 
-      const completion = await openai.chat.completions.create({
-        model: VISION_MODEL,
-        messages: [
+      const result = await chatWithFallback(
+        [
           { role: "system", content: VISION_PROMPT },
           {
             role: "user",
@@ -407,12 +467,10 @@ async function extractSAPDataFromImages(images = []) {
             ]
           }
         ],
-        response_format: { type: "json_object" },
-        temperature: 0.0,
-        max_tokens: 2000
-      });
+        { model: VISION_MODEL, response_format: { type: "json_object" }, temperature: 0.0, max_tokens: 2000 }
+      );
 
-      const content = completion.choices[0].message.content;
+      const content = result.content;
       console.log(`[Vision] Réponse: ${content.substring(0, 200)}...`);
       
       const parsed = cleanJSON(content);
