@@ -72,6 +72,7 @@ Tu aides les techniciens et ingénieurs électriques à:
 - Identifier et résoudre les non-conformités
 - Trouver de la documentation technique
 - Optimiser la maintenance préventive
+- **CRÉER DES PROCÉDURES opérationnelles** (excellences opérationnelles)
 
 ## Contexte de l'application
 ElectroHub gère plusieurs types d'équipements:
@@ -99,6 +100,67 @@ ElectroHub gère plusieurs types d'équipements:
 - Tu ne peux pas modifier directement les données
 - Pour les recherches web, tu dois explicitement demander à l'utilisateur
 - Si tu n'as pas assez d'infos, demande des clarifications`;
+
+// -----------------------------------------------------------------------------
+// Intent Detection - Procédures
+// -----------------------------------------------------------------------------
+
+const PROCEDURE_INTENT_PATTERNS = [
+  /créer?\s+(une\s+)?procédure/i,
+  /nouvelle\s+procédure/i,
+  /faire\s+(une\s+)?procédure/i,
+  /ajouter\s+(une\s+)?procédure/i,
+  /excellence[s]?\s+opérationnelle/i,
+  /créer?\s+(une\s+)?excellence/i,
+  /documenter\s+(une\s+)?(intervention|opération|procédure|maintenance)/i,
+  /procédure\s+(de|pour|d')\s+\w+/i,
+  /faire\s+une\s+fiche/i,
+  /créer?\s+(une\s+)?fiche\s+(technique|intervention|maintenance)/i,
+  /mode\s+procédure/i,
+  /assistant\s+procédure/i,
+  /guide[r]?\s+moi\s+(pour|à)\s+(créer|faire|documenter)/i,
+];
+
+function detectProcedureIntent(message) {
+  const lowerMessage = message.toLowerCase().trim();
+
+  for (const pattern of PROCEDURE_INTENT_PATTERNS) {
+    if (pattern.test(lowerMessage)) {
+      return true;
+    }
+  }
+
+  // Check for simple keyword combinations
+  const hasProcedure = /procédure|procedure|excellence|fiche/i.test(lowerMessage);
+  const hasCreate = /créer|creer|faire|ajouter|nouvelle|nouveau|documenter/i.test(lowerMessage);
+
+  if (hasProcedure && hasCreate) {
+    return true;
+  }
+
+  return false;
+}
+
+// Extract what kind of procedure the user wants
+function extractProcedureContext(message) {
+  const lowerMessage = message.toLowerCase();
+
+  // Try to extract the subject
+  const patterns = [
+    /procédure\s+(?:de\s+|pour\s+|d[''])?(.+?)(?:\?|$|\.)/i,
+    /documenter\s+(?:une?\s+)?(.+?)(?:\?|$|\.)/i,
+    /excellence\s+(?:pour\s+|de\s+)?(.+?)(?:\?|$|\.)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = lowerMessage.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -302,6 +364,24 @@ app.post("/chat", async (req, res) => {
 
     if (!message) {
       return res.status(400).json({ error: "Message requis" });
+    }
+
+    // =========================================================================
+    // PROCEDURE INTENT DETECTION - Priority check before anything else
+    // =========================================================================
+    if (detectProcedureIntent(message)) {
+      const procedureSubject = extractProcedureContext(message);
+
+      // Direct, action-oriented response
+      return res.json({
+        message: `**C'est parti !** 🚀 Je lance le mode création de procédure.${procedureSubject ? `\n\nJ'ai compris que tu veux documenter : **${procedureSubject}**` : ''}`,
+        launchMode: 'procedure',
+        procedureContext: {
+          initialSubject: procedureSubject,
+          userMessage: message
+        },
+        provider: 'system'
+      });
     }
 
     // Build messages array
