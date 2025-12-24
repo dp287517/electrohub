@@ -18,6 +18,7 @@ const VSD_MAPS_BASE = process.env.VSD_MAPS_BASE || process.env.VSD_BASE_URL || "
 
 // Base du microservice Switchboard pour récupérer les infos des tableaux
 const SWITCHBOARD_BASE = process.env.SWITCHBOARD_BASE || "http://localhost:3003";
+const FETCH_TIMEOUT = Number(process.env.SWB_MAP_FETCH_TIMEOUT || 15000);
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -66,6 +67,18 @@ function getUser(req) {
 
 function getSite(req) {
   return req.header("X-Site") || req.query.site || "Default";
+}
+
+// Utility to apply a timeout to fetch-based calls
+async function fetchWithTimeout(resource, { timeout = FETCH_TIMEOUT, ...options } = {}) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    return await fetch(resource, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
 }
 
 // -------------------------------------------------
@@ -261,7 +274,7 @@ async function proxyToVsd(req, res, path, { method = "GET", body = null } = {}) 
   });
 
   try {
-    const vsdRes = await fetch(url.toString(), {
+    const vsdRes = await fetchWithTimeout(url.toString(), {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -279,8 +292,10 @@ async function proxyToVsd(req, res, path, { method = "GET", body = null } = {}) 
     const buf = Buffer.from(await vsdRes.arrayBuffer());
     return res.send(buf);
   } catch (e) {
-    console.error("[swb-map] Proxy to VSD error:", e.message);
-    return res.status(502).json({ ok: false, error: "VSD service unavailable: " + e.message });
+    const reason = e.name === "AbortError" ? `timeout after ${FETCH_TIMEOUT}ms` : e.message;
+    console.error("[swb-map] Proxy to VSD error:", reason);
+    const status = e.name === "AbortError" ? 504 : 502;
+    return res.status(status).json({ ok: false, error: "VSD service unavailable: " + reason });
   }
 }
 
@@ -288,7 +303,7 @@ async function proxyToVsd(req, res, path, { method = "GET", body = null } = {}) 
 async function getSwitchboardInfo(switchboardId, site, headers = {}) {
   try {
     const url = `${SWITCHBOARD_BASE}/api/switchboard/boards/${switchboardId}?site=${encodeURIComponent(site)}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -299,7 +314,8 @@ async function getSwitchboardInfo(switchboardId, site, headers = {}) {
     if (!res.ok) return null;
     return await res.json();
   } catch (e) {
-    console.warn("[swb-map] Get switchboard info error:", e.message);
+    const reason = e.name === "AbortError" ? `timeout after ${FETCH_TIMEOUT}ms` : e.message;
+    console.warn("[swb-map] Get switchboard info error:", reason);
     return null;
   }
 }
@@ -308,7 +324,7 @@ async function getSwitchboardInfo(switchboardId, site, headers = {}) {
 async function getAllSwitchboards(site, headers = {}) {
   try {
     const url = `${SWITCHBOARD_BASE}/api/switchboard/boards?site=${encodeURIComponent(site)}&pageSize=500`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -320,7 +336,8 @@ async function getAllSwitchboards(site, headers = {}) {
     const data = await res.json();
     return data.data || [];
   } catch (e) {
-    console.warn("[swb-map] Get all switchboards error:", e.message);
+    const reason = e.name === "AbortError" ? `timeout after ${FETCH_TIMEOUT}ms` : e.message;
+    console.warn("[swb-map] Get all switchboards error:", reason);
     return [];
   }
 }
@@ -373,7 +390,7 @@ app.put("/api/switchboard/maps/renamePlan", async (req, res) => {
 
     // Proxy vers VSD
     const url = new URL("/api/vsd/maps/renamePlan", VSD_MAPS_BASE);
-    const vsdRes = await fetch(url.toString(), {
+    const vsdRes = await fetchWithTimeout(url.toString(), {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -415,7 +432,7 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
     if (id && !logical_name) {
       try {
         const vsdUrl = new URL("/api/vsd/maps/listPlans", VSD_MAPS_BASE);
-        const vsdRes = await fetch(vsdUrl.toString(), { 
+        const vsdRes = await fetchWithTimeout(vsdUrl.toString(), {
           method: "GET",
           headers: { "X-Site": site }
         });
