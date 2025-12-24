@@ -57,6 +57,7 @@ const allApps = {
     { id: 'ask-veeva', label: 'Ask Veeva AI', shortLabel: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 via-purple-500 to-fuchsia-600', glow: 'shadow-purple-500/30' },
     { id: 'dcf', label: 'Support SAP', shortLabel: 'DCF', to: '/app/dcf', icon: '📊', color: 'from-emerald-400 via-green-500 to-lime-600', glow: 'shadow-green-500/30' },
     { id: 'learn-ex', label: 'Formation ATEX', shortLabel: 'Formation', to: '/app/learn_ex', icon: '📊', color: 'from-amber-400 via-yellow-500 to-orange-600', glow: 'shadow-yellow-500/30' },
+    { id: 'procedures', label: 'Procédures Opérationnelles', shortLabel: 'Procédures', to: '/app/procedures', icon: '📋', color: 'from-violet-400 via-purple-500 to-indigo-600', glow: 'shadow-violet-500/30' },
   ]
 };
 

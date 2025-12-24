@@ -1,0 +1,278 @@
+// procedures-api.js — Client API for Procedures microservice
+
+const API_BASE = '/api/procedures';
+
+// Helper for fetch with auth headers
+async function fetchWithAuth(url, options = {}) {
+  const userEmail = localStorage.getItem('userEmail') || '';
+  const site = localStorage.getItem('selectedSite') || '';
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-User-Email': userEmail,
+    'X-Site': site,
+    ...options.headers,
+  };
+
+  // Remove Content-Type for FormData
+  if (options.body instanceof FormData) {
+    delete headers['Content-Type'];
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Erreur réseau' }));
+    throw new Error(error.error || 'Erreur API');
+  }
+
+  return response;
+}
+
+// ==================== PROCEDURES ====================
+
+export async function listProcedures(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters.category) params.append('category', filters.category);
+  if (filters.status) params.append('status', filters.status);
+  if (filters.search) params.append('search', filters.search);
+
+  const response = await fetchWithAuth(`${API_BASE}?${params}`);
+  return response.json();
+}
+
+export async function getProcedure(id) {
+  const response = await fetchWithAuth(`${API_BASE}/${id}`);
+  return response.json();
+}
+
+export async function createProcedure(data) {
+  const response = await fetchWithAuth(API_BASE, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return response.json();
+}
+
+export async function updateProcedure(id, data) {
+  const response = await fetchWithAuth(`${API_BASE}/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+  return response.json();
+}
+
+export async function deleteProcedure(id) {
+  const response = await fetchWithAuth(`${API_BASE}/${id}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+// ==================== STEPS ====================
+
+export async function addStep(procedureId, stepData) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/steps`, {
+    method: 'POST',
+    body: JSON.stringify(stepData),
+  });
+  return response.json();
+}
+
+export async function updateStep(procedureId, stepId, stepData) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/steps/${stepId}`, {
+    method: 'PUT',
+    body: JSON.stringify(stepData),
+  });
+  return response.json();
+}
+
+export async function deleteStep(procedureId, stepId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/steps/${stepId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+export async function uploadStepPhoto(procedureId, stepId, photoFile) {
+  const formData = new FormData();
+  formData.append('photo', photoFile);
+
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/steps/${stepId}/photo`, {
+    method: 'POST',
+    body: formData,
+  });
+  return response.json();
+}
+
+export function getStepPhotoUrl(stepId) {
+  return `${API_BASE}/steps/${stepId}/photo`;
+}
+
+// ==================== EQUIPMENT LINKS ====================
+
+export async function addEquipmentLink(procedureId, linkData) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/equipment`, {
+    method: 'POST',
+    body: JSON.stringify(linkData),
+  });
+  return response.json();
+}
+
+export async function removeEquipmentLink(procedureId, linkId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/equipment/${linkId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+export async function searchEquipment(query, type = null) {
+  const params = new URLSearchParams({ q: query });
+  if (type) params.append('type', type);
+
+  const response = await fetchWithAuth(`${API_BASE}/search-equipment?${params}`);
+  return response.json();
+}
+
+// ==================== AI GUIDED CREATION ====================
+
+export async function startAISession(initialMessage = null) {
+  const response = await fetchWithAuth(`${API_BASE}/ai/start`, {
+    method: 'POST',
+    body: JSON.stringify({ initialMessage }),
+  });
+  return response.json();
+}
+
+export async function continueAISession(sessionId, message, photoFile = null) {
+  if (photoFile) {
+    const formData = new FormData();
+    formData.append('message', message);
+    formData.append('photo', photoFile);
+
+    const response = await fetchWithAuth(`${API_BASE}/ai/chat/${sessionId}`, {
+      method: 'POST',
+      body: formData,
+    });
+    return response.json();
+  }
+
+  const response = await fetchWithAuth(`${API_BASE}/ai/chat/${sessionId}`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+  return response.json();
+}
+
+export async function finalizeAISession(sessionId) {
+  const response = await fetchWithAuth(`${API_BASE}/ai/finalize/${sessionId}`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
+// ==================== DOCUMENT ANALYSIS ====================
+
+export async function analyzeDocument(documentFile) {
+  const formData = new FormData();
+  formData.append('document', documentFile);
+
+  const response = await fetchWithAuth(`${API_BASE}/ai/analyze-document`, {
+    method: 'POST',
+    body: formData,
+  });
+  return response.json();
+}
+
+export async function analyzeReport(reportFile) {
+  const formData = new FormData();
+  formData.append('report', reportFile);
+
+  const response = await fetchWithAuth(`${API_BASE}/ai/analyze-report`, {
+    method: 'POST',
+    body: formData,
+  });
+  return response.json();
+}
+
+export async function getActionLists() {
+  const response = await fetchWithAuth(`${API_BASE}/action-lists`);
+  return response.json();
+}
+
+// ==================== PDF ====================
+
+export function getProcedurePdfUrl(procedureId) {
+  return `${API_BASE}/${procedureId}/pdf`;
+}
+
+export async function downloadProcedurePdf(procedureId) {
+  const response = await fetch(getProcedurePdfUrl(procedureId), {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement du PDF');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `procedure_${procedureId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// ==================== CATEGORIES ====================
+
+export async function getCategories() {
+  const response = await fetchWithAuth(`${API_BASE}/categories`);
+  return response.json();
+}
+
+// ==================== CONSTANTS ====================
+
+export const RISK_LEVELS = {
+  low: { label: 'Faible', color: 'green', bgColor: 'bg-green-100', textColor: 'text-green-800' },
+  medium: { label: 'Modéré', color: 'yellow', bgColor: 'bg-yellow-100', textColor: 'text-yellow-800' },
+  high: { label: 'Élevé', color: 'orange', bgColor: 'bg-orange-100', textColor: 'text-orange-800' },
+  critical: { label: 'Critique', color: 'red', bgColor: 'bg-red-100', textColor: 'text-red-800' },
+};
+
+export const STATUS_LABELS = {
+  draft: { label: 'Brouillon', color: 'gray', bgColor: 'bg-gray-100', textColor: 'text-gray-800' },
+  review: { label: 'En révision', color: 'blue', bgColor: 'bg-blue-100', textColor: 'text-blue-800' },
+  approved: { label: 'Approuvée', color: 'green', bgColor: 'bg-green-100', textColor: 'text-green-800' },
+  archived: { label: 'Archivée', color: 'gray', bgColor: 'bg-gray-200', textColor: 'text-gray-600' },
+};
+
+export const DEFAULT_PPE = [
+  'Casque de sécurité',
+  'Lunettes de protection',
+  'Gants isolants',
+  'Chaussures de sécurité',
+  'Vêtements antistatiques',
+  'Protection auditive',
+  'Masque respiratoire',
+  'Harnais de sécurité',
+];
+
+export const CATEGORY_ICONS = {
+  general: 'FileText',
+  maintenance: 'Wrench',
+  securite: 'Shield',
+  mise_en_service: 'Play',
+  mise_hors_service: 'PowerOff',
+  urgence: 'AlertTriangle',
+  controle: 'CheckCircle',
+  formation: 'Book',
+};

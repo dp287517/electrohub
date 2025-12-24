@@ -27,6 +27,7 @@ export const ALL_APPS = [
   { id: 'mobile-equipments', name: 'Mobile Equipments', icon: '🔌', category: 'Electrical', route: '/app/mobile-equipments' },
   { id: 'glo', name: 'Global Electrical Equipments', icon: '🔋', category: 'Electrical', route: '/app/glo' },
   { id: 'datahub', name: 'Datahub', icon: '🗄️', category: 'Electrical', route: '/app/datahub' },
+  { id: 'procedures', name: 'Operational Procedures', icon: '📋', category: 'Utilities', route: '/app/procedures' },
 ];
 
 // Get user permissions from localStorage

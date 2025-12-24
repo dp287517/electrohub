@@ -1758,6 +1758,8 @@ const gloTarget = process.env.GLO_BASE_URL || "http://127.0.0.1:3023";
 const datahubTarget = process.env.DATAHUB_BASE_URL || "http://127.0.0.1:3024";
 // 🤖 AI Assistant (avatar intelligent avec OpenAI/Gemini) — microservice sur 3025
 const aiAssistantTarget = process.env.AI_ASSISTANT_BASE_URL || "http://127.0.0.1:3025";
+// 📋 Procedures (Procédures opérationnelles avec création guidée par IA) — microservice sur 3026
+const proceduresTarget = process.env.PROCEDURES_BASE_URL || "http://127.0.0.1:3026";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 // 🔵 Infrastructure (plans électriques multi-zones) — intégré dans server_atex.js (port 3001)
@@ -1864,6 +1866,9 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 
 // >>> Datahub (Custom categories with map markers) : re-stream pour uploads
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
+
+// >>> Procedures (Procédures opérationnelles avec création guidée par IA) : re-stream pour uploads photos
+app.use("/api/procedures", mkProxy(proceduresTarget, { withRestream: true }));
 
 // >>> AI Assistant - Powerful AI with OpenAI + Database access
 app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
