@@ -573,12 +573,12 @@ async function generateProcedurePDF(procedureId) {
     darkBg: "#111827",
   };
 
-  // Risk level colors and labels
+  // Risk level colors and labels (using text instead of emojis for PDF compatibility)
   const riskConfig = {
-    low: { color: colors.success, label: "FAIBLE", icon: "✓" },
-    medium: { color: colors.warning, label: "MODÉRÉ", icon: "⚠" },
-    high: { color: colors.danger, label: "ÉLEVÉ", icon: "⚠" },
-    critical: { color: "#7f1d1d", label: "CRITIQUE", icon: "⛔" },
+    low: { color: colors.success, label: "FAIBLE", icon: "[OK]" },
+    medium: { color: colors.warning, label: "MODERE", icon: "[!]" },
+    high: { color: colors.danger, label: "ELEVE", icon: "[!!]" },
+    critical: { color: "#7f1d1d", label: "CRITIQUE", icon: "[XXX]" },
   };
 
   const riskInfo = riskConfig[procedure.risk_level] || riskConfig.low;
@@ -678,7 +678,7 @@ async function generateProcedurePDF(procedureId) {
 
   // Header
   doc.rect(0, 0, 595, 60).fill(colors.danger);
-  doc.fontSize(20).fillColor("#fff").text("⚠ SÉCURITÉ & EPI", 50, 22, { width: 495 });
+  doc.fontSize(20).fillColor("#fff").text("SECURITE & EPI", 50, 22, { width: 495 });
 
   yPos = 90;
 
@@ -688,17 +688,6 @@ async function generateProcedurePDF(procedureId) {
 
   const ppeList = procedure.ppe_required || [];
   if (ppeList.length > 0) {
-    const ppeIcons = {
-      "Casque de sécurité": "🪖",
-      "Lunettes de protection": "🥽",
-      "Gants isolants": "🧤",
-      "Chaussures de sécurité": "👞",
-      "Protection auditive": "🎧",
-      "Masque respiratoire": "😷",
-      "Harnais de sécurité": "🦺",
-      "Vêtements antistatiques": "👔",
-    };
-
     const ppePerRow = 2;
     ppeList.forEach((ppe, i) => {
       const col = i % ppePerRow;
@@ -707,7 +696,7 @@ async function generateProcedurePDF(procedureId) {
       const y = yPos + row * 45;
 
       doc.roundedRect(x, y, 245, 40, 5).fillAndStroke("#fef3c7", colors.warning);
-      doc.fontSize(11).fillColor(colors.text).text(`${ppeIcons[ppe] || "•"} ${ppe}`, x + 15, y + 14, { width: 220 });
+      doc.fontSize(11).fillColor(colors.text).text(`* ${ppe}`, x + 15, y + 14, { width: 220 });
     });
 
     yPos += Math.ceil(ppeList.length / ppePerRow) * 45 + 20;
@@ -725,7 +714,7 @@ async function generateProcedurePDF(procedureId) {
   if (safetyCodes.length > 0) {
     safetyCodes.forEach((code, i) => {
       doc.roundedRect(50, yPos, 495, 30, 5).fillAndStroke("#dbeafe", colors.primary);
-      doc.fontSize(10).fillColor(colors.text).text(`📋 ${code}`, 65, yPos + 10, { width: 465 });
+      doc.fontSize(10).fillColor(colors.text).text(`> ${code}`, 65, yPos + 10, { width: 465 });
       yPos += 35;
     });
   } else {
@@ -738,7 +727,7 @@ async function generateProcedurePDF(procedureId) {
   if (contacts.length > 0) {
     yPos += 30;
     doc.rect(50, yPos, 495, 40 + contacts.length * 35).fillAndStroke("#fef2f2", colors.danger);
-    doc.fontSize(14).fillColor(colors.danger).text("📞 CONTACTS D'URGENCE", 70, yPos + 15);
+    doc.fontSize(14).fillColor(colors.danger).text("CONTACTS D'URGENCE", 70, yPos + 15);
     yPos += 45;
 
     contacts.forEach((contact, i) => {
@@ -753,22 +742,29 @@ async function generateProcedurePDF(procedureId) {
   // === STEPS PAGES ===
   doc.addPage();
   doc.rect(0, 0, 595, 60).fill(colors.primary);
-  doc.fontSize(20).fillColor("#fff").text("📋 ÉTAPES DE LA PROCÉDURE", 50, 22, { width: 495 });
+  doc.fontSize(20).fillColor("#fff").text("ETAPES DE LA PROCEDURE", 50, 22, { width: 495 });
 
   yPos = 90;
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
 
+    // Calculate actual content height
+    const hasPhoto = step.photo_content || step.photo_path;
+    const instructionHeight = step.instructions ? doc.heightOfString(step.instructions, { width: 455 }) + 15 : 0;
+    const warningHeight = step.warning ? 45 : 0;
+    const photoHeight = hasPhoto ? 180 : 0;
+    const baseHeight = 60; // Header + padding
+    const stepHeight = baseHeight + instructionHeight + warningHeight + photoHeight;
+
     // Check if we need a new page
-    const stepHeight = 120 + (step.photo_content ? 180 : 0);
     if (yPos + stepHeight > 750) {
       doc.addPage();
       yPos = 50;
     }
 
     // Step card
-    doc.roundedRect(50, yPos, 495, stepHeight - 10, 10).fillAndStroke("#fff", "#e5e7eb");
+    doc.roundedRect(50, yPos, 495, stepHeight, 10).fillAndStroke("#fff", "#e5e7eb");
 
     // Step number circle
     doc.circle(80, yPos + 25, 18).fill(colors.primary);
@@ -779,7 +775,7 @@ async function generateProcedurePDF(procedureId) {
 
     // Duration if available
     if (step.duration_minutes) {
-      doc.fontSize(9).fillColor("#6b7280").font("Helvetica").text(`⏱ ${step.duration_minutes} min`, 450, yPos + 20);
+      doc.fontSize(9).fillColor("#6b7280").font("Helvetica").text(`${step.duration_minutes} min`, 450, yPos + 20);
     }
 
     let contentY = yPos + 45;
@@ -793,7 +789,7 @@ async function generateProcedurePDF(procedureId) {
     // Warning
     if (step.warning) {
       doc.roundedRect(70, contentY, 455, 30, 5).fillAndStroke("#fef3c7", colors.warning);
-      doc.fontSize(9).fillColor(colors.warning).text(`⚠ ${step.warning}`, 85, contentY + 10, { width: 425 });
+      doc.fontSize(9).fillColor(colors.warning).text(`ATTENTION: ${step.warning}`, 85, contentY + 10, { width: 425 });
       contentY += 40;
     }
 
@@ -819,14 +815,14 @@ async function generateProcedurePDF(procedureId) {
       }
     }
 
-    yPos += stepHeight;
+    yPos += stepHeight + 15; // Add spacing between steps
   }
 
   // === EQUIPMENT LINKS PAGE ===
   if (equipmentLinks.length > 0) {
     doc.addPage();
     doc.rect(0, 0, 595, 60).fill(colors.secondary);
-    doc.fontSize(20).fillColor("#fff").text("🔗 ÉQUIPEMENTS CONCERNÉS", 50, 22, { width: 495 });
+    doc.fontSize(20).fillColor("#fff").text("EQUIPEMENTS CONCERNES", 50, 22, { width: 495 });
 
     yPos = 90;
 
@@ -1616,6 +1612,7 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
     const userEmail = req.headers["x-user-email"] || "system";
+    const site = req.headers["x-site"] || req.query.site;
 
     // Get session data
     const { rows: sessions } = await pool.query(
@@ -1629,6 +1626,14 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
 
     const session = sessions[0];
     const data = session.collected_data || {};
+    const conversation = session.conversation || [];
+
+    // Extract photos from conversation (user messages with photos)
+    const conversationPhotos = conversation
+      .filter(msg => msg.role === 'user' && msg.photo)
+      .map(msg => msg.photo);
+
+    console.log(`[Procedures] Finalize: Found ${conversationPhotos.length} photos in conversation`);
 
     // Create procedure from collected data
     const { rows } = await pool.query(
@@ -1641,7 +1646,7 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
         data.title || "Nouvelle procédure",
         data.description || "",
         data.category || "general",
-        data.site,
+        data.site || site,
         data.building,
         data.zone,
         JSON.stringify(data.ppe_required || []),
@@ -1654,14 +1659,38 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
 
     const procedure = rows[0];
 
-    // Add steps
+    // Add steps with photos
     if (data.steps && data.steps.length > 0) {
       for (let i = 0; i < data.steps.length; i++) {
         const step = data.steps[i];
+        let photoContent = null;
+        let photoPath = null;
+
+        // Try to link a photo to this step
+        // Use photo from step data if available, otherwise use conversation photo
+        if (step.photo) {
+          photoPath = step.photo;
+        } else if (conversationPhotos[i]) {
+          photoPath = conversationPhotos[i];
+        }
+
+        // Read photo content if we have a path
+        if (photoPath) {
+          try {
+            const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+            if (fs.existsSync(fullPath)) {
+              photoContent = await fsp.readFile(fullPath);
+              console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath}`);
+            }
+          } catch (e) {
+            console.log(`[Procedures] Could not read photo for step ${i + 1}:`, e.message);
+          }
+        }
+
         await pool.query(
           `INSERT INTO procedure_steps
-           (procedure_id, step_number, title, description, instructions, warning, duration_minutes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (procedure_id, step_number, title, description, instructions, warning, duration_minutes, photo_path, photo_content)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             procedure.id,
             i + 1,
@@ -1670,6 +1699,37 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
             step.instructions,
             step.warning,
             step.duration_minutes,
+            photoPath,
+            photoContent,
+          ]
+        );
+      }
+    } else if (conversationPhotos.length > 0) {
+      // If no steps defined but we have photos, create steps from photos
+      console.log(`[Procedures] Creating ${conversationPhotos.length} steps from photos`);
+      for (let i = 0; i < conversationPhotos.length; i++) {
+        const photoPath = conversationPhotos[i];
+        let photoContent = null;
+
+        try {
+          const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+          if (fs.existsSync(fullPath)) {
+            photoContent = await fsp.readFile(fullPath);
+          }
+        } catch (e) {
+          console.log(`[Procedures] Could not read photo ${i}:`, e.message);
+        }
+
+        await pool.query(
+          `INSERT INTO procedure_steps
+           (procedure_id, step_number, title, photo_path, photo_content)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            procedure.id,
+            i + 1,
+            `Étape ${i + 1}`,
+            photoPath,
+            photoContent,
           ]
         );
       }
@@ -1883,10 +1943,26 @@ Durée estimée: ${s.duration_minutes || 'N/A'} minutes
       ]), sessionId]
     );
 
+    // Build step photos array
+    const stepPhotos = steps
+      .filter(s => s.photo_content || s.photo_path)
+      .map(s => ({
+        stepNumber: s.step_number,
+        url: `/api/procedures/steps/${s.id}/photo`
+      }));
+
+    // Get current step photo if available
+    const currentStep = steps.find(s => s.step_number === 1);
+    const currentStepPhoto = currentStep && (currentStep.photo_content || currentStep.photo_path)
+      ? `/api/procedures/steps/${currentStep.id}/photo`
+      : null;
+
     res.json({
       sessionId,
       procedureTitle: procedure.title,
       totalSteps: steps.length,
+      stepPhotos,
+      currentStepPhoto,
       ...aiResponse
     });
   } catch (err) {
@@ -1994,10 +2070,18 @@ ${steps.map(s => `Étape ${s.step_number}: ${s.title} - ${s.instructions || 'N/A
       [JSON.stringify(conversation), JSON.stringify(newCollectedData), sessionId]
     );
 
+    // Get current step photo based on AI response
+    const currentStepNum = aiResponse.currentStepNumber || newCollectedData.currentStepNumber || 1;
+    const currentStep = steps.find(s => s.step_number === currentStepNum);
+    const currentStepPhoto = currentStep && (currentStep.photo_content || currentStep.photo_path)
+      ? `/api/procedures/steps/${currentStep.id}/photo`
+      : null;
+
     res.json({
       ...aiResponse,
       photoAnalysis,
-      totalSteps: steps.length
+      totalSteps: steps.length,
+      currentStepPhoto
     });
   } catch (err) {
     console.error("Error in assistance:", err);
