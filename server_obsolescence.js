@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import multer from 'multer';
 import axios from 'axios';
 import { getSiteFilter } from './lib/tenant-filter.js';
@@ -19,6 +20,36 @@ const pool = new Pool({
   max: 10,                        // Limite le nombre de connexions
   statement_timeout: 10000        // Timeout pour les requêtes (10s)
 });
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log('[OBSOLESCENCE] Gemini initialized');
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return error?.status === 429 || error?.code === 'insufficient_quota' || msg.includes('429') || msg.includes('quota') || msg.includes('rate limit');
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+  const model = gemini.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 } });
+  let systemPrompt = '', contents = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') { systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content; continue; }
+    contents.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
+  }
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === 'user');
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
 
 // ========== VSD COST ESTIMATION ==========
 function estimateVsdCostGBP(vsd) {
@@ -221,6 +252,28 @@ try {
   if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 } catch {}
 
+async function chatWithFallback(messages, options = {}) {
+  if (openai) {
+    try {
+      const response = await openai.chat.completions.create({ model: options.model || 'gpt-4o-mini', messages, temperature: options.temperature ?? 0.7, max_tokens: options.max_tokens ?? 2000, ...(options.response_format && { response_format: options.response_format }) });
+      return { content: response.choices[0]?.message?.content || '', provider: 'openai' };
+    } catch (error) {
+      console.error('[OBSOLESCENCE] OpenAI failed:', error.message);
+      if (gemini && isQuotaError(error)) {
+        console.log('[OBSOLESCENCE] Fallback to Gemini...');
+        const content = await callGemini(messages, options);
+        return { content, provider: 'gemini' };
+      }
+      throw error;
+    }
+  }
+  if (gemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: 'gemini' };
+  }
+  throw new Error('No AI provider configured');
+}
+
 const app = express();
 app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
@@ -350,16 +403,14 @@ async function estimateFromWeb(type = '', inAmps = 0) {
     const abstract = r?.data?.AbstractText || '';
     if (!abstract) return null;
 
-    const comp = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    const result = await chatWithFallback(
+      [
         { role: 'system', content: 'Return ONE integer: installed cost in GBP (materials+labour), conservative, no symbols.' },
         { role: 'user', content: `Infer a realistic installed price for ${type} ${inAmps}A in the UK from: "${abstract}". Return just the number.` }
       ],
-      max_tokens: 10,
-      temperature: 0.2
-    });
-    const n = parseInt((comp.choices?.[0]?.message?.content || '').replace(/[^0-9]/g, ''), 10);
+      { max_tokens: 10, temperature: 0.2 }
+    );
+    const n = parseInt((result.content || '').replace(/[^0-9]/g, ''), 10);
     const val = Number.isFinite(n) && n > 0 ? n : null;
     if (val) webCostCache.set(key, val);
     return val;
@@ -969,9 +1020,8 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
       inlinePrice = `\n\n**Quick estimate** for ${typ.toUpperCase()} ${amps}A installed (UK): **£${final.toLocaleString('en-GB')}** ${web ? '(web-assist)' : '(heuristic)'}.\n`;
     }
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
+    const result = await chatWithFallback(
+      [
         { role: 'system', content:
 `You are an experienced IEC/IEEE asset-management engineer.
 Answer in concise bullet points, with actionable recommendations.
@@ -980,10 +1030,9 @@ Always add a short "Estimates & Scope" note: prices are indicative, include mate
         { role: 'user', content: `SITE DB (trimmed): ${context}` },
         { role: 'user', content: String(query || '') + inlinePrice }
       ],
-      max_tokens: 450,
-      temperature: 0.3
-    });
-    const response = completion.choices?.[0]?.message?.content?.trim() || 'No response';
+      { max_tokens: 450, temperature: 0.3 }
+    );
+    const response = result.content?.trim() || 'No response';
     res.json({ response, updates: false, web_cost: isWebCostEnabled });
   } catch (e) {
     console.error('[AI QUERY] error:', e.message);
