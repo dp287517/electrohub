@@ -2854,8 +2854,8 @@ async function atexExtractWithGemini(images) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // gemini-2.0-flash-exp est le seul modèle qui fonctionne avec les nouvelles clés API
-  const modelName = "gemini-2.0-flash-exp";
+  // Utiliser gemini-2.0-flash (stable) - plus fiable que exp
+  const modelName = "gemini-2.0-flash";
   const model = genAI.getGenerativeModel({ model: modelName });
 
   // Préparer les parts pour Gemini
