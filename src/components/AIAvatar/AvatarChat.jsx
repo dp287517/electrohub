@@ -376,11 +376,22 @@ export default function AvatarChat({
         pendingAction: response.pendingAction,
         provider: response.provider,
         model: response.model,
+        // Procedure tracking
+        procedureId: response.procedureId,
+        procedureMode: response.procedureMode,
+        procedureStep: response.procedureStep,
+        pdfUrl: response.pdfUrl,
         timestamp: new Date()
       };
 
       setMessages(prev => [...prev, assistantMessage]);
       speak(response.message);
+
+      // Si un PDF est disponible, on pourrait l'ouvrir automatiquement
+      if (response.pdfUrl && response.procedureComplete) {
+        // Optionnel: ouvrir le PDF dans un nouvel onglet
+        // window.open(response.pdfUrl, '_blank');
+      }
 
     } catch (error) {
       console.error('Erreur:', error);
