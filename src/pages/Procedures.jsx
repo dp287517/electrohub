@@ -3,14 +3,17 @@ import {
   Plus, Search, Filter, FileText, AlertTriangle, Shield,
   Wrench, Play, PowerOff, CheckCircle, Book, Download,
   ChevronDown, Grid, List, Clock, User, Building,
-  Sparkles, X, Loader2, FileSpreadsheet, Zap
+  Sparkles, X, Loader2, FileSpreadsheet, Zap, Package, ClipboardList, FileCheck
 } from 'lucide-react';
 import { ProcedureCreator, ProcedureViewer } from '../components/Procedures';
 import {
   listProcedures,
   getCategories,
   downloadProcedurePdf,
-  downloadExampleMethodStatementPdf,
+  downloadExampleRAMSPdf,
+  downloadExampleWorkMethodPdf,
+  downloadExampleProcedurePdf,
+  downloadAllExampleDocuments,
   generateExampleMethodStatement,
   RISK_LEVELS,
   STATUS_LABELS,
@@ -152,18 +155,33 @@ export default function Procedures() {
   const [showCreator, setShowCreator] = useState(false);
   const [selectedProcedure, setSelectedProcedure] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [generatingExample, setGeneratingExample] = useState(false);
+  const [generatingDoc, setGeneratingDoc] = useState(null); // 'rams' | 'method' | 'proc' | 'all' | null
+  const [showDocMenu, setShowDocMenu] = useState(false);
 
-  // Generate Example Method Statement (ATEX Demo based on Excel reference)
-  const handleGenerateExample = async () => {
-    setGeneratingExample(true);
+  // Download specific example document
+  const handleDownloadDocument = async (docType) => {
+    setGeneratingDoc(docType);
+    setShowDocMenu(false);
     try {
-      await downloadExampleMethodStatementPdf();
+      switch (docType) {
+        case 'rams':
+          await downloadExampleRAMSPdf();
+          break;
+        case 'method':
+          await downloadExampleWorkMethodPdf();
+          break;
+        case 'proc':
+          await downloadExampleProcedurePdf();
+          break;
+        case 'all':
+          await downloadAllExampleDocuments();
+          break;
+      }
     } catch (error) {
-      console.error('Error generating example:', error);
-      alert('Erreur lors de la génération de l\'exemple. Veuillez réessayer.');
+      console.error('Error generating document:', error);
+      alert('Erreur lors de la génération du document. Veuillez réessayer.');
     } finally {
-      setGeneratingExample(false);
+      setGeneratingDoc(null);
     }
   };
 
@@ -215,20 +233,86 @@ export default function Procedures() {
             <p className="text-gray-500 mt-1">Créez et gérez vos procédures de maintenance et sécurité</p>
           </div>
           <div className="flex items-center gap-3">
-            {/* Example Method Statement Button */}
-            <button
-              onClick={handleGenerateExample}
-              disabled={generatingExample}
-              className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2 shadow-lg shadow-amber-200 disabled:opacity-50"
-              title="Générer un Method Statement d'exemple basé sur le template ATEX"
-            >
-              {generatingExample ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <FileSpreadsheet className="w-5 h-5" />
+            {/* Example Documents Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDocMenu(!showDocMenu)}
+                disabled={generatingDoc !== null}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2 shadow-lg shadow-amber-200 disabled:opacity-50"
+                title="Télécharger les documents exemples"
+              >
+                {generatingDoc ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="w-5 h-5" />
+                )}
+                {generatingDoc ? 'Génération...' : 'Exemples'}
+                <ChevronDown className={`w-4 h-4 transition-transform ${showDocMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Dropdown Menu */}
+              {showDocMenu && (
+                <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden z-50">
+                  <div className="p-2">
+                    <p className="text-xs font-semibold text-gray-400 uppercase px-3 py-2">Documents Exemples</p>
+
+                    <button
+                      onClick={() => handleDownloadDocument('rams')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-amber-50 rounded-lg transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 bg-amber-100 rounded-lg flex items-center justify-center">
+                        <FileSpreadsheet className="w-4 h-4 text-amber-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">RAMS</p>
+                        <p className="text-xs text-gray-500">Analyse des risques (A3)</p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadDocument('method')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-blue-50 rounded-lg transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <ClipboardList className="w-4 h-4 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">Méthode de Travail</p>
+                        <p className="text-xs text-gray-500">Méthodologie détaillée (A4)</p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownloadDocument('proc')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-green-50 rounded-lg transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                        <FileCheck className="w-4 h-4 text-green-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">Procédure</p>
+                        <p className="text-xs text-gray-500">Étapes à suivre (A4)</p>
+                      </div>
+                    </button>
+
+                    <hr className="my-2 border-gray-100" />
+
+                    <button
+                      onClick={() => handleDownloadDocument('all')}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-violet-50 rounded-lg transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center">
+                        <Package className="w-4 h-4 text-violet-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">Télécharger tout</p>
+                        <p className="text-xs text-gray-500">Les 3 documents (ZIP)</p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
               )}
-              {generatingExample ? 'Génération...' : 'Exemple RAMS'}
-            </button>
+            </div>
 
             <button
               onClick={() => setShowCreator(true)}

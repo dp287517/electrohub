@@ -2233,6 +2233,98 @@ app.post("/api/procedures/generate-example-method-statement", async (req, res) =
   }
 });
 
+// API Endpoint: Generate Example Work Method PDF (A4)
+app.get("/api/procedures/example-work-method-pdf", async (req, res) => {
+  try {
+    console.log("[Work Method] Generating example Work Method PDF...");
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    const pdfBuffer = await generateExampleWorkMethodPDF(baseUrl);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Methode_Travail_Exemple_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    console.log("[Work Method] Example PDF generated successfully");
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("[Work Method] Error generating example PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API Endpoint: Generate Example Procedure PDF (A4)
+app.get("/api/procedures/example-procedure-pdf", async (req, res) => {
+  try {
+    console.log("[Procedure] Generating example Procedure PDF...");
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    const pdfBuffer = await generateExampleProcedurePDF(baseUrl);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Procedure_Exemple_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    console.log("[Procedure] Example PDF generated successfully");
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("[Procedure] Error generating example PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API Endpoint: Download all 3 documents as ZIP
+app.get("/api/procedures/example-all-documents", async (req, res) => {
+  try {
+    console.log("[Documents] Generating all example documents...");
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Generate all 3 PDFs
+    const [ramsPdf, workMethodPdf, procedurePdf] = await Promise.all([
+      generateExampleMethodStatementPDF(baseUrl),
+      generateExampleWorkMethodPDF(baseUrl),
+      generateExampleProcedurePDF(baseUrl)
+    ]);
+
+    // Create ZIP archive
+    const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Documentation_Complete_${new Date().toISOString().split("T")[0]}.zip"`
+    );
+
+    archive.pipe(res);
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    archive.append(ramsPdf, { name: `RAMS_${dateStr}.pdf` });
+    archive.append(workMethodPdf, { name: `Methode_Travail_${dateStr}.pdf` });
+    archive.append(procedurePdf, { name: `Procedure_${dateStr}.pdf` });
+
+    await archive.finalize();
+
+    console.log("[Documents] All documents generated successfully");
+  } catch (err) {
+    console.error("[Documents] Error generating documents:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get single procedure with all details
 app.get("/api/procedures/:id", async (req, res) => {
   try {
@@ -3514,10 +3606,12 @@ const EXAMPLE_RAMS_DATA = {
 async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.app') {
   const data = EXAMPLE_RAMS_DATA;
 
-  // Generate QR Code
+  // Generate QR Code - Links to AI assistant for this procedure
+  const docRef = `RAMS-${data.workDate.replace(/\//g, '')}`;
   let qrCodeBuffer = null;
   try {
-    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures?example=true&ai=true`, {
+    // QR Code links to the AI assistant page with procedure context
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=rams`, {
       width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
@@ -3588,39 +3682,56 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
 
   // === PAGE 1: HEADER + RISK TABLE ===
 
-  // Header background - GREEN #30EA03
-  const headerH = 60;
+  // Header background - GREEN #30EA03 - Increased height for better layout
+  const headerH = 75;
   doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
 
-  // Company name / Logo area - black text on green
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
-     .text(data.company.toUpperCase(), margin + 5, 12);
+  // Left section: Company + RAMS badge
+  doc.font("Helvetica-Bold").fontSize(16).fillColor(c.headerText)
+     .text(data.company.toUpperCase(), margin + 5, 8);
 
-  // Method Statement badge
-  doc.roundedRect(margin + 5, 30, 140, 22, 4).fill(c.primary);
-  doc.fontSize(11).fillColor(c.white).text("METHOD STATEMENT", margin + 12, 35);
+  // RAMS badge (renamed from METHOD STATEMENT)
+  doc.roundedRect(margin + 5, 28, 70, 20, 4).fill(c.darkBlue);
+  doc.fontSize(10).fillColor(c.white).text("RAMS", margin + 22, 33);
 
-  // Main title centered - black text on green
-  const titleW = 500;
-  const titleX = (pageWidth - titleW) / 2;
-  doc.fontSize(12).fillColor(c.headerText)
-     .text(data.activity.toUpperCase(), titleX, 8, { width: titleW, align: "center" });
-  doc.fontSize(8).fillColor("#1a5c00")
-     .text(`Activite: ${data.category} | Version ${data.version} | ${data.workDate}`, titleX, 26, { width: titleW, align: "center" });
+  // Document reference under badge
+  doc.font("Helvetica").fontSize(7).fillColor("#1a5c00")
+     .text(`Ref: RAMS-${data.workDate.replace(/\//g, '')}`, margin + 5, 52);
+
+  // Center section: Main title (properly positioned, no overlap)
+  const titleStartX = 200;
+  const titleEndX = pageWidth - 250;
+  const titleW = titleEndX - titleStartX;
+
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.headerText)
+     .text(data.activity.toUpperCase(), titleStartX, 6, { width: titleW, align: "center" });
+
+  // Subtitle info on separate lines
+  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
+     .text(`Activite: ${data.category}`, titleStartX, 24, { width: titleW, align: "center" });
   doc.fontSize(7).fillColor("#2d7a00")
-     .text(`Date de travaux: ${data.workDate} | Heure: ${data.workTime} | Collaborateurs: ${data.workers}`, titleX, 40, { width: titleW, align: "center" });
+     .text(`Date: ${data.workDate} | Heure: ${data.workTime}`, titleStartX, 38, { width: titleW, align: "center" });
+  doc.fontSize(7).fillColor("#2d7a00")
+     .text(`Version ${data.version} | ${data.workers} collaborateur(s)`, titleStartX, 50, { width: titleW, align: "center" });
 
-  // Risk badge
+  // Document links indicator
+  doc.font("Helvetica").fontSize(6).fillColor(c.headerText)
+     .text("Documents lies: RAMS | Methode de Travail | Procedure", titleStartX, 62, { width: titleW, align: "center" });
+
+  // Right section: Risk badge + QR Code
   const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.darkRed };
   const riskLabels = { low: "FAIBLE", medium: "MODERE", high: "ELEVE", critical: "CRITIQUE" };
-  doc.roundedRect(pageWidth - 170, 8, 70, 44, 5).fill(riskColors[data.riskLevel]);
-  doc.fontSize(7).fillColor(c.white).text("RISQUE", pageWidth - 165, 14, { width: 60, align: "center" });
-  doc.fontSize(12).text(riskLabels[data.riskLevel], pageWidth - 165, 28, { width: 60, align: "center" });
+  doc.roundedRect(pageWidth - 170, 6, 70, 44, 5).fill(riskColors[data.riskLevel]);
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(c.white).text("RISQUE", pageWidth - 165, 12, { width: 60, align: "center" });
+  doc.fontSize(11).text(riskLabels[data.riskLevel], pageWidth - 165, 26, { width: 60, align: "center" });
 
-  // QR Code
+  // QR Code - Fixed URL to AI assistant
   if (qrCodeBuffer) {
     try {
-      doc.image(qrCodeBuffer, pageWidth - margin - 65, 5, { width: 50 });
+      doc.image(qrCodeBuffer, pageWidth - margin - 60, 8, { width: 48 });
+      doc.font("Helvetica").fontSize(5).fillColor(c.headerText)
+         .text("Scanner pour", pageWidth - margin - 60, 58, { width: 48, align: "center" });
+      doc.text("assistant IA", pageWidth - margin - 60, 64, { width: 48, align: "center" });
     } catch (e) {}
   }
 
@@ -3976,20 +4087,576 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
      .text(`Reduction: ${reduction}%`, sidebarX + sidebarW / 2, ry + 42);
 
+  // === SIGNATURE SECTION ===
+  // Add new page for signatures
+  doc.addPage();
+
+  // Header for signature page
+  doc.rect(0, 0, pageWidth, 40).fill(c.headerBg);
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
+     .text("SIGNATURES ET APPROBATIONS - RAMS", margin, 12, { width: pageWidth - margin * 2, align: "center" });
+  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
+     .text(`Document: ${docRef} | ${data.activity}`, margin, 28, { width: pageWidth - margin * 2, align: "center" });
+
+  let sigY = 60;
+
+  // Creator signature
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("REDACTEUR / CREATEUR", margin, sigY);
+  doc.rect(margin, sigY + 15, 350, 80).stroke(c.border);
+  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
+  doc.text("Nom:", margin + 10, sigY + 25);
+  doc.text("Fonction:", margin + 10, sigY + 45);
+  doc.text("Date:", margin + 10, sigY + 65);
+  doc.text("Signature:", margin + 180, sigY + 25);
+
+  // Approver signature
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("APPROBATEUR HSE", margin + 400, sigY);
+  doc.rect(margin + 400, sigY + 15, 350, 80).stroke(c.border);
+  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
+  doc.text("Nom:", margin + 410, sigY + 25);
+  doc.text("Fonction:", margin + 410, sigY + 45);
+  doc.text("Date:", margin + 410, sigY + 65);
+  doc.text("Signature:", margin + 580, sigY + 25);
+
+  sigY += 110;
+
+  // Technicians signatures
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+     .text("TECHNICIENS / INTERVENANTS - Prise de connaissance et engagement", margin, sigY);
+
+  sigY += 20;
+  const techBoxW = (pageWidth - margin * 2 - 30) / 3;
+
+  for (let i = 0; i < 6; i++) {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const tx = margin + col * (techBoxW + 15);
+    const ty = sigY + row * 90;
+
+    doc.rect(tx, ty, techBoxW, 80).stroke(c.border);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text)
+       .text(`Intervenant ${i + 1}`, tx + 10, ty + 8);
+    doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+    doc.text("Nom:", tx + 10, ty + 25);
+    doc.text("Date:", tx + 10, ty + 42);
+    doc.text("Signature:", tx + 10, ty + 59);
+    doc.text("J'ai lu et compris le RAMS", tx + techBoxW / 2, ty + 25, { width: techBoxW / 2 - 15 });
+  }
+
+  sigY += 200;
+
+  // Document linkage info
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
+     .text("DOCUMENTS LIES", margin, sigY);
+  doc.font("Helvetica").fontSize(8).fillColor(c.text);
+  doc.text(`[  ] Methode de Travail - Ref: MT-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 18);
+  doc.text(`[  ] Procedure - Ref: PROC-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 34);
+
   // === FOOTER ===
   const footerY = pageHeight - 18;
   doc.rect(0, footerY, pageWidth, 18).fill(c.headerBg);
 
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.headerText);
-  doc.text(`${data.company} - RAMS Example`, margin, footerY + 4);
+  doc.text(`${data.company} - RAMS`, margin, footerY + 4);
   doc.text(`Document genere par IA - ${new Date().toLocaleString("fr-FR")}`, pageWidth / 2 - 100, footerY + 4, { width: 200, align: "center" });
-  doc.text(`Template base sur RAMS_B20_ATEX`, pageWidth - margin - 180, footerY + 4, { width: 180, align: "right" });
+  doc.text(`Ref: ${docRef}`, pageWidth - margin - 180, footerY + 4, { width: 180, align: "right" });
 
   doc.end();
 
   return new Promise((resolve) => {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
   });
+}
+
+// ====================================
+// WORK METHOD PDF GENERATOR (A4)
+// Detailed work methodology with photos
+// ====================================
+async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
+  const data = procedureData;
+  const docRef = `MT-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
+
+  // Generate QR Code
+  let qrCodeBuffer = null;
+  try {
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=workmethod`, {
+      width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
+    });
+  } catch (e) {
+    console.log("[Work Method] QR code error:", e.message);
+  }
+
+  // A4 Portrait
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 30;
+
+  const doc = new PDFDocument({
+    size: 'A4',
+    margins: { top: margin, bottom: margin, left: margin, right: margin },
+    bufferPages: true,
+    info: {
+      Title: `Methode de Travail - ${data.title || data.activity}`,
+      Author: data.company || "ElectroHub",
+      Subject: "Work Method Documentation",
+    },
+  });
+
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+
+  const c = {
+    headerBg: "#30EA03",
+    headerText: "#000000",
+    primary: "#7c3aed",
+    danger: "#dc2626",
+    warning: "#f59e0b",
+    success: "#16a34a",
+    info: "#2563eb",
+    text: "#1f2937",
+    lightText: "#6b7280",
+    lightBg: "#f8fafc",
+    border: "#d1d5db",
+    white: "#ffffff",
+    darkBlue: "#1e1b4b",
+  };
+
+  const contentW = pageWidth - margin * 2;
+
+  // === HEADER ===
+  doc.rect(0, 0, pageWidth, 70).fill(c.headerBg);
+
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.headerText)
+     .text(data.company || "ELECTROHUB", margin, 8);
+
+  doc.roundedRect(margin, 24, 120, 18, 3).fill(c.info);
+  doc.fontSize(9).fillColor(c.white).text("METHODE DE TRAVAIL", margin + 8, 28);
+
+  doc.font("Helvetica").fontSize(7).fillColor("#1a5c00")
+     .text(`Ref: ${docRef}`, margin, 48);
+
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.headerText)
+     .text(data.title || data.activity, margin + 150, 12, { width: 280, align: "center" });
+  doc.font("Helvetica").fontSize(7).fillColor("#2d7a00")
+     .text(`Version ${data.version || 1} | ${new Date().toLocaleDateString('fr-FR')}`, margin + 150, 28, { width: 280, align: "center" });
+
+  // Document links
+  doc.fontSize(6).fillColor(c.headerText)
+     .text("Docs lies: RAMS | Methode | Procedure", margin + 150, 42, { width: 280, align: "center" });
+
+  if (qrCodeBuffer) {
+    try {
+      doc.image(qrCodeBuffer, pageWidth - margin - 45, 8, { width: 40 });
+    } catch (e) {}
+  }
+
+  let y = 85;
+
+  // === INTRODUCTION ===
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
+     .text("OBJECTIF DE L'INTERVENTION", margin, y);
+  y += 15;
+
+  doc.rect(margin, y, contentW, 50).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(9).fillColor(c.text)
+     .text(data.description || data.activity || "Description de l'intervention", margin + 10, y + 10, { width: contentW - 20 });
+  y += 60;
+
+  // === STEPS WITH PHOTOS ===
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
+     .text("METHODOLOGIE DETAILLEE", margin, y);
+  y += 20;
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+
+    // Check if we need a new page
+    if (y > pageHeight - 200) {
+      doc.addPage();
+      y = margin;
+    }
+
+    // Step header
+    doc.roundedRect(margin, y, contentW, 25, 3).fill(c.darkBlue);
+    doc.circle(margin + 18, y + 12, 10).fill(c.primary);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(step.step_number || i + 1), margin + 13, y + 7);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+       .text(step.title, margin + 40, y + 7);
+
+    if (step.duration_minutes) {
+      doc.font("Helvetica").fontSize(8).fillColor("#a5b4fc")
+         .text(`Duree: ${step.duration_minutes} min`, pageWidth - margin - 80, y + 8);
+    }
+    y += 30;
+
+    // Step content box
+    const contentBoxH = 120;
+    doc.rect(margin, y, contentW, contentBoxH).stroke(c.border);
+
+    // Photo area (left)
+    const photoW = 150;
+    const photoH = contentBoxH - 10;
+    doc.rect(margin + 5, y + 5, photoW, photoH).fillAndStroke(c.lightBg, c.border);
+
+    if (step.photo_content || step.photo_path) {
+      try {
+        if (step.photo_content) {
+          doc.image(step.photo_content, margin + 5, y + 5, { fit: [photoW, photoH], align: 'center', valign: 'center' });
+        }
+      } catch (e) {
+        doc.font("Helvetica").fontSize(8).fillColor(c.lightText)
+           .text("Photo disponible", margin + 5 + photoW / 2 - 30, y + photoH / 2);
+      }
+    } else {
+      // Placeholder
+      doc.font("Helvetica").fontSize(8).fillColor(c.lightText)
+         .text("Photo etape " + (step.step_number || i + 1), margin + 35, y + photoH / 2);
+    }
+
+    // Instructions (right)
+    const textX = margin + photoW + 15;
+    const textW = contentW - photoW - 25;
+
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text)
+       .text("Instructions:", textX, y + 8);
+    doc.font("Helvetica").fontSize(8).fillColor(c.text)
+       .text(step.instructions || step.description || "Suivre la procedure standard", textX, y + 20, { width: textW, height: 45 });
+
+    if (step.warning) {
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger)
+         .text("! Attention:", textX, y + 70);
+      doc.font("Helvetica").fontSize(7).fillColor(c.danger)
+         .text(step.warning, textX, y + 82, { width: textW, height: 30 });
+    }
+
+    y += contentBoxH + 10;
+  }
+
+  // === SIGNATURE SECTION ===
+  if (y > pageHeight - 150) {
+    doc.addPage();
+    y = margin;
+  }
+
+  y += 20;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
+     .text("VALIDATION", margin, y);
+  y += 18;
+
+  // Signature boxes
+  const sigW = (contentW - 20) / 2;
+  doc.rect(margin, y, sigW, 60).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text).text("Redacteur", margin + 10, y + 8);
+  doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+  doc.text("Nom:", margin + 10, y + 25);
+  doc.text("Date:", margin + 10, y + 40);
+
+  doc.rect(margin + sigW + 20, y, sigW, 60).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text).text("Technicien", margin + sigW + 30, y + 8);
+  doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+  doc.text("Nom:", margin + sigW + 30, y + 25);
+  doc.text("Date:", margin + sigW + 30, y + 40);
+
+  // Footer on all pages
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+    doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
+    doc.font("Helvetica").fontSize(7).fillColor(c.headerText);
+    doc.text(data.company || "ElectroHub", margin, pageHeight - 14);
+    doc.text(`Methode de Travail - ${docRef}`, pageWidth / 2 - 60, pageHeight - 14, { width: 120, align: "center" });
+    doc.text(`Page ${i + 1}/${range.count}`, pageWidth - margin - 50, pageHeight - 14, { width: 50, align: "right" });
+  }
+
+  doc.end();
+
+  return new Promise((resolve) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+// ====================================
+// PROCEDURE PDF GENERATOR (A4)
+// Clear step-by-step procedure
+// ====================================
+async function generateProcedurePDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
+  const data = procedureData;
+  const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
+
+  // Generate QR Code
+  let qrCodeBuffer = null;
+  try {
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=procedure`, {
+      width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
+    });
+  } catch (e) {
+    console.log("[Procedure] QR code error:", e.message);
+  }
+
+  // A4 Portrait
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 30;
+
+  const doc = new PDFDocument({
+    size: 'A4',
+    margins: { top: margin, bottom: margin, left: margin, right: margin },
+    bufferPages: true,
+    info: {
+      Title: `Procedure - ${data.title || data.activity}`,
+      Author: data.company || "ElectroHub",
+      Subject: "Operating Procedure",
+    },
+  });
+
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+
+  const c = {
+    headerBg: "#30EA03",
+    headerText: "#000000",
+    primary: "#7c3aed",
+    danger: "#dc2626",
+    warning: "#f59e0b",
+    success: "#16a34a",
+    info: "#2563eb",
+    text: "#1f2937",
+    lightText: "#6b7280",
+    lightBg: "#f8fafc",
+    border: "#d1d5db",
+    white: "#ffffff",
+    darkBlue: "#1e1b4b",
+  };
+
+  const contentW = pageWidth - margin * 2;
+
+  // === HEADER ===
+  doc.rect(0, 0, pageWidth, 70).fill(c.headerBg);
+
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.headerText)
+     .text(data.company || "ELECTROHUB", margin, 8);
+
+  doc.roundedRect(margin, 24, 90, 18, 3).fill(c.success);
+  doc.fontSize(9).fillColor(c.white).text("PROCEDURE", margin + 12, 28);
+
+  doc.font("Helvetica").fontSize(7).fillColor("#1a5c00")
+     .text(`Ref: ${docRef}`, margin, 48);
+
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.headerText)
+     .text(data.title || data.activity, margin + 120, 12, { width: 320, align: "center" });
+  doc.font("Helvetica").fontSize(7).fillColor("#2d7a00")
+     .text(`Version ${data.version || 1} | ${new Date().toLocaleDateString('fr-FR')}`, margin + 120, 28, { width: 320, align: "center" });
+
+  doc.fontSize(6).fillColor(c.headerText)
+     .text("Docs lies: RAMS | Methode | Procedure", margin + 120, 42, { width: 320, align: "center" });
+
+  if (qrCodeBuffer) {
+    try {
+      doc.image(qrCodeBuffer, pageWidth - margin - 45, 8, { width: 40 });
+    } catch (e) {}
+  }
+
+  let y = 85;
+
+  // === PROCEDURE INFO BOX ===
+  doc.rect(margin, y, contentW, 60).fillAndStroke(c.lightBg, c.border);
+
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.text);
+  doc.text("Categorie:", margin + 10, y + 10);
+  doc.text("Niveau de risque:", margin + 10, y + 25);
+  doc.text("Duree estimee:", margin + 10, y + 40);
+
+  doc.font("Helvetica").fontSize(9).fillColor(c.text);
+  doc.text(data.category || "General", margin + 100, y + 10);
+
+  const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.danger };
+  const riskLabels = { low: "Faible", medium: "Modere", high: "Eleve", critical: "Critique" };
+  doc.fillColor(riskColors[data.risk_level || data.riskLevel] || c.success)
+     .text(riskLabels[data.risk_level || data.riskLevel] || "Faible", margin + 100, y + 25);
+
+  const totalDuration = steps.reduce((sum, s) => sum + (s.duration_minutes || 10), 0);
+  doc.fillColor(c.text).text(`${totalDuration} minutes`, margin + 100, y + 40);
+
+  // PPE required
+  const ppeList = data.ppe_required || data.ppeRequired || [];
+  if (ppeList.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.text)
+       .text("EPI requis:", margin + 280, y + 10);
+    doc.font("Helvetica").fontSize(8).fillColor(c.info)
+       .text(ppeList.slice(0, 4).join(", "), margin + 280, y + 22, { width: 240 });
+  }
+
+  y += 70;
+
+  // === STEPS CHECKLIST ===
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
+     .text("ETAPES A SUIVRE", margin, y);
+  y += 20;
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+
+    // Check for new page
+    if (y > pageHeight - 100) {
+      doc.addPage();
+      y = margin;
+    }
+
+    // Step box with checkbox
+    const stepH = 55;
+    doc.rect(margin, y, contentW, stepH).stroke(c.border);
+
+    // Checkbox
+    doc.rect(margin + 8, y + 8, 15, 15).stroke(c.border);
+
+    // Step number circle
+    doc.circle(margin + 45, y + 15, 12).fill(c.primary);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(step.step_number || i + 1), margin + 40, y + 10);
+
+    // Step title
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
+       .text(step.title, margin + 65, y + 8, { width: contentW - 150 });
+
+    // Duration badge
+    if (step.duration_minutes) {
+      doc.roundedRect(pageWidth - margin - 60, y + 5, 50, 16, 3).fill(c.lightBg);
+      doc.font("Helvetica").fontSize(7).fillColor(c.lightText)
+         .text(`${step.duration_minutes} min`, pageWidth - margin - 55, y + 9);
+    }
+
+    // Instructions
+    doc.font("Helvetica").fontSize(8).fillColor(c.text)
+       .text(step.instructions || step.description || "Executer cette etape selon les consignes", margin + 65, y + 25, { width: contentW - 80, height: 25 });
+
+    // Warning if exists
+    if (step.warning) {
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger)
+         .text("! " + step.warning.substring(0, 80), margin + 65, y + 42, { width: contentW - 80 });
+    }
+
+    // Validation checkbox
+    if (step.requires_validation) {
+      doc.rect(pageWidth - margin - 20, y + stepH - 20, 12, 12).stroke(c.success);
+      doc.font("Helvetica").fontSize(6).fillColor(c.success)
+         .text("Valid.", pageWidth - margin - 45, y + stepH - 18);
+    }
+
+    y += stepH + 5;
+  }
+
+  // === COMPLETION SECTION ===
+  if (y > pageHeight - 180) {
+    doc.addPage();
+    y = margin;
+  }
+
+  y += 15;
+
+  // Notes section
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
+     .text("NOTES / OBSERVATIONS", margin, y);
+  y += 15;
+  doc.rect(margin, y, contentW, 60).stroke(c.border);
+  y += 70;
+
+  // Signature section
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
+     .text("SIGNATURES DE COMPLETION", margin, y);
+  y += 18;
+
+  const sigW = (contentW - 30) / 3;
+
+  // Technician
+  doc.rect(margin, y, sigW, 70).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text).text("Executant", margin + 10, y + 8);
+  doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+  doc.text("Nom:", margin + 10, y + 25);
+  doc.text("Date:", margin + 10, y + 40);
+  doc.text("Signature:", margin + 10, y + 55);
+
+  // Verifier
+  doc.rect(margin + sigW + 15, y, sigW, 70).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text).text("Verificateur", margin + sigW + 25, y + 8);
+  doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+  doc.text("Nom:", margin + sigW + 25, y + 25);
+  doc.text("Date:", margin + sigW + 25, y + 40);
+  doc.text("Signature:", margin + sigW + 25, y + 55);
+
+  // Approver
+  doc.rect(margin + (sigW + 15) * 2, y, sigW, 70).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text).text("Approbateur", margin + (sigW + 15) * 2 + 10, y + 8);
+  doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
+  doc.text("Nom:", margin + (sigW + 15) * 2 + 10, y + 25);
+  doc.text("Date:", margin + (sigW + 15) * 2 + 10, y + 40);
+  doc.text("Signature:", margin + (sigW + 15) * 2 + 10, y + 55);
+
+  // Footer on all pages
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i++) {
+    doc.switchToPage(i);
+    doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
+    doc.font("Helvetica").fontSize(7).fillColor(c.headerText);
+    doc.text(data.company || "ElectroHub", margin, pageHeight - 14);
+    doc.text(`Procedure - ${docRef}`, pageWidth / 2 - 50, pageHeight - 14, { width: 100, align: "center" });
+    doc.text(`Page ${i + 1}/${range.count}`, pageWidth - margin - 50, pageHeight - 14, { width: 50, align: "right" });
+  }
+
+  doc.end();
+
+  return new Promise((resolve) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+// ====================================
+// EXAMPLE DATA FOR ALL 3 DOCUMENTS
+// ====================================
+function getExampleDocumentData() {
+  return {
+    procedure: {
+      title: EXAMPLE_RAMS_DATA.activity,
+      activity: EXAMPLE_RAMS_DATA.activity,
+      description: "Intervention de maintenance electrique en zone ATEX pour le remplacement de materiel non conforme et ajout de mises a terre supplementaires.",
+      category: EXAMPLE_RAMS_DATA.category,
+      company: EXAMPLE_RAMS_DATA.company,
+      version: EXAMPLE_RAMS_DATA.version,
+      risk_level: EXAMPLE_RAMS_DATA.riskLevel,
+      riskLevel: EXAMPLE_RAMS_DATA.riskLevel,
+      ppe_required: EXAMPLE_RAMS_DATA.ppeRequired,
+      ppeRequired: EXAMPLE_RAMS_DATA.ppeRequired,
+      safety_codes: EXAMPLE_RAMS_DATA.safetyCodes,
+      workDate: EXAMPLE_RAMS_DATA.workDate,
+      workTime: EXAMPLE_RAMS_DATA.workTime,
+      workers: EXAMPLE_RAMS_DATA.workers,
+    },
+    steps: EXAMPLE_RAMS_DATA.steps.map((s, i) => ({
+      step_number: s.number,
+      title: s.title,
+      description: s.hazards[0]?.measures || "Suivre les consignes de securite",
+      instructions: s.hazards.map(h => h.measures).join(". "),
+      warning: s.hazards.find(h => h.gi >= 4)?.danger || null,
+      duration_minutes: 15 + i * 5,
+      requires_validation: s.hazards.some(h => h.gi >= 4),
+      photo_path: null,
+      photo_content: null,
+    }))
+  };
+}
+
+// Example Work Method PDF Generator
+async function generateExampleWorkMethodPDF(baseUrl = 'https://electrohub.app') {
+  const { procedure, steps } = getExampleDocumentData();
+  return generateWorkMethodPDF(procedure, steps, baseUrl);
+}
+
+// Example Procedure PDF Generator
+async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
+  const { procedure, steps } = getExampleDocumentData();
+  return generateProcedurePDF(procedure, steps, baseUrl);
 }
 
 // ------------------------------

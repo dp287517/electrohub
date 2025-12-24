@@ -245,8 +245,8 @@ export async function generateExampleMethodStatement() {
   return response.json();
 }
 
-// Download Example Method Statement PDF directly
-export async function downloadExampleMethodStatementPdf() {
+// Download Example RAMS PDF (A3) directly
+export async function downloadExampleRAMSPdf() {
   const response = await fetch(`${API_BASE}/example-method-statement-pdf`, {
     headers: {
       'X-User-Email': localStorage.getItem('userEmail') || '',
@@ -255,7 +255,7 @@ export async function downloadExampleMethodStatementPdf() {
   });
 
   if (!response.ok) {
-    throw new Error('Erreur lors du téléchargement du Method Statement Exemple');
+    throw new Error('Erreur lors du téléchargement du RAMS Exemple');
   }
 
   const blob = await response.blob();
@@ -263,6 +263,81 @@ export async function downloadExampleMethodStatementPdf() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `RAMS_Exemple_ATEX_${new Date().toISOString().split('T')[0]}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Alias for backward compatibility
+export const downloadExampleMethodStatementPdf = downloadExampleRAMSPdf;
+
+// Download Example Work Method PDF (A4)
+export async function downloadExampleWorkMethodPdf() {
+  const response = await fetch(`${API_BASE}/example-work-method-pdf`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Méthode de Travail Exemple');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Methode_Travail_Exemple_${new Date().toISOString().split('T')[0]}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download Example Procedure PDF (A4)
+export async function downloadExampleProcedurePdf() {
+  const response = await fetch(`${API_BASE}/example-procedure-pdf`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Procédure Exemple');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Procedure_Exemple_${new Date().toISOString().split('T')[0]}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download All Example Documents as ZIP
+export async function downloadAllExampleDocuments() {
+  const response = await fetch(`${API_BASE}/example-all-documents`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la documentation complète');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Documentation_Complete_${new Date().toISOString().split('T')[0]}.zip`;
   document.body.appendChild(a);
   a.click();
   window.URL.revokeObjectURL(url);
