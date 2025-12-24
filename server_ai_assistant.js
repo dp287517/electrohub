@@ -353,6 +353,11 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "ai-assistant",
+    version: "2.0-procedures", // Added to verify deployment
+    features: {
+      procedureDetection: true,
+      photoAnalysis: true
+    },
     providers: {
       openai: !!process.env.OPENAI_API_KEY,
       gemini: !!GEMINI_API_KEY
@@ -379,14 +384,20 @@ app.post("/chat", async (req, res) => {
     // =========================================================================
     // PROCEDURE INTENT DETECTION - Direct inline response
     // =========================================================================
-    if (detectProcedureIntent(message)) {
+    console.log(`[CHAT] Message reçu: "${message}"`);
+    const isProcedure = detectProcedureIntent(message);
+    console.log(`[CHAT] Procedure intent detected: ${isProcedure}`);
+
+    if (isProcedure) {
       const procedureSubject = extractProcedureContext(message);
+      console.log(`[CHAT] Procedure subject: ${procedureSubject}`);
 
       // Direct, simple question - no blabla
       const directResponse = procedureSubject
         ? `OK, procédure pour **${procedureSubject}**.\n\n📷 **Première étape** - décris ce qu'il faut faire et envoie une photo.`
         : `**C'est quoi le titre de la procédure ?**`;
 
+      console.log(`[CHAT] Returning direct procedure response`);
       return res.json({
         message: directResponse,
         procedureMode: true,

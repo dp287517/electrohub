@@ -174,16 +174,13 @@ export default function AvatarChat({
       const welcomeMessage = {
         id: Date.now(),
         role: 'assistant',
-        content: `Bonjour ! Je suis ${avatar.name}, votre assistant ElectroHub.
+        content: `Salut ! Je suis ${avatar.name}. 👋
 
-Je peux vous aider à :
-• Analyser vos **non-conformités** et proposer des actions
-• Planifier vos **contrôles à venir**
-• Regrouper les équipements par **bâtiment/étage**
-• Rechercher de la **documentation technique** sur le web
-• Donner une **vue globale** de votre installation
-
-Comment puis-je vous aider aujourd'hui ?`,
+**Que veux-tu faire ?**
+• 📋 Créer une procédure (avec photos)
+• ⚠️ Voir les non-conformités
+• 📅 Contrôles à venir
+• 🔍 Rechercher un équipement`,
         timestamp: new Date()
       };
       setMessages([welcomeMessage]);
