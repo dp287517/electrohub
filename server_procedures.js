@@ -266,6 +266,94 @@ async function chatWithFallback(messages, options = {}) {
 }
 
 // ------------------------------
+// RAMS REFERENCE DATA - Based on RAMS_B20_ATEX Excel (Annexes 1-4)
+// ------------------------------
+
+// ANNEXE 4 - Échelles de cotation officielles
+const RAMS_GRAVITY_SCALE = {
+  5: { level: 5, label: "Catastrophique", desc: "Mortalité, invalide à vie", keywords: "décès, mort, invalide permanent" },
+  4: { level: 4, label: "Critique", desc: "Incapacité permanente (amputation, fractures multiples, surdité, brûlure 3e degré)", keywords: "amputation, fractures multiples, surdité, brûlure grave" },
+  3: { level: 3, label: "Grave", desc: "Incapacité temporaire (entorse, fracture simple, tendinite, commotion)", keywords: "entorse, fracture, tendinite, commotion, brûlure modérée" },
+  2: { level: 2, label: "Important", desc: "Perte de temps (foulure, gastro, coupure profonde)", keywords: "foulure, coupure profonde, arrêt travail" },
+  1: { level: 1, label: "Mineure", desc: "Premiers soins sans perte de temps (ecchymose, inconfort, égratignure)", keywords: "ecchymose, égratignure, inconfort" }
+};
+
+const RAMS_PROBABILITY_SCALE = {
+  5: { level: 5, label: "Très probable", desc: "Aucune mesure de sécurité, va certainement survenir" },
+  4: { level: 4, label: "Probable", desc: "Mesures de sécurité faibles (EPI seulement fournis)" },
+  3: { level: 3, label: "Possible", desc: "Mesures de prévention en place (formation, procédures, inspections, alarmes)" },
+  2: { level: 2, label: "Peu probable", desc: "Contrôles techniques en place (protecteurs fixes, ventilation auto, garde-corps)" },
+  1: { level: 1, label: "Improbable", desc: "Pratiquement impossible, élimination à la source" }
+};
+
+// ANNEXE 1 - Liste complète des catégories de dangers (checkbox)
+const RAMS_HAZARD_CATEGORIES = {
+  // Dangers physiques
+  "Présence de bruit": { group: "Physique", ppe: ["Bouchons d'oreilles EN 352-2", "Serre-têtes EN352-1"] },
+  "Éclairage insuffisant": { group: "Physique", ppe: [] },
+  "Rayonnement laser / soudure": { group: "Physique", ppe: ["Casque de soudage EN379 / EN175"] },
+  "Vibration": { group: "Physique", ppe: ["Gants anti-vibrations"] },
+  "Outil coupants / tranchants": { group: "Physique", ppe: ["Gants anti coupure EN388"] },
+  "Travail en hauteur": { group: "Physique", ppe: ["Harnais antichute EN 361", "Casque à jugulaire EN 12492"] },
+  "Écrasement / choc": { group: "Physique", ppe: ["Casque de chantier EN397", "Chaussures de sécurité EN345 S3"] },
+  "Coupure / Cisaillement": { group: "Physique", ppe: ["Gants anti coupure EN388 - 4 4 3 3 D P"] },
+  "Projection": { group: "Physique", ppe: ["Lunettes de sécurité EN ISO 16321", "Visière de sécurité EN16321"] },
+  "Gaz sous pression": { group: "Physique", ppe: [] },
+  "Coincement": { group: "Physique", ppe: ["Gants de protection mécanique EN388"] },
+
+  // Dangers chute
+  "Chute de plein pied": { group: "Chute", ppe: ["Chaussures de sécurité EN345 S3"] },
+  "Chute de hauteur < 1m": { group: "Chute", ppe: ["Casque de chantier EN397"] },
+  "Chute de hauteur 1m > 1,8m": { group: "Chute", ppe: ["Harnais antichute EN 361"] },
+  "Chute de hauteur > 3m": { group: "Chute", ppe: ["Harnais antichute EN 361", "Stop chute EN 360"] },
+  "Circulation (frappé par)": { group: "Chute", ppe: ["Gilet haute visibilité EN ISO 20471"] },
+
+  // Dangers levage
+  "Chute de charge": { group: "Levage", ppe: ["Casque de chantier EN397"] },
+  "Rupture d'élingue": { group: "Levage", ppe: [] },
+
+  // Dangers environnement de travail
+  "Zone dangereuse ATEX": { group: "Environnement", ppe: ["Chaussures de sécurité ESD certifiées ATEX", "Vêtements antistatiques"] },
+  "Vent fort": { group: "Environnement", ppe: [] },
+  "Intempéries": { group: "Environnement", ppe: [] },
+  "Température basse": { group: "Environnement", ppe: ["Gants de protection froid EN511"] },
+  "Température élevée": { group: "Environnement", ppe: ["Gants de protection chaleur EN407"] },
+  "Incendie": { group: "Environnement", ppe: [] },
+  "Accès exigu": { group: "Environnement", ppe: [] },
+  "Travailleur isolé": { group: "Environnement", ppe: [] },
+  "Coactivité": { group: "Environnement", ppe: ["Gilet haute visibilité EN ISO 20471"] },
+
+  // Dangers électriques
+  "Fil dénudé / endommagé": { group: "Électrique", ppe: ["Gants isolants"] },
+  "Électrisation": { group: "Électrique", ppe: ["Casque électriquement isolants EN50365", "Gants isolants"] },
+  "Arc électrique": { group: "Électrique", ppe: ["Visière arc électrique", "Vêtements ARC"] },
+
+  // Dangers ergonomiques
+  "Déplacement de charge lourde": { group: "Ergonomie", ppe: ["Gants de manutention"] },
+  "Posture contraignante": { group: "Ergonomie", ppe: ["Genouillères"] },
+  "Levage manuel": { group: "Ergonomie", ppe: ["Ceinture lombaire"] },
+
+  // Dangers chimiques
+  "Éclaboussures produits dangereux": { group: "Chimique", ppe: ["Gants de protection chimique EN374", "Lunettes étanches"] },
+  "Vapeur / poussières / fumées toxiques": { group: "Chimique", ppe: ["Masque FFP2", "Masque FFP3"] },
+
+  // Génériques
+  "Accès / circulation": { group: "Général", ppe: ["Chaussures de sécurité EN345 S3", "Gilet haute visibilité"] },
+  "Manutention / TMS": { group: "Général", ppe: ["Gants de manutention"] },
+  "Coupures / projections": { group: "Général", ppe: ["Lunettes de protection", "Gants anti-coupures"] },
+  "Bruit": { group: "Général", ppe: ["Protections auditives EN352"] },
+  "Chute d'objets": { group: "Général", ppe: ["Casque de sécurité EN397"] },
+  "Organisation": { group: "Général", ppe: [] },
+  "Électrique": { group: "Électrique", ppe: ["Gants isolants", "VAT"] },
+  "Électrique - ATEX": { group: "Électrique", ppe: ["Gants isolants", "Écran facial arc", "Vêtements antistatiques"] },
+  "Risque ATEX": { group: "ATEX", ppe: ["Vêtements antistatiques", "Chaussures ESD"] },
+  "Thermique": { group: "Thermique", ppe: ["Gants protection thermique"] },
+  "Glissade / Chute": { group: "Chute", ppe: ["Chaussures de sécurité antidérapantes"] },
+  "Ergonomie": { group: "Ergonomie", ppe: ["Genouillères"] },
+  "Perçage / Poussières": { group: "Physique", ppe: ["Lunettes de protection", "Masque FFP2"] }
+};
+
+// ------------------------------
 // AI Risk Analysis for RAMS
 // ------------------------------
 async function analyzeRisksWithAI(procedure, steps) {
@@ -289,21 +377,21 @@ ${steps.map((s, i) => `
 - Durée: ${s.duration_minutes || '?'} min
 `).join('\n')}
 
-## ÉCHELLES DE COTATION
+## ÉCHELLES DE COTATION (Réf. Annexe 4)
 
 GRAVITÉ (G) - Conséquences potentielles:
-5 = Catastrophique (Décès, incapacité permanente grave)
-4 = Critique (Incapacité permanente, blessure grave)
-3 = Grave (Incapacité temporaire > 7 jours)
-2 = Important (Arrêt de travail, soins médicaux)
-1 = Mineure (Premiers soins, sans arrêt)
+5 = Catastrophique : Mortalité, invalide à vie
+4 = Critique : Incapacité permanente (amputation, fractures multiples, surdité, brûlure 3e degré)
+3 = Grave : Incapacité temporaire (entorse, fracture simple, tendinite, commotion)
+2 = Important : Perte de temps (foulure, gastro, coupure profonde, brûlure modérée)
+1 = Mineure : Premiers soins sans perte de temps (ecchymose, inconfort, égratignure)
 
-PROBABILITÉ (P) - Fréquence d'occurrence:
-5 = Très probable (Quotidien, quasi certain)
-4 = Probable (Hebdomadaire, fréquent)
-3 = Possible (Mensuel, occasionnel)
-2 = Peu probable (Annuel, rare)
-1 = Improbable (Exceptionnel, très rare)
+PROBABILITÉ (P) - Mesures en place:
+5 = Très probable : Aucune mesure de sécurité, va certainement survenir
+4 = Probable : Mesures de sécurité faibles (EPI seulement fournis)
+3 = Possible : Mesures de prévention en place (formation, procédures, inspections, alarmes)
+2 = Peu probable : Contrôles techniques en place (protecteurs fixes, ventilation auto, garde-corps)
+1 = Improbable : Pratiquement impossible, élimination à la source
 
 NIR = G × P (Niveau d'Indice de Risque)
 - NIR ≥ 15: CRITIQUE
@@ -1678,41 +1766,44 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITÉ (G)", margin + 5, y + 4);
   y += 16;
 
+  // Use official RAMS scales from Annexe 4
   const gravityScale = [
-    { level: 5, label: "Catastrophique", color: c.darkRed },
-    { level: 4, label: "Critique", color: c.danger },
-    { level: 3, label: "Grave", color: c.orange },
-    { level: 2, label: "Important", color: c.warning },
-    { level: 1, label: "Mineure", color: c.success },
+    { level: 5, label: "Catastrophique", desc: "Mortalité", color: c.darkRed },
+    { level: 4, label: "Critique", desc: "Incap. perm.", color: c.danger },
+    { level: 3, label: "Grave", desc: "Incap. temp.", color: c.orange },
+    { level: 2, label: "Important", desc: "Perte temps", color: c.warning },
+    { level: 1, label: "Mineure", desc: "1ers soins", color: c.success },
   ];
 
   gravityScale.forEach((g, i) => {
     const sw = scaleW / 5;
-    doc.rect(margin + i * sw, y, sw, 28).fillAndStroke(g.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+    doc.rect(margin + i * sw, y, sw, 32).fillAndStroke(g.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
        .text(String(g.level), margin + i * sw, y + 2, { width: sw, align: "center" });
-    doc.fontSize(5).text(g.label, margin + i * sw, y + 16, { width: sw, align: "center" });
+    doc.fontSize(5).text(g.label, margin + i * sw, y + 15, { width: sw, align: "center" });
+    doc.fontSize(4).fillColor("#ffffff99").text(g.desc, margin + i * sw, y + 23, { width: sw, align: "center" });
   });
 
-  // Probability scale
+  // Probability scale (Réf. Annexe 4)
   const probX = margin + scaleW + 20;
   doc.rect(probX, y - 16, scaleW, 16).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P)", probX + 5, y - 12);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P) - Réf. Annexe 4", probX + 5, y - 12);
 
   const probScale = [
-    { level: 5, label: "Très probable", color: c.darkRed },
-    { level: 4, label: "Probable", color: c.danger },
-    { level: 3, label: "Possible", color: c.orange },
-    { level: 2, label: "Peu probable", color: c.warning },
-    { level: 1, label: "Improbable", color: c.success },
+    { level: 5, label: "Très probable", desc: "0 mesure", color: c.darkRed },
+    { level: 4, label: "Probable", desc: "EPI seuls", color: c.danger },
+    { level: 3, label: "Possible", desc: "Prévention", color: c.orange },
+    { level: 2, label: "Peu probable", desc: "Ctrl tech.", color: c.warning },
+    { level: 1, label: "Improbable", desc: "Éliminé", color: c.success },
   ];
 
   probScale.forEach((p, i) => {
     const sw = scaleW / 5;
-    doc.rect(probX + i * sw, y, sw, 28).fillAndStroke(p.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+    doc.rect(probX + i * sw, y, sw, 32).fillAndStroke(p.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
        .text(String(p.level), probX + i * sw, y + 2, { width: sw, align: "center" });
-    doc.fontSize(5).text(p.label, probX + i * sw, y + 16, { width: sw, align: "center" });
+    doc.fontSize(5).text(p.label, probX + i * sw, y + 15, { width: sw, align: "center" });
+    doc.fontSize(4).fillColor("#ffffff99").text(p.desc, probX + i * sw, y + 23, { width: sw, align: "center" });
   });
 
   // === RIGHT COLUMN (SIDE PANEL) ===
@@ -3681,41 +3772,44 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITÉ (G)", margin + 5, y + 4);
   y += 16;
 
+  // Use official RAMS scales from Annexe 4
   const gravityScale = [
-    { level: 5, label: "Catastrophique", color: c.darkRed },
-    { level: 4, label: "Critique", color: c.danger },
-    { level: 3, label: "Grave", color: c.orange },
-    { level: 2, label: "Important", color: c.warning },
-    { level: 1, label: "Mineure", color: c.success },
+    { level: 5, label: "Catastrophique", desc: "Mortalité", color: c.darkRed },
+    { level: 4, label: "Critique", desc: "Incap. perm.", color: c.danger },
+    { level: 3, label: "Grave", desc: "Incap. temp.", color: c.orange },
+    { level: 2, label: "Important", desc: "Perte temps", color: c.warning },
+    { level: 1, label: "Mineure", desc: "1ers soins", color: c.success },
   ];
 
   gravityScale.forEach((g, i) => {
     const sw = scaleW / 5;
-    doc.rect(margin + i * sw, y, sw, 28).fillAndStroke(g.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+    doc.rect(margin + i * sw, y, sw, 32).fillAndStroke(g.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
        .text(String(g.level), margin + i * sw, y + 2, { width: sw, align: "center" });
-    doc.fontSize(5).text(g.label, margin + i * sw, y + 16, { width: sw, align: "center" });
+    doc.fontSize(5).text(g.label, margin + i * sw, y + 15, { width: sw, align: "center" });
+    doc.fontSize(4).fillColor("#ffffff99").text(g.desc, margin + i * sw, y + 23, { width: sw, align: "center" });
   });
 
-  // Probability scale
+  // Probability scale (Réf. Annexe 4)
   const probX = margin + scaleW + 20;
   doc.rect(probX, y - 16, scaleW, 16).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P)", probX + 5, y - 12);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P) - Réf. Annexe 4", probX + 5, y - 12);
 
   const probScale = [
-    { level: 5, label: "Très probable", color: c.darkRed },
-    { level: 4, label: "Probable", color: c.danger },
-    { level: 3, label: "Possible", color: c.orange },
-    { level: 2, label: "Peu probable", color: c.warning },
-    { level: 1, label: "Improbable", color: c.success },
+    { level: 5, label: "Très probable", desc: "0 mesure", color: c.darkRed },
+    { level: 4, label: "Probable", desc: "EPI seuls", color: c.danger },
+    { level: 3, label: "Possible", desc: "Prévention", color: c.orange },
+    { level: 2, label: "Peu probable", desc: "Ctrl tech.", color: c.warning },
+    { level: 1, label: "Improbable", desc: "Éliminé", color: c.success },
   ];
 
   probScale.forEach((p, i) => {
     const sw = scaleW / 5;
-    doc.rect(probX + i * sw, y, sw, 28).fillAndStroke(p.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+    doc.rect(probX + i * sw, y, sw, 32).fillAndStroke(p.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
        .text(String(p.level), probX + i * sw, y + 2, { width: sw, align: "center" });
-    doc.fontSize(5).text(p.label, probX + i * sw, y + 16, { width: sw, align: "center" });
+    doc.fontSize(5).text(p.label, probX + i * sw, y + 15, { width: sw, align: "center" });
+    doc.fontSize(4).fillColor("#ffffff99").text(p.desc, probX + i * sw, y + 23, { width: sw, align: "center" });
   });
 
   // === RIGHT COLUMN (SIDE PANEL) ===
