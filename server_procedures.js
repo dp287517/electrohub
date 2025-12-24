@@ -556,7 +556,7 @@ async function analyzePhotoForRisks(photoBuffer) {
   try {
     const base64Image = photoBuffer.toString('base64');
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini", // Use gpt-4o-mini for speed (like ATEX)
       messages: [
         {
           role: "user",
@@ -855,15 +855,44 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Build conversation history
   const conversation = session.conversation || [];
 
-  // NOTE: Photo analysis via GPT-4o Vision REMOVED to speed up response time
-  // This was causing Render proxy timeouts (>20 sec)
-  // The photo filename is still passed to LIA via [Photo: filename] pattern
-  // Photos are stored and will be used when generating the final documents
+  // Analyze photo with gpt-4o-mini (fast like ATEX does)
+  // ATEX uses gpt-4o-mini for vision and it works without timeout
+  let photoAnalysis = null;
+  if (uploadedPhoto) {
+    try {
+      const photoPath = path.join(__dirname, 'uploads', 'procedure_photos', uploadedPhoto);
+      if (fs.existsSync(photoPath)) {
+        const photoBuffer = fs.readFileSync(photoPath);
+        const base64Image = photoBuffer.toString('base64');
+        const mimeType = uploadedPhoto.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+
+        console.log(`[PROC-VISION] Analyzing photo with gpt-4o-mini...`);
+        const startTime = Date.now();
+
+        const visionResult = await chatWithFallback([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Décris brièvement cette photo en 1-2 phrases. Que vois-tu? Quels outils, équipements ou actions sont visibles?" },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+            ]
+          }
+        ], { model: "gpt-4o-mini", max_tokens: 150 });
+
+        photoAnalysis = visionResult.content;
+        console.log(`[PROC-VISION] Analysis done in ${Date.now() - startTime}ms: ${photoAnalysis.substring(0, 100)}...`);
+      }
+    } catch (visionErr) {
+      console.error(`[PROC-VISION] Error analyzing photo: ${visionErr.message}`);
+      // Continue without analysis - photo filename will still be passed
+    }
+  }
 
   // Add user message
   const userEntry = { role: "user", content: userMessage };
   if (uploadedPhoto) {
     userEntry.photo = uploadedPhoto;
+    userEntry.photoAnalysis = photoAnalysis; // Store analysis for later use
     console.log(`[PROC] Photo attached: ${uploadedPhoto}`);
   }
   conversation.push(userEntry);
@@ -880,9 +909,9 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     },
     ...conversation.map(c => ({
       role: c.role,
-      // Put [Photo:] at START so AI sees it immediately
+      // Put [Photo:] at START with analysis so AI knows what's in the photo
       content: c.photo
-        ? `[Photo: ${c.photo}]\n${c.content}`
+        ? `[Photo: ${c.photo}]${c.photoAnalysis ? ` (Contenu: ${c.photoAnalysis})` : ''}\n${c.content}`
         : c.content
     }))
   ];
@@ -3278,7 +3307,7 @@ app.post("/api/procedures/ai/assist/:sessionId", uploadPhoto.single("photo"), as
           ]
         }
       ];
-      const visionResult = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 500 });
+      const visionResult = await chatWithFallback(visionMessages, { model: "gpt-4o-mini", max_tokens: 500 }); // gpt-4o-mini for speed
 
       photoAnalysis = visionResult.content;
       userContent += `\n\n[ANALYSE PHOTO]: ${photoAnalysis}`;
@@ -3369,7 +3398,7 @@ app.post("/api/procedures/ai/analyze-photo", uploadPhoto.single("photo"), async 
         ]
       }
     ];
-    const result = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 1000 });
+    const result = await chatWithFallback(visionMessages, { model: "gpt-4o-mini", max_tokens: 1000 }); // gpt-4o-mini for speed
 
     await fsp.unlink(req.file.path).catch(() => {});
 
