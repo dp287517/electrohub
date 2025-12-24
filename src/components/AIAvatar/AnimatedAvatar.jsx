@@ -1,5 +1,30 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 
+// Cache global pour l'icône personnalisée (évite les requêtes multiples)
+let customIconCache = { checked: false, url: null };
+
+// Vérifier si une icône personnalisée existe
+async function checkCustomIcon() {
+  if (customIconCache.checked) return customIconCache.url;
+
+  try {
+    const res = await fetch('/api/admin/settings/ai-icon/info');
+    const data = await res.json();
+    if (data.hasCustomIcon) {
+      customIconCache.url = `/api/admin/settings/ai-icon?t=${Date.now()}`;
+    }
+  } catch (e) {
+    // Silently fail - use default icon
+  }
+  customIconCache.checked = true;
+  return customIconCache.url;
+}
+
+// Fonction pour forcer le rafraîchissement de l'icône (appelée après upload)
+export function refreshCustomIcon() {
+  customIconCache = { checked: false, url: null };
+}
+
 // Avatars modernes et propres - style iconique
 const AVATAR_STYLES = {
   ai: {
@@ -63,6 +88,7 @@ const AnimatedAvatar = forwardRef(({
 }, ref) => {
   const [pulsePhase, setPulsePhase] = useState(0);
   const [waveOffset, setWaveOffset] = useState(0);
+  const [customIconUrl, setCustomIconUrl] = useState(null);
   const animationRef = useRef(null);
   const speakingRef = useRef(speaking);
 
@@ -71,7 +97,14 @@ const AnimatedAvatar = forwardRef(({
     stopSpeaking: () => speakingRef.current = false,
   }));
 
-  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.electro;
+  // Charger l'icône personnalisée au montage
+  useEffect(() => {
+    checkCustomIcon().then(url => {
+      if (url) setCustomIconUrl(url);
+    });
+  }, []);
+
+  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.ai;
   const sizes = { xs: 32, sm: 40, md: 56, lg: 80, xl: 120 };
   const s = sizes[size] || sizes.md;
 
@@ -211,6 +244,92 @@ const AnimatedAvatar = forwardRef(({
     }
   };
 
+  // Si une icône personnalisée est définie, l'afficher
+  if (customIconUrl) {
+    return (
+      <div
+        onClick={onClick}
+        className={`relative cursor-pointer transition-transform hover:scale-105 ${className}`}
+        style={{ width: s, height: s }}
+      >
+        {/* Glow effect */}
+        <div
+          className="absolute inset-0 rounded-full blur-md transition-opacity duration-300"
+          style={{
+            background: avatar.primaryColor,
+            opacity: glowIntensity,
+            transform: 'scale(1.1)',
+          }}
+        />
+
+        {/* Image personnalisée */}
+        <div className="relative w-full h-full">
+          <img
+            src={customIconUrl}
+            alt="AI Assistant"
+            className="w-full h-full rounded-full object-cover shadow-lg"
+            style={{
+              transform: speaking ? `scale(${1 + Math.sin(pulsePhase * 0.1) * 0.03})` : 'scale(1)',
+              transition: 'transform 0.1s ease'
+            }}
+          />
+
+          {/* Anneau animé autour de l'image */}
+          <svg
+            viewBox="0 0 100 100"
+            className="absolute inset-0 w-full h-full pointer-events-none"
+          >
+            <circle
+              cx="50"
+              cy="50"
+              r="48"
+              fill="none"
+              stroke={avatar.accentColor}
+              strokeWidth="3"
+              opacity={speaking ? 0.9 : 0.5}
+              strokeDasharray={speaking ? "15 8" : "0"}
+              style={{
+                transform: speaking ? `rotate(${pulsePhase}deg)` : 'none',
+                transformOrigin: 'center',
+                transition: 'all 0.3s ease'
+              }}
+            />
+          </svg>
+
+          {/* Indicateur de parole (barres audio) */}
+          {speaking && (
+            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex gap-0.5 bg-black/30 rounded-full px-1.5 py-0.5">
+              {audioBars.map((bar, i) => (
+                <div
+                  key={i}
+                  className="w-1 bg-white rounded-full"
+                  style={{
+                    height: `${bar.height * 0.5}px`,
+                    transition: 'height 0.1s ease'
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Indicateurs d'état */}
+        {emotion === 'thinking' && (
+          <div className="absolute -top-1 -right-1 w-4 h-4">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
+            <span className="relative inline-flex rounded-full h-4 w-4 bg-blue-500" />
+          </div>
+        )}
+        {emotion === 'alert' && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center animate-bounce">
+            <span className="text-white text-[8px] font-bold">!</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Sinon, afficher l'icône SVG par défaut
   return (
     <div
       onClick={onClick}
@@ -317,5 +436,5 @@ const AnimatedAvatar = forwardRef(({
 
 AnimatedAvatar.displayName = 'AnimatedAvatar';
 
-export { AnimatedAvatar, AVATAR_STYLES };
+export { AnimatedAvatar, AVATAR_STYLES, refreshCustomIcon };
 export default AnimatedAvatar;
