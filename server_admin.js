@@ -4,9 +4,23 @@ import express from "express";
 import pg from "pg";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import multer from "multer";
 import { extractTenantFromRequest, getTenantFilter, requireTenant } from "./lib/tenant-filter.js";
 
 dotenv.config();
+
+// Multer config pour upload d'images (stockage en mémoire)
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files allowed'), false);
+    }
+  }
+});
 
 const router = express.Router();
 const { Pool } = pg;
@@ -1671,6 +1685,107 @@ router.get("/auth-audit/stats", adminOnly, async (req, res) => {
     });
   } catch (err) {
     console.error("[auth-audit/stats] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// APP SETTINGS - Global application settings (AI Icon, etc.)
+// ============================================================
+
+// Ensure app_settings table exists
+async function ensureAppSettingsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB,
+      binary_data BYTEA,
+      mime_type TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
+
+// GET /api/admin/settings/ai-icon - Get AI icon (public, no auth required for display)
+router.get("/settings/ai-icon", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = 'ai_icon'`
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No custom AI icon set" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'image/png');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-icon GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-icon/info - Get AI icon metadata
+router.get("/settings/ai-icon/info", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    const result = await pool.query(
+      `SELECT mime_type, updated_at, LENGTH(binary_data) as size FROM app_settings WHERE key = 'ai_icon'`
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].size) {
+      return res.json({ hasCustomIcon: false });
+    }
+
+    res.json({
+      hasCustomIcon: true,
+      mimeType: result.rows[0].mime_type,
+      size: result.rows[0].size,
+      updatedAt: result.rows[0].updated_at
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-icon - Upload AI icon (admin only)
+router.post("/settings/ai-icon", adminOnly, uploadMemory.single('icon'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ('ai_icon', $1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [buffer, mimetype]);
+
+    res.json({ ok: true, message: "AI icon uploaded successfully" });
+  } catch (err) {
+    console.error("[settings/ai-icon POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/settings/ai-icon - Remove custom AI icon (admin only)
+router.delete("/settings/ai-icon", adminOnly, async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    await pool.query(`DELETE FROM app_settings WHERE key = 'ai_icon'`);
+    res.json({ ok: true, message: "AI icon removed" });
+  } catch (err) {
+    console.error("[settings/ai-icon DELETE] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });

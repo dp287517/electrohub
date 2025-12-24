@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
-  FileText
+  FileText, Settings, Upload, Image, Bot
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
@@ -1307,6 +1307,234 @@ function VsdPlansTab() {
   );
 }
 
+// ============== SETTINGS TAB ==============
+function SettingsTab() {
+  const [aiIconInfo, setAiIconInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Fetch AI icon info
+  const fetchAiIconInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-icon/info`, getAuthOptions());
+      const data = await res.json();
+      setAiIconInfo(data);
+      if (data.hasCustomIcon) {
+        setPreviewUrl(`${API_BASE}/settings/ai-icon?t=${Date.now()}`);
+      } else {
+        setPreviewUrl(null);
+      }
+    } catch (err) {
+      console.error('Error fetching AI icon info:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAiIconInfo();
+  }, [fetchAiIconInfo]);
+
+  // Handle file selection
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size must be less than 5MB');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('icon', file);
+
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/settings/ai-icon`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: formData
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        await fetchAiIconInfo();
+        alert('AI icon uploaded successfully!');
+      } else {
+        throw new Error(data.error || 'Upload failed');
+      }
+    } catch (err) {
+      alert('Error uploading icon: ' + err.message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Handle delete
+  const handleDelete = async () => {
+    if (!confirm('Remove custom AI icon and revert to default?')) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-icon`, {
+        ...getAuthOptions(),
+        method: 'DELETE'
+      });
+
+      if (res.ok) {
+        setPreviewUrl(null);
+        setAiIconInfo({ hasCustomIcon: false });
+        alert('AI icon removed');
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Delete failed');
+      }
+    } catch (err) {
+      alert('Error removing icon: ' + err.message);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* AI Icon Settings */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-purple-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+              <Bot size={20} className="text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">AI Assistant Icon</h3>
+              <p className="text-sm text-gray-500">Customize the AI assistant avatar displayed throughout the app</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+            </div>
+          ) : (
+            <div className="flex flex-col md:flex-row gap-8 items-start">
+              {/* Preview */}
+              <div className="flex flex-col items-center gap-4">
+                <div className="relative">
+                  <div className={`w-32 h-32 rounded-2xl overflow-hidden border-4 ${previewUrl ? 'border-indigo-200' : 'border-gray-200'} shadow-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center`}>
+                    {previewUrl ? (
+                      <img
+                        src={previewUrl}
+                        alt="AI Icon"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Bot size={48} className="text-white" />
+                    )}
+                  </div>
+                  {previewUrl && (
+                    <div className="absolute -top-2 -right-2 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
+                      <Check size={14} className="text-white" />
+                    </div>
+                  )}
+                </div>
+                <p className="text-sm text-gray-500">
+                  {previewUrl ? 'Custom icon active' : 'Using default icon'}
+                </p>
+              </div>
+
+              {/* Upload controls */}
+              <div className="flex-1 space-y-4">
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-2">Upload Custom Icon</h4>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Upload a PNG, JPG, or GIF image. Recommended size: 256x256 pixels. Maximum file size: 5MB.
+                  </p>
+
+                  <div className="flex flex-wrap gap-3">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                      id="ai-icon-upload"
+                    />
+                    <label
+                      htmlFor="ai-icon-upload"
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-medium cursor-pointer transition-colors ${uploading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                    >
+                      {uploading ? (
+                        <>
+                          <Loader2 size={18} className="animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Upload size={18} />
+                          Choose Image
+                        </>
+                      )}
+                    </label>
+
+                    {previewUrl && (
+                      <button
+                        onClick={handleDelete}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 size={18} />
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {aiIconInfo?.hasCustomIcon && (
+                  <div className="p-4 bg-gray-50 rounded-xl">
+                    <h5 className="text-sm font-medium text-gray-700 mb-2">Current Icon Details</h5>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <span className="text-gray-500">Type:</span>
+                      <span className="text-gray-900">{aiIconInfo.mimeType}</span>
+                      <span className="text-gray-500">Size:</span>
+                      <span className="text-gray-900">{(aiIconInfo.size / 1024).toFixed(1)} KB</span>
+                      <span className="text-gray-500">Updated:</span>
+                      <span className="text-gray-900">{new Date(aiIconInfo.updatedAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={18} className="text-amber-500 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-medium text-amber-800">Note</p>
+                      <p className="text-amber-700">The new icon will appear for all users after they refresh their browser.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============== MAIN ==============
 export default function Admin() {
   const navigate = useNavigate();
@@ -1412,6 +1640,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
             <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>Plans</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
+            <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={Settings}>Settings</TabButton>
           </div>
         </div>
       </div>
@@ -1428,6 +1657,7 @@ export default function Admin() {
             {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'vsd-plans' && <VsdPlansTab />}
             {activeTab === 'auth-audit' && <AuthAuditTab />}
+            {activeTab === 'settings' && <SettingsTab />}
           </>
         )}
       </div>

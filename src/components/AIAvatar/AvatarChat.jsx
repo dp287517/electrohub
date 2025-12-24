@@ -128,7 +128,7 @@ const QUICK_ACTIONS = [
 export default function AvatarChat({
   isOpen,
   onClose,
-  avatarStyle = 'electro',
+  avatarStyle = 'ai',
   onChangeAvatar
 }) {
   const [messages, setMessages] = useState([]);
@@ -151,7 +151,7 @@ export default function AvatarChat({
   const photoInputRef = useRef(null);
 
   // Fallback si le style n'existe plus (migration des anciens styles)
-  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'electro';
+  const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'ai';
   const avatar = AVATAR_STYLES[safeAvatarStyle];
 
   // Scroll vers le bas quand nouveaux messages

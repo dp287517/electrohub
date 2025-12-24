@@ -1,7 +1,41 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 
+// Cache global pour l'icône personnalisée (évite les requêtes multiples)
+let customIconCache = { checked: false, url: null };
+
+// Vérifier si une icône personnalisée existe
+async function checkCustomIcon() {
+  if (customIconCache.checked) return customIconCache.url;
+
+  try {
+    const res = await fetch('/api/admin/settings/ai-icon/info');
+    const data = await res.json();
+    if (data.hasCustomIcon) {
+      customIconCache.url = `/api/admin/settings/ai-icon?t=${Date.now()}`;
+    }
+  } catch (e) {
+    // Silently fail - use default icon
+  }
+  customIconCache.checked = true;
+  return customIconCache.url;
+}
+
+// Fonction pour forcer le rafraîchissement de l'icône (appelée après upload)
+export function refreshCustomIcon() {
+  customIconCache = { checked: false, url: null };
+}
+
 // Avatars modernes et propres - style iconique
 const AVATAR_STYLES = {
+  ai: {
+    name: 'AI',
+    description: 'Intelligence Artificielle',
+    primaryColor: '#6366F1',
+    secondaryColor: '#4F46E5',
+    accentColor: '#A5B4FC',
+    icon: 'ai',
+    animated: true
+  },
   electro: {
     name: 'Electro',
     description: 'Assistant ElectroHub',
@@ -45,7 +79,7 @@ const AVATAR_STYLES = {
 };
 
 const AnimatedAvatar = forwardRef(({
-  style = 'electro',
+  style = 'ai',
   size = 'md',
   speaking = false,
   emotion = 'neutral',
@@ -54,6 +88,7 @@ const AnimatedAvatar = forwardRef(({
 }, ref) => {
   const [pulsePhase, setPulsePhase] = useState(0);
   const [waveOffset, setWaveOffset] = useState(0);
+  const [customIconUrl, setCustomIconUrl] = useState(null);
   const animationRef = useRef(null);
   const speakingRef = useRef(speaking);
 
@@ -62,7 +97,14 @@ const AnimatedAvatar = forwardRef(({
     stopSpeaking: () => speakingRef.current = false,
   }));
 
-  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.electro;
+  // Charger l'icône personnalisée au montage
+  useEffect(() => {
+    checkCustomIcon().then(url => {
+      if (url) setCustomIconUrl(url);
+    });
+  }, []);
+
+  const avatar = AVATAR_STYLES[style] || AVATAR_STYLES.ai;
   const sizes = { xs: 32, sm: 40, md: 56, lg: 80, xl: 120 };
   const s = sizes[size] || sizes.md;
 
@@ -106,6 +148,55 @@ const AnimatedAvatar = forwardRef(({
     const cy = 45;
 
     switch (avatar.icon) {
+      case 'ai':
+        // Icône AI moderne avec cerveau/neurones animés
+        const nodeOpacity = 0.7 + Math.sin(pulsePhase * 0.08) * 0.3;
+        const connectionOpacity = 0.4 + Math.sin(pulsePhase * 0.06) * 0.3;
+        const pulseScale = 1 + Math.sin(pulsePhase * 0.05) * 0.05;
+        return (
+          <g style={{ transform: `scale(${pulseScale})`, transformOrigin: 'center' }}>
+            {/* Connexions neuronales animées */}
+            <g opacity={connectionOpacity}>
+              <line x1="50" y1="35" x2="35" y2="50" stroke="white" strokeWidth="1.5" />
+              <line x1="50" y1="35" x2="65" y2="50" stroke="white" strokeWidth="1.5" />
+              <line x1="35" y1="50" x2="50" y2="65" stroke="white" strokeWidth="1.5" />
+              <line x1="65" y1="50" x2="50" y2="65" stroke="white" strokeWidth="1.5" />
+              <line x1="35" y1="50" x2="65" y2="50" stroke="white" strokeWidth="1" strokeDasharray="3 2" />
+              <line x1="50" y1="35" x2="50" y2="65" stroke="white" strokeWidth="1" strokeDasharray="3 2" />
+            </g>
+            {/* Nœuds du réseau neuronal */}
+            <g opacity={nodeOpacity}>
+              {/* Nœud central supérieur */}
+              <circle cx="50" cy="35" r="6" fill="white" />
+              <circle cx="50" cy="35" r="3" fill={avatar.primaryColor} />
+              {/* Nœuds latéraux */}
+              <circle cx="35" cy="50" r="5" fill="white" />
+              <circle cx="35" cy="50" r="2.5" fill={avatar.primaryColor} />
+              <circle cx="65" cy="50" r="5" fill="white" />
+              <circle cx="65" cy="50" r="2.5" fill={avatar.primaryColor} />
+              {/* Nœud central inférieur */}
+              <circle cx="50" cy="65" r="6" fill="white" />
+              <circle cx="50" cy="65" r="3" fill={avatar.primaryColor} />
+            </g>
+            {/* Pulse animé qui voyage sur les connexions */}
+            {speaking && (
+              <g>
+                <circle
+                  cx={35 + Math.sin(waveOffset * 0.5) * 15 + 15}
+                  cy={50 + Math.cos(waveOffset * 0.5) * 15}
+                  r="2"
+                  fill={avatar.accentColor}
+                />
+                <circle
+                  cx={65 - Math.sin(waveOffset * 0.7) * 15 - 15}
+                  cy={50 - Math.cos(waveOffset * 0.7) * 15}
+                  r="2"
+                  fill={avatar.accentColor}
+                />
+              </g>
+            )}
+          </g>
+        );
       case 'bolt':
         return (
           <path
@@ -153,6 +244,92 @@ const AnimatedAvatar = forwardRef(({
     }
   };
 
+  // Si une icône personnalisée est définie, l'afficher
+  if (customIconUrl) {
+    return (
+      <div
+        onClick={onClick}
+        className={`relative cursor-pointer transition-transform hover:scale-105 ${className}`}
+        style={{ width: s, height: s }}
+      >
+        {/* Glow effect */}
+        <div
+          className="absolute inset-0 rounded-full blur-md transition-opacity duration-300"
+          style={{
+            background: avatar.primaryColor,
+            opacity: glowIntensity,
+            transform: 'scale(1.1)',
+          }}
+        />
+
+        {/* Image personnalisée */}
+        <div className="relative w-full h-full">
+          <img
+            src={customIconUrl}
+            alt="AI Assistant"
+            className="w-full h-full rounded-full object-cover shadow-lg"
+            style={{
+              transform: speaking ? `scale(${1 + Math.sin(pulsePhase * 0.1) * 0.03})` : 'scale(1)',
+              transition: 'transform 0.1s ease'
+            }}
+          />
+
+          {/* Anneau animé autour de l'image */}
+          <svg
+            viewBox="0 0 100 100"
+            className="absolute inset-0 w-full h-full pointer-events-none"
+          >
+            <circle
+              cx="50"
+              cy="50"
+              r="48"
+              fill="none"
+              stroke={avatar.accentColor}
+              strokeWidth="3"
+              opacity={speaking ? 0.9 : 0.5}
+              strokeDasharray={speaking ? "15 8" : "0"}
+              style={{
+                transform: speaking ? `rotate(${pulsePhase}deg)` : 'none',
+                transformOrigin: 'center',
+                transition: 'all 0.3s ease'
+              }}
+            />
+          </svg>
+
+          {/* Indicateur de parole (barres audio) */}
+          {speaking && (
+            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex gap-0.5 bg-black/30 rounded-full px-1.5 py-0.5">
+              {audioBars.map((bar, i) => (
+                <div
+                  key={i}
+                  className="w-1 bg-white rounded-full"
+                  style={{
+                    height: `${bar.height * 0.5}px`,
+                    transition: 'height 0.1s ease'
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Indicateurs d'état */}
+        {emotion === 'thinking' && (
+          <div className="absolute -top-1 -right-1 w-4 h-4">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
+            <span className="relative inline-flex rounded-full h-4 w-4 bg-blue-500" />
+          </div>
+        )}
+        {emotion === 'alert' && (
+          <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center animate-bounce">
+            <span className="text-white text-[8px] font-bold">!</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Sinon, afficher l'icône SVG par défaut
   return (
     <div
       onClick={onClick}
@@ -259,5 +436,5 @@ const AnimatedAvatar = forwardRef(({
 
 AnimatedAvatar.displayName = 'AnimatedAvatar';
 
-export { AnimatedAvatar, AVATAR_STYLES };
+export { AnimatedAvatar, AVATAR_STYLES, refreshCustomIcon };
 export default AnimatedAvatar;
