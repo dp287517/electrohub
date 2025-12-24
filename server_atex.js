@@ -2920,6 +2920,8 @@ async function atexExtractFromFiles(openaiClient, files) {
   const hasOpenAI = !!openaiClient;
   const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 
+  console.log(`[ATEX-AI] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
   // Stratégie: OpenAI d'abord, Gemini en fallback
   if (hasOpenAI) {
     try {
@@ -2929,13 +2931,26 @@ async function atexExtractFromFiles(openaiClient, files) {
     } catch (openaiErr) {
       console.error(`[ATEX-AI] OpenAI failed:`, openaiErr.message);
 
+      // Détection plus robuste de l'erreur quota (429)
+      const isQuotaError =
+        openaiErr.status === 429 ||
+        openaiErr.code === "insufficient_quota" ||
+        openaiErr.message?.includes("429") ||
+        openaiErr.message?.includes("quota");
+
       // Fallback vers Gemini si disponible
-      if (hasGemini && (openaiErr.status === 429 || openaiErr.code === "insufficient_quota")) {
+      if (hasGemini && isQuotaError) {
         console.log(`[ATEX-AI] ⚡ Fallback to Gemini (free tier)...`);
         const result = await atexExtractWithGemini(images);
         console.log(`[ATEX-AI] ✅ Extracted (Gemini fallback):`, result);
         return result;
       }
+
+      if (!hasGemini && isQuotaError) {
+        console.error(`[ATEX-AI] ❌ OpenAI quota exceeded and no GEMINI_API_KEY configured!`);
+        throw new Error("OpenAI quota exceeded. Configure GEMINI_API_KEY for free fallback.");
+      }
+
       throw openaiErr;
     }
   }
