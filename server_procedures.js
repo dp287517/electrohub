@@ -498,140 +498,159 @@ function generateFallbackRiskAnalysis(procedure, steps) {
   const HAZARD_LIBRARY = {
     // Dangers physiques / accès
     'access': {
-      checkbox: '□ Accès / circulation',
+      checkbox: '[ ] Accès / circulation',
       danger: 'Déplacements dans la zone : risque de trébucher, glisser, heurt avec obstacles ou piétons.',
       gi: 3, pi: 2,
-      measures: '□ Signalisation et marquage\n□ Éclairage complémentaire',
+      measures: '[ ] Signalisation et marquage\n[ ] Éclairage complémentaire',
       ppe: ['Chaussures de sécurité S3', 'Gilet haute visibilité'],
       actions: 'Briefing sécurité + repérage. Maintenir cheminement dégagé, rangement permanent, éclairage suffisant.',
       responsible: 'Chef d\'équipe'
     },
     'coactivity': {
-      checkbox: '□ Coactivité',
+      checkbox: '[ ] Coactivité',
       danger: 'Coactivité avec autres intervenants : interférences, intrusion dans la zone de travail.',
       gi: 3, pi: 2,
-      measures: '□ Balisage\n□ Coordination avec responsable zone',
+      measures: '[ ] Balisage\n[ ] Coordination avec responsable zone',
       ppe: ['Gilet haute visibilité', 'Casque de sécurité'],
       actions: 'Coordination avec responsable de zone. Informer les parties prenantes, définir zones interdites.',
       responsible: 'Chef d\'équipe'
     },
     'handling': {
-      checkbox: '□ Manutention / TMS',
+      checkbox: '[ ] Manutention / TMS',
       danger: 'Manutention du matériel : postures contraignantes, charges, pincements.',
       gi: 2, pi: 3,
-      measures: '□ Protection des mains\n□ Chariot de transport',
+      measures: '[ ] Protection des mains\n[ ] Chariot de transport',
       ppe: ['Gants de manutention EN388', 'Chaussures de sécurité S3'],
       actions: 'Utiliser chariot/diable si besoin. Respecter charges max, lever avec les jambes.',
       responsible: 'Tous'
     },
     'cuts': {
-      checkbox: '□ Coupures / projections',
+      checkbox: '[ ] Coupures / projections',
       danger: 'Risque de coupure lors de manipulations ou d\'outillage ; projections possibles.',
       gi: 3, pi: 2,
-      measures: '□ Protection des mains\n□ Protection des yeux',
+      measures: '[ ] Protection des mains\n[ ] Protection des yeux',
       ppe: ['Gants anti-coupure EN388', 'Lunettes de protection EN166'],
       actions: 'Outils en bon état. Attention aux arêtes vives. Zone de travail dégagée.',
       responsible: 'Tous'
     },
     'falling_objects': {
-      checkbox: '□ Chute d\'objets',
+      checkbox: '[ ] Chute d\'objets',
       danger: 'Chute d\'outils ou de matériel pendant la manipulation ou le travail en hauteur.',
       gi: 3, pi: 2,
-      measures: '□ Balisage\n□ Rangement permanent',
+      measures: '[ ] Balisage\n[ ] Rangement permanent',
       ppe: ['Casque de sécurité EN397', 'Chaussures de sécurité S3'],
       actions: 'Collecter au fur et à mesure. Utiliser bacs/porte-outils. Maintenir zone dégagée.',
       responsible: 'Tous'
     },
     'noise': {
-      checkbox: '□ Bruit',
+      checkbox: '[ ] Bruit',
       danger: 'Utilisation d\'outillage bruyant : nuisance et gêne, risque auditif.',
       gi: 2, pi: 2,
-      measures: '□ Protection auditive adaptée au bruit',
+      measures: '[ ] Protection auditive adaptée au bruit',
       ppe: ['Bouchons d\'oreilles EN352-2', 'Casque anti-bruit EN352-1'],
       actions: 'Port obligatoire si > 85 dB. Limiter durée d\'exposition.',
       responsible: 'Tous'
     },
     // Dangers électriques
     'electrical': {
-      checkbox: '□ Électrisation / court-circuit',
+      checkbox: '[ ] Électrisation / court-circuit',
       danger: 'Risque électrique lors d\'intervention sur coffrets/armoires : électrisation, arc électrique.',
       gi: 4, pi: 3,
-      measures: '□ Distance de sécurité / Consignation\n□ Habilitation électrique',
+      measures: '[ ] Distance de sécurité / Consignation\n[ ] Habilitation électrique',
       ppe: ['Gants isolants EN60903', 'Écran facial arc électrique', 'Outils isolés 1000V'],
       actions: 'Vérifier absence de tension (VAT). Consignation LOTO obligatoire. Respecter distances.',
       responsible: 'Électricien habilité'
     },
     'residual_energy': {
-      checkbox: '□ Énergies résiduelles',
+      checkbox: '[ ] Énergies résiduelles',
       danger: 'Condensateurs/variateurs : tension résiduelle après coupure.',
       gi: 4, pi: 2,
-      measures: '□ Décharge des condensateurs\n□ Temps d\'attente',
+      measures: '[ ] Décharge des condensateurs\n[ ] Temps d\'attente',
       ppe: ['Gants isolants EN60903', 'Outils isolés 1000V'],
       actions: 'Attendre décharge complète (5 min). Vérifier avec VAT. Ne jamais présumer.',
       responsible: 'Électricien habilité'
     },
     'arc_flash': {
-      checkbox: '□ Arc électrique',
+      checkbox: '[ ] Arc électrique',
       danger: 'Court-circuit possible lors de manipulations : brûlures, projections.',
       gi: 5, pi: 2,
-      measures: '□ EPI arc flash\n□ Distance de sécurité',
+      measures: '[ ] EPI arc flash\n[ ] Distance de sécurité',
       ppe: ['Combinaison arc flash', 'Écran facial EN166', 'Gants isolants'],
       actions: 'Maintenir distance de sécurité. Port EPI arc obligatoire. Intervention à deux.',
       responsible: 'Électricien habilité'
     },
+    // Travaux sous tension (mesures, contrôles)
+    'live_measurement': {
+      checkbox: '[ ] Mesure sous tension',
+      danger: 'Prise de mesure électrique sur circuit sous tension : contact direct, court-circuit possible.',
+      gi: 4, pi: 2,
+      measures: '[ ] Appareil de mesure CAT III/IV adapté\n[ ] Vérification état cordons/pointes',
+      ppe: ['Gants isolants EN60903', 'Lunettes de protection EN166', 'Outils isolés 1000V'],
+      actions: 'Utiliser multimètre catégorie adaptée. Vérifier état cordons avant. Une seule main. Zone dégagée et sèche.',
+      responsible: 'Électricien habilité BR/B2V'
+    },
+    'vat_test': {
+      checkbox: '[ ] Vérification Absence Tension',
+      danger: 'Test VAT sur installation supposée consignée : risque si consignation incomplète.',
+      gi: 4, pi: 2,
+      measures: '[ ] VAT bi-polaire conforme\n[ ] Test fonctionnel avant/après',
+      ppe: ['Gants isolants EN60903', 'Écran facial', 'Outils isolés'],
+      actions: 'Tester VAT sur source connue avant. Tester entre toutes phases et terre. Retester après.',
+      responsible: 'Électricien habilité B1V/B2V'
+    },
     // Dangers ATEX
     'atex': {
-      checkbox: '□ ATEX (inflammation/explosion)',
+      checkbox: '[ ] ATEX (inflammation/explosion)',
       danger: 'Zone ATEX : risque d\'inflammation si source d\'ignition (étincelle, chaleur, ESD).',
       gi: 5, pi: 3,
-      measures: '□ Permis de feu / Autorisation SSI\n□ Matériel certifié ATEX',
+      measures: '[ ] Permis de feu / Autorisation SSI\n[ ] Matériel certifié ATEX',
       ppe: ['Vêtements antistatiques EN1149-5', 'Chaussures ESD certifiées ATEX', 'Outils anti-étincelles'],
       actions: 'Autorisation sécurité incendie obligatoire. Vérifier classification zone. Matériel ATEX uniquement.',
       responsible: 'Responsable sécurité'
     },
     'esd': {
-      checkbox: '□ Électricité statique (ESD)',
+      checkbox: '[ ] Électricité statique (ESD)',
       danger: 'Accumulation d\'électricité statique : étincelle possible lors de décharges.',
       gi: 4, pi: 2,
-      measures: '□ Mise à terre\n□ Équipements antistatiques',
+      measures: '[ ] Mise à terre\n[ ] Équipements antistatiques',
       ppe: ['Bracelet antistatique', 'Chaussures ESD', 'Vêtements antistatiques'],
       actions: 'Se décharger avant intervention. Relier équipements à la terre. Éviter matériaux synthétiques.',
       responsible: 'Tous'
     },
     // Travail en hauteur
     'fall_height': {
-      checkbox: '□ Chute de hauteur',
+      checkbox: '[ ] Chute de hauteur',
       danger: 'Travail en hauteur : risque de chute (moyen d\'accès instable, perte d\'équilibre).',
       gi: 4, pi: 3,
-      measures: '□ Protection contre les chutes\n□ Échafaudage / Nacelle',
+      measures: '[ ] Protection contre les chutes\n[ ] Échafaudage / Nacelle',
       ppe: ['Harnais antichute EN361', 'Casque à jugulaire EN12492', 'Chaussures antidérapantes'],
       actions: 'Choisir moyen d\'accès adapté. Vérifier stabilité. 3 points d\'appui. Balisage au sol.',
       responsible: 'Chef d\'équipe'
     },
     'ladder': {
-      checkbox: '□ Renversement',
+      checkbox: '[ ] Renversement',
       danger: 'Instabilité d\'escabeau/PIRL/échafaudage : basculement.',
       gi: 4, pi: 2,
-      measures: '□ Vérification stabilité\n□ Calage',
+      measures: '[ ] Vérification stabilité\n[ ] Calage',
       ppe: ['Casque de sécurité EN397', 'Chaussures antidérapantes'],
       actions: 'Vérifier état et stabilité. Caler si nécessaire. Ne pas surcharger.',
       responsible: 'Utilisateur'
     },
     // Organisation
     'organization': {
-      checkbox: '□ Organisation',
+      checkbox: '[ ] Organisation',
       danger: 'Risque organisationnel : communication, coordination, planification.',
       gi: 2, pi: 2,
-      measures: '□ Briefing équipe\n□ Check-list',
+      measures: '[ ] Briefing équipe\n[ ] Check-list',
       ppe: ['Gilet haute visibilité'],
       actions: 'Briefing avant intervention. Répartition des tâches. Point régulier.',
       responsible: 'Chef d\'équipe'
     },
     'communication': {
-      checkbox: '□ Communication',
+      checkbox: '[ ] Communication',
       danger: 'Mauvaise coordination avec l\'exploitation : risque de reprise intempestive.',
       gi: 3, pi: 2,
-      measures: '□ Coordination avec exploitation\n□ Affichage',
+      measures: '[ ] Coordination avec exploitation\n[ ] Affichage',
       ppe: ['Gilet haute visibilité'],
       actions: 'Informer PC sécurité. Contact permanent avec exploitation. Affichage travaux.',
       responsible: 'Chef d\'équipe'
@@ -639,16 +658,29 @@ function generateFallbackRiskAnalysis(procedure, steps) {
   };
 
   // Keywords to detect hazards based on step content
+  // Separate live measurement work from lockout work
   const KEYWORD_HAZARDS = {
-    'électri|courant|tension|disjoncteur|armoire|coffret|câbl': ['electrical', 'residual_energy', 'arc_flash'],
+    // Mesures et contrôles sous tension (PAS de consignation)
+    'mesur.*tension|contrôl.*tension|vérif.*tension|test.*tension|relev.*tension': ['live_measurement', 'arc_flash'],
+    'multimètre|pince.*ampère|oscilloscope|mesur.*courant|mesur.*intensité': ['live_measurement'],
+    'vat|absence.*tension|présence.*tension': ['vat_test', 'electrical'],
+    // Travaux électriques nécessitant consignation
+    'consign|loto|déconnect|remplacer.*disjonct|changer.*câble|modifier.*circuit': ['electrical', 'residual_energy', 'arc_flash'],
+    'débranch|raccord|câbl|connect|démont|raccordement': ['electrical', 'residual_energy'],
+    'armoire|coffret|tableau.*électr|disjoncteur|variateur|vsd': ['electrical', 'residual_energy', 'arc_flash'],
+    // Zones ATEX
     'atex|zone.*ex|explosive|inflammable': ['atex', 'esd'],
+    // Travail en hauteur
     'hauteur|échelle|escabeau|nacelle|échafaud|pirl': ['fall_height', 'ladder', 'falling_objects'],
+    // Manutention
     'manutention|porter|soulever|charge|lourd': ['handling'],
-    'couper|coupure|tranchant|outil|visser': ['cuts'],
-    'bruit|perceuse|meuleuse': ['noise'],
+    // Outils
+    'couper|coupure|tranchant|outil|visser|percer': ['cuts'],
+    'bruit|perceuse|meuleuse|disqueuse': ['noise'],
+    // Accès
     'accès|déplacement|circulation': ['access', 'coactivity'],
-    'terre|mise.*terre|équipotentiel': ['electrical', 'esd'],
-    'contrôle|vérif|test|essai': ['electrical', 'organization']
+    // Mise à terre
+    'terre|mise.*terre|équipotentiel': ['electrical', 'esd']
   };
 
   // Analyze each step and generate comprehensive hazards
@@ -1728,63 +1760,78 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
 
   const riskLevel = procedure.risk_level || 'low';
 
-  // === HEADER SECTION - Properly spaced layout ===
+  // === HEADER SECTION - Clean layout without overlap ===
   const headerH = 65;
   doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
 
-  // LEFT SECTION: Logo + Company (200px)
-  const leftSectionW = 200;
-  let logoX = margin;
+  // LEFT SECTION: Logo only (fixed 60px width) OR company name if no logo
+  let leftContentEnd = margin;
   if (siteSettings.logo) {
     try {
-      doc.image(siteSettings.logo, margin, 8, { height: 48 });
-      logoX = margin + 55;
-    } catch (e) {}
+      doc.image(siteSettings.logo, margin, 8, { height: 48, width: 50 });
+      leftContentEnd = margin + 55;
+    } catch (e) {
+      // No logo, use text
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.headerText)
+         .text(siteSettings.company_name || "ELECTROHUB", margin, 10, { width: 100 });
+      leftContentEnd = margin + 105;
+    }
+  } else {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(c.headerText)
+       .text(siteSettings.company_name || "ELECTROHUB", margin, 10, { width: 100 });
+    leftContentEnd = margin + 105;
   }
 
-  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.headerText)
-     .text(siteSettings.company_name || "ELECTROHUB", logoX + 5, 8, { width: leftSectionW - logoX + margin });
+  // Method Statement badge - positioned after logo/company
+  doc.roundedRect(leftContentEnd + 5, 8, 115, 20, 3).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("METHOD STATEMENT", leftContentEnd + 12, 13);
 
-  // Method Statement badge
-  doc.roundedRect(logoX + 5, 28, 130, 22, 4).fill(c.primary);
-  doc.fontSize(10).fillColor(c.white).text("METHOD STATEMENT", logoX + 12, 33);
-
-  // RIGHT SECTION: Risk badge + QR (150px)
-  const rightSectionW = 150;
-  const rightSectionX = pageWidth - margin - rightSectionW;
+  // RIGHT SECTION: Risk badge + QR (140px total)
+  const rightSectionX = pageWidth - margin - 140;
 
   // Risk badge
   const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.darkRed };
-  const riskLabels = { low: "FAIBLE", medium: "MODÉRÉ", high: "ÉLEVÉ", critical: "CRITIQUE" };
-  doc.roundedRect(rightSectionX, 8, 70, 48, 5).fill(riskColors[riskLevel] || c.success);
-  doc.fontSize(7).fillColor(c.white).text("RISQUE", rightSectionX + 5, 14, { width: 60, align: "center" });
-  doc.font("Helvetica-Bold").fontSize(11).text(riskLabels[riskLevel] || "FAIBLE", rightSectionX + 5, 30, { width: 60, align: "center" });
+  const riskLabels = { low: "FAIBLE", medium: "MODERE", high: "ELEVE", critical: "CRITIQUE" };
+  doc.roundedRect(rightSectionX, 8, 65, 48, 4).fill(riskColors[riskLevel] || c.success);
+  doc.fontSize(7).fillColor(c.white).text("RISQUE", rightSectionX + 5, 14, { width: 55, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(10).text(riskLabels[riskLevel] || "FAIBLE", rightSectionX + 5, 30, { width: 55, align: "center" });
 
   // QR Code
   if (qrCodeBuffer) {
     try {
-      doc.image(qrCodeBuffer, rightSectionX + 80, 6, { width: 52 });
+      doc.image(qrCodeBuffer, rightSectionX + 75, 6, { width: 52 });
     } catch (e) {}
   }
 
-  // CENTER SECTION: Title (between left and right sections)
-  const titleX = margin + leftSectionW + 10;
-  const titleW = rightSectionX - titleX - 15;
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.headerText)
+  // CENTER SECTION: Title (between left badge and right section)
+  const titleX = leftContentEnd + 130;
+  const titleW = rightSectionX - titleX - 10;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.headerText)
      .text(procedure.title.toUpperCase(), titleX, 6, { width: titleW, align: "center" });
-  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
-     .text(`Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`, titleX, 26, { width: titleW, align: "center" });
+  doc.font("Helvetica").fontSize(7).fillColor("#1a5c00")
+     .text(`Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`, titleX, 22, { width: titleW, align: "center" });
   doc.fontSize(7).fillColor("#2d7a00")
-     .text(`Site: ${procedure.site || 'N/A'} | Batiment: ${procedure.building || 'N/A'}`, titleX, 42, { width: titleW, align: "center" });
+     .text(`Site: ${procedure.site || 'N/A'} | Batiment: ${procedure.building || 'N/A'}`, titleX, 36, { width: titleW, align: "center" });
 
-  // === CONTENT LAYOUT - Precise proportions to avoid overlap ===
-  let y = headerH + 8;
+  // Company name in header bottom if logo present
+  if (siteSettings.logo && siteSettings.company_name) {
+    doc.font("Helvetica").fontSize(6).fillColor(c.headerText)
+       .text(siteSettings.company_name, margin, 52, { width: 100 });
+  }
+
+  // === CONTENT LAYOUT - Table and sidebar aligned ===
+  const contentStartY = headerH + 8;
+  let y = contentStartY;
   const contentW = pageWidth - margin * 2;
-  const sidebarW = 245;  // Compact sidebar width
-  const gapW = 15;       // Gap between table and sidebar
-  const col1W = contentW - sidebarW - gapW;  // Table width
+
+  // Sidebar on the right - fixed width and position
+  const sidebarW = 240;
+  const col2X = pageWidth - margin - sidebarW;  // Sidebar starts 240px from right edge
   const col2W = sidebarW;
-  const col2X = margin + col1W + gapW;  // Sidebar position
+
+  // Table fills remaining space with 12px gap
+  const gapW = 12;
+  const col1W = col2X - margin - gapW;  // Table width = sidebar start - margin - gap
 
   // === MAIN RISK TABLE HEADER ===
   doc.rect(margin, y, col1W, 18).fill(c.danger);
@@ -1913,7 +1960,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
       // Danger with checkbox - no substring, use ellipsis
       const checkbox = hazard.checkbox || hazard.category || "Risque";
       doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
-         .text(`☐ ${checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4, lineBreak: false });
+         .text(`[ ] ${checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4, lineBreak: false });
       doc.font("Helvetica").fontSize(5).fillColor(c.text)
          .text(hazard.danger || "", rx + 2, y + 10, { width: colWidths.danger - 4, height: rowH - 14, ellipsis: true });
       rx += colWidths.danger;
@@ -2036,8 +2083,8 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     doc.fontSize(4).fillColor("#ffffff99").text(p.desc, probX + i * sw, y + 23, { width: sw, align: "center" });
   });
 
-  // === RIGHT COLUMN (SIDE PANEL) ===
-  let ry = headerH + 8;
+  // === RIGHT COLUMN (SIDE PANEL) - Aligned with table ===
+  let ry = contentStartY;  // Same Y as table start
 
   // Photos section (NO EMOJI)
   doc.rect(col2X, ry, col2W, 16).fill(c.primary);
@@ -2116,7 +2163,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   ppeList.slice(0, 8).forEach((ppe, i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
-    doc.text("☑ " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
+    doc.text("[x] " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
   });
   ry += ppeH + 3;
 
@@ -2130,7 +2177,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
   doc.font("Helvetica").fontSize(6).fillColor(c.text);
   safetyCodes.slice(0, 4).forEach((code, i) => {
-    doc.text("▸ " + code, col2X + 4, ry + 4 + i * 11, { width: col2W - 8, lineBreak: false, ellipsis: true });
+    doc.text("> " + code, col2X + 4, ry + 4 + i * 11, { width: col2W - 8, lineBreak: false, ellipsis: true });
   });
   ry += scH + 3;
 
