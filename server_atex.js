@@ -2853,29 +2853,48 @@ async function atexExtractWithGemini(images) {
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-  console.log(`[ATEX-AI] Calling Gemini (model: gemini-1.5-flash)...`);
-  const startTime = Date.now();
+  // Modèles à essayer (du plus récent au plus ancien)
+  const modelNames = [
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-latest",
+    "gemini-pro-vision"
+  ];
 
-  // Préparer les parts pour Gemini
-  const imageParts = images.map((img) => ({
-    inlineData: {
-      data: img.base64,
-      mimeType: img.mime,
-    },
-  }));
+  let lastError = null;
+  for (const modelName of modelNames) {
+    try {
+      console.log(`[ATEX-AI] Trying Gemini model: ${modelName}...`);
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const startTime = Date.now();
 
-  const result = await model.generateContent([
-    ATEX_PROMPT,
-    ...imageParts,
-  ]);
+      // Préparer les parts pour Gemini
+      const imageParts = images.map((img) => ({
+        inlineData: {
+          data: img.base64,
+          mimeType: img.mime,
+        },
+      }));
 
-  const elapsed = Date.now() - startTime;
-  const rawContent = result.response.text();
-  console.log(`[ATEX-AI] Gemini response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+      const result = await model.generateContent([
+        ATEX_PROMPT,
+        ...imageParts,
+      ]);
 
-  return parseAtexResult(rawContent);
+      const elapsed = Date.now() - startTime;
+      const rawContent = result.response.text();
+      console.log(`[ATEX-AI] Gemini (${modelName}) response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+
+      return parseAtexResult(rawContent);
+    } catch (err) {
+      console.log(`[ATEX-AI] Model ${modelName} failed: ${err.message}`);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed");
 }
 
 // ✅ Extraction via OpenAI
