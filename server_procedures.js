@@ -898,7 +898,7 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   conversation.push(userEntry);
 
   // Build messages for OpenAI
-  const photoContext = photoAnalysis ? `\n[Photo analysée: ${photoAnalysis}]` : (uploadedPhoto ? `\n[Photo uploadée: ${uploadedPhoto}]` : "");
+  // IMPORTANT: Always use "[Photo: filename]" format so LIA knows a photo was sent
   const messages = [
     { role: "system", content: PROCEDURE_CREATION_PROMPT },
     {
@@ -909,7 +909,8 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     },
     ...conversation.map(c => ({
       role: c.role,
-      content: c.content + (c.photoAnalysis ? `\n[Photo: ${c.photoAnalysis}]` : (c.photo ? `\n[Photo: ${c.photo}]` : ""))
+      // Always include [Photo: filename] when photo exists, regardless of analysis result
+      content: c.content + (c.photo ? `\n[Photo: ${c.photo}]` : "")
     }))
   ];
 
