@@ -24,6 +24,7 @@ import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.j
 import OpenAI from "openai";
 // Gemini fallback
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import archiver from "archiver";
 
 dotenv.config();
 
@@ -2311,8 +2312,7 @@ app.get("/api/procedures/example-all-documents", async (req, res) => {
       generateExampleProcedurePDF(baseUrl)
     ]);
 
-    // Create ZIP archive
-    const archiver = require('archiver');
+    // Create ZIP archive (archiver imported at top of file)
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     res.setHeader("Content-Type", "application/zip");
@@ -3638,7 +3638,6 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: true,
     autoFirstPage: true,
     info: {
       Title: `RAMS Exemple - ${data.activity}`,
@@ -3836,7 +3835,7 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
     for (let hi = 0; hi < step.hazards.length; hi++) {
       const hazard = step.hazards[hi];
       const isFirst = hi === 0;
-      const rowH = 28;
+      const rowH = 42; // Increased height for more text
       const isEven = rowCount % 2 === 0;
 
       doc.rect(margin, y, tableW, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
@@ -3851,76 +3850,77 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
       }
       rx += colWidths.n;
 
-      // Task/Activity
-      doc.font("Helvetica-Bold").fontSize(5).fillColor(c.text);
+      // Task/Activity - more text allowed
+      doc.font("Helvetica-Bold").fontSize(5.5).fillColor(c.text);
       if (isFirst) {
-        doc.text(step.title.substring(0, 35), rx + 2, y + 3, { width: colWidths.task - 4 });
+        doc.text(step.title, rx + 2, y + 3, { width: colWidths.task - 4, height: rowH - 6, ellipsis: true });
       }
       rx += colWidths.task;
 
-      // Danger with checkbox (no emoji, use simple checkbox)
+      // Danger with checkbox - more text space
       doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
          .text(`[x] ${hazard.checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4 });
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.danger.substring(0, 65), rx + 2, y + 10, { width: colWidths.danger - 4 });
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.danger, rx + 2, y + 12, { width: colWidths.danger - 4, height: rowH - 16, ellipsis: true });
       rx += colWidths.danger;
 
       // G initial
       const niri = hazard.gi * hazard.pi;
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gi));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.gi), rx + 2, y + 9, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.gi));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.gi), rx + 2, y + 15, { width: 20, align: "center" });
       rx += colWidths.gi;
 
       // P initial
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pi));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.pi), rx + 2, y + 9, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.pi));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.pi), rx + 2, y + 15, { width: 20, align: "center" });
       rx += colWidths.pi;
 
       // NIR initial
-      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(niri));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(niri), rx + 1, y + 9, { width: 26, align: "center" });
+      doc.roundedRect(rx + 1, y + 12, 26, 16, 2).fill(getRiskColor(niri));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(niri), rx + 1, y + 15, { width: 26, align: "center" });
       rx += colWidths.niri;
 
-      // Measures
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.measures.substring(0, 65), rx + 2, y + 3, { width: colWidths.measures - 4 });
+      // Measures - more text allowed
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.measures, rx + 2, y + 3, { width: colWidths.measures - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.measures;
 
-      // PPE
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.info)
-         .text(hazard.ppe.slice(0, 2).join(", ").substring(0, 30), rx + 2, y + 3, { width: colWidths.ppe - 4 });
+      // PPE - show more items
+      const ppeText = hazard.ppe.slice(0, 3).join(", ");
+      doc.font("Helvetica").fontSize(5).fillColor(c.info)
+         .text(ppeText, rx + 2, y + 3, { width: colWidths.ppe - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.ppe;
 
-      // Actions
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.actions.substring(0, 45), rx + 2, y + 3, { width: colWidths.actions - 4 });
+      // Actions - more text allowed
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.actions, rx + 2, y + 3, { width: colWidths.actions - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.actions;
 
       // Responsible
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.responsible, rx + 2, y + 10, { width: colWidths.resp - 4, align: "center" });
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.responsible, rx + 2, y + 15, { width: colWidths.resp - 4, align: "center" });
       rx += colWidths.resp;
 
       // G final
       const nirf = hazard.gf * hazard.pf;
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.gf), rx + 2, y + 9, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.gf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.gf), rx + 2, y + 15, { width: 20, align: "center" });
       rx += colWidths.gf;
 
       // P final
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.pf), rx + 2, y + 9, { width: 20, align: "center" });
+      doc.roundedRect(rx + 2, y + 12, 20, 16, 2).fill(getGravityColor(hazard.pf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.pf), rx + 2, y + 15, { width: 20, align: "center" });
       rx += colWidths.pf;
 
       // NIR final
-      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(nirf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(nirf), rx + 1, y + 9, { width: 26, align: "center" });
+      doc.roundedRect(rx + 1, y + 12, 26, 16, 2).fill(getRiskColor(nirf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(nirf), rx + 1, y + 15, { width: 26, align: "center" });
 
       y += rowH;
       rowCount++;
@@ -4047,8 +4047,8 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   const scH = Math.min(50, data.safetyCodes.length * 11 + 6);
   doc.rect(sidebarX, ry, sidebarW, scH).fillAndStroke(c.lightBg, c.border);
   doc.font("Helvetica").fontSize(6).fillColor(c.text);
-  data.safetyCodes.forEach((code, i) => {
-    doc.text("> " + code, sidebarX + 4, ry + 4 + i * 11, { width: sidebarW - 8 });
+  data.safetyCodes.slice(0, 4).forEach((code, i) => {
+    doc.text("> " + code, sidebarX + 4, ry + 4 + i * 11, { width: sidebarW - 8, lineBreak: false });
   });
   ry += scH + 4;
 
@@ -4057,11 +4057,11 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONTACTS URGENCE", sidebarX + 8, ry + 4);
   ry += 16;
 
-  const contactH = data.emergencyContacts.length * 16 + 6;
+  const contactH = Math.min(data.emergencyContacts.length, 3) * 16 + 6;
   doc.rect(sidebarX, ry, sidebarW, contactH).fillAndStroke("#fef2f2", c.danger);
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger);
-  data.emergencyContacts.forEach((contact, i) => {
-    doc.text(`${contact.name}: ${contact.phone}`, sidebarX + 6, ry + 4 + i * 16, { width: sidebarW - 12 });
+  data.emergencyContacts.slice(0, 3).forEach((contact, i) => {
+    doc.text(`${contact.name}: ${contact.phone}`, sidebarX + 6, ry + 4 + i * 16, { width: sidebarW - 12, lineBreak: false });
   });
   ry += contactH + 4;
 
