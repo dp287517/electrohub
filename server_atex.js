@@ -2854,13 +2854,12 @@ async function atexExtractWithGemini(images) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Modèles à essayer (du plus récent au plus ancien)
+  // Modèles à essayer (noms corrects de l'API Gemini)
   const modelNames = [
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-pro-latest",
-    "gemini-pro-vision"
+    "gemini-1.5-flash",      // Modèle rapide gratuit
+    "gemini-1.5-pro",        // Modèle pro gratuit
+    "gemini-1.0-pro-vision", // Ancien modèle vision
+    "gemini-pro",            // Fallback texte
   ];
 
   let lastError = null;
