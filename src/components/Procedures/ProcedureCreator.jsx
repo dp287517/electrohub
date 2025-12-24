@@ -273,13 +273,13 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               </div>
               <div className="flex-1">
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  Création rapide avec LIA
+                  Création guidée avec LIA
                   <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                    ⚡ 30 sec
+                    RAMS + Méthodo + Procédure
                   </span>
                 </h3>
                 <p className="text-sm text-gray-600 mt-1">
-                  3 étapes simples : titre → décrivez vos étapes → c'est prêt ! Photos optionnelles 📷
+                  Titre → Décrivez chaque étape + 📸 photo → LIA génère les 3 documents complets
                 </p>
               </div>
               <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-violet-600 transition-colors" />
@@ -584,23 +584,23 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           </button>
         ) : (
           <div className="space-y-2">
-            {/* Photo hint when in steps mode */}
+            {/* Photo requirement hint when in steps mode */}
             {currentStep === 'steps' && (
-              <div className="flex items-center gap-2 text-xs text-gray-500 px-1">
+              <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
                 <Camera className="w-3.5 h-3.5" />
-                <span>📷 Photo optionnelle - appuyez sur l'icône caméra pour en ajouter une</span>
+                <span>📸 <strong>Photo obligatoire</strong> pour chaque étape - cliquez sur l'icône caméra</span>
               </div>
             )}
             <div className="flex gap-2">
-              {/* Always show camera button in steps mode */}
+              {/* Always show camera button in steps mode - now required */}
               {(expectsPhoto || currentStep === 'steps') && (
                 <button
                   onClick={() => photoInputRef.current?.click()}
-                  className="p-3 bg-violet-100 text-violet-600 rounded-xl hover:bg-violet-200 transition-colors relative"
-                  title="Ajouter une photo (optionnel)"
+                  className="p-3 bg-amber-100 text-amber-600 rounded-xl hover:bg-amber-200 transition-colors relative animate-pulse"
+                  title="Ajouter une photo (obligatoire)"
                 >
                   <Camera className="w-5 h-5" />
-                  <span className="absolute -top-1 -right-1 text-[10px] bg-gray-200 text-gray-600 px-1 rounded">opt.</span>
+                  <span className="absolute -top-1 -right-1 text-[10px] bg-amber-500 text-white px-1 rounded font-medium">!</span>
                 </button>
               )}
               <input
@@ -617,8 +617,9 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder={
-                  currentStep === 'init' ? "Ex: Changer une ampoule, Vérifier le moteur..." :
-                  currentStep === 'steps' ? "Décrivez l'étape ou tapez 'terminé'" :
+                  currentStep === 'init' ? "Ex: Remplacement disjoncteur, Maintenance moteur..." :
+                  currentStep === 'steps' ? "Décrivez l'étape + ajoutez une photo 📸" :
+                  currentStep === 'review' ? "Tapez 'oui' pour créer ou modifiez..." :
                   "Votre réponse..."
                 }
                 className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
