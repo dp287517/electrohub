@@ -6,10 +6,9 @@ import {
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
   Volume2, VolumeX, BarChart3, Play, Loader2,
-  ClipboardList
+  ClipboardList, Camera, Image, Upload
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
-import { ProcedureCreator } from '../Procedures';
 import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -142,13 +141,14 @@ export default function AvatarChat({
   const [isMuted, setIsMuted] = useState(() => {
     return localStorage.getItem('eh_avatar_muted') === 'true';
   });
-  // Procedure mode state
-  const [showProcedureCreator, setShowProcedureCreator] = useState(false);
-  const [procedureContext, setProcedureContext] = useState(null);
+  // Photo upload state
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
+  const photoInputRef = useRef(null);
 
   // Fallback si le style n'existe plus (migration des anciens styles)
   const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'electro';
@@ -320,9 +320,30 @@ Comment puis-je vous aider aujourd'hui ?`,
     recognition.start();
   };
 
-  // Envoyer un message
+  // Photo handling
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedPhoto(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPhotoPreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const clearPhoto = () => {
+    setSelectedPhoto(null);
+    setPhotoPreview(null);
+    if (photoInputRef.current) {
+      photoInputRef.current.value = '';
+    }
+  };
+
+  // Envoyer un message (avec photo optionnelle)
   const handleSend = async (messageText = input) => {
-    if (!messageText.trim() || isLoading) return;
+    if ((!messageText.trim() && !selectedPhoto) || isLoading) return;
 
     stopSpeaking();
     setShowQuickActions(false);
@@ -330,40 +351,23 @@ Comment puis-je vous aider aujourd'hui ?`,
     const userMessage = {
       id: Date.now(),
       role: 'user',
-      content: messageText.trim(),
+      content: messageText.trim() || (selectedPhoto ? '📷 Photo envoyée' : ''),
+      photo: photoPreview,
       timestamp: new Date()
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    const photoToSend = selectedPhoto;
+    clearPhoto();
     setIsLoading(true);
-    setIsSpeaking(true); // Animation pendant chargement
+    setIsSpeaking(true);
 
     try {
-      const response = await aiAssistant.chat(messageText, {
+      const response = await aiAssistant.chatWithPhoto(messageText, photoToSend, {
         context,
-        conversationHistory: messages.slice(-10) // Derniers 10 messages pour contexte
+        conversationHistory: messages.slice(-10)
       });
-
-      // Check if AI wants to launch procedure mode
-      if (response.launchMode === 'procedure') {
-        const assistantMessage = {
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: response.message,
-          provider: response.provider,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-        speak(response.message);
-
-        // Launch procedure creator after a short delay
-        setTimeout(() => {
-          setProcedureContext(response.procedureContext);
-          setShowProcedureCreator(true);
-        }, 1500);
-        return;
-      }
 
       const assistantMessage = {
         id: Date.now() + 1,
@@ -402,35 +406,7 @@ Comment puis-je vous aider aujourd'hui ?`,
     handleSend(action.prompt);
   };
 
-  // Handle procedure creator close
-  const handleProcedureClose = useCallback((savedProcedure) => {
-    setShowProcedureCreator(false);
-    setProcedureContext(null);
-
-    if (savedProcedure) {
-      // Add a success message to the chat
-      const successMessage = {
-        id: Date.now(),
-        role: 'assistant',
-        content: `✅ **Procédure créée avec succès !**\n\n• Titre: **${savedProcedure.title}**\n• ${savedProcedure.steps?.length || 0} étapes documentées\n\nLa procédure est maintenant disponible dans la section "Procédures".`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, successMessage]);
-      speak(successMessage.content);
-    }
-  }, [speak]);
-
   if (!isOpen) return null;
-
-  // Show ProcedureCreator if in procedure mode
-  if (showProcedureCreator) {
-    return (
-      <ProcedureCreator
-        onClose={handleProcedureClose}
-        initialContext={procedureContext}
-      />
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -504,16 +480,29 @@ Comment puis-je vous aider aujourd'hui ?`,
                     : 'bg-gray-100 text-gray-900'
                 }`}
               >
+                {/* Photo attachée */}
+                {message.photo && (
+                  <div className="mb-2">
+                    <img
+                      src={message.photo}
+                      alt="Photo"
+                      className="max-h-48 rounded-lg"
+                    />
+                  </div>
+                )}
+
                 {/* Contenu du message avec markdown basique */}
-                <div className="text-sm whitespace-pre-wrap">
-                  {message.content.split('\n').map((line, i) => (
-                    <p key={i} className={line.startsWith('•') ? 'ml-2' : ''}>
-                      {line.split('**').map((part, j) =>
-                        j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                      )}
-                    </p>
-                  ))}
-                </div>
+                {message.content && (
+                  <div className="text-sm whitespace-pre-wrap">
+                    {message.content.split('\n').map((line, i) => (
+                      <p key={i} className={line.startsWith('•') ? 'ml-2' : ''}>
+                        {line.split('**').map((part, j) =>
+                          j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+                        )}
+                      </p>
+                    ))}
+                  </div>
+                )}
 
                 {/* Actions suggérées */}
                 {message.actions && message.actions.length > 0 && (
@@ -672,6 +661,23 @@ Comment puis-je vous aider aujourd'hui ?`,
 
         {/* Input Area */}
         <div className="p-4 border-t bg-gray-50 shrink-0">
+          {/* Photo Preview */}
+          {photoPreview && (
+            <div className="mb-3 relative inline-block">
+              <img
+                src={photoPreview}
+                alt="Preview"
+                className="h-20 rounded-lg"
+              />
+              <button
+                onClick={clearPhoto}
+                className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             {/* Voice Input */}
             <button
@@ -686,6 +692,24 @@ Comment puis-je vous aider aujourd'hui ?`,
               {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
             </button>
 
+            {/* Photo Upload */}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={handlePhotoSelect}
+              className="hidden"
+            />
+            <button
+              onClick={() => photoInputRef.current?.click()}
+              className="p-3 rounded-xl bg-gray-200 text-gray-600 hover:bg-violet-100 hover:text-violet-600 transition-all"
+              title="Ajouter une photo"
+              disabled={isLoading}
+            >
+              <Camera className="w-5 h-5" />
+            </button>
+
             {/* Text Input */}
             <input
               ref={inputRef}
@@ -693,7 +717,7 @@ Comment puis-je vous aider aujourd'hui ?`,
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              placeholder={isListening ? 'Je vous écoute...' : `Parlez à ${avatar.name}...`}
+              placeholder={isListening ? 'Je vous écoute...' : selectedPhoto ? 'Décris cette photo...' : `Parlez à ${avatar.name}...`}
               className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
               disabled={isLoading || isListening}
             />
@@ -701,9 +725,9 @@ Comment puis-je vous aider aujourd'hui ?`,
             {/* Send Button */}
             <button
               onClick={() => handleSend()}
-              disabled={!input.trim() || isLoading}
+              disabled={(!input.trim() && !selectedPhoto) || isLoading}
               className={`p-3 rounded-xl transition-all ${
-                input.trim() && !isLoading
+                (input.trim() || selectedPhoto) && !isLoading
                   ? 'bg-brand-600 text-white hover:bg-brand-700'
                   : 'bg-gray-200 text-gray-400 cursor-not-allowed'
               }`}

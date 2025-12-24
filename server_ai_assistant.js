@@ -24,8 +24,16 @@ globalThis.fetch = _fetch;
 
 // OpenAI SDK
 import OpenAI from "openai";
+import multer from "multer";
+import fs from "fs";
 
 dotenv.config();
+
+// Multer for file uploads
+const upload = multer({
+  dest: '/tmp/ai-assistant-uploads/',
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,43 +71,45 @@ const GEMINI_MODEL = process.env.AI_ASSISTANT_GEMINI_MODEL || "gemini-1.5-flash"
 // -----------------------------------------------------------------------------
 // System Prompt - Le coeur de l'intelligence
 // -----------------------------------------------------------------------------
-const SYSTEM_PROMPT = `Tu es un assistant IA expert pour ElectroHub, une plateforme de gestion d'équipements électriques et de conformité.
+const SYSTEM_PROMPT = `Tu es un assistant IA expert pour ElectroHub, une plateforme de gestion d'équipements électriques.
+
+## RÈGLES CRITIQUES
+1. **SOIS BREF** - Pas de blabla. Réponses courtes et directes.
+2. **AGIS** - Ne demande pas de confirmation, fais directement.
+3. **UNE CHOSE À LA FOIS** - Pose UNE question, attends la réponse.
 
 ## Ton rôle
-Tu aides les techniciens et ingénieurs électriques à:
-- Gérer leurs équipements (armoires électriques, variateurs VSD, moteurs, pompes)
-- Planifier et suivre les contrôles réglementaires
-- Identifier et résoudre les non-conformités
-- Trouver de la documentation technique
-- Optimiser la maintenance préventive
-- **CRÉER DES PROCÉDURES opérationnelles** (excellences opérationnelles)
+Tu aides à:
+- Gérer les équipements électriques
+- Planifier les contrôles
+- Résoudre les non-conformités
+- **CRÉER DES PROCÉDURES** étape par étape avec photos
 
-## Contexte de l'application
-ElectroHub gère plusieurs types d'équipements:
-- **Switchboards**: Armoires électriques avec leurs disjoncteurs et protections
-- **VSD (Variable Speed Drives)**: Variateurs de vitesse pour moteurs
-- **Meca**: Équipements mécaniques (pompes, ventilateurs, moteurs)
-- **ATEX**: Équipements en zones explosives
-- **HV (High Voltage)**: Équipements haute tension
-- **GLO**: Équipements généraux (UPS, batteries, éclairage de sécurité)
+## Création de procédures (MODE SIMPLE)
+Quand l'utilisateur veut créer une procédure:
+1. Demande le titre (une seule question)
+2. Demande la première étape + photo
+3. Pour chaque étape: description + photo
+4. À la fin: demande EPI, codes sécurité, équipement lié
+5. Génère automatiquement
 
-## Comment tu réponds
-1. **Sois concis et actionnable** - Donne des réponses directes et utiles
-2. **Utilise le contexte fourni** - Analyse les données d'équipements/contrôles fournies
-3. **Propose des actions concrètes** - Suggère toujours les prochaines étapes
-4. **Parle français** - Réponds toujours en français sauf si demandé autrement
-5. **Sois proactif** - Si tu vois des problèmes potentiels, mentionne-les
+**EXEMPLE DE DIALOGUE:**
+User: "Je veux créer une procédure"
+Toi: "C'est quoi le titre ?"
+User: "Changement de pompe"
+Toi: "OK ! Première étape - décris ce qu'il faut faire et envoie une photo 📷"
+User: "Couper l'alimentation" + photo
+Toi: "Reçu ✓ Étape 2 ?"
+...
 
-## Format de réponse
-- Utilise **gras** pour les points importants
-- Utilise des bullet points (•) pour les listes
-- Structure tes réponses en sections claires
-- Si tu proposes des actions, mets-les à la fin
+## Format réponse
+- COURT
+- Utilise **gras** pour les mots clés
+- ✓ pour confirmer réception
+- 📷 pour demander photo
 
-## Limitations
-- Tu ne peux pas modifier directement les données
-- Pour les recherches web, tu dois explicitement demander à l'utilisateur
-- Si tu n'as pas assez d'infos, demande des clarifications`;
+## Équipements disponibles
+Switchboards, VSD, Meca, ATEX, HV, GLO, Datahub, Projects, OIBT, Doors, Mobile Equipment`;
 
 // -----------------------------------------------------------------------------
 // Intent Detection - Procédures
@@ -367,19 +377,20 @@ app.post("/chat", async (req, res) => {
     }
 
     // =========================================================================
-    // PROCEDURE INTENT DETECTION - Priority check before anything else
+    // PROCEDURE INTENT DETECTION - Direct inline response
     // =========================================================================
     if (detectProcedureIntent(message)) {
       const procedureSubject = extractProcedureContext(message);
 
-      // Direct, action-oriented response
+      // Direct, simple question - no blabla
+      const directResponse = procedureSubject
+        ? `OK, procédure pour **${procedureSubject}**.\n\n📷 **Première étape** - décris ce qu'il faut faire et envoie une photo.`
+        : `**C'est quoi le titre de la procédure ?**`;
+
       return res.json({
-        message: `**C'est parti !** 🚀 Je lance le mode création de procédure.${procedureSubject ? `\n\nJ'ai compris que tu veux documenter : **${procedureSubject}**` : ''}`,
-        launchMode: 'procedure',
-        procedureContext: {
-          initialSubject: procedureSubject,
-          userMessage: message
-        },
+        message: directResponse,
+        procedureMode: true,
+        procedureStep: procedureSubject ? 'step1' : 'title',
         provider: 'system'
       });
     }
@@ -480,6 +491,104 @@ app.post("/chat", async (req, res) => {
     res.status(500).json({
       error: "Erreur lors de la génération de réponse",
       details: error.message
+    });
+  }
+});
+
+// =============================================================================
+// CHAT WITH PHOTO - Vision AI for procedure creation
+// =============================================================================
+app.post("/chat-with-photo", upload.single('photo'), async (req, res) => {
+  try {
+    const { message } = req.body;
+    const photo = req.file;
+    const context = req.body.context ? JSON.parse(req.body.context) : null;
+    const conversationHistory = req.body.conversationHistory ? JSON.parse(req.body.conversationHistory) : [];
+    const user = req.body.user ? JSON.parse(req.body.user) : null;
+
+    if (!photo) {
+      return res.status(400).json({ error: "Photo requise" });
+    }
+
+    // Read photo and convert to base64
+    const photoBuffer = fs.readFileSync(photo.path);
+    const base64Photo = photoBuffer.toString('base64');
+    const mimeType = photo.mimetype || 'image/jpeg';
+
+    // Clean up temp file
+    fs.unlinkSync(photo.path);
+
+    // Build conversation with vision
+    const visionMessages = [
+      {
+        role: "system",
+        content: `Tu es un assistant qui aide à créer des procédures opérationnelles.
+
+RÈGLES:
+- Sois BREF et DIRECT
+- Analyse la photo envoyée
+- Identifie: équipement, étape de travail, contexte
+- Pose UNE question pour la suite
+
+Si l'utilisateur crée une procédure:
+- Confirme réception de la photo: "✓ Photo reçue"
+- Décris brièvement ce que tu vois
+- Demande "Étape suivante ?" ou si c'est fini
+
+Format: Court, avec émojis (✓ 📷 ⚠️)`
+      }
+    ];
+
+    // Add conversation history
+    conversationHistory.slice(-6).forEach(msg => {
+      visionMessages.push({
+        role: msg.role,
+        content: msg.content
+      });
+    });
+
+    // Add current message with photo
+    visionMessages.push({
+      role: "user",
+      content: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:${mimeType};base64,${base64Photo}`,
+            detail: "low" // Use low detail for faster processing
+          }
+        },
+        {
+          type: "text",
+          text: message || "Voici la photo pour cette étape."
+        }
+      ]
+    });
+
+    // Call GPT-4o Vision
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: visionMessages,
+      max_tokens: 300,
+      temperature: 0.7
+    });
+
+    const aiResponse = response.choices[0]?.message?.content || "✓ Photo reçue. Étape suivante ?";
+
+    res.json({
+      message: aiResponse,
+      actions: [
+        { label: "Étape suivante", prompt: "Étape suivante" },
+        { label: "Terminer", prompt: "C'est fini, génère la procédure" }
+      ],
+      provider: "openai-vision"
+    });
+
+  } catch (error) {
+    console.error("Chat with photo error:", error);
+    res.status(500).json({
+      error: "Erreur lors de l'analyse de la photo",
+      message: "✓ Photo reçue ! Décris cette étape et envoie la suivante 📷"
     });
   }
 });

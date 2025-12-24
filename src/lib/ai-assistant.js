@@ -258,6 +258,75 @@ class AIAssistant {
   }
 
   /**
+   * Chat avec photo - pour création de procédures et analyses visuelles
+   * @param {string} message - Message de l'utilisateur
+   * @param {File|null} photo - Fichier photo optionnel
+   * @param {object} options - Options supplémentaires
+   */
+  async chatWithPhoto(message, photo = null, options = {}) {
+    const {
+      context = null,
+      conversationHistory = []
+    } = options;
+
+    try {
+      // Préparer le contexte
+      const fullContext = context || await this.getGlobalContext();
+
+      // Si pas de photo, utiliser le chat normal
+      if (!photo) {
+        return this.chat(message, options);
+      }
+
+      // Créer FormData pour l'upload de photo
+      const formData = new FormData();
+      formData.append('message', message || '');
+      formData.append('photo', photo);
+      formData.append('context', JSON.stringify(this.prepareContextForAI(fullContext)));
+      formData.append('conversationHistory', JSON.stringify(
+        conversationHistory.map(m => ({
+          role: m.role,
+          content: m.content,
+          photo: m.photo ? true : false // Juste indiquer si photo, pas le contenu
+        }))
+      ));
+      formData.append('user', JSON.stringify(this.getCurrentUser()));
+
+      const response = await fetch(`${this.baseUrl}/chat-with-photo`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('Erreur lors de l\'envoi de la photo');
+      }
+
+      const data = await response.json();
+
+      return {
+        message: data.message,
+        actions: data.actions || [],
+        sources: data.sources || [],
+        provider: data.provider,
+        model: data.model,
+        chart: data.chart || null,
+        pendingAction: data.pendingAction || null,
+        procedureData: data.procedureData || null
+      };
+    } catch (error) {
+      console.error('Erreur chat avec photo:', error);
+
+      return {
+        message: "J'ai bien reçu ta photo ! Dis-moi ce que tu veux faire avec.",
+        actions: [
+          { label: 'Créer une procédure', prompt: 'Utilise cette photo pour créer une procédure' },
+          { label: 'Analyser l\'équipement', prompt: 'Analyse cet équipement sur la photo' }
+        ]
+      };
+    }
+  }
+
+  /**
    * Chat avec contexte d'équipement spécifique
    * @param {string} message - Message de l'utilisateur
    * @param {object} equipmentContext - Contexte de l'équipement
