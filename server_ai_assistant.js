@@ -132,23 +132,20 @@ const PROCEDURE_INTENT_PATTERNS = [
 ];
 
 function detectProcedureIntent(message) {
-  const lowerMessage = message.toLowerCase().trim();
+  if (!message) return false;
+  const m = message.toLowerCase();
 
-  for (const pattern of PROCEDURE_INTENT_PATTERNS) {
-    if (pattern.test(lowerMessage)) {
-      return true;
-    }
-  }
+  // SIMPLE: cherche juste les mots clés
+  const keywords = ['procédure', 'procedure', 'excellence', 'étape', 'etape'];
+  const actions = ['créer', 'creer', 'faire', 'nouvelle', 'ajouter', 'commencer'];
 
-  // Check for simple keyword combinations
-  const hasProcedure = /procédure|procedure|excellence|fiche/i.test(lowerMessage);
-  const hasCreate = /créer|creer|faire|ajouter|nouvelle|nouveau|documenter/i.test(lowerMessage);
+  const hasKeyword = keywords.some(k => m.includes(k));
+  const hasAction = actions.some(a => m.includes(a));
 
-  if (hasProcedure && hasCreate) {
-    return true;
-  }
+  // Debug
+  console.log(`[DETECT] "${m}" → keyword=${hasKeyword}, action=${hasAction}`);
 
-  return false;
+  return hasKeyword && hasAction;
 }
 
 // Extract what kind of procedure the user wants

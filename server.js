@@ -1882,6 +1882,26 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
 
     console.log(`[AI] 🚀 Processing: "${message.substring(0, 50)}..." for site ${site}`);
 
+    // =========================================================================
+    // PROCEDURE DETECTION - Réponse directe, pas de blabla
+    // =========================================================================
+    const msgLower = message.toLowerCase();
+    const wantsProcedure = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
+      (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
+       msgLower.includes('nouvelle') || msgLower.includes('ajouter') || msgLower.includes('commencer'))
+    );
+
+    if (wantsProcedure) {
+      console.log('[AI] 📋 Procedure mode detected - direct response');
+      return res.json({
+        message: `**C'est quoi le titre de ta procédure ?**`,
+        actions: [],
+        provider: 'system',
+        procedureMode: true
+      });
+    }
+
     // Get real-time context from database
     const dbContext = await getAIContext(site);
     const contextPrompt = formatContextForAI(dbContext);
@@ -2056,6 +2076,69 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     const dbContext = await getAIContext(site).catch(() => ({}));
 
     res.json(generateIntelligentFallback(req.body?.message || '', dbContext));
+  }
+});
+
+// >>> AI Assistant - Chat with Photo (GPT-4o Vision for procedures)
+const aiPhotoUpload = multer({ dest: '/tmp/ai-photos/', limits: { fileSize: 10 * 1024 * 1024 } });
+app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), async (req, res) => {
+  try {
+    const { message } = req.body;
+    const photo = req.file;
+
+    if (!photo) {
+      return res.status(400).json({ error: "Photo requise" });
+    }
+
+    console.log(`[AI] 📷 Photo received: ${photo.originalname}`);
+
+    // Read and convert to base64
+    const photoBuffer = fs.readFileSync(photo.path);
+    const base64Photo = photoBuffer.toString('base64');
+    const mimeType = photo.mimetype || 'image/jpeg';
+    fs.unlinkSync(photo.path); // Cleanup
+
+    // Call GPT-4o Vision directly
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `Tu aides à créer des procédures. Quand tu reçois une photo:
+- Dis "✓ Photo reçue"
+- Décris BRIÈVEMENT ce que tu vois (1 ligne max)
+- Demande "Étape suivante ?"
+SOIS TRÈS BREF.`
+        },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
+            { type: "text", text: message || "Photo pour cette étape" }
+          ]
+        }
+      ],
+      max_tokens: 150
+    });
+
+    const aiMessage = completion.choices[0]?.message?.content || "✓ Photo reçue ! Étape suivante ?";
+
+    res.json({
+      message: aiMessage,
+      actions: [
+        { label: "Étape suivante", prompt: "Étape suivante" },
+        { label: "Terminer", prompt: "C'est fini" }
+      ],
+      provider: "gpt-4o-vision"
+    });
+
+  } catch (error) {
+    console.error('[AI] ❌ Photo error:', error.message);
+    res.json({
+      message: "✓ Photo reçue ! Décris cette étape et continue 📷",
+      actions: [{ label: "Continuer", prompt: "Étape suivante" }],
+      provider: "fallback"
+    });
   }
 });
 
