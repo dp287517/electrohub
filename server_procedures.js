@@ -855,45 +855,16 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Build conversation history
   const conversation = session.conversation || [];
 
-  // If a photo was uploaded, analyze it with GPT-4o Vision
-  let photoAnalysis = null;
-  if (uploadedPhoto) {
-    try {
-      const photoPath = path.join(PHOTOS_DIR, uploadedPhoto);
-      if (fs.existsSync(photoPath)) {
-        const photoBuffer = fs.readFileSync(photoPath);
-        const base64Photo = photoBuffer.toString('base64');
-        const mimeType = 'image/jpeg';
-
-        const visionMessages = [
-          {
-            role: "system",
-            content: "Tu analyses des photos pour créer des procédures de maintenance. Décris brièvement (2-3 lignes) ce que tu vois: l'action, l'équipement, le contexte. Sois direct."
-          },
-          {
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
-              { type: "text", text: userMessage || "Décris cette image pour une procédure" }
-            ]
-          }
-        ];
-        const visionResult = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 200 });
-        photoAnalysis = visionResult.content || '';
-        console.log(`[PROC] Photo analysis: ${photoAnalysis.substring(0, 100)}...`);
-      }
-    } catch (e) {
-      console.error('[PROC] Photo analysis error:', e.message);
-    }
-  }
+  // NOTE: Photo analysis via GPT-4o Vision REMOVED to speed up response time
+  // This was causing Render proxy timeouts (>20 sec)
+  // The photo filename is still passed to LIA via [Photo: filename] pattern
+  // Photos are stored and will be used when generating the final documents
 
   // Add user message
   const userEntry = { role: "user", content: userMessage };
   if (uploadedPhoto) {
     userEntry.photo = uploadedPhoto;
-    if (photoAnalysis) {
-      userEntry.photoAnalysis = photoAnalysis;
-    }
+    console.log(`[PROC] Photo attached: ${uploadedPhoto}`);
   }
   conversation.push(userEntry);
 
