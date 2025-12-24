@@ -66,7 +66,7 @@ const OPENAI_MODEL = process.env.AI_ASSISTANT_OPENAI_MODEL || "gpt-4o-mini";
 
 // Gemini (Google AI)
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.AI_ASSISTANT_GEMINI_MODEL || "gemini-1.5-flash";
+const GEMINI_MODEL = process.env.AI_ASSISTANT_GEMINI_MODEL || "gemini-2.0-flash";
 
 // -----------------------------------------------------------------------------
 // System Prompt - Le coeur de l'intelligence
@@ -573,15 +573,52 @@ Format: Court, avec émojis (✓ 📷 ⚠️)`
       ]
     });
 
-    // Call GPT-4o Vision
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: visionMessages,
-      max_tokens: 300,
-      temperature: 0.7
-    });
+    // Call Vision AI with fallback
+    let aiResponse;
+    try {
+      console.log('[AI-Assistant] Calling OpenAI Vision...');
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: visionMessages,
+        max_tokens: 300,
+        temperature: 0.7
+      });
+      aiResponse = response.choices[0]?.message?.content || "✓ Photo reçue. Étape suivante ?";
+    } catch (openaiError) {
+      console.log('[AI-Assistant] OpenAI Vision failed:', openaiError.message);
 
-    const aiResponse = response.choices[0]?.message?.content || "✓ Photo reçue. Étape suivante ?";
+      // Fallback to Gemini if quota error
+      if (GEMINI_API_KEY && (openaiError.status === 429 || openaiError.message?.includes('429') || openaiError.message?.includes('quota'))) {
+        console.log('[AI-Assistant] Fallback to Gemini Vision...');
+        try {
+          const geminiResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{
+                  role: "user",
+                  parts: [
+                    { text: visionMessages[0].content + "\n\n" + (message || "Voici la photo pour cette étape.") },
+                    { inlineData: { mimeType, data: base64Photo } }
+                  ]
+                }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 300 }
+              })
+            }
+          );
+          const data = await geminiResponse.json();
+          aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "✓ Photo reçue. Étape suivante ?";
+          console.log('[AI-Assistant] Gemini Vision success');
+        } catch (geminiError) {
+          console.error('[AI-Assistant] Gemini Vision also failed:', geminiError.message);
+          aiResponse = "✓ Photo reçue. Étape suivante ?";
+        }
+      } else {
+        throw openaiError;
+      }
+    }
 
     res.json({
       message: aiResponse,
