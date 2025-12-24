@@ -41,3 +41,51 @@ body { @apply bg-gray-50 text-gray-900; }
 .below-safe-header {
   top: calc(4rem + env(safe-area-inset-top, 0px));
 }
+
+/* iOS PWA Performance Optimizations */
+@supports (-webkit-touch-callout: none) {
+  /* iOS-specific optimizations */
+
+  /* Disable backdrop-blur on iOS standalone mode for better performance */
+  @media (display-mode: standalone) {
+    .ios-pwa-no-blur {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+  }
+
+  /* Force GPU acceleration for smoother animations */
+  .modal-content,
+  .animate-slideUp,
+  .animate-fadeIn {
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  /* Optimize touch interactions */
+  button, a, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Prevent overscroll bounce on iOS modals */
+.modal-overlay {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: auto;
+}
+
+/* Improve touch responsiveness */
+.touch-manipulation {
+  touch-action: manipulation;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
