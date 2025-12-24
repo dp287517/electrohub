@@ -504,7 +504,7 @@ Retourne un JSON avec:
 }
 
 // ------------------------------
-// PDF Generation
+// PDF Generation - Professional Template with Logo
 // ------------------------------
 async function generateProcedurePDF(procedureId) {
   // Get procedure with all related data
@@ -519,7 +519,7 @@ async function generateProcedurePDF(procedureId) {
 
   const procedure = procedures[0];
 
-  // Get steps
+  // Get steps with photos
   const { rows: steps } = await pool.query(
     `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
     [procedureId]
@@ -531,6 +531,20 @@ async function generateProcedurePDF(procedureId) {
     [procedureId]
   );
 
+  // Get site settings (logo, company name) from Switchboard settings
+  let siteSettings = {};
+  try {
+    const { rows: settings } = await pool.query(
+      `SELECT logo, logo_mime, company_name FROM site_settings WHERE site = $1`,
+      [procedure.site || 'default']
+    );
+    if (settings.length > 0) {
+      siteSettings = settings[0];
+    }
+  } catch (e) {
+    console.log("[Procedures] Could not fetch site settings:", e.message);
+  }
+
   // Create PDF
   const doc = new PDFDocument({
     size: "A4",
@@ -538,15 +552,16 @@ async function generateProcedurePDF(procedureId) {
     bufferPages: true,
     info: {
       Title: procedure.title,
-      Author: "ElectroHub",
+      Author: siteSettings.company_name || "ElectroHub",
       Subject: "Procédure opérationnelle",
+      Creator: "ElectroHub Procedures System",
     },
   });
 
   const chunks = [];
   doc.on("data", (chunk) => chunks.push(chunk));
 
-  // Colors
+  // Colors - Professional scheme
   const colors = {
     primary: "#7c3aed",
     secondary: "#a78bfa",
@@ -555,223 +570,312 @@ async function generateProcedurePDF(procedureId) {
     danger: "#ef4444",
     text: "#1f2937",
     lightBg: "#f3f4f6",
+    darkBg: "#111827",
   };
 
-  // Risk level colors
-  const riskColors = {
-    low: colors.success,
-    medium: colors.warning,
-    high: colors.danger,
-    critical: "#7f1d1d",
+  // Risk level colors and labels
+  const riskConfig = {
+    low: { color: colors.success, label: "FAIBLE", icon: "✓" },
+    medium: { color: colors.warning, label: "MODÉRÉ", icon: "⚠" },
+    high: { color: colors.danger, label: "ÉLEVÉ", icon: "⚠" },
+    critical: { color: "#7f1d1d", label: "CRITIQUE", icon: "⛔" },
   };
 
-  // --- Cover Page ---
+  const riskInfo = riskConfig[procedure.risk_level] || riskConfig.low;
+
+  // === COVER PAGE ===
   doc.rect(0, 0, 595, 842).fill("#faf5ff");
-  doc.rect(0, 0, 595, 200).fill(colors.primary);
 
-  // Title
-  doc.fontSize(28).fillColor("#fff").text("PROCÉDURE OPÉRATIONNELLE", 50, 70, {
-    align: "center",
-    width: 495,
-  });
+  // Header band with gradient effect
+  doc.rect(0, 0, 595, 220).fill(colors.primary);
+  doc.rect(0, 200, 595, 20).fill(colors.secondary);
 
-  doc.fontSize(18).text(procedure.title, 50, 120, {
-    align: "center",
-    width: 495,
-  });
-
-  // Version and date
-  doc
-    .fontSize(12)
-    .text(`Version ${procedure.version || 1} - ${new Date().toLocaleDateString("fr-FR")}`, 50, 160, {
-      align: "center",
-      width: 495,
-    });
-
-  // Info box
-  let yPos = 240;
-  doc.rect(50, yPos, 495, 120).fillAndStroke("#fff", "#e5e7eb");
-
-  yPos += 15;
-  doc.fontSize(11).fillColor(colors.text);
-  doc.text(`Catégorie: ${procedure.category || "Général"}`, 70, yPos);
-  yPos += 20;
-  doc.text(`Site: ${procedure.site || "Non spécifié"}`, 70, yPos);
-  yPos += 20;
-  doc.text(`Bâtiment: ${procedure.building || "Non spécifié"}`, 70, yPos);
-  yPos += 20;
-
-  // Risk level
-  const riskLevel = procedure.risk_level || "low";
-  const riskLabels = {
-    low: "Faible",
-    medium: "Modéré",
-    high: "Élevé",
-    critical: "Critique",
-  };
-  doc.text("Niveau de risque: ", 70, yPos);
-  doc
-    .fillColor(riskColors[riskLevel])
-    .text(riskLabels[riskLevel], 170, yPos);
-
-  // Description
-  if (procedure.description) {
-    yPos += 50;
-    doc.fontSize(12).fillColor(colors.text).text("Description:", 50, yPos);
-    yPos += 20;
-    doc.fontSize(10).text(procedure.description, 50, yPos, { width: 495 });
+  // Logo if available
+  let logoWidth = 0;
+  if (siteSettings.logo) {
+    try {
+      doc.image(siteSettings.logo, 40, 25, { width: 80, height: 60 });
+      logoWidth = 90;
+    } catch (e) {
+      console.log("[Procedures] Could not add logo to PDF:", e.message);
+    }
   }
 
-  // --- PPE Page ---
+  // Company name
+  if (siteSettings.company_name) {
+    doc.fontSize(14).fillColor("#fff").text(siteSettings.company_name, 40 + logoWidth, 40, { width: 200 });
+  }
+
+  // Document type badge
+  doc.roundedRect(400, 30, 150, 30, 5).fill("#fff");
+  doc.fontSize(10).fillColor(colors.primary).text("PROCÉDURE OPÉRATIONNELLE", 410, 40, { width: 130, align: "center" });
+
+  // Main title
+  doc.fontSize(32).fillColor("#fff").text("PROCÉDURE", 50, 90, { align: "center", width: 495 });
+  doc.fontSize(22).text(procedure.title.toUpperCase(), 50, 135, { align: "center", width: 495 });
+
+  // Version badge
+  doc.roundedRect(230, 175, 135, 25, 3).fill("rgba(255,255,255,0.2)");
+  doc.fontSize(10).fillColor("#fff").text(`Version ${procedure.version || 1} • ${new Date().toLocaleDateString("fr-FR")}`, 235, 182, { width: 125, align: "center" });
+
+  // Risk level banner
+  doc.rect(0, 230, 595, 50).fill(riskInfo.color);
+  doc.fontSize(16).fillColor("#fff").text(`${riskInfo.icon} NIVEAU DE RISQUE: ${riskInfo.label}`, 50, 245, { align: "center", width: 495 });
+
+  // Info card
+  let yPos = 310;
+  doc.roundedRect(50, yPos, 495, 140, 10).fillAndStroke("#fff", "#e5e7eb");
+
+  yPos += 20;
+  doc.fontSize(14).fillColor(colors.primary).text("INFORMATIONS GÉNÉRALES", 70, yPos);
+
+  yPos += 30;
+  doc.fontSize(11).fillColor(colors.text);
+
+  const infoGrid = [
+    ["Catégorie", procedure.category || "Général"],
+    ["Site", procedure.site || "Non spécifié"],
+    ["Bâtiment", procedure.building || "Non spécifié"],
+    ["Zone", procedure.zone || "Non spécifié"],
+  ];
+
+  infoGrid.forEach(([label, value], i) => {
+    const x = i % 2 === 0 ? 70 : 300;
+    const y = yPos + Math.floor(i / 2) * 25;
+    doc.font("Helvetica-Bold").text(`${label}:`, x, y, { continued: true });
+    doc.font("Helvetica").text(` ${value}`);
+  });
+
+  // Description box
+  if (procedure.description) {
+    yPos = 480;
+    doc.roundedRect(50, yPos, 495, 80, 10).fillAndStroke("#f8fafc", "#e5e7eb");
+    doc.fontSize(10).fillColor(colors.primary).text("DESCRIPTION", 70, yPos + 15);
+    doc.fontSize(10).fillColor(colors.text).text(procedure.description, 70, yPos + 35, { width: 455 });
+  }
+
+  // Stats at bottom of cover
+  yPos = 600;
+  const stats = [
+    { label: "Étapes", value: steps.length, color: colors.primary },
+    { label: "Équipements liés", value: equipmentLinks.length, color: colors.secondary },
+    { label: "EPI requis", value: (procedure.ppe_required || []).length, color: colors.warning },
+  ];
+
+  const statWidth = 150;
+  stats.forEach((stat, i) => {
+    const x = 50 + i * (statWidth + 22);
+    doc.roundedRect(x, yPos, statWidth, 70, 8).fillAndStroke(stat.color, stat.color);
+    doc.fontSize(28).fillColor("#fff").text(String(stat.value), x, yPos + 12, { width: statWidth, align: "center" });
+    doc.fontSize(10).text(stat.label, x, yPos + 48, { width: statWidth, align: "center" });
+  });
+
+  // Created by
+  doc.fontSize(9).fillColor("#9ca3af").text(`Créé par: ${procedure.created_by || "Système"} • Dernière modification: ${new Date(procedure.updated_at).toLocaleString("fr-FR")}`, 50, 750, { align: "center", width: 495 });
+
+  // === PAGE 2: SAFETY ===
   doc.addPage();
-  doc.fontSize(20).fillColor(colors.primary).text("ÉQUIPEMENTS DE PROTECTION", 50, 50);
+
+  // Header
+  doc.rect(0, 0, 595, 60).fill(colors.danger);
+  doc.fontSize(20).fillColor("#fff").text("⚠ SÉCURITÉ & EPI", 50, 22, { width: 495 });
 
   yPos = 90;
+
+  // EPI Section
+  doc.fontSize(14).fillColor(colors.text).text("ÉQUIPEMENTS DE PROTECTION INDIVIDUELLE", 50, yPos);
+  yPos += 30;
+
   const ppeList = procedure.ppe_required || [];
   if (ppeList.length > 0) {
+    const ppeIcons = {
+      "Casque de sécurité": "🪖",
+      "Lunettes de protection": "🥽",
+      "Gants isolants": "🧤",
+      "Chaussures de sécurité": "👞",
+      "Protection auditive": "🎧",
+      "Masque respiratoire": "😷",
+      "Harnais de sécurité": "🦺",
+      "Vêtements antistatiques": "👔",
+    };
+
+    const ppePerRow = 2;
     ppeList.forEach((ppe, i) => {
-      doc.rect(50, yPos, 495, 30).fillAndStroke(i % 2 === 0 ? "#fff" : colors.lightBg, "#e5e7eb");
-      doc.fontSize(11).fillColor(colors.text).text(`• ${ppe}`, 70, yPos + 10);
-      yPos += 30;
+      const col = i % ppePerRow;
+      const row = Math.floor(i / ppePerRow);
+      const x = 50 + col * 260;
+      const y = yPos + row * 45;
+
+      doc.roundedRect(x, y, 245, 40, 5).fillAndStroke("#fef3c7", colors.warning);
+      doc.fontSize(11).fillColor(colors.text).text(`${ppeIcons[ppe] || "•"} ${ppe}`, x + 15, y + 14, { width: 220 });
     });
+
+    yPos += Math.ceil(ppeList.length / ppePerRow) * 45 + 20;
   } else {
-    doc.fontSize(11).fillColor(colors.text).text("Aucun EPI spécifique requis", 50, yPos);
+    doc.fontSize(11).fillColor("#6b7280").text("Aucun EPI spécifique requis pour cette procédure.", 50, yPos);
+    yPos += 30;
   }
 
-  // Safety codes
-  yPos += 30;
-  doc.fontSize(16).fillColor(colors.primary).text("CODES DE SÉCURITÉ", 50, yPos);
+  // Safety Codes
+  yPos += 20;
+  doc.fontSize(14).fillColor(colors.text).text("CODES & CONSIGNES DE SÉCURITÉ", 50, yPos);
   yPos += 30;
 
   const safetyCodes = procedure.safety_codes || [];
   if (safetyCodes.length > 0) {
-    safetyCodes.forEach((code) => {
-      doc.fontSize(11).fillColor(colors.text).text(`• ${code}`, 70, yPos);
-      yPos += 20;
+    safetyCodes.forEach((code, i) => {
+      doc.roundedRect(50, yPos, 495, 30, 5).fillAndStroke("#dbeafe", colors.primary);
+      doc.fontSize(10).fillColor(colors.text).text(`📋 ${code}`, 65, yPos + 10, { width: 465 });
+      yPos += 35;
     });
   } else {
-    doc.fontSize(11).fillColor(colors.text).text("Aucun code de sécurité spécifique", 50, yPos);
+    doc.fontSize(11).fillColor("#6b7280").text("Aucun code de sécurité spécifique.", 50, yPos);
+    yPos += 30;
   }
 
-  // Emergency contacts
+  // Emergency Contacts
   const contacts = procedure.emergency_contacts || [];
   if (contacts.length > 0) {
     yPos += 30;
-    doc.fontSize(16).fillColor(colors.danger).text("CONTACTS D'URGENCE", 50, yPos);
-    yPos += 30;
+    doc.rect(50, yPos, 495, 40 + contacts.length * 35).fillAndStroke("#fef2f2", colors.danger);
+    doc.fontSize(14).fillColor(colors.danger).text("📞 CONTACTS D'URGENCE", 70, yPos + 15);
+    yPos += 45;
 
-    contacts.forEach((contact) => {
-      doc.rect(50, yPos, 495, 40).fillAndStroke("#fef2f2", colors.danger);
+    contacts.forEach((contact, i) => {
       doc.fontSize(11).fillColor(colors.text);
-      doc.text(`${contact.name || "Contact"}`, 70, yPos + 8);
-      doc.text(`Tél: ${contact.phone || "N/A"}`, 70, yPos + 22);
-      if (contact.role) {
-        doc.text(`Rôle: ${contact.role}`, 300, yPos + 8);
-      }
-      yPos += 45;
+      doc.font("Helvetica-Bold").text(contact.name || "Contact", 70, yPos);
+      if (contact.role) doc.font("Helvetica").text(` (${contact.role})`, { continued: false });
+      doc.font("Helvetica-Bold").fillColor(colors.danger).text(contact.phone || "N/A", 400, yPos);
+      yPos += 25;
     });
   }
 
-  // --- Steps Pages ---
+  // === STEPS PAGES ===
   doc.addPage();
-  doc.fontSize(20).fillColor(colors.primary).text("ÉTAPES DE LA PROCÉDURE", 50, 50);
+  doc.rect(0, 0, 595, 60).fill(colors.primary);
+  doc.fontSize(20).fillColor("#fff").text("📋 ÉTAPES DE LA PROCÉDURE", 50, 22, { width: 495 });
 
   yPos = 90;
-  for (const step of steps) {
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+
     // Check if we need a new page
-    if (yPos > 700) {
+    const stepHeight = 120 + (step.photo_content ? 180 : 0);
+    if (yPos + stepHeight > 750) {
       doc.addPage();
       yPos = 50;
     }
 
-    // Step header
-    doc.rect(50, yPos, 495, 35).fill(colors.primary);
-    doc
-      .fontSize(14)
-      .fillColor("#fff")
-      .text(`Étape ${step.step_number}: ${step.title}`, 60, yPos + 10);
-    yPos += 40;
+    // Step card
+    doc.roundedRect(50, yPos, 495, stepHeight - 10, 10).fillAndStroke("#fff", "#e5e7eb");
+
+    // Step number circle
+    doc.circle(80, yPos + 25, 18).fill(colors.primary);
+    doc.fontSize(14).fillColor("#fff").text(String(step.step_number), 71, yPos + 18);
+
+    // Step title
+    doc.fontSize(14).fillColor(colors.text).font("Helvetica-Bold").text(step.title, 110, yPos + 18, { width: 420 });
+
+    // Duration if available
+    if (step.duration_minutes) {
+      doc.fontSize(9).fillColor("#6b7280").font("Helvetica").text(`⏱ ${step.duration_minutes} min`, 450, yPos + 20);
+    }
+
+    let contentY = yPos + 45;
 
     // Instructions
     if (step.instructions) {
-      doc.fontSize(10).fillColor(colors.text).text(step.instructions, 50, yPos, { width: 495 });
-      yPos += doc.heightOfString(step.instructions, { width: 495 }) + 10;
+      doc.fontSize(10).fillColor(colors.text).font("Helvetica").text(step.instructions, 70, contentY, { width: 455 });
+      contentY += doc.heightOfString(step.instructions, { width: 455 }) + 10;
     }
 
     // Warning
     if (step.warning) {
-      doc.rect(50, yPos, 495, 30).fillAndStroke("#fef3c7", colors.warning);
-      doc.fontSize(10).fillColor(colors.warning).text(`⚠ ${step.warning}`, 60, yPos + 10, { width: 475 });
-      yPos += 35;
-    }
-
-    // Duration
-    if (step.duration_minutes) {
-      doc.fontSize(9).fillColor("#6b7280").text(`Durée estimée: ${step.duration_minutes} minutes`, 50, yPos);
-      yPos += 15;
+      doc.roundedRect(70, contentY, 455, 30, 5).fillAndStroke("#fef3c7", colors.warning);
+      doc.fontSize(9).fillColor(colors.warning).text(`⚠ ${step.warning}`, 85, contentY + 10, { width: 425 });
+      contentY += 40;
     }
 
     // Photo
     if (step.photo_content) {
       try {
-        const imgHeight = 150;
-        if (yPos + imgHeight > 750) {
-          doc.addPage();
-          yPos = 50;
-        }
-        doc.image(step.photo_content, 50, yPos, { width: 200, height: imgHeight });
-        yPos += imgHeight + 10;
+        doc.image(step.photo_content, 70, contentY, { width: 200, height: 150 });
+        doc.fontSize(8).fillColor("#9ca3af").text(`Photo étape ${step.step_number}`, 70, contentY + 155);
+        contentY += 170;
       } catch (e) {
-        console.error("Error adding image:", e);
+        console.log(`[Procedures] Could not add step ${step.step_number} photo:`, e.message);
       }
     } else if (step.photo_path) {
       try {
         const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
         if (fs.existsSync(imgPath)) {
-          const imgHeight = 150;
-          if (yPos + imgHeight > 750) {
-            doc.addPage();
-            yPos = 50;
-          }
-          doc.image(imgPath, 50, yPos, { width: 200, height: imgHeight });
-          yPos += imgHeight + 10;
+          doc.image(imgPath, 70, contentY, { width: 200, height: 150 });
+          doc.fontSize(8).fillColor("#9ca3af").text(`Photo étape ${step.step_number}`, 70, contentY + 155);
+          contentY += 170;
         }
       } catch (e) {
-        console.error("Error adding image from path:", e);
+        console.log(`[Procedures] Could not add step ${step.step_number} photo from path:`, e.message);
       }
     }
 
-    yPos += 20;
+    yPos += stepHeight;
   }
 
-  // --- Equipment Links Page ---
+  // === EQUIPMENT LINKS PAGE ===
   if (equipmentLinks.length > 0) {
     doc.addPage();
-    doc.fontSize(20).fillColor(colors.primary).text("ÉQUIPEMENTS CONCERNÉS", 50, 50);
+    doc.rect(0, 0, 595, 60).fill(colors.secondary);
+    doc.fontSize(20).fillColor("#fff").text("🔗 ÉQUIPEMENTS CONCERNÉS", 50, 22, { width: 495 });
 
     yPos = 90;
+
+    const typeLabels = {
+      switchboard: "Armoire électrique",
+      vsd: "Variateur de vitesse",
+      meca: "Équipement mécanique",
+      atex: "Équipement ATEX",
+      hv: "Haute Tension",
+      glo: "UPS/Batteries",
+      mobile: "Équipement mobile",
+      doors: "Porte coupe-feu",
+      datahub: "DataHub",
+      projects: "Projet",
+      oibt: "OIBT",
+    };
+
     equipmentLinks.forEach((link, i) => {
-      doc.rect(50, yPos, 495, 35).fillAndStroke(i % 2 === 0 ? "#fff" : colors.lightBg, "#e5e7eb");
-      doc.fontSize(11).fillColor(colors.text);
-      doc.text(`${link.equipment_name || link.equipment_id}`, 70, yPos + 10);
-      doc.fontSize(9).fillColor("#6b7280").text(`Type: ${link.equipment_type}`, 350, yPos + 10);
-      yPos += 35;
+      doc.roundedRect(50, yPos, 495, 45, 8).fillAndStroke(i % 2 === 0 ? "#f8fafc" : "#fff", "#e5e7eb");
+
+      doc.roundedRect(70, yPos + 12, 100, 22, 3).fill(colors.primary);
+      doc.fontSize(9).fillColor("#fff").text(typeLabels[link.equipment_type] || link.equipment_type, 75, yPos + 17, { width: 90, align: "center" });
+
+      doc.fontSize(12).fillColor(colors.text).text(link.equipment_name || link.equipment_id, 185, yPos + 15, { width: 340 });
+
+      yPos += 50;
     });
   }
 
-  // --- Footer on all pages ---
+  // === FOOTER on all pages ===
   const pages = doc.bufferedPageRange();
   for (let i = 0; i < pages.count; i++) {
     doc.switchToPage(i);
-    doc
-      .fontSize(8)
-      .fillColor("#9ca3af")
-      .text(
-        `${procedure.title} - Page ${i + 1}/${pages.count} - Généré le ${new Date().toLocaleDateString("fr-FR")} par ElectroHub`,
-        50,
-        800,
-        { align: "center", width: 495 }
-      );
+
+    // Footer line
+    doc.rect(50, 810, 495, 1).fill("#e5e7eb");
+
+    // Footer text
+    doc.fontSize(8).fillColor("#9ca3af").text(
+      `${procedure.title} • Page ${i + 1}/${pages.count} • Généré le ${new Date().toLocaleString("fr-FR")} • ElectroHub`,
+      50, 818, { align: "center", width: 495 }
+    );
+
+    // Logo watermark on each page (small)
+    if (siteSettings.logo && i > 0) {
+      try {
+        doc.image(siteSettings.logo, 510, 10, { width: 40, height: 30 });
+      } catch (e) {}
+    }
   }
 
   doc.end();
@@ -781,6 +885,39 @@ async function generateProcedurePDF(procedureId) {
       resolve(Buffer.concat(chunks));
     });
   });
+}
+
+// Helper to get equipment details for linked equipment
+async function getLinkedEquipmentDetails(links) {
+  const details = [];
+
+  for (const link of links) {
+    try {
+      let sql;
+      switch (link.equipment_type) {
+        case "switchboard":
+          sql = `SELECT name, code, building_code as building FROM switchboards WHERE id = $1`;
+          break;
+        case "vsd":
+          sql = `SELECT name, manufacturer_ref as code, building FROM vsd_equipments WHERE id = $1`;
+          break;
+        case "meca":
+          sql = `SELECT name, tag as code, building FROM meca_equipments WHERE id = $1`;
+          break;
+        default:
+          continue;
+      }
+
+      const { rows } = await pool.query(sql, [link.equipment_id]);
+      if (rows.length > 0) {
+        details.push({ ...link, ...rows[0] });
+      }
+    } catch (e) {
+      details.push(link);
+    }
+  }
+
+  return details;
 }
 
 // ------------------------------
@@ -1560,15 +1697,19 @@ app.get("/api/procedures/categories", async (req, res) => {
 
 // --- SEARCH EQUIPMENT FOR LINKING ---
 
-// Search all equipment types
+// Search ALL equipment types across the entire system
 app.get("/api/procedures/search-equipment", async (req, res) => {
   try {
     const { q, type } = req.query;
     const searchTerm = `%${q || ""}%`;
     const results = [];
 
-    // Search based on type or all
-    const types = type ? [type] : ["switchboard", "vsd", "meca", "atex"];
+    // ALL equipment types in the system
+    const allTypes = [
+      "switchboard", "vsd", "meca", "atex", "hv", "glo",
+      "mobile", "doors", "datahub", "projects", "oibt"
+    ];
+    const types = type ? [type] : allTypes;
 
     for (const t of types) {
       try {
@@ -1576,19 +1717,47 @@ app.get("/api/procedures/search-equipment", async (req, res) => {
 
         switch (t) {
           case "switchboard":
-            sql = `SELECT id::text, name, code, 'switchboard' as type FROM switchboards WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            sql = `SELECT id::text, name, code, building_code as building, 'switchboard' as type, 'Armoire électrique' as type_label FROM switchboards WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
             params = [searchTerm];
             break;
           case "vsd":
-            sql = `SELECT id::text, name, manufacturer_ref as code, 'vsd' as type FROM vsd_equipments WHERE name ILIKE $1 LIMIT 10`;
+            sql = `SELECT id::text, name, manufacturer_ref as code, building, 'vsd' as type, 'Variateur de vitesse' as type_label FROM vsd_equipments WHERE name ILIKE $1 OR manufacturer_ref ILIKE $1 LIMIT 10`;
             params = [searchTerm];
             break;
           case "meca":
-            sql = `SELECT id::text, name, tag as code, 'meca' as type FROM meca_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            sql = `SELECT id::text, name, tag as code, building, 'meca' as type, 'Équipement mécanique' as type_label FROM meca_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
             params = [searchTerm];
             break;
           case "atex":
-            sql = `SELECT id::text, name, manufacturer as code, 'atex' as type FROM atex_equipments WHERE name ILIKE $1 LIMIT 10`;
+            sql = `SELECT id::text, name, manufacturer as code, building, 'atex' as type, 'Équipement ATEX' as type_label FROM atex_equipments WHERE name ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "hv":
+            sql = `SELECT id::text, name, tag as code, building, 'hv' as type, 'Haute Tension' as type_label FROM hv_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "glo":
+            sql = `SELECT id::text, name, tag as code, building, 'glo' as type, 'UPS/Batteries/Éclairage' as type_label FROM glo_equipments WHERE name ILIKE $1 OR tag ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "mobile":
+            sql = `SELECT id::text, name, serial_number as code, location as building, 'mobile' as type, 'Équipement mobile' as type_label FROM me_equipments WHERE name ILIKE $1 OR serial_number ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "doors":
+            sql = `SELECT id::text, name, code, building, 'doors' as type, 'Porte coupe-feu' as type_label FROM doors WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "datahub":
+            sql = `SELECT i.id::text, i.name, i.code, i.building, 'datahub' as type, COALESCE(c.name, 'DataHub') as type_label FROM dh_items i LEFT JOIN dh_categories c ON i.category_id = c.id WHERE i.name ILIKE $1 OR i.code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "projects":
+            sql = `SELECT id::text, name, code, site as building, 'projects' as type, 'Projet' as type_label FROM pm_projects WHERE name ILIKE $1 OR code ILIKE $1 LIMIT 10`;
+            params = [searchTerm];
+            break;
+          case "oibt":
+            sql = `SELECT id::text, name, dossier_number as code, site as building, 'oibt' as type, 'OIBT/Périodique' as type_label FROM oibt_projects WHERE name ILIKE $1 OR dossier_number ILIKE $1 LIMIT 10`;
             params = [searchTerm];
             break;
           default:
@@ -1598,14 +1767,279 @@ app.get("/api/procedures/search-equipment", async (req, res) => {
         const { rows } = await pool.query(sql, params);
         results.push(...rows.map((r) => ({ ...r, equipment_type: t })));
       } catch (e) {
-        // Table might not exist, skip
-        console.log(`Equipment table ${t} not found:`, e.message);
+        // Table might not exist, skip silently
+        console.log(`[Procedures] Equipment table ${t} skipped:`, e.message);
       }
     }
 
     res.json(results);
   } catch (err) {
     console.error("Error searching equipment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- REAL-TIME ASSISTANCE MODE ---
+// "Faisons ça ensemble" - Guide l'utilisateur étape par étape
+
+const REALTIME_ASSISTANCE_PROMPT = `Tu es un expert technique qui guide l'utilisateur EN TEMPS RÉEL pour effectuer une opération.
+
+Tu as accès à une procédure existante et tu dois guider l'utilisateur étape par étape.
+Tu peux aussi analyser des photos qu'il t'envoie pour vérifier qu'il fait correctement les étapes.
+
+## Ton rôle
+- Guide l'utilisateur de manière interactive
+- Vérifie les photos envoyées et confirme si c'est correct
+- Réponds aux questions en temps réel
+- Adapte-toi au contexte (si l'utilisateur signale un problème)
+- Propose des alternatives si une étape n'est pas possible
+
+## Format de réponse JSON
+{
+  "message": "Ton message à l'utilisateur",
+  "currentStepNumber": 1,
+  "isStepComplete": false,
+  "needsPhoto": false,
+  "photoFeedback": null,
+  "warning": null,
+  "canProceed": true,
+  "suggestedActions": ["action1", "action2"],
+  "emergencyStop": false
+}
+
+Sois professionnel, précis et sécuritaire. Si tu détectes un danger, dis STOP immédiatement.`;
+
+// Start real-time assistance session
+app.post("/api/procedures/ai/assist/start", async (req, res) => {
+  try {
+    const { procedureId, initialQuestion } = req.body;
+    const userEmail = req.headers["x-user-email"] || "anonymous";
+
+    // Get procedure details
+    const { rows: procedures } = await pool.query(
+      `SELECT * FROM procedures WHERE id = $1`, [procedureId]
+    );
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [procedureId]
+    );
+
+    const procedure = procedures[0];
+    if (!procedure) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    // Create assistance session
+    const { rows: sessions } = await pool.query(
+      `INSERT INTO procedure_ai_sessions
+       (procedure_id, user_email, current_step, collected_data, conversation)
+       VALUES ($1, $2, 'assist_step_1', $3, '[]'::jsonb)
+       RETURNING id`,
+      [procedureId, userEmail, JSON.stringify({ mode: 'realtime_assist', currentStepNumber: 1 })]
+    );
+
+    const sessionId = sessions[0].id;
+
+    // Build context for AI
+    const procedureContext = `
+PROCÉDURE: ${procedure.title}
+DESCRIPTION: ${procedure.description || 'N/A'}
+NIVEAU DE RISQUE: ${procedure.risk_level}
+EPI REQUIS: ${JSON.stringify(procedure.ppe_required || [])}
+CODES SÉCURITÉ: ${JSON.stringify(procedure.safety_codes || [])}
+CONTACTS URGENCE: ${JSON.stringify(procedure.emergency_contacts || [])}
+
+ÉTAPES:
+${steps.map(s => `
+Étape ${s.step_number}: ${s.title}
+Instructions: ${s.instructions || 'N/A'}
+Avertissement: ${s.warning || 'Aucun'}
+Durée estimée: ${s.duration_minutes || 'N/A'} minutes
+`).join('\n')}
+`;
+
+    const messages = [
+      { role: "system", content: REALTIME_ASSISTANCE_PROMPT + "\n\n" + procedureContext },
+      { role: "user", content: initialQuestion || "Je suis prêt à commencer la procédure. Guide-moi." }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages,
+      temperature: 0.5,
+      max_tokens: 1000,
+      response_format: { type: "json_object" }
+    });
+
+    const aiResponse = JSON.parse(response.choices[0]?.message?.content || "{}");
+
+    // Save conversation
+    await pool.query(
+      `UPDATE procedure_ai_sessions SET conversation = $1, updated_at = now() WHERE id = $2`,
+      [JSON.stringify([
+        { role: "user", content: initialQuestion || "Début assistance" },
+        { role: "assistant", ...aiResponse }
+      ]), sessionId]
+    );
+
+    res.json({
+      sessionId,
+      procedureTitle: procedure.title,
+      totalSteps: steps.length,
+      ...aiResponse
+    });
+  } catch (err) {
+    console.error("Error starting assistance:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Continue real-time assistance with optional photo analysis
+app.post("/api/procedures/ai/assist/:sessionId", uploadPhoto.single("photo"), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message, action } = req.body;
+
+    // Get session
+    const { rows: sessions } = await pool.query(
+      `SELECT s.*, p.title as procedure_title, p.ppe_required, p.safety_codes, p.emergency_contacts, p.risk_level
+       FROM procedure_ai_sessions s
+       JOIN procedures p ON s.procedure_id = p.id
+       WHERE s.id = $1`, [sessionId]
+    );
+
+    if (sessions.length === 0) {
+      return res.status(404).json({ error: "Session non trouvée" });
+    }
+
+    const session = sessions[0];
+    const conversation = session.conversation || [];
+    const collectedData = session.collected_data || {};
+
+    // Get steps
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      [session.procedure_id]
+    );
+
+    // Build message with photo if present
+    let userContent = message || action || "Continue";
+    let photoAnalysis = null;
+
+    if (req.file) {
+      // Analyze photo with GPT-4 Vision
+      const photoBuffer = await fsp.readFile(req.file.path);
+      const base64Image = photoBuffer.toString('base64');
+
+      const visionResponse = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: `Analyse cette photo dans le contexte de l'étape ${collectedData.currentStepNumber || 1} de la procédure "${session.procedure_title}". L'utilisateur doit faire: ${steps[collectedData.currentStepNumber - 1]?.instructions || 'suivre les instructions'}. Est-ce correct ? Y a-t-il des problèmes de sécurité ?` },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+            ]
+          }
+        ],
+        max_tokens: 500
+      });
+
+      photoAnalysis = visionResponse.choices[0]?.message?.content;
+      userContent += `\n\n[ANALYSE PHOTO]: ${photoAnalysis}`;
+
+      // Clean up
+      await fsp.unlink(req.file.path).catch(() => {});
+    }
+
+    // Add to conversation
+    conversation.push({ role: "user", content: message || action, photo: !!req.file, photoAnalysis });
+
+    // Build context
+    const procedureContext = `
+PROCÉDURE: ${session.procedure_title}
+ÉTAPE ACTUELLE: ${collectedData.currentStepNumber || 1} / ${steps.length}
+NIVEAU DE RISQUE: ${session.risk_level}
+
+ÉTAPES:
+${steps.map(s => `Étape ${s.step_number}: ${s.title} - ${s.instructions || 'N/A'}`).join('\n')}
+`;
+
+    const messages = [
+      { role: "system", content: REALTIME_ASSISTANCE_PROMPT + "\n\n" + procedureContext },
+      ...conversation.map(c => ({ role: c.role, content: typeof c === 'string' ? c : (c.content || JSON.stringify(c)) })),
+      { role: "user", content: userContent }
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages,
+      temperature: 0.5,
+      max_tokens: 1000,
+      response_format: { type: "json_object" }
+    });
+
+    const aiResponse = JSON.parse(response.choices[0]?.message?.content || "{}");
+
+    // Update conversation and step
+    conversation.push({ role: "assistant", ...aiResponse });
+    const newCollectedData = {
+      ...collectedData,
+      currentStepNumber: aiResponse.currentStepNumber || collectedData.currentStepNumber
+    };
+
+    await pool.query(
+      `UPDATE procedure_ai_sessions SET conversation = $1, collected_data = $2, updated_at = now() WHERE id = $3`,
+      [JSON.stringify(conversation), JSON.stringify(newCollectedData), sessionId]
+    );
+
+    res.json({
+      ...aiResponse,
+      photoAnalysis,
+      totalSteps: steps.length
+    });
+  } catch (err) {
+    console.error("Error in assistance:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- ANALYZE PHOTO STANDALONE ---
+app.post("/api/procedures/ai/analyze-photo", uploadPhoto.single("photo"), async (req, res) => {
+  try {
+    const { context, question } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: "Aucune photo fournie" });
+    }
+
+    const photoBuffer = await fsp.readFile(req.file.path);
+    const base64Image = photoBuffer.toString('base64');
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `${question || "Analyse cette image en détail."}\n\nContexte: ${context || "Maintenance industrielle / équipements électriques"}`
+            },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+          ]
+        }
+      ],
+      max_tokens: 1000
+    });
+
+    await fsp.unlink(req.file.path).catch(() => {});
+
+    res.json({
+      analysis: response.choices[0]?.message?.content,
+      success: true
+    });
+  } catch (err) {
+    console.error("Error analyzing photo:", err);
     res.status(500).json({ error: err.message });
   }
 });

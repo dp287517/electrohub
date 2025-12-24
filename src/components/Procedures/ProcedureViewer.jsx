@@ -3,7 +3,7 @@ import {
   X, Download, Edit2, Trash2, AlertTriangle, Shield,
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
-  FileText, Loader2
+  FileText, Loader2, Play, Sparkles
 } from 'lucide-react';
 import {
   getProcedure,
@@ -22,6 +22,7 @@ import {
   STATUS_LABELS,
   DEFAULT_PPE,
 } from '../../lib/procedures-api';
+import RealtimeAssistant from './RealtimeAssistant';
 
 // Step Component
 function StepCard({ step, procedureId, isEditing, onUpdate, onDelete }) {
@@ -229,6 +230,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentResults, setEquipmentResults] = useState([]);
   const [downloading, setDownloading] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
 
   const loadProcedure = async () => {
     try {
@@ -712,6 +714,32 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Start Assistance Button - Fixed at bottom when not editing */}
+      {!isEditing && procedure?.steps?.length > 0 && (
+        <div className="p-4 border-t bg-gradient-to-r from-violet-50 to-purple-50 flex-shrink-0">
+          <button
+            onClick={() => setShowAssistant(true)}
+            className="w-full py-3 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-medium hover:from-violet-700 hover:to-purple-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-200"
+          >
+            <Play className="w-5 h-5" />
+            Commencer l'assistance en temps réel
+            <Sparkles className="w-4 h-4" />
+          </button>
+          <p className="text-center text-xs text-gray-500 mt-2">
+            L'IA vous guidera étape par étape avec analyse de photos en temps réel
+          </p>
+        </div>
+      )}
+
+      {/* Realtime Assistant Modal */}
+      {showAssistant && procedure && (
+        <RealtimeAssistant
+          procedureId={procedureId}
+          procedureTitle={procedure.title}
+          onClose={() => setShowAssistant(false)}
+        />
       )}
     </div>
   );
