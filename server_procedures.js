@@ -4379,10 +4379,10 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 }
 
 // ====================================
-// PROCEDURE PDF GENERATOR (A4)
-// Clear step-by-step procedure
+// PROCEDURE DOCUMENT PDF GENERATOR (A4)
+// Clear step-by-step procedure - for new document system
 // ====================================
-async function generateProcedurePDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
+async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
   const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
@@ -4656,7 +4656,7 @@ async function generateExampleWorkMethodPDF(baseUrl = 'https://electrohub.app') 
 // Example Procedure PDF Generator
 async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
   const { procedure, steps } = getExampleDocumentData();
-  return generateProcedurePDF(procedure, steps, baseUrl);
+  return generateProcedureDocPDF(procedure, steps, baseUrl);
 }
 
 // ------------------------------
