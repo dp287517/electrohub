@@ -66,60 +66,7 @@ export default function NotificationProvider({ children }) {
     init();
   }, []);
 
-  // Check if we should prompt for notifications
-  useEffect(() => {
-    if (!isInitialized) return;
-
-    const shouldPrompt = () => {
-      // Must be supported
-      if (!isSupported) {
-        console.log('[Notifications] Not prompting: not supported');
-        return false;
-      }
-
-      // Already subscribed? No need to prompt
-      if (isSubscribed) {
-        console.log('[Notifications] Not prompting: already subscribed');
-        return false;
-      }
-
-      // If permission is denied, don't auto-prompt (user can still click bell)
-      if (permission === 'denied') {
-        console.log('[Notifications] Not prompting: permission denied');
-        return false;
-      }
-
-      // Check if user has dismissed recently (only 1 day cooldown now)
-      const lastDismissed = localStorage.getItem('eh_notification_prompt_dismissed');
-      if (lastDismissed) {
-        const dismissedDate = new Date(lastDismissed);
-        const hoursSince = (Date.now() - dismissedDate.getTime()) / (1000 * 60 * 60);
-        if (hoursSince < 24) {
-          console.log('[Notifications] Not prompting: dismissed', Math.round(hoursSince), 'hours ago');
-          return false;
-        }
-      }
-
-      // Must be logged in
-      const token = localStorage.getItem('eh_token');
-      if (!token) {
-        console.log('[Notifications] Not prompting: not logged in');
-        return false;
-      }
-
-      console.log('[Notifications] Will prompt for notifications');
-      return true;
-    };
-
-    // Delay the prompt for better UX
-    const timer = setTimeout(() => {
-      if (shouldPrompt()) {
-        setShowPermissionModal(true);
-      }
-    }, 3000); // Show after 3 seconds
-
-    return () => clearTimeout(timer);
-  }, [isInitialized, isSupported, permission, isSubscribed]);
+  // Auto-prompt for notifications removed - users can enable via the bell button in navbar
 
   // Subscribe to push notifications
   const subscribe = useCallback(async () => {
