@@ -245,12 +245,20 @@ class AIAssistant {
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
         actionResult: data.actionResult || null,
-        // Procedure system
+        // Procedure system (microservice sessions)
+        procedureSessionId: data.procedureSessionId || null,
+        procedureStep: data.procedureStep || null,
+        expectsPhoto: data.expectsPhoto || false,
+        procedureReady: data.procedureReady || false,
+        // Legacy procedure fields (fallback)
         procedureId: data.procedureId || null,
         procedureMode: data.procedureMode || null,
-        procedureStep: data.procedureStep || null,
         pdfUrl: data.pdfUrl || null,
-        procedureComplete: data.procedureComplete || false
+        procedureComplete: data.procedureComplete || false,
+        // File upload mode
+        expectsFile: data.expectsFile || false,
+        importedProcedure: data.importedProcedure || null,
+        reportAnalysis: data.reportAnalysis || null
       };
     } catch (error) {
       console.error('Erreur chat IA:', error);
@@ -314,7 +322,12 @@ class AIAssistant {
         model: data.model,
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
-        // Procedure system
+        // Procedure system (microservice sessions)
+        procedureSessionId: data.procedureSessionId || null,
+        procedureStep: data.procedureStep || null,
+        expectsPhoto: data.expectsPhoto || false,
+        procedureReady: data.procedureReady || false,
+        // Legacy fields
         procedureId: data.procedureId || null,
         procedureMode: data.procedureMode || null,
         stepNumber: data.stepNumber || null
@@ -328,6 +341,50 @@ class AIAssistant {
           { label: 'Créer une procédure', prompt: 'Utilise cette photo pour créer une procédure' },
           { label: 'Analyser l\'équipement', prompt: 'Analyse cet équipement sur la photo' }
         ]
+      };
+    }
+  }
+
+  /**
+   * Upload de fichier pour import de document ou analyse de rapport
+   * @param {File} file - Fichier à uploader (PDF, Word, TXT)
+   * @param {string} mode - 'import-document' ou 'analyze-report'
+   * @param {object} options - Options supplémentaires
+   */
+  async uploadFile(file, mode = 'import-document', options = {}) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', mode);
+
+      const response = await fetch(`${this.baseUrl}/upload-file`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('Erreur lors de l\'upload du fichier');
+      }
+
+      const data = await response.json();
+
+      return {
+        message: data.message,
+        actions: data.actions || [],
+        provider: data.provider,
+        // Document import results
+        importedProcedure: data.importedProcedure || null,
+        // Report analysis results
+        reportAnalysis: data.reportAnalysis || null,
+        actionListId: data.actionListId || null
+      };
+    } catch (error) {
+      console.error('Erreur upload fichier:', error);
+
+      return {
+        message: "Erreur lors du traitement du fichier. Réessaie.",
+        actions: [],
+        provider: 'fallback'
       };
     }
   }

@@ -144,11 +144,14 @@ export default function AvatarChat({
   // Photo upload state
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileUploadMode, setFileUploadMode] = useState(null); // 'import-document' | 'analyze-report'
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
   const photoInputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Fallback si le style n'existe plus (migration des anciens styles)
   const safeAvatarStyle = AVATAR_STYLES[avatarStyle] ? avatarStyle : 'ai';
@@ -338,6 +341,84 @@ export default function AvatarChat({
     }
   };
 
+  // File handling for document import / report analysis
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedFile(file);
+      // Detect mode from last message expectsFile
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.procedureMode === 'analyze-report') {
+        setFileUploadMode('analyze-report');
+      } else {
+        setFileUploadMode('import-document');
+      }
+    }
+  };
+
+  const clearFile = () => {
+    setSelectedFile(null);
+    setFileUploadMode(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Envoyer un fichier
+  const handleSendFile = async () => {
+    if (!selectedFile || isLoading) return;
+
+    stopSpeaking();
+    setShowQuickActions(false);
+
+    const userMessage = {
+      id: Date.now(),
+      role: 'user',
+      content: `📄 ${selectedFile.name}`,
+      timestamp: new Date()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    const fileToSend = selectedFile;
+    const modeToSend = fileUploadMode || 'import-document';
+    clearFile();
+    setIsLoading(true);
+    setIsSpeaking(true);
+
+    try {
+      const response = await aiAssistant.uploadFile(fileToSend, modeToSend);
+
+      const assistantMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: response.message,
+        actions: response.actions,
+        provider: response.provider,
+        importedProcedure: response.importedProcedure,
+        reportAnalysis: response.reportAnalysis,
+        actionListId: response.actionListId,
+        timestamp: new Date()
+      };
+
+      setMessages(prev => [...prev, assistantMessage]);
+      speak(response.message);
+
+    } catch (error) {
+      console.error('Erreur upload:', error);
+      const errorMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: `Erreur lors du traitement du fichier: ${error.message}`,
+        isError: true,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      setIsSpeaking(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Envoyer un message (avec photo optionnelle)
   const handleSend = async (messageText = input) => {
     if ((!messageText.trim() && !selectedPhoto) || isLoading) return;
@@ -376,11 +457,19 @@ export default function AvatarChat({
         pendingAction: response.pendingAction,
         provider: response.provider,
         model: response.model,
-        // Procedure tracking
+        // Procedure tracking (microservice sessions)
+        procedureSessionId: response.procedureSessionId,
+        procedureStep: response.procedureStep,
+        expectsPhoto: response.expectsPhoto,
+        procedureReady: response.procedureReady,
+        // Legacy procedure fields
         procedureId: response.procedureId,
         procedureMode: response.procedureMode,
-        procedureStep: response.procedureStep,
         pdfUrl: response.pdfUrl,
+        // File upload mode
+        expectsFile: response.expectsFile,
+        importedProcedure: response.importedProcedure,
+        reportAnalysis: response.reportAnalysis,
         timestamp: new Date()
       };
 
@@ -686,6 +775,27 @@ export default function AvatarChat({
             </div>
           )}
 
+          {/* File Preview */}
+          {selectedFile && (
+            <div className="mb-3 flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+              <FileText className="w-5 h-5 text-blue-600" />
+              <span className="text-sm text-blue-800 flex-1 truncate">{selectedFile.name}</span>
+              <button
+                onClick={handleSendFile}
+                disabled={isLoading}
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Envoyer'}
+              </button>
+              <button
+                onClick={clearFile}
+                className="p-1 text-red-500 hover:bg-red-100 rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             {/* Voice Input */}
             <button
@@ -716,6 +826,23 @@ export default function AvatarChat({
               disabled={isLoading}
             >
               <Camera className="w-5 h-5" />
+            </button>
+
+            {/* File Upload (documents/reports) */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.xls,.xlsx"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="p-3 rounded-xl bg-gray-200 text-gray-600 hover:bg-blue-100 hover:text-blue-600 transition-all"
+              title="Importer un document"
+              disabled={isLoading}
+            >
+              <Upload className="w-5 h-5" />
             </button>
 
             {/* Text Input */}

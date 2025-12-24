@@ -1870,11 +1870,37 @@ app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
 // >>> Procedures (Procédures opérationnelles avec création guidée par IA) : re-stream pour uploads photos
 app.use("/api/procedures", mkProxy(proceduresTarget, { withRestream: true }));
 
+// >>> Helper to call Procedures Microservice
+async function callProceduresMicroservice(endpoint, options = {}) {
+  const url = `${proceduresTarget}${endpoint}`;
+  try {
+    const response = await fetch(url, {
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Email': options.userEmail || 'system',
+        'X-Site': options.site || 'Nyon',
+        ...options.headers
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(err);
+    }
+    return response.json();
+  } catch (e) {
+    console.error(`[PROC] Error calling ${endpoint}:`, e.message);
+    return null;
+  }
+}
+
 // >>> AI Assistant - Powerful AI with OpenAI + Database access
 app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
   try {
     const { message, context: clientContext, conversationHistory = [], executeAction = false } = req.body;
     const site = req.header('X-Site') || clientContext?.user?.site || process.env.DEFAULT_SITE || 'Nyon';
+    const userEmail = clientContext?.user?.email || 'anonymous';
 
     if (!message) {
       return res.status(400).json({ error: "Message requis" });
@@ -1883,11 +1909,69 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     console.log(`[AI] 🚀 Processing: "${message.substring(0, 50)}..." for site ${site}`);
 
     // =========================================================================
-    // PROCEDURE SYSTEM - Création, recherche, lecture
+    // PROCEDURE SYSTEM - Intégration microservice
     // =========================================================================
     const msgLower = message.toLowerCase();
 
-    // --- Détecter si on veut CRÉER une procédure ---
+    // Check if we're in an active procedure session
+    const lastProcMsg = [...conversationHistory].reverse().find(m => m.procedureSessionId);
+    const activeSessionId = lastProcMsg?.procedureSessionId;
+
+    // --- Si on a une session active, continuer avec le microservice ---
+    if (activeSessionId) {
+      console.log(`[AI] 📋 Continuing procedure session: ${activeSessionId}`);
+
+      // Check if user wants to finish
+      const isDone = /^(c'est (fini|bon|terminé|tout)|fini|terminé|stop|voilà)$/i.test(msgLower.trim()) ||
+                     msgLower.includes("c'est fini") || msgLower.includes("c'est bon") ||
+                     msgLower.includes("c'est tout") || msgLower.includes("terminé");
+
+      if (isDone) {
+        // Finalize the procedure
+        const result = await callProceduresMicroservice(`/api/procedures/ai/finalize/${activeSessionId}`, {
+          method: 'POST',
+          userEmail,
+          site
+        });
+
+        if (result?.id) {
+          const pdfUrl = `/api/procedures/${result.id}/pdf`;
+          return res.json({
+            message: `✅ **Procédure créée !**\n\n📋 **${result.title}**\n\n[📥 Télécharger le PDF](${pdfUrl})\n\nJe l'ai sauvegardée. Tu peux me demander de la lire ou de te guider plus tard !`,
+            actions: [
+              { label: "Télécharger PDF", url: pdfUrl },
+              { label: "Voir mes procédures", prompt: "Montre-moi mes procédures" }
+            ],
+            provider: 'system',
+            pdfUrl,
+            procedureId: result.id,
+            procedureComplete: true
+          });
+        }
+      }
+
+      // Continue the session
+      const result = await callProceduresMicroservice(`/api/procedures/ai/chat/${activeSessionId}`, {
+        method: 'POST',
+        userEmail,
+        site,
+        body: { message }
+      });
+
+      if (result) {
+        return res.json({
+          message: result.message,
+          actions: result.options?.map(o => ({ label: o, prompt: o })) || [],
+          provider: 'procedures-ai',
+          procedureSessionId: activeSessionId,
+          procedureStep: result.currentStep,
+          expectsPhoto: result.expectsPhoto,
+          procedureReady: result.procedureReady
+        });
+      }
+    }
+
+    // --- Détecter si on veut CRÉER une procédure (pas de session active) ---
     const wantsCreateProcedure = (
       (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
       (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
@@ -1895,13 +1979,70 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     );
 
     if (wantsCreateProcedure) {
-      console.log('[AI] 📋 Procedure creation mode');
+      console.log('[AI] 📋 Starting new procedure session via microservice');
+
+      // Start a new AI session via the microservice
+      const result = await callProceduresMicroservice('/api/procedures/ai/start', {
+        method: 'POST',
+        userEmail,
+        site,
+        body: { initialMessage: message }
+      });
+
+      if (result?.sessionId) {
+        return res.json({
+          message: result.message || "C'est quoi le titre de ta procédure ?",
+          actions: result.options?.map(o => ({ label: o, prompt: o })) || [],
+          provider: 'procedures-ai',
+          procedureSessionId: result.sessionId,
+          procedureStep: result.currentStep || 'title',
+          expectsPhoto: result.expectsPhoto
+        });
+      }
+
+      // Fallback if microservice unavailable
       return res.json({
         message: `**C'est quoi le titre de ta procédure ?**`,
         actions: [],
         provider: 'system',
         procedureMode: 'create',
         procedureStep: 'title'
+      });
+    }
+
+    // --- Détecter si on veut IMPORTER un document existant ---
+    const wantsImportDocument = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('document')) &&
+      (msgLower.includes('import') || msgLower.includes('charger') || msgLower.includes('uploader') ||
+       msgLower.includes('convertir') || msgLower.includes('transformer') || msgLower.includes('fichier'))
+    );
+
+    if (wantsImportDocument) {
+      console.log('[AI] 📄 Document import mode');
+      return res.json({
+        message: `📄 **Import de document**\n\nEnvoie-moi ton fichier (PDF, Word, TXT) et je l'analyserai pour créer une procédure structurée automatiquement.\n\nUtilise le bouton 📎 pour joindre ton document.`,
+        actions: [],
+        provider: 'system',
+        procedureMode: 'import-document',
+        expectsFile: true
+      });
+    }
+
+    // --- Détecter si on veut ANALYSER un rapport ---
+    const wantsAnalyzeReport = (
+      (msgLower.includes('rapport') || msgLower.includes('audit') || msgLower.includes('inspection')) &&
+      (msgLower.includes('analys') || msgLower.includes('action') || msgLower.includes('correc') ||
+       msgLower.includes('import') || msgLower.includes('charger'))
+    );
+
+    if (wantsAnalyzeReport) {
+      console.log('[AI] 📊 Report analysis mode');
+      return res.json({
+        message: `📊 **Analyse de rapport**\n\nEnvoie-moi ton rapport d'audit ou d'inspection et j'extrairai automatiquement les actions correctives à mettre en place.\n\nUtilise le bouton 📎 pour joindre ton rapport.`,
+        actions: [],
+        provider: 'system',
+        procedureMode: 'analyze-report',
+        expectsFile: true
       });
     }
 
@@ -2042,76 +2183,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       }
     }
 
-    // --- Détecter si on est en train de donner un TITRE de procédure ---
-    const lastMsg = conversationHistory[conversationHistory.length - 1];
-    const isGivingTitle = lastMsg?.content?.includes("C'est quoi le titre") ||
-                          lastMsg?.procedureStep === 'title';
-
-    if (isGivingTitle && message.length > 2 && message.length < 200) {
-      console.log(`[AI] 📝 Got procedure title: ${message}`);
-
-      try {
-        // Create the procedure in database
-        const insertResult = await pool.query(`
-          INSERT INTO procedures (site, title, status, created_by, created_at)
-          VALUES ($1, $2, 'draft', $3, NOW())
-          RETURNING id
-        `, [site, message.trim(), clientContext?.user?.email || 'unknown']);
-
-        const procedureId = insertResult.rows[0].id;
-
-        return res.json({
-          message: `✓ Procédure **"${message.trim()}"** créée !\n\n📷 **Première étape** - décris ce qu'il faut faire et envoie une photo.`,
-          actions: [],
-          provider: 'system',
-          procedureMode: 'create',
-          procedureStep: 'step1',
-          procedureId: procedureId
-        });
-      } catch (e) {
-        console.error('[AI] Create procedure error:', e);
-      }
-    }
-
-    // --- Détecter "C'est fini / terminé" pour finaliser une procédure ---
-    const isDone = /^(c'est (fini|bon|terminé|tout)|fini|terminé|stop|voilà|that's it)$/i.test(msgLower.trim()) ||
-                   msgLower.includes("c'est fini") || msgLower.includes("c'est bon") ||
-                   msgLower.includes("c'est tout") || msgLower.includes("terminé");
-
-    if (isDone && conversationHistory.some(m => m.procedureId || m.procedureMode)) {
-      // Find the procedure ID from conversation
-      const procMsg = conversationHistory.find(m => m.procedureId);
-      const procedureId = procMsg?.procedureId;
-
-      if (procedureId) {
-        try {
-          // Update status to complete
-          await pool.query(`UPDATE procedures SET status = 'complete' WHERE id = $1`, [procedureId]);
-
-          // Get procedure info
-          const procResult = await pool.query(`
-            SELECT title, (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = $1) as step_count
-            FROM procedures WHERE id = $1
-          `, [procedureId]);
-
-          const proc = procResult.rows[0];
-          const pdfUrl = `/api/procedures/${procedureId}/pdf`;
-
-          return res.json({
-            message: `✅ **Procédure terminée !**\n\n📋 **${proc?.title || 'Procédure'}**\n📝 ${proc?.step_count || 0} étapes enregistrées\n\n[📥 Télécharger le PDF](${pdfUrl})\n\nJe l'ai sauvegardée. Tu pourras me demander de la relire ou de te guider plus tard !`,
-            actions: [
-              { label: "Télécharger PDF", url: pdfUrl },
-              { label: "Voir mes procédures", prompt: "Montre-moi mes procédures" }
-            ],
-            provider: 'system',
-            pdfUrl: pdfUrl,
-            procedureComplete: true
-          });
-        } catch (e) {
-          console.error('[AI] Finalize procedure error:', e);
-        }
-      }
-    }
+    // Note: Titre et finalisation sont maintenant gérés via le microservice de procédures
+    // (procedureSessionId dans conversationHistory)
 
     // Get real-time context from database
     const dbContext = await getAIContext(site);
@@ -2290,7 +2363,7 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
   }
 });
 
-// >>> AI Assistant - Chat with Photo (GPT-4o Vision for procedures)
+// >>> AI Assistant - Chat with Photo (supports microservice sessions + GPT-4o Vision)
 const aiPhotoUpload = multer({ dest: '/tmp/ai-photos/', limits: { fileSize: 10 * 1024 * 1024 } });
 app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), async (req, res) => {
   try {
@@ -2298,6 +2371,7 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
     const photo = req.file;
     const conversationHistory = req.body.conversationHistory ? JSON.parse(req.body.conversationHistory) : [];
     const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+    const userEmail = req.header('X-User-Email') || 'anonymous';
 
     if (!photo) {
       return res.status(400).json({ error: "Photo requise" });
@@ -2305,30 +2379,67 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
 
     console.log(`[AI] 📷 Photo received: ${photo.originalname}`);
 
-    // Read and convert to base64
+    // Check for active procedure session (microservice)
+    const lastProcMsg = [...conversationHistory].reverse().find(m => m.procedureSessionId);
+    const sessionId = lastProcMsg?.procedureSessionId;
+
+    // Read photo data
     const photoBuffer = fs.readFileSync(photo.path);
-    const base64Photo = photoBuffer.toString('base64');
-    const mimeType = photo.mimetype || 'image/jpeg';
 
-    // Find active procedure from conversation history
-    const procMsg = conversationHistory.find(m => m.procedureId);
-    const procedureId = procMsg?.procedureId;
+    // If we have an active microservice session, forward the photo there
+    if (sessionId) {
+      console.log(`[AI] 📷 Forwarding photo to procedure session: ${sessionId}`);
 
-    // Get current step count for this procedure
-    let stepNumber = 1;
-    if (procedureId) {
       try {
-        const countResult = await pool.query(
-          'SELECT COALESCE(MAX(step_number), 0) + 1 as next_step FROM procedure_steps WHERE procedure_id = $1',
-          [procedureId]
-        );
-        stepNumber = countResult.rows[0].next_step;
+        // Create form data for microservice
+        const FormData = (await import('form-data')).default;
+        const formData = new FormData();
+        formData.append('message', message || 'Photo ajoutée');
+        formData.append('photo', photoBuffer, {
+          filename: photo.originalname,
+          contentType: photo.mimetype
+        });
+
+        // Call microservice
+        const response = await fetch(`${proceduresTarget}/api/procedures/ai/chat/${sessionId}`, {
+          method: 'POST',
+          headers: {
+            'X-User-Email': userEmail,
+            'X-Site': site,
+            ...formData.getHeaders()
+          },
+          body: formData
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+
+          // Cleanup temp file
+          fs.unlinkSync(photo.path);
+
+          return res.json({
+            message: result.message,
+            actions: result.options?.map(o => ({ label: o, prompt: o })) || [
+              { label: "📷 Étape suivante", prompt: "Étape suivante" },
+              { label: "✅ Terminer", prompt: "C'est fini" }
+            ],
+            provider: 'procedures-ai',
+            procedureSessionId: sessionId,
+            procedureStep: result.currentStep,
+            expectsPhoto: result.expectsPhoto,
+            procedureReady: result.procedureReady
+          });
+        }
       } catch (e) {
-        console.error('[AI] Step count error:', e);
+        console.error('[AI] Microservice photo error:', e.message);
+        // Fall through to direct GPT-4o Vision
       }
     }
 
-    // Call GPT-4o Vision to analyze and describe the photo
+    // Fallback: Direct GPT-4o Vision analysis (no active session)
+    const base64Photo = photoBuffer.toString('base64');
+    const mimeType = photo.mimetype || 'image/jpeg';
+
     let aiDescription = '';
     try {
       const completion = await openai.chat.completions.create({
@@ -2336,10 +2447,9 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
         messages: [
           {
             role: "system",
-            content: `Tu analyses des photos pour créer des procédures de maintenance.
+            content: `Tu analyses des photos pour la maintenance industrielle.
 Décris BRIÈVEMENT ce que tu vois (1-2 lignes max).
-Identifie: l'action visible, l'équipement, le contexte.
-Format: description directe, pas de blabla.`
+Identifie: équipement, état, contexte.`
           },
           {
             role: "user",
@@ -2349,60 +2459,175 @@ Format: description directe, pas de blabla.`
             ]
           }
         ],
-        max_tokens: 100
+        max_tokens: 150
       });
       aiDescription = completion.choices[0]?.message?.content || '';
     } catch (e) {
       console.error('[AI] Vision error:', e.message);
-      aiDescription = message || 'Étape documentée';
-    }
-
-    // Save step to database if we have a procedure
-    if (procedureId) {
-      try {
-        // Save photo to filesystem or cloud storage (for now, save base64 reference)
-        const photoPath = `/uploads/procedures/${procedureId}/step_${stepNumber}.jpg`;
-
-        // Create uploads directory if needed
-        const uploadDir = path.join(__dirname, 'uploads', 'procedures', String(procedureId));
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true });
-        }
-
-        // Save the photo
-        fs.writeFileSync(path.join(uploadDir, `step_${stepNumber}.jpg`), photoBuffer);
-
-        // Insert step into database
-        await pool.query(`
-          INSERT INTO procedure_steps (procedure_id, step_number, title, description, photo_url, created_at)
-          VALUES ($1, $2, $3, $4, $5, NOW())
-        `, [procedureId, stepNumber, message || `Étape ${stepNumber}`, aiDescription, photoPath]);
-
-        console.log(`[AI] ✅ Saved step ${stepNumber} for procedure ${procedureId}`);
-      } catch (e) {
-        console.error('[AI] Save step error:', e);
-      }
+      aiDescription = "Photo reçue";
     }
 
     // Cleanup temp file
     fs.unlinkSync(photo.path);
 
     res.json({
-      message: `✓ **Étape ${stepNumber}** enregistrée !\n\n${aiDescription ? `📝 ${aiDescription}\n\n` : ''}Étape suivante ? (ou dis "c'est fini")`,
+      message: aiDescription || "Photo analysée. Que veux-tu faire ?",
       actions: [
-        { label: "📷 Étape suivante", prompt: "Étape suivante" },
-        { label: "✅ Terminer", prompt: "C'est fini" }
+        { label: "Créer une procédure", prompt: "Je veux créer une procédure avec cette photo" }
       ],
-      provider: "gpt-4o-vision",
-      procedureId: procedureId,
-      stepNumber: stepNumber
+      provider: "gpt-4o-vision"
     });
 
   } catch (error) {
     console.error('[AI] ❌ Photo error:', error.message);
     res.json({
-      message: "✓ Photo reçue ! Décris cette étape et continue 📷",
-      actions: [{ label: "Continuer", prompt: "Étape suivante" }],
+      message: "Photo reçue ! Que veux-tu faire avec ?",
+      actions: [{ label: "Créer procédure", prompt: "Je veux créer une procédure" }],
+      provider: "fallback"
+    });
+  }
+});
+
+// >>> AI Assistant - File upload for document import and report analysis
+const aiFileUpload = multer({ dest: '/tmp/ai-files/', limits: { fileSize: 50 * 1024 * 1024 } });
+app.post("/api/ai-assistant/upload-file", aiFileUpload.single('file'), async (req, res) => {
+  try {
+    const { mode } = req.body;  // 'import-document' or 'analyze-report'
+    const file = req.file;
+    const site = req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+    const userEmail = req.header('X-User-Email') || 'anonymous';
+
+    if (!file) {
+      return res.status(400).json({ error: "Fichier requis" });
+    }
+
+    console.log(`[AI] 📄 File received: ${file.originalname} (mode: ${mode})`);
+
+    // Read file
+    const fileBuffer = fs.readFileSync(file.path);
+
+    try {
+      // Create form data for microservice
+      const FormData = (await import('form-data')).default;
+      const formData = new FormData();
+
+      // Choose endpoint based on mode
+      const endpoint = mode === 'analyze-report'
+        ? '/api/procedures/ai/analyze-report'
+        : '/api/procedures/ai/analyze-document';
+
+      const fieldName = mode === 'analyze-report' ? 'report' : 'document';
+      formData.append(fieldName, fileBuffer, {
+        filename: file.originalname,
+        contentType: file.mimetype
+      });
+
+      // Call microservice
+      const response = await fetch(`${proceduresTarget}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'X-User-Email': userEmail,
+          'X-Site': site,
+          ...formData.getHeaders()
+        },
+        body: formData
+      });
+
+      // Cleanup temp file
+      fs.unlinkSync(file.path);
+
+      if (response.ok) {
+        const result = await response.json();
+
+        if (mode === 'analyze-report') {
+          // Report analysis - show action list
+          const actions = result.actions || [];
+          let message = `📊 **Analyse du rapport terminée !**\n\n`;
+          message += `**${result.title || file.originalname}**\n\n`;
+
+          if (actions.length > 0) {
+            message += `**${actions.length} actions identifiées :**\n`;
+            actions.slice(0, 5).forEach((a, i) => {
+              message += `${i + 1}. ${a.title || a.description}\n`;
+              if (a.priority) message += `   ⚠️ Priorité: ${a.priority}\n`;
+            });
+            if (actions.length > 5) {
+              message += `\n... et ${actions.length - 5} autres actions\n`;
+            }
+          }
+
+          message += `\nVeux-tu créer des procédures pour ces actions ?`;
+
+          return res.json({
+            message,
+            actions: [
+              { label: "Créer procédures", prompt: "Crée les procédures pour ces actions" },
+              { label: "Voir détails", prompt: "Montre-moi toutes les actions" }
+            ],
+            provider: 'procedures-ai',
+            reportAnalysis: result,
+            actionListId: result.actionListId
+          });
+
+        } else {
+          // Document import - show parsed procedure
+          const steps = result.steps || [];
+          let message = `📄 **Document analysé !**\n\n`;
+          message += `**${result.title || 'Procédure importée'}**\n`;
+          if (result.description) message += `${result.description}\n`;
+          message += `\n**${steps.length} étapes détectées**\n`;
+
+          if (steps.length > 0) {
+            steps.slice(0, 3).forEach((s, i) => {
+              message += `${i + 1}. ${s.title || s.instructions?.substring(0, 50) + '...'}\n`;
+            });
+            if (steps.length > 3) {
+              message += `... et ${steps.length - 3} autres étapes\n`;
+            }
+          }
+
+          if (result.ppe_required?.length > 0) {
+            message += `\n🦺 **EPI requis:** ${result.ppe_required.join(', ')}\n`;
+          }
+
+          message += `\nVeux-tu sauvegarder cette procédure ?`;
+
+          return res.json({
+            message,
+            actions: [
+              { label: "Sauvegarder", prompt: "Sauvegarde cette procédure" },
+              { label: "Modifier", prompt: "Je veux modifier cette procédure avant de sauvegarder" }
+            ],
+            provider: 'procedures-ai',
+            importedProcedure: result
+          });
+        }
+      } else {
+        const error = await response.text();
+        console.error('[AI] Microservice file error:', error);
+        return res.json({
+          message: "Erreur lors de l'analyse du fichier. Réessaie.",
+          actions: [],
+          provider: 'fallback'
+        });
+      }
+
+    } catch (e) {
+      console.error('[AI] File processing error:', e.message);
+      // Cleanup on error
+      try { fs.unlinkSync(file.path); } catch {}
+      return res.json({
+        message: "Erreur lors du traitement du fichier.",
+        actions: [],
+        provider: 'fallback'
+      });
+    }
+
+  } catch (error) {
+    console.error('[AI] ❌ File upload error:', error.message);
+    res.json({
+      message: "Erreur lors de l'upload. Réessaie.",
+      actions: [],
       provider: "fallback"
     });
   }
