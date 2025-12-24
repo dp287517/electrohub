@@ -69,6 +69,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const [procedureReady, setProcedureReady] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [pendingPhoto, setPendingPhoto] = useState(null); // Photo en attente d'envoi
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -115,20 +116,24 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
   // Send message in guided session
   const sendMessage = async (messageText = input, photoFile = null) => {
-    if (!messageText.trim() && !photoFile) return;
+    // Utiliser la photo en attente si pas de photo passée directement
+    const photoToSend = photoFile || pendingPhoto;
+
+    if (!messageText.trim() && !photoToSend) return;
     if (!sessionId) return;
 
-    const userMessage = { role: 'user', content: messageText };
-    if (photoFile) {
-      userMessage.photo = URL.createObjectURL(photoFile);
+    const userMessage = { role: 'user', content: messageText || '📸 Photo ajoutée' };
+    if (photoToSend) {
+      userMessage.photo = URL.createObjectURL(photoToSend);
     }
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setPendingPhoto(null); // Clear pending photo after sending
     setIsLoading(true);
 
     try {
-      const response = await continueAISession(sessionId, messageText, photoFile);
+      const response = await continueAISession(sessionId, messageText || 'Photo de l\'étape', photoToSend);
 
       setMessages(prev => [
         ...prev,
@@ -150,11 +155,13 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     }
   };
 
-  // Handle photo upload
+  // Handle photo upload - store photo for sending with next message
   const handlePhotoUpload = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      sendMessage(`[Photo: ${file.name}]`, file);
+      setPendingPhoto(file);
+      // Reset file input so same file can be selected again
+      e.target.value = '';
     }
   };
 
@@ -584,23 +591,52 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           </button>
         ) : (
           <div className="space-y-2">
-            {/* Photo requirement hint when in steps mode */}
-            {currentStep === 'steps' && (
+            {/* Photo preview when pending */}
+            {pendingPhoto && (
+              <div className="flex items-center gap-2 bg-green-50 border border-green-200 px-3 py-2 rounded-lg">
+                <img
+                  src={URL.createObjectURL(pendingPhoto)}
+                  alt="Photo en attente"
+                  className="w-12 h-12 object-cover rounded"
+                />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-green-700">✓ Photo prête</p>
+                  <p className="text-xs text-green-600">{pendingPhoto.name}</p>
+                </div>
+                <button
+                  onClick={() => setPendingPhoto(null)}
+                  className="p-1 text-green-600 hover:text-red-500 transition-colors"
+                  title="Supprimer la photo"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {/* Photo requirement hint when in steps mode and no photo pending */}
+            {currentStep === 'steps' && !pendingPhoto && (
               <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
                 <Camera className="w-3.5 h-3.5" />
-                <span>📸 <strong>Photo obligatoire</strong> pour chaque étape - cliquez sur l'icône caméra</span>
+                <span>📸 <strong>Photo obligatoire</strong> - cliquez sur l'icône caméra</span>
               </div>
             )}
             <div className="flex gap-2">
-              {/* Always show camera button in steps mode - now required */}
+              {/* Camera button - changes style based on whether photo is pending */}
               {(expectsPhoto || currentStep === 'steps') && (
                 <button
                   onClick={() => photoInputRef.current?.click()}
-                  className="p-3 bg-amber-100 text-amber-600 rounded-xl hover:bg-amber-200 transition-colors relative animate-pulse"
-                  title="Ajouter une photo (obligatoire)"
+                  className={`p-3 rounded-xl transition-colors relative ${
+                    pendingPhoto
+                      ? 'bg-green-100 text-green-600 hover:bg-green-200'
+                      : 'bg-amber-100 text-amber-600 hover:bg-amber-200 animate-pulse'
+                  }`}
+                  title={pendingPhoto ? "Changer la photo" : "Ajouter une photo (obligatoire)"}
                 >
                   <Camera className="w-5 h-5" />
-                  <span className="absolute -top-1 -right-1 text-[10px] bg-amber-500 text-white px-1 rounded font-medium">!</span>
+                  {pendingPhoto ? (
+                    <span className="absolute -top-1 -right-1 text-[10px] bg-green-500 text-white px-1 rounded font-medium">✓</span>
+                  ) : (
+                    <span className="absolute -top-1 -right-1 text-[10px] bg-amber-500 text-white px-1 rounded font-medium">!</span>
+                  )}
                 </button>
               )}
               <input
@@ -618,7 +654,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder={
                   currentStep === 'init' ? "Ex: Remplacement disjoncteur, Maintenance moteur..." :
-                  currentStep === 'steps' ? "Décrivez l'étape + ajoutez une photo 📸" :
+                  currentStep === 'steps' ? (pendingPhoto ? "Décrivez l'étape puis envoyez →" : "Décrivez l'étape + ajoutez une photo 📸") :
                   currentStep === 'review' ? "Tapez 'oui' pour créer ou modifiez..." :
                   "Votre réponse..."
                 }
@@ -627,8 +663,12 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               />
               <button
                 onClick={() => sendMessage()}
-                disabled={isLoading || !input.trim()}
-                className="p-3 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isLoading || (!input.trim() && !pendingPhoto)}
+                className={`p-3 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  pendingPhoto && input.trim()
+                    ? 'bg-green-600 text-white hover:bg-green-700'
+                    : 'bg-violet-600 text-white hover:bg-violet-700'
+                }`}
               >
                 <Send className="w-5 h-5" />
               </button>
