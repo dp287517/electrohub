@@ -491,61 +491,260 @@ RÉPONDS UNIQUEMENT AVEC LE JSON, sans texte avant ou après.`;
 
 // Fallback risk analysis when AI fails
 function generateFallbackRiskAnalysis(procedure, steps) {
-  const riskLevel = procedure.risk_level || 'low';
-  const baseGravity = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
-  const baseProb = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
+  const riskLevel = procedure.risk_level || 'medium';
+  const baseProb = { low: 2, medium: 3, high: 4, critical: 4 }[riskLevel] || 3;
 
-  const hazardTemplates = {
-    'electri': { checkbox: 'Électrique', danger: 'Risque d\'électrocution ou d\'arc électrique', gi: 4, ppe: ['Gants isolants', 'Écran facial'] },
-    'atex': { checkbox: 'Risque ATEX', danger: 'Risque d\'inflammation en zone ATEX', gi: 5, ppe: ['Vêtements antistatiques', 'Chaussures ESD'] },
-    'hauteur': { checkbox: 'Chute de hauteur', danger: 'Chute lors de travaux en élévation', gi: 4, ppe: ['Harnais de sécurité', 'Casque'] },
-    'manutention': { checkbox: 'Manutention / TMS', danger: 'Troubles musculo-squelettiques lors de manutention', gi: 2, ppe: ['Gants de manutention'] },
-    'coupure': { checkbox: 'Coupures / projections', danger: 'Coupures ou blessures lors de manipulations', gi: 3, ppe: ['Gants anti-coupures', 'Lunettes de protection'] },
-    'default': { checkbox: 'Organisation', danger: 'Risque opérationnel général', gi: baseGravity, ppe: ['Chaussures de sécurité'] }
+  // Complete hazard templates based on RAMS_B20_ATEX Excel structure
+  const HAZARD_LIBRARY = {
+    // Dangers physiques / accès
+    'access': {
+      checkbox: '□ Accès / circulation',
+      danger: 'Déplacements dans la zone : risque de trébucher, glisser, heurt avec obstacles ou piétons.',
+      gi: 3, pi: 2,
+      measures: '□ Signalisation et marquage\n□ Éclairage complémentaire',
+      ppe: ['Chaussures de sécurité S3', 'Gilet haute visibilité'],
+      actions: 'Briefing sécurité + repérage. Maintenir cheminement dégagé, rangement permanent, éclairage suffisant.',
+      responsible: 'Chef d\'équipe'
+    },
+    'coactivity': {
+      checkbox: '□ Coactivité',
+      danger: 'Coactivité avec autres intervenants : interférences, intrusion dans la zone de travail.',
+      gi: 3, pi: 2,
+      measures: '□ Balisage\n□ Coordination avec responsable zone',
+      ppe: ['Gilet haute visibilité', 'Casque de sécurité'],
+      actions: 'Coordination avec responsable de zone. Informer les parties prenantes, définir zones interdites.',
+      responsible: 'Chef d\'équipe'
+    },
+    'handling': {
+      checkbox: '□ Manutention / TMS',
+      danger: 'Manutention du matériel : postures contraignantes, charges, pincements.',
+      gi: 2, pi: 3,
+      measures: '□ Protection des mains\n□ Chariot de transport',
+      ppe: ['Gants de manutention EN388', 'Chaussures de sécurité S3'],
+      actions: 'Utiliser chariot/diable si besoin. Respecter charges max, lever avec les jambes.',
+      responsible: 'Tous'
+    },
+    'cuts': {
+      checkbox: '□ Coupures / projections',
+      danger: 'Risque de coupure lors de manipulations ou d\'outillage ; projections possibles.',
+      gi: 3, pi: 2,
+      measures: '□ Protection des mains\n□ Protection des yeux',
+      ppe: ['Gants anti-coupure EN388', 'Lunettes de protection EN166'],
+      actions: 'Outils en bon état. Attention aux arêtes vives. Zone de travail dégagée.',
+      responsible: 'Tous'
+    },
+    'falling_objects': {
+      checkbox: '□ Chute d\'objets',
+      danger: 'Chute d\'outils ou de matériel pendant la manipulation ou le travail en hauteur.',
+      gi: 3, pi: 2,
+      measures: '□ Balisage\n□ Rangement permanent',
+      ppe: ['Casque de sécurité EN397', 'Chaussures de sécurité S3'],
+      actions: 'Collecter au fur et à mesure. Utiliser bacs/porte-outils. Maintenir zone dégagée.',
+      responsible: 'Tous'
+    },
+    'noise': {
+      checkbox: '□ Bruit',
+      danger: 'Utilisation d\'outillage bruyant : nuisance et gêne, risque auditif.',
+      gi: 2, pi: 2,
+      measures: '□ Protection auditive adaptée au bruit',
+      ppe: ['Bouchons d\'oreilles EN352-2', 'Casque anti-bruit EN352-1'],
+      actions: 'Port obligatoire si > 85 dB. Limiter durée d\'exposition.',
+      responsible: 'Tous'
+    },
+    // Dangers électriques
+    'electrical': {
+      checkbox: '□ Électrisation / court-circuit',
+      danger: 'Risque électrique lors d\'intervention sur coffrets/armoires : électrisation, arc électrique.',
+      gi: 4, pi: 3,
+      measures: '□ Distance de sécurité / Consignation\n□ Habilitation électrique',
+      ppe: ['Gants isolants EN60903', 'Écran facial arc électrique', 'Outils isolés 1000V'],
+      actions: 'Vérifier absence de tension (VAT). Consignation LOTO obligatoire. Respecter distances.',
+      responsible: 'Électricien habilité'
+    },
+    'residual_energy': {
+      checkbox: '□ Énergies résiduelles',
+      danger: 'Condensateurs/variateurs : tension résiduelle après coupure.',
+      gi: 4, pi: 2,
+      measures: '□ Décharge des condensateurs\n□ Temps d\'attente',
+      ppe: ['Gants isolants EN60903', 'Outils isolés 1000V'],
+      actions: 'Attendre décharge complète (5 min). Vérifier avec VAT. Ne jamais présumer.',
+      responsible: 'Électricien habilité'
+    },
+    'arc_flash': {
+      checkbox: '□ Arc électrique',
+      danger: 'Court-circuit possible lors de manipulations : brûlures, projections.',
+      gi: 5, pi: 2,
+      measures: '□ EPI arc flash\n□ Distance de sécurité',
+      ppe: ['Combinaison arc flash', 'Écran facial EN166', 'Gants isolants'],
+      actions: 'Maintenir distance de sécurité. Port EPI arc obligatoire. Intervention à deux.',
+      responsible: 'Électricien habilité'
+    },
+    // Dangers ATEX
+    'atex': {
+      checkbox: '□ ATEX (inflammation/explosion)',
+      danger: 'Zone ATEX : risque d\'inflammation si source d\'ignition (étincelle, chaleur, ESD).',
+      gi: 5, pi: 3,
+      measures: '□ Permis de feu / Autorisation SSI\n□ Matériel certifié ATEX',
+      ppe: ['Vêtements antistatiques EN1149-5', 'Chaussures ESD certifiées ATEX', 'Outils anti-étincelles'],
+      actions: 'Autorisation sécurité incendie obligatoire. Vérifier classification zone. Matériel ATEX uniquement.',
+      responsible: 'Responsable sécurité'
+    },
+    'esd': {
+      checkbox: '□ Électricité statique (ESD)',
+      danger: 'Accumulation d\'électricité statique : étincelle possible lors de décharges.',
+      gi: 4, pi: 2,
+      measures: '□ Mise à terre\n□ Équipements antistatiques',
+      ppe: ['Bracelet antistatique', 'Chaussures ESD', 'Vêtements antistatiques'],
+      actions: 'Se décharger avant intervention. Relier équipements à la terre. Éviter matériaux synthétiques.',
+      responsible: 'Tous'
+    },
+    // Travail en hauteur
+    'fall_height': {
+      checkbox: '□ Chute de hauteur',
+      danger: 'Travail en hauteur : risque de chute (moyen d\'accès instable, perte d\'équilibre).',
+      gi: 4, pi: 3,
+      measures: '□ Protection contre les chutes\n□ Échafaudage / Nacelle',
+      ppe: ['Harnais antichute EN361', 'Casque à jugulaire EN12492', 'Chaussures antidérapantes'],
+      actions: 'Choisir moyen d\'accès adapté. Vérifier stabilité. 3 points d\'appui. Balisage au sol.',
+      responsible: 'Chef d\'équipe'
+    },
+    'ladder': {
+      checkbox: '□ Renversement',
+      danger: 'Instabilité d\'escabeau/PIRL/échafaudage : basculement.',
+      gi: 4, pi: 2,
+      measures: '□ Vérification stabilité\n□ Calage',
+      ppe: ['Casque de sécurité EN397', 'Chaussures antidérapantes'],
+      actions: 'Vérifier état et stabilité. Caler si nécessaire. Ne pas surcharger.',
+      responsible: 'Utilisateur'
+    },
+    // Organisation
+    'organization': {
+      checkbox: '□ Organisation',
+      danger: 'Risque organisationnel : communication, coordination, planification.',
+      gi: 2, pi: 2,
+      measures: '□ Briefing équipe\n□ Check-list',
+      ppe: ['Gilet haute visibilité'],
+      actions: 'Briefing avant intervention. Répartition des tâches. Point régulier.',
+      responsible: 'Chef d\'équipe'
+    },
+    'communication': {
+      checkbox: '□ Communication',
+      danger: 'Mauvaise coordination avec l\'exploitation : risque de reprise intempestive.',
+      gi: 3, pi: 2,
+      measures: '□ Coordination avec exploitation\n□ Affichage',
+      ppe: ['Gilet haute visibilité'],
+      actions: 'Informer PC sécurité. Contact permanent avec exploitation. Affichage travaux.',
+      responsible: 'Chef d\'équipe'
+    }
   };
 
-  const stepsAnalysis = steps.map(step => {
-    const combined = ((step.instructions || '') + ' ' + (step.warning || '') + ' ' + (step.title || '')).toLowerCase();
-    const hazards = [];
+  // Keywords to detect hazards based on step content
+  const KEYWORD_HAZARDS = {
+    'électri|courant|tension|disjoncteur|armoire|coffret|câbl': ['electrical', 'residual_energy', 'arc_flash'],
+    'atex|zone.*ex|explosive|inflammable': ['atex', 'esd'],
+    'hauteur|échelle|escabeau|nacelle|échafaud|pirl': ['fall_height', 'ladder', 'falling_objects'],
+    'manutention|porter|soulever|charge|lourd': ['handling'],
+    'couper|coupure|tranchant|outil|visser': ['cuts'],
+    'bruit|perceuse|meuleuse': ['noise'],
+    'accès|déplacement|circulation': ['access', 'coactivity'],
+    'terre|mise.*terre|équipotentiel': ['electrical', 'esd'],
+    'contrôle|vérif|test|essai': ['electrical', 'organization']
+  };
 
-    Object.entries(hazardTemplates).forEach(([keyword, template]) => {
-      if (keyword !== 'default' && combined.includes(keyword)) {
+  // Analyze each step and generate comprehensive hazards
+  const stepsAnalysis = steps.map((step, idx) => {
+    const combined = ((step.title || '') + ' ' + (step.instructions || '') + ' ' + (step.warning || '')).toLowerCase();
+    const hazardKeys = new Set();
+
+    // Always add base hazards
+    hazardKeys.add('access');
+    hazardKeys.add('organization');
+
+    // Detect hazards based on keywords
+    Object.entries(KEYWORD_HAZARDS).forEach(([pattern, hazardIds]) => {
+      if (new RegExp(pattern, 'i').test(combined)) {
+        hazardIds.forEach(id => hazardKeys.add(id));
+      }
+    });
+
+    // Add some variety based on step number
+    if (idx === 0) {
+      hazardKeys.add('coactivity');
+      hazardKeys.add('communication');
+    }
+    if (idx === steps.length - 1) {
+      hazardKeys.add('organization');
+    }
+
+    // Ensure minimum 4 hazards per step
+    const defaultHazards = ['handling', 'cuts', 'falling_objects', 'coactivity'];
+    let hazardIndex = 0;
+    while (hazardKeys.size < 4 && hazardIndex < defaultHazards.length) {
+      hazardKeys.add(defaultHazards[hazardIndex]);
+      hazardIndex++;
+    }
+
+    // Build hazards array with full details
+    const hazards = [];
+    hazardKeys.forEach(key => {
+      const template = HAZARD_LIBRARY[key];
+      if (template) {
+        const gi = template.gi;
+        const pi = Math.min(template.pi, baseProb);
+        const nir_initial = gi * pi;
+        // Final probability reduced by measures
+        const pf = Math.max(1, pi - 2);
+        const gf = gi; // Gravity stays same
+        const nir_final = gf * pf;
+
         hazards.push({
           checkbox: template.checkbox,
           danger: template.danger,
-          gi: template.gi,
-          pi: baseProb,
-          measures: `Appliquer les mesures de prévention standard. ${step.warning || ''}`,
+          gi: gi,
+          pi: pi,
+          nir_initial: nir_initial,
+          measures: template.measures,
           ppe: template.ppe,
-          actions: 'Vérifier l\'environnement avant intervention. Respecter les consignes de sécurité.',
-          responsible: 'Chef d\'équipe',
-          gf: template.gi,
-          pf: Math.max(1, baseProb - 2)
+          actions: template.actions,
+          responsible: template.responsible,
+          gf: gf,
+          pf: pf,
+          nir_final: nir_final,
+          risk_level: nir_initial >= 15 ? 'critical' : nir_initial >= 10 ? 'high' : nir_initial >= 5 ? 'medium' : 'low'
         });
       }
     });
 
-    if (hazards.length === 0) {
-      hazards.push({
-        ...hazardTemplates.default,
-        pi: baseProb,
-        measures: 'Appliquer les mesures de prévention standard.',
-        actions: 'Suivre les instructions de la procédure.',
-        responsible: 'Tous',
-        gf: hazardTemplates.default.gi,
-        pf: Math.max(1, baseProb - 1)
-      });
-    }
+    // Sort by initial NIR (highest first)
+    hazards.sort((a, b) => b.nir_initial - a.nir_initial);
 
-    return { step_number: step.step_number, hazards };
+    return {
+      step_number: step.step_number,
+      step_title: step.title || `Étape ${step.step_number}`,
+      hazards: hazards.slice(0, 7) // Max 7 hazards per step
+    };
   });
+
+  // Calculate global assessment
+  const allHazards = stepsAnalysis.flatMap(s => s.hazards);
+  const maxNirInitial = Math.max(...allHazards.map(h => h.nir_initial));
+  const maxNirFinal = Math.max(...allHazards.map(h => h.nir_final));
+  const criticalSteps = stepsAnalysis
+    .filter(s => s.hazards.some(h => h.nir_initial >= 12))
+    .map(s => s.step_number);
+
+  const overallRisk = maxNirInitial >= 15 ? 'critical' :
+                      maxNirInitial >= 10 ? 'high' :
+                      maxNirInitial >= 5 ? 'medium' : 'low';
 
   return {
     global_assessment: {
-      overall_risk: riskLevel,
-      main_hazards: [...new Set(stepsAnalysis.flatMap(s => s.hazards.map(h => h.checkbox)))],
-      critical_steps: stepsAnalysis.filter(s => s.hazards.some(h => h.gi * h.pi >= 12)).map(s => s.step_number),
-      total_hazards: stepsAnalysis.reduce((acc, s) => acc + s.hazards.length, 0)
+      overall_risk: overallRisk,
+      main_hazards: [...new Set(allHazards.map(h => h.checkbox))],
+      critical_steps: criticalSteps,
+      total_hazards: allHazards.length,
+      max_nir_initial: maxNirInitial,
+      max_nir_final: maxNirFinal
     },
     steps: stepsAnalysis
   };
@@ -1643,7 +1842,8 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
       gf: 2, pf: 1
     }];
 
-    for (let hi = 0; hi < Math.min(hazards.length, 3); hi++) {
+    // Show ALL hazards per step (up to 7 max as defined in analysis)
+    for (let hi = 0; hi < hazards.length; hi++) {
       if (y > maxTableY - 30) {
         doc.addPage();
         y = margin;
