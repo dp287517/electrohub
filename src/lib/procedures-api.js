@@ -237,6 +237,38 @@ export function getMethodStatementPdfUrl(procedureId) {
   return `${API_BASE}/${procedureId}/method-statement-pdf`;
 }
 
+// Generate Example Method Statement (ATEX Demo)
+export async function generateExampleMethodStatement() {
+  const response = await fetchWithAuth(`${API_BASE}/generate-example-method-statement`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
+// Download Example Method Statement PDF directly
+export async function downloadExampleMethodStatementPdf() {
+  const response = await fetch(`${API_BASE}/example-method-statement-pdf`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement du Method Statement Exemple');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `RAMS_Exemple_ATEX_${new Date().toISOString().split('T')[0]}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
 export async function downloadMethodStatementPdf(procedureId) {
   const response = await fetch(getMethodStatementPdfUrl(procedureId), {
     headers: {
