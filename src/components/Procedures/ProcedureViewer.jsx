@@ -19,6 +19,9 @@ import {
   searchEquipment,
   downloadProcedurePdf,
   downloadMethodStatementPdf,
+  downloadWorkMethodPdf,
+  downloadProcedureDocPdf,
+  downloadAllDocuments,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
@@ -230,8 +233,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
   const [showAddEquipment, setShowAddEquipment] = useState(false);
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentResults, setEquipmentResults] = useState([]);
-  const [downloading, setDownloading] = useState(false);
-  const [downloadingMethodStatement, setDownloadingMethodStatement] = useState(false);
+  const [downloading, setDownloading] = useState(null); // null, 'rams', 'method', 'procedure', 'all'
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
@@ -344,27 +346,31 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
     }
   };
 
-  const handleDownloadPdf = async () => {
-    setDownloading(true);
+  const handleDownload = async (type) => {
+    setDownloading(type);
     setShowPrintMenu(false);
     try {
-      await downloadProcedurePdf(procedureId);
+      switch (type) {
+        case 'rams':
+          await downloadMethodStatementPdf(procedureId);
+          break;
+        case 'method':
+          await downloadWorkMethodPdf(procedureId);
+          break;
+        case 'procedure':
+          await downloadProcedureDocPdf(procedureId);
+          break;
+        case 'all':
+          await downloadAllDocuments(procedureId);
+          break;
+        default:
+          await downloadProcedurePdf(procedureId);
+      }
     } catch (error) {
-      console.error('Error downloading PDF:', error);
+      console.error(`Error downloading ${type}:`, error);
+      alert(`Erreur lors du téléchargement: ${error.message}`);
     } finally {
-      setDownloading(false);
-    }
-  };
-
-  const handleDownloadMethodStatement = async () => {
-    setDownloadingMethodStatement(true);
-    setShowPrintMenu(false);
-    try {
-      await downloadMethodStatementPdf(procedureId);
-    } catch (error) {
-      console.error('Error downloading Method Statement:', error);
-    } finally {
-      setDownloadingMethodStatement(false);
+      setDownloading(null);
     }
   };
 
@@ -427,11 +433,11 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
             <div className="relative">
               <button
                 onClick={() => setShowPrintMenu(!showPrintMenu)}
-                disabled={downloading || downloadingMethodStatement}
+                disabled={!!downloading}
                 className="p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors text-white flex items-center gap-1"
-                title="Options d'impression"
+                title="Télécharger les documents"
               >
-                {(downloading || downloadingMethodStatement) ? (
+                {downloading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
                   <>
@@ -442,41 +448,73 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
               </button>
 
               {showPrintMenu && (
-                <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border z-50 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border z-50 overflow-hidden">
                   <div className="p-2 bg-gray-50 border-b">
-                    <span className="text-xs font-medium text-gray-500">FORMATS D'IMPRESSION</span>
+                    <span className="text-xs font-medium text-gray-500">DOCUMENTS À TÉLÉCHARGER</span>
                   </div>
 
-                  {/* PDF A4 Standard */}
+                  {/* RAMS A3 */}
                   <button
-                    onClick={handleDownloadPdf}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
+                    onClick={() => handleDownload('rams')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-violet-50 transition-colors text-left"
                   >
-                    <div className="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center">
-                      <FileText className="w-5 h-5 text-violet-600" />
+                    <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-orange-500 rounded-lg flex items-center justify-center">
+                      <Shield className="w-5 h-5 text-white" />
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-900">PDF A4 Standard</p>
-                      <p className="text-xs text-gray-500">Format portrait classique</p>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">RAMS (A3)</p>
+                      <p className="text-xs text-gray-500">Risk Assessment Method Statement</p>
                     </div>
+                    {downloading === 'rams' && <Loader2 className="w-4 h-4 animate-spin text-violet-600" />}
                   </button>
 
-                  {/* Method Statement A3 */}
+                  {/* Méthodologie A4 */}
                   <button
-                    onClick={handleDownloadMethodStatement}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-violet-50 transition-colors text-left border-t"
+                    onClick={() => handleDownload('method')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-blue-50 transition-colors text-left border-t"
                   >
-                    <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
+                    <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center">
                       <FileSpreadsheet className="w-5 h-5 text-white" />
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-900">Method Statement A3</p>
-                      <p className="text-xs text-gray-500">Format paysage avec QR code</p>
-                      <div className="flex items-center gap-1 mt-1">
-                        <QrCode className="w-3 h-3 text-violet-500" />
-                        <span className="text-xs text-violet-600">Compatible IA Electro</span>
-                      </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Méthodologie (A4)</p>
+                      <p className="text-xs text-gray-500">Méthode de travail détaillée</p>
                     </div>
+                    {downloading === 'method' && <Loader2 className="w-4 h-4 animate-spin text-blue-600" />}
+                  </button>
+
+                  {/* Procédure A4 */}
+                  <button
+                    onClick={() => handleDownload('procedure')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-green-50 transition-colors text-left border-t"
+                  >
+                    <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-500 rounded-lg flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Procédure (A4)</p>
+                      <p className="text-xs text-gray-500">Instructions étape par étape</p>
+                    </div>
+                    {downloading === 'procedure' && <Loader2 className="w-4 h-4 animate-spin text-green-600" />}
+                  </button>
+
+                  {/* Télécharger tout (ZIP) */}
+                  <button
+                    onClick={() => handleDownload('all')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-purple-50 transition-colors text-left border-t bg-gray-50"
+                  >
+                    <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-purple-700 rounded-lg flex items-center justify-center">
+                      <Download className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Télécharger tout (ZIP)</p>
+                      <p className="text-xs text-gray-500">Les 3 documents en un clic</p>
+                    </div>
+                    {downloading === 'all' && <Loader2 className="w-4 h-4 animate-spin text-purple-600" />}
                   </button>
                 </div>
               )}

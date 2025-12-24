@@ -353,14 +353,86 @@ export async function downloadMethodStatementPdf(procedureId) {
   });
 
   if (!response.ok) {
-    throw new Error('Erreur lors du téléchargement du Method Statement PDF');
+    throw new Error('Erreur lors du téléchargement du RAMS PDF');
   }
 
   const blob = await response.blob();
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `method_statement_${procedureId}_A3.pdf`;
+  a.download = `RAMS_${procedureId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download Work Method PDF (Méthodologie A4)
+export async function downloadWorkMethodPdf(procedureId) {
+  const response = await fetch(`${API_BASE}/${procedureId}/work-method-pdf`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Méthodologie PDF');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Methodologie_${procedureId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download Procedure Document PDF (Procédure A4)
+export async function downloadProcedureDocPdf(procedureId) {
+  const response = await fetch(`${API_BASE}/${procedureId}/procedure-doc-pdf`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Procédure PDF');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Procedure_${procedureId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download all 3 documents as ZIP
+export async function downloadAllDocuments(procedureId) {
+  const response = await fetch(`${API_BASE}/${procedureId}/all-documents`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement des documents');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Documents_${procedureId}.zip`;
   document.body.appendChild(a);
   a.click();
   window.URL.revokeObjectURL(url);

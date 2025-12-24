@@ -757,6 +757,7 @@ const PROCEDURE_CREATION_PROMPT = `Tu es LIA. Tu crées des procédures pour gé
 5. ⛔ NE DEMANDE JAMAIS "y a-t-il autre chose" ou "autre EPI"
 6. ⛔ NE POSE JAMAIS plusieurs questions à la fois
 7. ⛔ NE REDEMANDE JAMAIS une photo si le message contient "[Photo:"
+8. ⛔ NE LIMITE JAMAIS le nombre d'étapes - l'utilisateur décide quand il a terminé
 
 ## 📸 COMMENT DÉTECTER UNE PHOTO
 - Si le message de l'utilisateur contient "[Photo:" → UNE PHOTO A ÉTÉ ENVOYÉE
@@ -774,12 +775,14 @@ const PROCEDURE_CREATION_PROMPT = `Tu es LIA. Tu crées des procédures pour gé
 - Message : "Procédure : [titre]. Décrivez l'étape 1 + 📸 photo."
 
 ### PHASE 2 : ÉTAPES (currentStep: "steps")
+⚠️ AUCUNE LIMITE D'ÉTAPES - L'utilisateur peut ajouter 1, 5, 10, 20 étapes ou plus !
+
 Pour CHAQUE message de l'utilisateur :
 1. SI le message contient "[Photo:" → ÉTAPE COMPLÈTE
    → "✓ Étape [n] enregistrée. Étape suivante + 📸 ? (ou 'terminé')"
 2. SI le message NE contient PAS "[Photo:" → photo manquante
    → "📸 Ajoutez la photo de cette étape."
-3. SI le message = "terminé" ou "fini" → PASSE à review
+3. SI le message = "terminé" ou "fini" ou "c'est tout" → PASSE à review
 
 TU GÉNÈRES AUTOMATIQUEMENT pour chaque étape :
 - title, instructions, warning, duration_minutes, hazards
@@ -812,25 +815,7 @@ TU GÉNÈRES AUTOMATIQUEMENT pour chaque étape :
     "risk_level": "low|medium|high|critical"
   },
   "procedureReady": false
-}
-
-## EXEMPLE CORRECT
-User: "Contrôler un tableau électrique"
-LIA: "📋 Procédure : Contrôler un tableau électrique. Décrivez l'étape 1 + 📸 photo."
-
-User: "Ouvrir le tableau électrique\n[Photo: image.jpg]"
-LIA: "✓ Étape 1 enregistrée. Étape 2 + 📸 ? (ou 'terminé')"
-(La photo était dans le message → étape validée !)
-
-User: "Vérifier les disjoncteurs\n[Photo: photo2.jpg]"
-LIA: "✓ Étape 2 enregistrée. Étape 3 + 📸 ? (ou 'terminé')"
-
-User: "terminé"
-LIA: "✅ Contrôler un tableau électrique - 2 étapes.
-EPI: Gants isolants, Lunettes, Casque, Chaussures sécurité
-Risque: Élevé (travail électrique)
-Créer ?"`;
-
+}`;
 async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Get or create session
   let session;
@@ -1443,18 +1428,12 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     console.log("[RAMS] Site settings error:", e.message);
   }
 
-  // === AI RISK ANALYSIS (with new complete format) ===
-  console.log("[RAMS] Starting AI risk analysis for procedure:", procedure.title);
-  let aiAnalysis = null;
-  try {
-    aiAnalysis = await analyzeRisksWithAI(procedure, steps);
-    if (aiAnalysis) {
-      console.log("[RAMS] AI analysis completed - Global risk:", aiAnalysis.global_assessment?.overall_risk);
-    }
-  } catch (e) {
-    console.log("[RAMS] AI analysis failed, using fallback:", e.message);
-    aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
-  }
+  // === RISK ANALYSIS ===
+  // Using instant fallback analysis to prevent Render timeout (AI analysis took >20s)
+  // AI analysis can be cached during finalize for future optimization
+  console.log("[RAMS] Generating risk analysis for procedure:", procedure.title);
+  const aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
+  console.log("[RAMS] Risk analysis completed - Global risk:", aiAnalysis.global_assessment?.overall_risk);
 
   // Build hazards map from AI analysis
   const aiHazardsMap = new Map();
@@ -3100,6 +3079,133 @@ app.get("/api/procedures/:id/method-statement-pdf", async (req, res) => {
     res.end(pdfBuffer);
   } catch (err) {
     console.error("Error generating Method Statement PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Work Method PDF (Méthodologie A4)
+app.get("/api/procedures/:id/work-method-pdf", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Get procedure and steps
+    const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
+    );
+
+    const pdfBuffer = await generateWorkMethodPDF(procedures[0], steps, baseUrl);
+
+    const title = procedures[0]?.title || "methode_travail";
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 50);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Methode_Travail_${safeTitle}_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Error generating Work Method PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Procedure Document PDF (Procédure A4)
+app.get("/api/procedures/:id/procedure-doc-pdf", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Get procedure and steps
+    const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
+    );
+
+    const pdfBuffer = await generateProcedureDocPDF(procedures[0], steps, baseUrl);
+
+    const title = procedures[0]?.title || "procedure";
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 50);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Procedure_${safeTitle}_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Error generating Procedure PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download all 3 documents as ZIP
+app.get("/api/procedures/:id/all-documents", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Get procedure and steps
+    const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
+    );
+
+    const procedure = procedures[0];
+    const title = procedure.title || "procedure";
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 30);
+
+    // Generate all 3 PDFs in parallel
+    const [ramsPdf, workMethodPdf, procedurePdf] = await Promise.all([
+      generateMethodStatementA3PDF(id, baseUrl),
+      generateWorkMethodPDF(procedure, steps, baseUrl),
+      generateProcedureDocPDF(procedure, steps, baseUrl)
+    ]);
+
+    // Create ZIP archive
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Documents_${safeTitle}_${new Date().toISOString().split("T")[0]}.zip"`
+    );
+
+    archive.pipe(res);
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    archive.append(ramsPdf, { name: `RAMS_${safeTitle}_${dateStr}.pdf` });
+    archive.append(workMethodPdf, { name: `Methode_Travail_${safeTitle}_${dateStr}.pdf` });
+    archive.append(procedurePdf, { name: `Procedure_${safeTitle}_${dateStr}.pdf` });
+
+    await archive.finalize();
+  } catch (err) {
+    console.error("Error generating all documents:", err);
     res.status(500).json({ error: err.message });
   }
 });
