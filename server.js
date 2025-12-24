@@ -2057,12 +2057,15 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     if (wantsSearchProcedure) {
       console.log('[AI] 🔍 Procedure search mode');
       try {
+        // Search procedures - include both site-specific and those without site
         const procResult = await pool.query(`
-          SELECT id, title, created_at, risk_level,
+          SELECT id, title, created_at, risk_level, site,
                  (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
           FROM procedures p
-          WHERE site = $1
-          ORDER BY created_at DESC
+          WHERE site = $1 OR site IS NULL OR site = ''
+          ORDER BY
+            CASE WHEN site = $1 THEN 0 ELSE 1 END,
+            created_at DESC
           LIMIT 10
         `, [site]);
 
@@ -2100,13 +2103,21 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       try {
         const procResult = await pool.query(`
           SELECT p.*, json_agg(
-            json_build_object('step_number', s.step_number, 'title', s.title, 'description', s.description)
+            json_build_object(
+              'id', s.id,
+              'step_number', s.step_number,
+              'title', s.title,
+              'description', s.description,
+              'instructions', s.instructions,
+              'has_photo', (s.photo_content IS NOT NULL OR s.photo_path IS NOT NULL)
+            )
             ORDER BY s.step_number
           ) as steps
           FROM procedures p
           LEFT JOIN procedure_steps s ON s.procedure_id = p.id
-          WHERE p.site = $1 AND LOWER(p.title) LIKE $2
+          WHERE (p.site = $1 OR p.site IS NULL OR p.site = '') AND LOWER(p.title) LIKE $2
           GROUP BY p.id
+          ORDER BY CASE WHEN p.site = $1 THEN 0 ELSE 1 END
           LIMIT 1
         `, [site, `%${searchTitle.toLowerCase()}%`]);
 
@@ -2115,10 +2126,17 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           const steps = proc.steps?.[0] ? proc.steps.filter(s => s.step_number) : [];
 
           let response = `## 📋 ${proc.title}\n\n`;
+          const stepImages = [];
+
           if (steps.length > 0) {
             steps.forEach((s, i) => {
               response += `**Étape ${s.step_number}:** ${s.title || s.description}\n`;
-              if (s.description && s.title) response += `   ${s.description}\n`;
+              if (s.instructions) response += `   ${s.instructions}\n`;
+              else if (s.description && s.title) response += `   ${s.description}\n`;
+              if (s.has_photo) {
+                response += `   📷 *Photo disponible*\n`;
+                stepImages.push({ stepNumber: s.step_number, url: `/api/procedures/steps/${s.id}/photo` });
+              }
               response += '\n';
             });
           }
@@ -2132,7 +2150,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
               { label: "PDF", prompt: `Génère le PDF de "${proc.title}"` }
             ],
             provider: 'system',
-            procedureId: proc.id
+            procedureId: proc.id,
+            stepImages: stepImages.length > 0 ? stepImages : undefined
           });
         }
       } catch (e) {
@@ -2152,11 +2171,11 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       console.log(`[AI] 📄 Generating PDF for: ${searchTitle}`);
 
       try {
-        // Find the procedure
+        // Find the procedure (include procedures without site)
         const procResult = await pool.query(`
           SELECT id, title FROM procedures
-          WHERE site = $1 ${searchTitle ? "AND LOWER(title) LIKE $2" : ""}
-          ORDER BY created_at DESC
+          WHERE (site = $1 OR site IS NULL OR site = '') ${searchTitle ? "AND LOWER(title) LIKE $2" : ""}
+          ORDER BY CASE WHEN site = $1 THEN 0 ELSE 1 END, created_at DESC
           LIMIT 1
         `, searchTitle ? [site, `%${searchTitle.toLowerCase()}%`] : [site]);
 
