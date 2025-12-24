@@ -2854,28 +2854,26 @@ async function atexExtractWithGemini(images) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Modèles à essayer (noms corrects de l'API Gemini)
-  const modelNames = [
-    "gemini-1.5-flash",      // Modèle rapide gratuit
-    "gemini-1.5-pro",        // Modèle pro gratuit
-    "gemini-1.0-pro-vision", // Ancien modèle vision
-    "gemini-pro",            // Fallback texte
-  ];
+  // gemini-2.0-flash-exp est le seul modèle qui fonctionne avec les nouvelles clés API
+  const modelName = "gemini-2.0-flash-exp";
+  const model = genAI.getGenerativeModel({ model: modelName });
 
+  // Préparer les parts pour Gemini
+  const imageParts = images.map((img) => ({
+    inlineData: {
+      data: img.base64,
+      mimeType: img.mime,
+    },
+  }));
+
+  // Retry avec délai si rate limit (429)
+  const maxRetries = 3;
   let lastError = null;
-  for (const modelName of modelNames) {
-    try {
-      console.log(`[ATEX-AI] Trying Gemini model: ${modelName}...`);
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const startTime = Date.now();
 
-      // Préparer les parts pour Gemini
-      const imageParts = images.map((img) => ({
-        inlineData: {
-          data: img.base64,
-          mimeType: img.mime,
-        },
-      }));
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[ATEX-AI] Calling Gemini (${modelName}) attempt ${attempt}/${maxRetries}...`);
+      const startTime = Date.now();
 
       const result = await model.generateContent([
         ATEX_PROMPT,
@@ -2884,16 +2882,27 @@ async function atexExtractWithGemini(images) {
 
       const elapsed = Date.now() - startTime;
       const rawContent = result.response.text();
-      console.log(`[ATEX-AI] Gemini (${modelName}) response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+      console.log(`[ATEX-AI] Gemini response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
 
       return parseAtexResult(rawContent);
     } catch (err) {
-      console.log(`[ATEX-AI] Model ${modelName} failed: ${err.message}`);
       lastError = err;
+      console.log(`[ATEX-AI] Gemini attempt ${attempt} failed: ${err.message}`);
+
+      // Si c'est une erreur 429 (rate limit), attendre et réessayer
+      if (err.message?.includes("429") && attempt < maxRetries) {
+        const waitTime = attempt * 10000; // 10s, 20s, 30s
+        console.log(`[ATEX-AI] Rate limited, waiting ${waitTime / 1000}s before retry...`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        continue;
+      }
+
+      // Sinon, on sort de la boucle
+      break;
     }
   }
 
-  throw lastError || new Error("All Gemini models failed");
+  throw lastError || new Error("Gemini failed after retries");
 }
 
 // ✅ Extraction via OpenAI
