@@ -2188,6 +2188,48 @@ app.get("/api/procedures/search-equipment", async (req, res) => {
   }
 });
 
+// API Endpoint: Generate Example Method Statement PDF
+// IMPORTANT: This route MUST be defined BEFORE /api/procedures/:id to avoid UUID parse error
+app.get("/api/procedures/example-method-statement-pdf", async (req, res) => {
+  try {
+    console.log("[RAMS] Generating example Method Statement PDF...");
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    const pdfBuffer = await generateExampleMethodStatementPDF(baseUrl);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="RAMS_Exemple_ATEX_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    console.log("[RAMS] Example PDF generated successfully");
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("[RAMS] Error generating example PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API Endpoint: Generate Example Method Statement (returns procedure data)
+// IMPORTANT: This route MUST be defined BEFORE /api/procedures/:id to avoid UUID parse error
+app.post("/api/procedures/generate-example-method-statement", async (req, res) => {
+  try {
+    // Return the example data structure for display/editing
+    res.json({
+      success: true,
+      data: EXAMPLE_RAMS_DATA,
+      message: "Exemple RAMS ATEX généré avec succès"
+    });
+  } catch (err) {
+    console.error("Error generating example:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get single procedure with all details
 app.get("/api/procedures/:id", async (req, res) => {
   try {
@@ -3911,46 +3953,6 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
     doc.on("end", () => resolve(Buffer.concat(chunks)));
   });
 }
-
-// API Endpoint: Generate Example Method Statement PDF
-app.get("/api/procedures/example-method-statement-pdf", async (req, res) => {
-  try {
-    console.log("[RAMS] Generating example Method Statement PDF...");
-
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
-
-    const pdfBuffer = await generateExampleMethodStatementPDF(baseUrl);
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="RAMS_Exemple_ATEX_${new Date().toISOString().split("T")[0]}.pdf"`
-    );
-
-    console.log("[RAMS] Example PDF generated successfully");
-    res.end(pdfBuffer);
-  } catch (err) {
-    console.error("[RAMS] Error generating example PDF:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API Endpoint: Generate Example Method Statement (returns procedure data)
-app.post("/api/procedures/generate-example-method-statement", async (req, res) => {
-  try {
-    // Return the example data structure for display/editing
-    res.json({
-      success: true,
-      data: EXAMPLE_RAMS_DATA,
-      message: "Exemple RAMS ATEX généré avec succès"
-    });
-  } catch (err) {
-    console.error("Error generating example:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ------------------------------
 // Start Server
