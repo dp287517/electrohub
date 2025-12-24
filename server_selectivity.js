@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
@@ -25,6 +26,58 @@ if (process.env.OPENAI_API_KEY) {
 } else {
   console.warn('[SELECTIVITY] No OPENAI_API_KEY found');
   openaiError = 'No API key';
+}
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log('[SELECTIVITY] Gemini initialized');
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return error?.status === 429 || error?.code === 'insufficient_quota' || msg.includes('429') || msg.includes('quota') || msg.includes('rate limit');
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+  const model = gemini.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 } });
+  let systemPrompt = '', contents = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') { systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content; continue; }
+    contents.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
+  }
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === 'user');
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+async function chatWithFallback(messages, options = {}) {
+  if (openai) {
+    try {
+      const response = await openai.chat.completions.create({ model: options.model || 'gpt-4o-mini', messages, temperature: options.temperature ?? 0.7, max_tokens: options.max_tokens ?? 2000, ...(options.response_format && { response_format: options.response_format }) });
+      return { content: response.choices[0]?.message?.content || '', provider: 'openai' };
+    } catch (error) {
+      console.error('[SELECTIVITY] OpenAI failed:', error.message);
+      if (gemini && isQuotaError(error)) {
+        console.log('[SELECTIVITY] Fallback to Gemini...');
+        const content = await callGemini(messages, options);
+        return { content, provider: 'gemini' };
+      }
+      throw error;
+    }
+  }
+  if (gemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: 'gemini' };
+  }
+  throw new Error('No AI provider configured');
 }
 
 const app = express();
@@ -204,26 +257,23 @@ app.get('/api/selectivity/curves', async (req, res) => {
 // AI TIP for remediation
 app.post('/api/selectivity/ai-tip', async (req, res) => {
   try {
-    if (!openai) return res.json({ tip: 'AI tips unavailable' });
+    if (!openai && !gemini) return res.json({ tip: 'AI tips unavailable' });
 
     const { query } = req.body;
     const context = query || 'Selectivity advice';
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert in IEC 60947 selectivity. Provide concise remediation advice based on "${context}". Consider trip_type (thermal-magnetic or electronic) and curve (B/C/D). For TM, ensure Im_up >=2*Im_down max. Use standards like time-current curves, adjust Ir/Isd. 1-2 sentences.` 
+    const result = await chatWithFallback(
+      [
+        {
+          role: 'system',
+          content: `You are an expert in IEC 60947 selectivity. Provide concise remediation advice based on "${context}". Consider trip_type (thermal-magnetic or electronic) and curve (B/C/D). For TM, ensure Im_up >=2*Im_down max. Use standards like time-current curves, adjust Ir/Isd. 1-2 sentences.`
         },
         { role: 'user', content: context }
       ],
-      max_tokens: 120,
-      temperature: 0.3
-    });
+      { max_tokens: 120, temperature: 0.3 }
+    );
 
-    const tip = completion.choices[0].message.content.trim();
-    res.json({ tip });
+    res.json({ tip: result.content.trim() });
   } catch (e) {
     console.error('[AI TIP] error:', e.message);
     res.status(500).json({ error: 'AI tip failed' });

@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getSiteFilter } from './lib/tenant-filter.js';
 
 dotenv.config();
@@ -26,6 +27,126 @@ if (process.env.OPENAI_API_KEY) {
 } else {
   console.warn('[ARCFLASH] No OPENAI_API_KEY found');
   openaiError = 'No API key';
+}
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log('[ARCFLASH] Gemini initialized');
+}
+
+// Check if error is quota/rate limit related
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return (
+    error?.status === 429 ||
+    error?.code === 'insufficient_quota' ||
+    msg.includes('429') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit')
+  );
+}
+
+// Convert OpenAI messages to Gemini format
+function convertToGeminiFormat(messages) {
+  let systemPrompt = '';
+  const contents = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content;
+      continue;
+    }
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    contents.push({ role, parts: [{ text: msg.content }] });
+  }
+
+  return { systemPrompt, contents };
+}
+
+// Call Gemini API
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+
+  const model = gemini.getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: {
+      temperature: options.temperature ?? 0.7,
+      maxOutputTokens: options.max_tokens ?? 4096,
+    },
+  });
+
+  const { systemPrompt, contents } = convertToGeminiFormat(messages);
+
+  if (systemPrompt && contents.length > 0) {
+    const firstUserIdx = contents.findIndex(c => c.role === 'user');
+    if (firstUserIdx >= 0 && contents[firstUserIdx].parts[0]?.text) {
+      contents[firstUserIdx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[firstUserIdx].parts[0].text}`;
+    }
+  }
+
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+// Parse JSON from AI response
+function parseAIJson(text) {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
+  if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
+  if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
+  return JSON.parse(cleaned.trim());
+}
+
+// Chat with fallback
+async function chatWithFallback(messages, options = {}) {
+  const hasOpenAI = !!openai;
+  const hasGemini = !!gemini;
+
+  console.log(`[ARCFLASH-AI] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
+  if (hasOpenAI) {
+    try {
+      console.log(`[ARCFLASH-AI] Calling OpenAI...`);
+      const response = await openai.chat.completions.create({
+        model: options.model || "gpt-4o-mini",
+        messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.max_tokens ?? 2000,
+        ...(options.response_format && { response_format: options.response_format }),
+      });
+      const content = response.choices[0]?.message?.content || '';
+      console.log(`[ARCFLASH-AI] OpenAI response: ${content.length} chars`);
+      return { content, provider: 'openai' };
+    } catch (error) {
+      console.error(`[ARCFLASH-AI] OpenAI failed: ${error.message}`);
+
+      if (hasGemini && isQuotaError(error)) {
+        console.log(`[ARCFLASH-AI] Fallback to Gemini...`);
+        try {
+          const content = await callGemini(messages, options);
+          console.log(`[ARCFLASH-AI] Gemini response: ${content.length} chars`);
+          return { content, provider: 'gemini' };
+        } catch (geminiError) {
+          console.error(`[ARCFLASH-AI] Gemini also failed: ${geminiError.message}`);
+          throw geminiError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  if (hasGemini) {
+    console.log(`[ARCFLASH-AI] Using Gemini (no OpenAI)...`);
+    const content = await callGemini(messages, options);
+    console.log(`[ARCFLASH-AI] Gemini response: ${content.length} chars`);
+    return { content, provider: 'gemini' };
+  }
+
+  throw new Error('No AI provider configured');
 }
 
 const app = express();
@@ -290,13 +411,11 @@ app.post('/api/arcflash/autofill', async (req, res) => {
       let settings = device.settings || {};
       if (Object.keys(settings).length === 0) {
         const prompt = `Generate realistic protection settings for a ${device_type} breaker with In=${in_amps}A, Icu=${icu_ka}kA, Voltage=${voltage_v}V. Return JSON: {"ir": number, "isd": number, "tsd": number, "ii": number, "ig": number, "tg": number, "zsi": boolean, "erms": boolean, "curve_type": string}`;
-        const completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [{ role: 'system', content: prompt }],
-          response_format: { type: 'json_object' },
-          temperature: 0.3,
-        });
-        settings = JSON.parse(completion.choices[0].message.content.trim());
+        const result = await chatWithFallback(
+          [{ role: 'system', content: prompt }],
+          { response_format: { type: 'json_object' }, temperature: 0.3 }
+        );
+        settings = parseAIJson(result.content);
         await pool.query(`UPDATE devices SET settings = $1 WHERE id = $2 AND site = $3`, [settings, id, site]);
         updates.push({ device_id: id, settings });
         console.log(`[ARC AUTOFILL] Generated settings for device ${id}: ${JSON.stringify(settings)}`);
@@ -452,26 +571,23 @@ app.get('/api/arcflash/curves', async (req, res) => {
 // AI TIP for remediation
 app.post('/api/arcflash/ai-tip', async (req, res) => {
   try {
-    if (!openai) return res.json({ tip: 'AI tips unavailable' });
+    if (!openai && !gemini) return res.json({ tip: 'AI tips unavailable' });
 
     const { query } = req.body;
     const context = query || 'Arc flash advice';
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert in IEEE 1584 arc flash calculations. Provide concise advice based on "${context}". Reference standards, suggest mitigations like PPE or engineering controls. 1-2 sentences.` 
+    const result = await chatWithFallback(
+      [
+        {
+          role: 'system',
+          content: `You are an expert in IEEE 1584 arc flash calculations. Provide concise advice based on "${context}". Reference standards, suggest mitigations like PPE or engineering controls. 1-2 sentences.`
         },
         { role: 'user', content: context }
       ],
-      max_tokens: 120,
-      temperature: 0.3
-    });
+      { max_tokens: 120, temperature: 0.3 }
+    );
 
-    const tip = completion.choices[0].message.content.trim();
-    res.json({ tip });
+    res.json({ tip: result.content.trim() });
   } catch (e) {
     console.error('[AI TIP] error:', e.message, e.stack);
     res.status(500).json({ error: 'AI tip failed', details: e.message });

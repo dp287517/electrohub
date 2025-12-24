@@ -22,6 +22,8 @@ import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.j
 
 // OpenAI for AI-guided creation
 import OpenAI from "openai";
+// Gemini fallback
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
@@ -116,10 +118,152 @@ const pool = new Pool({
 });
 
 // ------------------------------
-// OpenAI
+// OpenAI & Gemini
 // ------------------------------
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const OPENAI_MODEL = process.env.AI_ASSISTANT_OPENAI_MODEL || "gpt-4o-mini";
+
+// Gemini configuration
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+}
+
+// Check if error is quota/rate limit related
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return (
+    error?.status === 429 ||
+    error?.code === 'insufficient_quota' ||
+    msg.includes('429') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit')
+  );
+}
+
+// Convert OpenAI messages to Gemini format
+function convertToGeminiFormat(messages) {
+  let systemPrompt = '';
+  const contents = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content;
+      continue;
+    }
+
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+
+    if (Array.isArray(msg.content)) {
+      const parts = [];
+      for (const item of msg.content) {
+        if (item.type === 'text') {
+          parts.push({ text: item.text });
+        } else if (item.type === 'image_url') {
+          const url = item.image_url?.url || '';
+          const match = url.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            parts.push({
+              inlineData: { mimeType: match[1], data: match[2] }
+            });
+          }
+        }
+      }
+      contents.push({ role, parts });
+    } else {
+      contents.push({ role, parts: [{ text: msg.content }] });
+    }
+  }
+
+  return { systemPrompt, contents };
+}
+
+// Call Gemini API
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+
+  const model = gemini.getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: {
+      temperature: options.temperature ?? 0.7,
+      maxOutputTokens: options.max_tokens ?? 4096,
+    },
+  });
+
+  const { systemPrompt, contents } = convertToGeminiFormat(messages);
+
+  // Add system prompt to first user message
+  if (systemPrompt && contents.length > 0) {
+    const firstUserIdx = contents.findIndex(c => c.role === 'user');
+    if (firstUserIdx >= 0 && contents[firstUserIdx].parts[0]?.text) {
+      contents[firstUserIdx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[firstUserIdx].parts[0].text}`;
+    }
+  }
+
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+// Parse JSON from AI response (handles markdown code blocks)
+function parseAIJson(text) {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
+  if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
+  if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
+  return JSON.parse(cleaned.trim());
+}
+
+// Chat with fallback
+async function chatWithFallback(messages, options = {}) {
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasGemini = !!gemini;
+
+  console.log(`[PROC-AI] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
+  // Try OpenAI first
+  if (hasOpenAI) {
+    try {
+      console.log(`[PROC-AI] Calling OpenAI (${options.model || OPENAI_MODEL})...`);
+      const response = await openai.chat.completions.create({
+        model: options.model || OPENAI_MODEL,
+        messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.max_tokens ?? 1500,
+        ...(options.response_format && { response_format: options.response_format }),
+      });
+      const content = response.choices[0]?.message?.content || '';
+      console.log(`[PROC-AI] OpenAI response: ${content.length} chars`);
+      return { content, provider: 'openai' };
+    } catch (error) {
+      console.error(`[PROC-AI] OpenAI failed: ${error.message}`);
+
+      if (hasGemini && isQuotaError(error)) {
+        console.log(`[PROC-AI] Fallback to Gemini...`);
+        try {
+          const content = await callGemini(messages, options);
+          console.log(`[PROC-AI] Gemini response: ${content.length} chars`);
+          return { content, provider: 'gemini' };
+        } catch (geminiError) {
+          console.error(`[PROC-AI] Gemini also failed: ${geminiError.message}`);
+          throw geminiError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  // Only Gemini
+  if (hasGemini) {
+    console.log(`[PROC-AI] Using Gemini (no OpenAI)...`);
+    const content = await callGemini(messages, options);
+    console.log(`[PROC-AI] Gemini response: ${content.length} chars`);
+    return { content, provider: 'gemini' };
+  }
+
+  throw new Error('No AI provider configured');
+}
 
 // ------------------------------
 // AI Risk Analysis for RAMS
@@ -497,24 +641,21 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
         const base64Photo = photoBuffer.toString('base64');
         const mimeType = 'image/jpeg';
 
-        const visionResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "Tu analyses des photos pour créer des procédures de maintenance. Décris brièvement (2-3 lignes) ce que tu vois: l'action, l'équipement, le contexte. Sois direct."
-            },
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
-                { type: "text", text: userMessage || "Décris cette image pour une procédure" }
-              ]
-            }
-          ],
-          max_tokens: 200
-        });
-        photoAnalysis = visionResponse.choices[0]?.message?.content || '';
+        const visionMessages = [
+          {
+            role: "system",
+            content: "Tu analyses des photos pour créer des procédures de maintenance. Décris brièvement (2-3 lignes) ce que tu vois: l'action, l'équipement, le contexte. Sois direct."
+          },
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
+              { type: "text", text: userMessage || "Décris cette image pour une procédure" }
+            ]
+          }
+        ];
+        const visionResult = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 200 });
+        photoAnalysis = visionResult.content || '';
         console.log(`[PROC] Photo analysis: ${photoAnalysis.substring(0, 100)}...`);
       }
     } catch (e) {
@@ -548,23 +689,19 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     }))
   ];
 
-  // Call OpenAI
-  const response = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    messages,
+  // Call AI with fallback
+  const result = await chatWithFallback(messages, {
     temperature: 0.7,
     max_tokens: 1500,
     response_format: { type: "json_object" }
   });
 
-  const aiContent = response.choices[0]?.message?.content || "{}";
   let aiResponse;
-
   try {
-    aiResponse = JSON.parse(aiContent);
+    aiResponse = parseAIJson(result.content);
   } catch {
     aiResponse = {
-      message: aiContent,
+      message: result.content,
       currentStep: session.current_step,
       question: "",
       procedureReady: false
@@ -632,16 +769,13 @@ Retourne un JSON avec:
   "summary": "Résumé de la procédure"
 }`;
 
-  const response = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
-    max_tokens: 2000,
-    response_format: { type: "json_object" }
-  });
+  const result = await chatWithFallback(
+    [{ role: "user", content: prompt }],
+    { temperature: 0.3, max_tokens: 2000, response_format: { type: "json_object" } }
+  );
 
   try {
-    return JSON.parse(response.choices[0]?.message?.content || "{}");
+    return parseAIJson(result.content);
   } catch {
     return { error: "Impossible d'analyser le document" };
   }
@@ -671,16 +805,13 @@ Retourne un JSON avec:
   "totalActions": 0
 }`;
 
-  const response = await openai.chat.completions.create({
-    model: OPENAI_MODEL,
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
-    max_tokens: 2500,
-    response_format: { type: "json_object" }
-  });
+  const result = await chatWithFallback(
+    [{ role: "user", content: prompt }],
+    { temperature: 0.3, max_tokens: 2500, response_format: { type: "json_object" } }
+  );
 
   try {
-    return JSON.parse(response.choices[0]?.message?.content || "{}");
+    return parseAIJson(result.content);
   } catch {
     return { error: "Impossible d'analyser le rapport" };
   }
@@ -2642,15 +2773,13 @@ Durée estimée: ${s.duration_minutes || 'N/A'} minutes
       { role: "user", content: initialQuestion || "Je suis prêt à commencer la procédure. Guide-moi." }
     ];
 
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
+    const result = await chatWithFallback(messages, {
       temperature: 0.5,
       max_tokens: 1000,
       response_format: { type: "json_object" }
     });
 
-    const aiResponse = JSON.parse(response.choices[0]?.message?.content || "{}");
+    const aiResponse = parseAIJson(result.content);
 
     // Save conversation
     await pool.query(
@@ -2722,25 +2851,22 @@ app.post("/api/procedures/ai/assist/:sessionId", uploadPhoto.single("photo"), as
     let photoAnalysis = null;
 
     if (req.file) {
-      // Analyze photo with GPT-4 Vision
+      // Analyze photo with Vision (fallback to Gemini)
       const photoBuffer = await fsp.readFile(req.file.path);
       const base64Image = photoBuffer.toString('base64');
 
-      const visionResponse = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Analyse cette photo dans le contexte de l'étape ${collectedData.currentStepNumber || 1} de la procédure "${session.procedure_title}". L'utilisateur doit faire: ${steps[collectedData.currentStepNumber - 1]?.instructions || 'suivre les instructions'}. Est-ce correct ? Y a-t-il des problèmes de sécurité ?` },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
-            ]
-          }
-        ],
-        max_tokens: 500
-      });
+      const visionMessages = [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Analyse cette photo dans le contexte de l'étape ${collectedData.currentStepNumber || 1} de la procédure "${session.procedure_title}". L'utilisateur doit faire: ${steps[collectedData.currentStepNumber - 1]?.instructions || 'suivre les instructions'}. Est-ce correct ? Y a-t-il des problèmes de sécurité ?` },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+          ]
+        }
+      ];
+      const visionResult = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 500 });
 
-      photoAnalysis = visionResponse.choices[0]?.message?.content;
+      photoAnalysis = visionResult.content;
       userContent += `\n\n[ANALYSE PHOTO]: ${photoAnalysis}`;
 
       // Clean up
@@ -2766,15 +2892,13 @@ ${steps.map(s => `Étape ${s.step_number}: ${s.title} - ${s.instructions || 'N/A
       { role: "user", content: userContent }
     ];
 
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
+    const result = await chatWithFallback(messages, {
       temperature: 0.5,
       max_tokens: 1000,
       response_format: { type: "json_object" }
     });
 
-    const aiResponse = JSON.parse(response.choices[0]?.message?.content || "{}");
+    const aiResponse = parseAIJson(result.content);
 
     // Update conversation and step
     conversation.push({ role: "assistant", ...aiResponse });
@@ -2819,27 +2943,24 @@ app.post("/api/procedures/ai/analyze-photo", uploadPhoto.single("photo"), async 
     const photoBuffer = await fsp.readFile(req.file.path);
     const base64Image = photoBuffer.toString('base64');
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `${question || "Analyse cette image en détail."}\n\nContexte: ${context || "Maintenance industrielle / équipements électriques"}`
-            },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
-          ]
-        }
-      ],
-      max_tokens: 1000
-    });
+    const visionMessages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `${question || "Analyse cette image en détail."}\n\nContexte: ${context || "Maintenance industrielle / équipements électriques"}`
+          },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+        ]
+      }
+    ];
+    const result = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 1000 });
 
     await fsp.unlink(req.file.path).catch(() => {});
 
     res.json({
-      analysis: response.choices[0]?.message?.content,
+      analysis: result.content,
       success: true
     });
   } catch (err) {

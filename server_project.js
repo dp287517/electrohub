@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import pg from "pg";
 import multer from "multer";
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getSiteFilter } from "./lib/tenant-filter.js";
 
 dotenv.config();
@@ -18,6 +19,58 @@ try {
   if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 } catch (e) {
   console.warn("[PROJECT] OpenAI init failed:", e.message);
+}
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log("[PROJECT] Gemini initialized");
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || "";
+  return error?.status === 429 || error?.code === "insufficient_quota" || msg.includes("429") || msg.includes("quota") || msg.includes("rate limit");
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error("GEMINI_API_KEY not configured");
+  const model = gemini.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 } });
+  let systemPrompt = "", contents = [];
+  for (const msg of messages) {
+    if (msg.role === "system") { systemPrompt += (systemPrompt ? "\n\n" : "") + msg.content; continue; }
+    contents.push({ role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] });
+  }
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === "user");
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+async function chatWithFallback(messages, options = {}) {
+  if (openai) {
+    try {
+      const response = await openai.chat.completions.create({ model: options.model || "gpt-4o-mini", messages, temperature: options.temperature ?? 0.7, max_tokens: options.max_tokens ?? 2000, ...(options.response_format && { response_format: options.response_format }) });
+      return { content: response.choices[0]?.message?.content || "", provider: "openai" };
+    } catch (error) {
+      console.error("[PROJECT] OpenAI failed:", error.message);
+      if (gemini && isQuotaError(error)) {
+        console.log("[PROJECT] Fallback to Gemini...");
+        const content = await callGemini(messages, options);
+        return { content, provider: "gemini" };
+      }
+      throw error;
+    }
+  }
+  if (gemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: "gemini" };
+  }
+  throw new Error("No AI provider configured");
 }
 
 const app = express();
@@ -701,7 +754,7 @@ app.post("/api/projects/projects/:id/assistant", async (req, res) => {
     const site = siteOf(req);
     const id = Number(req.params.id);
     const { question } = req.body || {};
-    if (!openai) return res.json({ answer: "AI not available (missing API key)." });
+    if (!openai && !gemini) return res.json({ answer: "AI not available (missing API key)." });
 
     const pQ = await pool.query(`SELECT title, wbs_number, budget_amount FROM pm_projects WHERE id=$1 AND site=$2`, [id, site]);
     const sums = (await pool.query(`SELECT COALESCE(SUM(amount),0) AS offers FROM pm_offers WHERE project_id=$1 AND site=$2`, [id, site])).rows[0];
@@ -711,15 +764,14 @@ WBS: ${pQ.rows[0]?.wbs_number || '-'}
 Budget: ${pQ.rows[0]?.budget_amount || '-'}
 Offers: ${sums.offers}`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      messages: [
+    const result = await chatWithFallback(
+      [
         { role: "system", content: "You are a senior PMO/Controlling assistant. Answer concisely with actionable and quantified advice." },
         { role: "user", content: `${ctx}\nQuestion: ${question || "Provide a short-term risk analysis."}` },
       ],
-    });
-    const answer = completion.choices[0].message.content.trim();
+      { temperature: 0.3 }
+    );
+    const answer = result.content.trim();
     res.json({ answer });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -23,10 +23,145 @@ const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 // AI SETUP - OpenAI + Gemini (fallback)
 // ============================================================
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-const gemini = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
-const geminiModel = gemini ? gemini.getGenerativeModel({ model: "gemini-1.5-flash" }) : null;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const gemini = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+const GEMINI_MODEL = "gemini-2.0-flash";
 
 console.log(`[AI] OpenAI: ${openai ? '✅' : '❌'} | Gemini: ${gemini ? '✅' : '❌'}`);
+
+// Check if error is quota/rate limit related
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return (
+    error?.status === 429 ||
+    error?.code === 'insufficient_quota' ||
+    msg.includes('429') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit')
+  );
+}
+
+// Convert OpenAI messages to Gemini format
+function convertToGeminiFormat(messages) {
+  let systemPrompt = '';
+  const contents = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content;
+      continue;
+    }
+
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+
+    if (Array.isArray(msg.content)) {
+      const parts = [];
+      for (const item of msg.content) {
+        if (item.type === 'text') {
+          parts.push({ text: item.text });
+        } else if (item.type === 'image_url') {
+          const url = item.image_url?.url || '';
+          const match = url.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            parts.push({
+              inlineData: { mimeType: match[1], data: match[2] }
+            });
+          }
+        }
+      }
+      contents.push({ role, parts });
+    } else {
+      contents.push({ role, parts: [{ text: msg.content }] });
+    }
+  }
+
+  return { systemPrompt, contents };
+}
+
+// Call Gemini API
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+
+  const model = gemini.getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: {
+      temperature: options.temperature ?? 0.7,
+      maxOutputTokens: options.max_tokens ?? 4096,
+    },
+  });
+
+  const { systemPrompt, contents } = convertToGeminiFormat(messages);
+
+  // Add system prompt to first user message
+  if (systemPrompt && contents.length > 0) {
+    const firstUserIdx = contents.findIndex(c => c.role === 'user');
+    if (firstUserIdx >= 0 && contents[firstUserIdx].parts[0]?.text) {
+      contents[firstUserIdx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[firstUserIdx].parts[0].text}`;
+    }
+  }
+
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+// Parse JSON from AI response (handles markdown code blocks)
+function parseAIJson(text) {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```json')) cleaned = cleaned.slice(7);
+  if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
+  if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
+  return JSON.parse(cleaned.trim());
+}
+
+// Chat with fallback (OpenAI -> Gemini)
+async function chatWithFallback(messages, options = {}) {
+  const hasOpenAI = !!openai;
+  const hasGemini = !!gemini;
+
+  console.log(`[AI-Fallback] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
+  // Try OpenAI first
+  if (hasOpenAI) {
+    try {
+      console.log(`[AI-Fallback] Calling OpenAI...`);
+      const response = await openai.chat.completions.create({
+        model: options.model || "gpt-4o-mini",
+        messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.max_tokens ?? 2000,
+        ...(options.response_format && { response_format: options.response_format }),
+      });
+      const content = response.choices[0]?.message?.content || '';
+      console.log(`[AI-Fallback] OpenAI response: ${content.length} chars`);
+      return { content, provider: 'openai' };
+    } catch (error) {
+      console.error(`[AI-Fallback] OpenAI failed: ${error.message}`);
+
+      if (hasGemini && isQuotaError(error)) {
+        console.log(`[AI-Fallback] Fallback to Gemini...`);
+        try {
+          const content = await callGemini(messages, options);
+          console.log(`[AI-Fallback] Gemini response: ${content.length} chars`);
+          return { content, provider: 'gemini' };
+        } catch (geminiError) {
+          console.error(`[AI-Fallback] Gemini also failed: ${geminiError.message}`);
+          throw geminiError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  // Only Gemini
+  if (hasGemini) {
+    console.log(`[AI-Fallback] Using Gemini (no OpenAI)...`);
+    const content = await callGemini(messages, options);
+    console.log(`[AI-Fallback] Gemini response: ${content.length} chars`);
+    return { content, provider: 'gemini' };
+  }
+
+  throw new Error('No AI provider configured');
+}
 
 // ============================================================
 // SUPER INTELLIGENT AI SYSTEM PROMPT
@@ -921,7 +1056,7 @@ async function searchWebForDocumentation(query, equipmentInfo = {}) {
   const enhancedQuery = `${query} ${equipmentInfo.manufacturer || ''} ${equipmentInfo.model || ''} fiche technique datasheet PDF`.trim();
 
   // Try Gemini with web grounding first
-  if (geminiModel) {
+  if (gemini) {
     try {
       const prompt = `Tu es un expert en documentation technique industrielle. Recherche les informations techniques pour:
 
@@ -938,8 +1073,7 @@ IMPORTANT: Fournis:
 
 Format ta réponse de manière structurée avec des bullet points.`;
 
-      const result = await geminiModel.generateContent(prompt);
-      const response = result.response.text();
+      const response = await callGemini([{ role: "user", content: prompt }]);
 
       results.summary = response;
       results.sources.push({ provider: 'Gemini', content: response });
@@ -963,20 +1097,18 @@ Format ta réponse de manière structurée avec des bullet points.`;
     }
   }
 
-  // Also try OpenAI for additional context
-  if (openai && (!results.summary || results.summary.length < 100)) {
+  // Also try AI for additional context (with fallback)
+  if ((openai || gemini) && (!results.summary || results.summary.length < 100)) {
     try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Tu es un expert en documentation technique industrielle. Fournis des informations précises sur les équipements électriques.
+      const messages = [
+        {
+          role: 'system',
+          content: `Tu es un expert en documentation technique industrielle. Fournis des informations précises sur les équipements électriques.
 IMPORTANT: Inclus toujours des spécifications techniques concrètes (tension, puissance, courant) et des recommandations de maintenance.`
-          },
-          {
-            role: 'user',
-            content: `Donne-moi les informations techniques détaillées pour: ${equipmentInfo.name || query}
+        },
+        {
+          role: 'user',
+          content: `Donne-moi les informations techniques détaillées pour: ${equipmentInfo.name || query}
 Fabricant: ${equipmentInfo.manufacturer || 'inconnu'}
 Modèle: ${equipmentInfo.model || 'inconnu'}
 
@@ -985,19 +1117,17 @@ Inclus:
 2. Procédures de maintenance recommandées
 3. Points de contrôle importants
 4. Intervalles de maintenance suggérés`
-          }
-        ],
-        max_tokens: 800
-      });
+        }
+      ];
 
-      const content = completion.choices[0]?.message?.content;
-      if (content) {
-        results.sources.push({ provider: 'OpenAI', content });
-        if (!results.summary) results.summary = content;
-        console.log('[AI] ✅ OpenAI documentation search completed');
+      const result = await chatWithFallback(messages, { max_tokens: 800 });
+      if (result.content) {
+        results.sources.push({ provider: result.provider, content: result.content });
+        if (!results.summary) results.summary = result.content;
+        console.log(`[AI] ✅ ${result.provider} documentation search completed`);
       }
     } catch (e) {
-      console.error('[AI] OpenAI doc search error:', e.message);
+      console.error('[AI] Doc search error:', e.message);
     }
   }
 
@@ -1569,58 +1699,27 @@ function parseAIResponse(responseText) {
 // AI CALL WITH FALLBACK - OpenAI -> Gemini -> Local
 // ============================================================
 async function callAI(messages, options = {}) {
-  const { maxTokens = 2000, temperature = 0.7 } = options;
+  const { maxTokens = 2000, temperature = 0.7, model } = options;
 
-  // Try OpenAI first
-  if (openai) {
-    try {
-      console.log('[AI] Calling OpenAI...');
-      const completion = await openai.chat.completions.create({
-        model: process.env.AI_MODEL || "gpt-4o-mini",
-        messages,
-        temperature,
-        max_tokens: maxTokens
-      });
-      return {
-        content: completion.choices[0]?.message?.content || '',
-        provider: 'openai',
-        model: process.env.AI_MODEL || 'gpt-4o-mini'
-      };
-    } catch (e) {
-      console.error('[AI] OpenAI error:', e.message);
-    }
+  try {
+    const result = await chatWithFallback(messages, {
+      max_tokens: maxTokens,
+      temperature,
+      model: model || process.env.AI_MODEL || "gpt-4o-mini"
+    });
+    return {
+      content: result.content,
+      provider: result.provider,
+      model: result.provider === 'openai' ? (model || process.env.AI_MODEL || 'gpt-4o-mini') : GEMINI_MODEL
+    };
+  } catch (e) {
+    console.error('[AI] All providers failed:', e.message);
+    return {
+      content: null,
+      provider: 'none',
+      error: 'Aucun service IA disponible'
+    };
   }
-
-  // Fallback to Gemini
-  if (geminiModel) {
-    try {
-      console.log('[AI] Falling back to Gemini...');
-      // Convert messages to Gemini format
-      const systemPrompt = messages.find(m => m.role === 'system')?.content || '';
-      const userMessages = messages.filter(m => m.role !== 'system');
-
-      const prompt = systemPrompt + '\n\n' + userMessages.map(m =>
-        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
-      ).join('\n\n');
-
-      const result = await geminiModel.generateContent(prompt);
-      const response = await result.response;
-      return {
-        content: response.text(),
-        provider: 'gemini',
-        model: 'gemini-1.5-flash'
-      };
-    } catch (e) {
-      console.error('[AI] Gemini error:', e.message);
-    }
-  }
-
-  // No AI available
-  return {
-    content: null,
-    provider: 'none',
-    error: 'Aucun service IA disponible'
-  };
 }
 
 // ============================================================
@@ -3066,26 +3165,23 @@ app.post("/api/ai-assistant/chat-with-photo", aiPhotoUpload.single('photo'), asy
 
     let aiDescription = '';
     try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `Tu analyses des photos pour la maintenance industrielle.
+      const visionMessages = [
+        {
+          role: "system",
+          content: `Tu analyses des photos pour la maintenance industrielle.
 Décris BRIÈVEMENT ce que tu vois (1-2 lignes max).
 Identifie: équipement, état, contexte.`
-          },
-          {
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
-              { type: "text", text: message || "Décris cette image" }
-            ]
-          }
-        ],
-        max_tokens: 150
-      });
-      aiDescription = completion.choices[0]?.message?.content || '';
+        },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Photo}`, detail: "low" } },
+            { type: "text", text: message || "Décris cette image" }
+          ]
+        }
+      ];
+      const result = await chatWithFallback(visionMessages, { model: "gpt-4o", max_tokens: 150 });
+      aiDescription = result.content || '';
     } catch (e) {
       console.error('[AI] Vision error:', e.message);
       aiDescription = "Photo reçue";
@@ -3908,12 +4004,12 @@ app.get("/api/ai-assistant/weekly-plan", async (req, res) => {
 app.get("/api/ai-assistant/health", (req, res) => {
   const providers = [];
   if (openai) providers.push('openai');
-  if (geminiModel) providers.push('gemini');
+  if (gemini) providers.push('gemini');
 
   res.json({
     status: providers.length > 0 ? "active" : "fallback",
     providers,
-    primaryProvider: openai ? "openai" : (geminiModel ? "gemini" : "local"),
+    primaryProvider: openai ? "openai" : (gemini ? "gemini" : "local"),
     capabilities: {
       chat: true,
       documentSearch: true,
@@ -4125,7 +4221,7 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
 
     // Generate AI insights if available
     let aiInsight = null;
-    if (openai || geminiModel) {
+    if (openai || gemini) {
       try {
         const insightPrompt = `En tant qu'expert maintenance industrielle, donne UN conseil actionnable et motivant pour aujourd'hui basé sur ces stats:
 - Équipements: ${totalEquipment} total (${equipment.switchboards} tableaux, ${equipment.vsd} variateurs, ${equipment.meca} méca)
@@ -4136,18 +4232,11 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
 
 Réponds en 1-2 phrases max, style direct et encourageant. Commence par une action concrète.`;
 
-        if (openai) {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: insightPrompt }],
-            max_tokens: 100,
-            temperature: 0.7
-          });
-          aiInsight = completion.choices[0]?.message?.content;
-        } else if (geminiModel) {
-          const result = await geminiModel.generateContent(insightPrompt);
-          aiInsight = result.response.text();
-        }
+        const result = await chatWithFallback(
+          [{ role: "user", content: insightPrompt }],
+          { max_tokens: 100, temperature: 0.7 }
+        );
+        aiInsight = result.content;
       } catch (e) {
         console.error('[MorningBrief] AI insight error:', e);
       }

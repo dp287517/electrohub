@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import multer from 'multer';
 import { getSiteFilter } from './lib/tenant-filter.js';
 import fs from 'fs';
@@ -38,6 +39,76 @@ if (process.env.OPENAI_API_KEY) {
   catch (e) { console.warn('[HV] OpenAI init failed:', e.message); }
 } else {
   console.warn('[HV] No OPENAI_API_KEY found');
+}
+
+// Gemini setup
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const GEMINI_MODEL = "gemini-2.0-flash";
+let gemini = null;
+if (GEMINI_API_KEY) {
+  gemini = new GoogleGenerativeAI(GEMINI_API_KEY);
+  console.log('[HV] Gemini initialized');
+}
+
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return error?.status === 429 || error?.code === 'insufficient_quota' || msg.includes('429') || msg.includes('quota') || msg.includes('rate limit');
+}
+
+function convertToGeminiFormat(messages) {
+  let systemPrompt = '', contents = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') { systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content; continue; }
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    if (Array.isArray(msg.content)) {
+      const parts = [];
+      for (const item of msg.content) {
+        if (item.type === 'text') parts.push({ text: item.text });
+        else if (item.type === 'image_url') {
+          const match = (item.image_url?.url || '').match(/^data:([^;]+);base64,(.+)$/);
+          if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+        }
+      }
+      contents.push({ role, parts });
+    } else {
+      contents.push({ role, parts: [{ text: msg.content }] });
+    }
+  }
+  return { systemPrompt, contents };
+}
+
+async function callGemini(messages, options = {}) {
+  if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+  const model = gemini.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { temperature: options.temperature ?? 0.7, maxOutputTokens: options.max_tokens ?? 4096 } });
+  const { systemPrompt, contents } = convertToGeminiFormat(messages);
+  if (systemPrompt && contents.length > 0) {
+    const idx = contents.findIndex(c => c.role === 'user');
+    if (idx >= 0 && contents[idx].parts[0]?.text) contents[idx].parts[0].text = `${systemPrompt}\n\n---\n\n${contents[idx].parts[0].text}`;
+  }
+  const result = await model.generateContent({ contents });
+  return result.response.text();
+}
+
+async function chatWithFallback(messages, options = {}) {
+  if (openai) {
+    try {
+      const response = await openai.chat.completions.create({ model: options.model || 'gpt-4o-mini', messages, temperature: options.temperature ?? 0.7, max_tokens: options.max_tokens ?? 2000, ...(options.response_format && { response_format: options.response_format }) });
+      return { content: response.choices[0]?.message?.content || '', provider: 'openai' };
+    } catch (error) {
+      console.error('[HV] OpenAI failed:', error.message);
+      if (gemini && isQuotaError(error)) {
+        console.log('[HV] Fallback to Gemini...');
+        const content = await callGemini(messages, options);
+        return { content, provider: 'gemini' };
+      }
+      throw error;
+    }
+  }
+  if (gemini) {
+    const content = await callGemini(messages, options);
+    return { content, provider: 'gemini' };
+  }
+  throw new Error('No AI provider configured');
 }
 
 const app = express();
@@ -534,14 +605,12 @@ TEXT:
 ${text}
 `}
   ];
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages,
+  const result = await chatWithFallback(messages, {
     temperature: 0.1,
     response_format: { type: 'json_object' },
     max_tokens: 700
   });
-  return safeJsonFromContent(completion.choices?.[0]?.message?.content || '');
+  return safeJsonFromContent(result.content || '');
 }
 
 // ---------------- IA: specs à partir de texte + photos (Vision + Web enrich) ----------------
@@ -552,7 +621,7 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     const device_type_hint = req.body.device_type || '';
     const files = req.files || [];
 
-    if (!openai) return res.status(503).json({ error: 'OpenAI not available. Set OPENAI_API_KEY.' });
+    if (!openai && !gemini) return res.status(503).json({ error: 'AI not available. Set OPENAI_API_KEY or GEMINI_API_KEY.' });
 
     // 1) Vision on photos — schema stricte
     const imageParts = (files || []).map(f => {
@@ -592,14 +661,13 @@ Please read all photos, transcribe the nameplate and extract as per schema.` },
       ]}
     ];
 
-    const vision = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: vMessages,
+    const visionResult = await chatWithFallback(vMessages, {
+      model: 'gpt-4o',
       temperature: 0.1,
       response_format: { type: 'json_object' },
       max_tokens: 800
     });
-    const vjson = safeJsonFromContent(vision.choices?.[0]?.message?.content || '');
+    const vjson = safeJsonFromContent(visionResult.content || '');
 
     if (process.env.HV_DEBUG === '1') {
       console.log('[VISION RAW]', vjson);
