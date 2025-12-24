@@ -269,97 +269,197 @@ async function chatWithFallback(messages, options = {}) {
 // AI Risk Analysis for RAMS
 // ------------------------------
 async function analyzeRisksWithAI(procedure, steps) {
-  const prompt = `Tu es un expert HSE (Hygiene Securite Environnement) specialise dans l'analyse de risques professionnels selon la methodologie RAMS (Risk Assessment Method Statement).
+  const prompt = `Tu es un expert HSE (Hygiène Sécurité Environnement) spécialisé dans l'analyse de risques professionnels selon la méthodologie RAMS (Risk Assessment Method Statement).
 
-Analyse cette procedure operationnelle et genere une evaluation des risques pour chaque etape.
+Analyse cette procédure opérationnelle et génère une évaluation des risques COMPLÈTE pour chaque étape, avec évaluation INITIALE et FINALE (après mesures).
 
-## PROCEDURE
+## PROCÉDURE
 Titre: ${procedure.title}
-Description: ${procedure.description || 'Non specifie'}
-Categorie: ${procedure.category || 'General'}
-Niveau de risque declare: ${procedure.risk_level || 'low'}
+Description: ${procedure.description || 'Non spécifié'}
+Catégorie: ${procedure.category || 'Général'}
+Niveau de risque déclaré: ${procedure.risk_level || 'low'}
 EPI requis: ${JSON.stringify(procedure.ppe_required || [])}
-Codes securite: ${JSON.stringify(procedure.safety_codes || [])}
+Codes sécurité: ${JSON.stringify(procedure.safety_codes || [])}
 
-## ETAPES
+## ÉTAPES
 ${steps.map((s, i) => `
-Etape ${s.step_number}: ${s.title}
+Étape ${s.step_number}: ${s.title}
 - Instructions: ${s.instructions || 'Aucune'}
 - Avertissement: ${s.warning || 'Aucun'}
-- Duree: ${s.duration_minutes || '?'} min
+- Durée: ${s.duration_minutes || '?'} min
 `).join('\n')}
 
-## ECHELLES DE COTATION
+## ÉCHELLES DE COTATION
 
-GRAVITE (G) - Consequences potentielles:
-5 = Catastrophique (Deces, incapacite permanente grave)
-4 = Critique (Incapacite permanente, blessure grave)
-3 = Grave (Incapacite temporaire > 7 jours)
-2 = Important (Arret de travail, soins medicaux)
-1 = Mineure (Premiers soins, sans arret)
+GRAVITÉ (G) - Conséquences potentielles:
+5 = Catastrophique (Décès, incapacité permanente grave)
+4 = Critique (Incapacité permanente, blessure grave)
+3 = Grave (Incapacité temporaire > 7 jours)
+2 = Important (Arrêt de travail, soins médicaux)
+1 = Mineure (Premiers soins, sans arrêt)
 
-PROBABILITE (P) - Frequence d'occurrence:
-5 = Tres probable (Quotidien, quasi certain)
-4 = Probable (Hebdomadaire, frequent)
+PROBABILITÉ (P) - Fréquence d'occurrence:
+5 = Très probable (Quotidien, quasi certain)
+4 = Probable (Hebdomadaire, fréquent)
 3 = Possible (Mensuel, occasionnel)
 2 = Peu probable (Annuel, rare)
-1 = Improbable (Exceptionnel, tres rare)
+1 = Improbable (Exceptionnel, très rare)
 
-NIR = G x P (Niveau Initial de Risque)
-- NIR >= 15: CRITIQUE (rouge fonce)
-- NIR >= 10: ELEVE (rouge)
-- NIR >= 5: MODERE (orange)
-- NIR < 5: FAIBLE (vert)
+NIR = G × P (Niveau d'Indice de Risque)
+- NIR ≥ 15: CRITIQUE
+- NIR ≥ 10: ÉLEVÉ
+- NIR ≥ 5: MODÉRÉ
+- NIR < 5: FAIBLE
 
-## FORMAT DE REPONSE (JSON uniquement)
+## CATÉGORIES DE DANGERS STANDARDS
+- Accès / circulation
+- Coactivité
+- Manutention / TMS
+- Coupures / projections
+- Chute d'objets
+- Chute de hauteur
+- Électrique
+- Électrique - ATEX
+- Risque ATEX
+- Arc électrique
+- Thermique
+- Chimique
+- Bruit
+- Ergonomie
+- Organisation
+- Glissade / Chute
+
+## FORMAT DE RÉPONSE (JSON STRICT)
 {
   "global_assessment": {
     "overall_risk": "low|medium|high|critical",
-    "main_hazards": ["liste des dangers principaux"],
-    "critical_steps": [numeros des etapes critiques]
+    "main_hazards": ["danger 1", "danger 2"],
+    "critical_steps": [2, 4],
+    "total_hazards": 12,
+    "max_nir_initial": 15,
+    "max_nir_final": 5
   },
   "steps": [
     {
       "step_number": 1,
       "hazards": [
         {
-          "category": "Electrique|Chute|ATEX|Mecanique|Chimique|Ergonomie|Thermique|Organisationnel",
-          "danger": "Description courte du danger",
-          "scenario": "Scenario d'accident possible",
-          "gravity": 1-5,
-          "probability": 1-5,
-          "measures": ["Mesure preventive 1", "Mesure preventive 2"]
+          "checkbox": "Accès / circulation",
+          "danger": "Description précise du danger et scénario d'accident",
+          "gi": 3,
+          "pi": 2,
+          "measures": "Mesures préventives concrètes à mettre en place",
+          "ppe": ["Chaussures de sécurité S3", "Gilet haute visibilité"],
+          "actions": "Actions détaillées et contrôles à effectuer",
+          "responsible": "Chef d'équipe",
+          "gf": 3,
+          "pf": 1
         }
       ]
     }
   ]
 }
 
-IMPORTANT:
-- Identifie TOUS les dangers pertinents pour chaque etape (1 a 3 dangers par etape)
-- Sois realiste dans les cotations G et P
-- Propose des mesures preventives concretes et applicables
-- Reponds UNIQUEMENT avec le JSON, sans texte avant ou apres`;
+## RÈGLES IMPORTANTES
+1. Identifie 2-4 dangers pertinents par étape
+2. gi/pi = Gravité/Probabilité INITIALES (avant mesures)
+3. gf/pf = Gravité/Probabilité FINALES (après mesures) - gf reste souvent égal à gi, mais pf doit être RÉDUIT grâce aux mesures
+4. La probabilité finale (pf) doit être ≤ pi si des mesures efficaces sont appliquées
+5. Sois réaliste et cohérent avec l'activité décrite
+6. Les mesures doivent être concrètes et applicables
+7. Les EPI doivent être spécifiques au danger identifié
+8. Le responsable doit être un rôle (Chef d'équipe, Électricien, Technicien, Tous, Superviseur)
+
+RÉPONDS UNIQUEMENT AVEC LE JSON, sans texte avant ou après.`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      max_tokens: 3000,
-    });
+    // Try OpenAI first, then Gemini fallback
+    const result = await chatWithFallback(
+      [{ role: "user", content: prompt }],
+      { temperature: 0.3, max_tokens: 4000, response_format: { type: "json_object" } }
+    );
 
-    const content = response.choices[0]?.message?.content || "{}";
+    const content = result.content || "{}";
     // Extract JSON from response (handle potential markdown code blocks)
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      console.log("[RAMS] AI analysis completed:", {
+        steps: parsed.steps?.length || 0,
+        totalHazards: parsed.global_assessment?.total_hazards || 'N/A',
+        overallRisk: parsed.global_assessment?.overall_risk || 'N/A'
+      });
+      return parsed;
     }
     return null;
   } catch (error) {
     console.error("[RAMS] AI risk analysis error:", error.message);
-    return null;
+
+    // Fallback: Generate basic structure from keywords
+    return generateFallbackRiskAnalysis(procedure, steps);
   }
+}
+
+// Fallback risk analysis when AI fails
+function generateFallbackRiskAnalysis(procedure, steps) {
+  const riskLevel = procedure.risk_level || 'low';
+  const baseGravity = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
+  const baseProb = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
+
+  const hazardTemplates = {
+    'electri': { checkbox: 'Électrique', danger: 'Risque d\'électrocution ou d\'arc électrique', gi: 4, ppe: ['Gants isolants', 'Écran facial'] },
+    'atex': { checkbox: 'Risque ATEX', danger: 'Risque d\'inflammation en zone ATEX', gi: 5, ppe: ['Vêtements antistatiques', 'Chaussures ESD'] },
+    'hauteur': { checkbox: 'Chute de hauteur', danger: 'Chute lors de travaux en élévation', gi: 4, ppe: ['Harnais de sécurité', 'Casque'] },
+    'manutention': { checkbox: 'Manutention / TMS', danger: 'Troubles musculo-squelettiques lors de manutention', gi: 2, ppe: ['Gants de manutention'] },
+    'coupure': { checkbox: 'Coupures / projections', danger: 'Coupures ou blessures lors de manipulations', gi: 3, ppe: ['Gants anti-coupures', 'Lunettes de protection'] },
+    'default': { checkbox: 'Organisation', danger: 'Risque opérationnel général', gi: baseGravity, ppe: ['Chaussures de sécurité'] }
+  };
+
+  const stepsAnalysis = steps.map(step => {
+    const combined = ((step.instructions || '') + ' ' + (step.warning || '') + ' ' + (step.title || '')).toLowerCase();
+    const hazards = [];
+
+    Object.entries(hazardTemplates).forEach(([keyword, template]) => {
+      if (keyword !== 'default' && combined.includes(keyword)) {
+        hazards.push({
+          checkbox: template.checkbox,
+          danger: template.danger,
+          gi: template.gi,
+          pi: baseProb,
+          measures: `Appliquer les mesures de prévention standard. ${step.warning || ''}`,
+          ppe: template.ppe,
+          actions: 'Vérifier l\'environnement avant intervention. Respecter les consignes de sécurité.',
+          responsible: 'Chef d\'équipe',
+          gf: template.gi,
+          pf: Math.max(1, baseProb - 2)
+        });
+      }
+    });
+
+    if (hazards.length === 0) {
+      hazards.push({
+        ...hazardTemplates.default,
+        pi: baseProb,
+        measures: 'Appliquer les mesures de prévention standard.',
+        actions: 'Suivre les instructions de la procédure.',
+        responsible: 'Tous',
+        gf: hazardTemplates.default.gi,
+        pf: Math.max(1, baseProb - 1)
+      });
+    }
+
+    return { step_number: step.step_number, hazards };
+  });
+
+  return {
+    global_assessment: {
+      overall_risk: riskLevel,
+      main_hazards: [...new Set(stepsAnalysis.flatMap(s => s.hazards.map(h => h.checkbox)))],
+      critical_steps: stepsAnalysis.filter(s => s.hazards.some(h => h.gi * h.pi >= 12)).map(s => s.step_number),
+      total_hazards: stepsAnalysis.reduce((acc, s) => acc + s.hazards.length, 0)
+    },
+    steps: stepsAnalysis
+  };
 }
 
 // Analyze photos with AI for additional risk detection
@@ -1199,7 +1299,7 @@ async function generateProcedurePDF(procedureId) {
 
 // ------------------------------
 // RAMS - Risk Assessment Method Statement A3 PDF
-// Professional format based on industrial standards
+// Professional format based on industrial standards with Initial AND Final evaluation
 // ------------------------------
 async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://electrohub.app') {
   // Get procedure with all related data
@@ -1223,14 +1323,6 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     [procedureId]
   );
 
-  // Get equipment links with Arc Flash data if available
-  const { rows: equipmentLinks } = await pool.query(
-    `SELECT pel.*
-     FROM procedure_equipment_links pel
-     WHERE pel.procedure_id = $1`,
-    [procedureId]
-  );
-
   // Get site settings with multiple fallbacks
   let siteSettings = {};
   try {
@@ -1248,7 +1340,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     console.log("[RAMS] Site settings error:", e.message);
   }
 
-  // === AI RISK ANALYSIS ===
+  // === AI RISK ANALYSIS (with new complete format) ===
   console.log("[RAMS] Starting AI risk analysis for procedure:", procedure.title);
   let aiAnalysis = null;
   try {
@@ -1258,6 +1350,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     }
   } catch (e) {
     console.log("[RAMS] AI analysis failed, using fallback:", e.message);
+    aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
   }
 
   // Build hazards map from AI analysis
@@ -1272,7 +1365,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   let qrCodeBuffer = null;
   try {
     qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures?id=${procedureId}&ai=true`, {
-      width: 100, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
+      width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
     console.log("[RAMS] QR code error:", e.message);
@@ -1281,18 +1374,18 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   // === PDF SETUP - A3 LANDSCAPE ===
   const pageWidth = 1190.55;
   const pageHeight = 841.89;
-  const margin = 25;
+  const margin = 20;
 
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: false,
+    bufferPages: true,
     autoFirstPage: true,
     info: {
       Title: `RAMS - ${procedure.title}`,
       Author: siteSettings.company_name || "ElectroHub",
       Subject: "Risk Assessment Method Statement",
-      Creator: "ElectroHub RAMS Generator",
+      Creator: "ElectroHub RAMS Generator v2",
     },
   });
 
@@ -1312,264 +1405,322 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     lightBg: "#f8fafc",
     border: "#d1d5db",
     white: "#ffffff",
+    darkRed: "#7f1d1d",
+    orange: "#ea580c",
   };
 
-  // Risk scales based on RAMS standard
-  const gravityScale = [
-    { level: 5, label: "Catastrophique", desc: "Mortalite", color: "#7f1d1d" },
-    { level: 4, label: "Critique", desc: "Incap. perm.", color: c.danger },
-    { level: 3, label: "Grave", desc: "Incap. temp.", color: "#ea580c" },
-    { level: 2, label: "Important", desc: "Perte temps", color: c.warning },
-    { level: 1, label: "Mineure", desc: "1ers soins", color: c.success },
-  ];
+  // Risk color functions
+  const getRiskColor = (nir) => {
+    if (nir >= 15) return c.darkRed;
+    if (nir >= 10) return c.danger;
+    if (nir >= 5) return c.warning;
+    return c.success;
+  };
 
-  const probScale = [
-    { level: 5, label: "Tres probable", color: "#7f1d1d" },
-    { level: 4, label: "Probable", color: c.danger },
-    { level: 3, label: "Possible", color: "#ea580c" },
-    { level: 2, label: "Peu probable", color: c.warning },
-    { level: 1, label: "Improbable", color: c.success },
-  ];
+  const getGravityColor = (g) => {
+    if (g >= 5) return c.darkRed;
+    if (g >= 4) return c.danger;
+    if (g >= 3) return c.orange;
+    if (g >= 2) return c.warning;
+    return c.success;
+  };
 
-  // Get procedure risk info
   const riskLevel = procedure.risk_level || 'low';
-  const baseGravity = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
-  const baseProb = { low: 2, medium: 3, high: 4, critical: 5 }[riskLevel] || 2;
-  const ppeCount = (procedure.ppe_required || []).length;
-  const safetyCount = (procedure.safety_codes || []).length;
 
-  // Calculate risk reduction from measures
-  const measureScore = Math.min(ppeCount + safetyCount, 8);
-  const probReduction = Math.min(Math.floor(measureScore / 2), 3);
-  const residualProb = Math.max(1, baseProb - probReduction);
-  const initialRisk = baseGravity * baseProb;
-  const residualRisk = baseGravity * residualProb;
-
-  // === HEADER SECTION (60pt) ===
-  const headerH = 60;
+  // === HEADER SECTION ===
+  const headerH = 65;
   doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
 
-  // Logo
+  // Logo / Company
   let logoX = margin;
   if (siteSettings.logo) {
     try {
-      doc.image(siteSettings.logo, margin, 8, { height: 44 });
-      logoX = margin + 60;
+      doc.image(siteSettings.logo, margin, 8, { height: 48 });
+      logoX = margin + 65;
     } catch (e) {}
   }
 
-  // Company name
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-     .text(siteSettings.company_name || "ELECTROHUB", logoX + 10, 12);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
+     .text(siteSettings.company_name || "ELECTROHUB", logoX + 5, 10);
 
-  // RAMS Badge
-  doc.roundedRect(logoX + 10, 28, 130, 22, 3).fill(c.primary);
-  doc.fontSize(11).fillColor(c.white).text("METHOD STATEMENT", logoX + 18, 33);
+  // Method Statement badge
+  doc.roundedRect(logoX + 5, 30, 140, 24, 4).fill(c.primary);
+  doc.fontSize(11).fillColor(c.white).text("METHOD STATEMENT", logoX + 15, 36);
 
   // Title centered
   const titleW = 500;
   const titleX = (pageWidth - titleW) / 2;
-  doc.fontSize(16).fillColor(c.white).text(procedure.title.toUpperCase(), titleX, 12, { width: titleW, align: "center" });
-  doc.fontSize(9).fillColor("#a5b4fc").text(
-    `Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`,
-    titleX, 32, { width: titleW, align: "center" }
-  );
+  doc.fontSize(13).fillColor(c.white)
+     .text(procedure.title.toUpperCase(), titleX, 8, { width: titleW, align: "center" });
+  doc.fontSize(9).fillColor("#a5b4fc")
+     .text(`Activité: ${procedure.category || "Générale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`, titleX, 28, { width: titleW, align: "center" });
+  doc.fontSize(8).fillColor("#94a3b8")
+     .text(`Site: ${procedure.site || 'N/A'} | Bâtiment: ${procedure.building || 'N/A'}`, titleX, 44, { width: titleW, align: "center" });
 
   // Risk badge
-  const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: "#7f1d1d" };
-  const riskLabels = { low: "FAIBLE", medium: "MODERE", high: "ELEVE", critical: "CRITIQUE" };
-  doc.roundedRect(pageWidth - 180, 10, 70, 40, 4).fill(riskColors[riskLevel] || c.success);
-  doc.fontSize(7).fillColor(c.white).text("RISQUE", pageWidth - 175, 14, { width: 60, align: "center" });
-  doc.fontSize(11).text(riskLabels[riskLevel] || "FAIBLE", pageWidth - 175, 28, { width: 60, align: "center" });
+  const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.darkRed };
+  const riskLabels = { low: "FAIBLE", medium: "MODÉRÉ", high: "ÉLEVÉ", critical: "CRITIQUE" };
+  doc.roundedRect(pageWidth - 175, 8, 75, 48, 5).fill(riskColors[riskLevel] || c.success);
+  doc.fontSize(8).fillColor(c.white).text("RISQUE", pageWidth - 170, 14, { width: 65, align: "center" });
+  doc.fontSize(13).text(riskLabels[riskLevel] || "FAIBLE", pageWidth - 170, 30, { width: 65, align: "center" });
 
   // QR Code
   if (qrCodeBuffer) {
     try {
-      doc.image(qrCodeBuffer, pageWidth - margin - 55, 5, { width: 50 });
+      doc.image(qrCodeBuffer, pageWidth - margin - 70, 5, { width: 55 });
     } catch (e) {}
   }
 
   // === CONTENT LAYOUT ===
   let y = headerH + 8;
   const contentW = pageWidth - margin * 2;
-  const col1W = contentW * 0.62;
-  const col2W = contentW * 0.36;
+  const col1W = contentW * 0.70;
+  const col2W = contentW * 0.28;
   const col2X = margin + col1W + 15;
 
-  // === LEFT COLUMN: RISK ASSESSMENT TABLE ===
-  doc.rect(margin, y, col1W, 18).fill(c.danger);
+  // === MAIN RISK TABLE HEADER ===
+  doc.rect(margin, y, col1W, 20).fill(c.danger);
   doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-     .text("ANALYSE DES RISQUES - METHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 8, y + 4);
-  y += 18;
+     .text("ANALYSE DES RISQUES - MÉTHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 10, y + 5);
+  y += 20;
 
-  // Table headers
-  const tableH = 22;
-  const cols = [35, col1W * 0.22, col1W * 0.28, 35, 35, 40, col1W * 0.25];
-  const headers = ["N", "TACHE / ACTIVITE", "DANGER - SCENARIO", "G", "P", "NIR", "MESURES PREVENTIVES"];
+  // Column headers with Initial AND Final evaluation
+  const tableHeaderH = 35;
+  const colWidths = {
+    n: 28,
+    task: col1W * 0.14,
+    danger: col1W * 0.18,
+    gi: 28, pi: 28, niri: 32,
+    measures: col1W * 0.18,
+    ppe: col1W * 0.10,
+    actions: col1W * 0.12,
+    resp: 45,
+    gf: 28, pf: 28, nirf: 32
+  };
 
-  doc.rect(margin, y, col1W, tableH).fill(c.lightBg).stroke(c.border);
+  // Header row 1 - Evaluation labels
+  doc.rect(margin, y, col1W, 15).fill(c.lightBg).stroke(c.border);
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text);
-  let hx = margin;
+
+  let hx = margin + colWidths.n + colWidths.task + colWidths.danger;
+  doc.text("ÉVALUATION INITIALE", hx, y + 4, { width: colWidths.gi + colWidths.pi + colWidths.niri, align: "center" });
+  hx += colWidths.gi + colWidths.pi + colWidths.niri + colWidths.measures + colWidths.ppe + colWidths.actions + colWidths.resp;
+  doc.text("ÉVALUATION FINALE", hx, y + 4, { width: colWidths.gf + colWidths.pf + colWidths.nirf, align: "center" });
+  y += 15;
+
+  // Header row 2 - Column names
+  doc.rect(margin, y, col1W, tableHeaderH - 15).fill(c.lightBg).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(6).fillColor(c.text);
+
+  const headers = [
+    { label: "N", w: colWidths.n },
+    { label: "TÂCHE / ACTIVITÉ", w: colWidths.task },
+    { label: "DANGER - SCÉNARIO", w: colWidths.danger },
+    { label: "G", w: colWidths.gi },
+    { label: "P", w: colWidths.pi },
+    { label: "NIR", w: colWidths.niri },
+    { label: "MESURES PRÉVENTIVES", w: colWidths.measures },
+    { label: "EPI", w: colWidths.ppe },
+    { label: "ACTIONS DÉTAILLÉES", w: colWidths.actions },
+    { label: "RESP.", w: colWidths.resp },
+    { label: "G", w: colWidths.gf },
+    { label: "P", w: colWidths.pf },
+    { label: "NIR", w: colWidths.nirf }
+  ];
+
+  hx = margin;
   headers.forEach((h, i) => {
-    doc.text(h, hx + 3, y + 7, { width: cols[i] - 6, align: i < 3 ? "left" : "center" });
-    hx += cols[i];
-  });
-  y += tableH;
-
-  // Table rows
-  const maxTableY = pageHeight - 170;
-
-  for (let i = 0; i < steps.length && y < maxTableY; i++) {
-    const step = steps[i];
-
-    // Get hazards from AI analysis or fallback to keyword detection
-    let hazards = [];
-    const aiStepHazards = aiHazardsMap.get(step.step_number);
-
-    if (aiStepHazards && aiStepHazards.length > 0) {
-      // Use AI-generated hazards
-      hazards = aiStepHazards.map(h => ({
-        cat: h.category || "General",
-        danger: h.danger || "Risque identifie",
-        scenario: h.scenario || "",
-        g: h.gravity || baseGravity,
-        p: h.probability || baseProb,
-        measures: h.measures || []
-      }));
-    } else {
-      // Fallback: Auto-detect hazards from keywords
-      const combined = ((step.instructions || "") + " " + (step.warning || "") + " " + (step.title || "")).toLowerCase();
-
-      if (combined.includes("electri") || combined.includes("tension") || combined.includes("consign"))
-        hazards.push({ cat: "Electrique", danger: "Electrisation/Arc", g: 4, p: baseProb, measures: [] });
-      if (combined.includes("hauteur") || combined.includes("echelle") || combined.includes("nacelle"))
-        hazards.push({ cat: "Chute", danger: "Chute de hauteur", g: 4, p: baseProb, measures: [] });
-      if (combined.includes("atex") || combined.includes("explosion") || combined.includes("zone"))
-        hazards.push({ cat: "ATEX", danger: "Inflammation/Explosion", g: 5, p: baseProb, measures: [] });
-      if (combined.includes("manutention") || combined.includes("lourd"))
-        hazards.push({ cat: "Ergonomie", danger: "Manutention/TMS", g: 2, p: 3, measures: [] });
-      if (combined.includes("coupure") || combined.includes("outil"))
-        hazards.push({ cat: "Mecanique", danger: "Coupure/Blessure", g: 3, p: baseProb, measures: [] });
-
-      if (hazards.length === 0) {
-        hazards.push({ cat: "General", danger: "Risque operationnel", g: baseGravity, p: baseProb, measures: [] });
-      }
+    const align = i < 3 || (i >= 6 && i < 10) ? "left" : "center";
+    doc.text(h.label, hx + 2, y + 5, { width: h.w - 4, align });
+    if (i < headers.length - 1) {
+      doc.moveTo(hx + h.w, y).lineTo(hx + h.w, y + tableHeaderH - 15).stroke(c.border);
     }
+    hx += h.w;
+  });
+  y += tableHeaderH - 15;
 
-    // Draw row for each hazard
-    for (let h = 0; h < Math.min(hazards.length, 2) && y < maxTableY; h++) {
-      const hazard = hazards[h];
-      const isFirst = h === 0;
-      const rowH = 28;
-      const isEven = i % 2 === 0;
+  // === TABLE ROWS ===
+  const maxTableY = pageHeight - 130;
+  let rowCount = 0;
+
+  for (const step of steps) {
+    const aiStepHazards = aiHazardsMap.get(step.step_number) || [];
+
+    // Use AI hazards or generate fallback
+    const hazards = aiStepHazards.length > 0 ? aiStepHazards : [{
+      checkbox: "Organisation",
+      danger: step.warning || "Risque opérationnel standard",
+      gi: 2, pi: 2,
+      measures: "Suivre les instructions de la procédure",
+      ppe: procedure.ppe_required?.slice(0, 2) || [],
+      actions: "Respecter les consignes de sécurité",
+      responsible: "Tous",
+      gf: 2, pf: 1
+    }];
+
+    for (let hi = 0; hi < Math.min(hazards.length, 3); hi++) {
+      if (y > maxTableY - 30) {
+        doc.addPage();
+        y = margin;
+        doc.rect(margin, y, col1W, 18).fill(c.danger);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+           .text("ANALYSE DES RISQUES (suite)", margin + 10, y + 4);
+        y += 20;
+      }
+
+      const hazard = hazards[hi];
+      const isFirst = hi === 0;
+      const rowH = 32;
+      const isEven = rowCount % 2 === 0;
 
       doc.rect(margin, y, col1W, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
 
       let rx = margin;
-      doc.font("Helvetica").fontSize(7).fillColor(c.text);
 
-      // Step number
+      // N (step number)
       if (isFirst) {
-        doc.circle(rx + 17, y + rowH/2, 10).fill(c.primary);
-        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-           .text(String(step.step_number), rx + 10, y + rowH/2 - 4, { width: 14, align: "center" });
+        doc.circle(rx + colWidths.n / 2, y + rowH / 2, 10).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+           .text(String(step.step_number), rx + colWidths.n / 2 - 4, y + rowH / 2 - 5);
       }
-      rx += cols[0];
+      rx += colWidths.n;
 
       // Task
-      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text)
-         .text(isFirst ? step.title.substring(0, 35) : "", rx + 2, y + 4, { width: cols[1] - 4 });
-      if (isFirst && step.instructions) {
-        doc.font("Helvetica").fontSize(6).fillColor(c.lightText)
-           .text(step.instructions.substring(0, 50) + "...", rx + 2, y + 14, { width: cols[1] - 4 });
+      if (isFirst) {
+        doc.font("Helvetica-Bold").fontSize(6).fillColor(c.text)
+           .text(step.title.substring(0, 40), rx + 2, y + 4, { width: colWidths.task - 4 });
       }
-      rx += cols[1];
+      rx += colWidths.task;
 
-      // Hazard
-      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger)
-         .text(`[${hazard.cat}]`, rx + 2, y + 4, { width: cols[2] - 4 });
-      doc.font("Helvetica").fontSize(6).fillColor(c.text)
-         .text(hazard.danger + (step.warning ? ": " + step.warning.substring(0, 40) : ""), rx + 2, y + 13, { width: cols[2] - 4 });
-      rx += cols[2];
+      // Danger with checkbox
+      const checkbox = hazard.checkbox || hazard.category || "Risque";
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(c.danger)
+         .text(`☐ ${checkbox}`, rx + 2, y + 3, { width: colWidths.danger - 4 });
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text((hazard.danger || "").substring(0, 70), rx + 2, y + 12, { width: colWidths.danger - 4 });
+      rx += colWidths.danger;
 
-      // G (Gravity)
-      const gColor = hazard.g >= 4 ? c.danger : hazard.g >= 3 ? c.warning : c.success;
-      doc.roundedRect(rx + 5, y + 6, 22, 16, 2).fill(gColor);
+      // G initial
+      const gi = hazard.gi || hazard.gravity || 2;
+      const pi = hazard.pi || hazard.probability || 2;
+      const niri = gi * pi;
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(gi));
       doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(hazard.g), rx + 5, y + 9, { width: 22, align: "center" });
-      rx += cols[3];
+         .text(String(gi), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.gi;
 
-      // P (Probability)
-      const pVal = Math.max(1, hazard.p - probReduction);
-      const pColor = pVal >= 4 ? c.danger : pVal >= 3 ? c.warning : c.success;
-      doc.roundedRect(rx + 5, y + 6, 22, 16, 2).fill(pColor);
+      // P initial
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(pi));
       doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(pVal), rx + 5, y + 9, { width: 22, align: "center" });
-      rx += cols[4];
+         .text(String(pi), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.pi;
 
-      // NIR
-      const nir = hazard.g * pVal;
-      const nirColor = nir >= 12 ? "#7f1d1d" : nir >= 8 ? c.danger : nir >= 4 ? c.warning : c.success;
-      doc.roundedRect(rx + 3, y + 6, 32, 16, 2).fill(nirColor);
+      // NIR initial
+      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(niri));
       doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(nir), rx + 3, y + 9, { width: 32, align: "center" });
-      rx += cols[5];
+         .text(String(niri), rx + 2, y + 11, { width: 28, align: "center" });
+      rx += colWidths.niri;
 
-      // Measures - Use AI-generated measures or fallback to PPE/safety codes
-      let measuresText = "";
-      if (hazard.measures && hazard.measures.length > 0) {
-        // Use AI-generated measures
-        measuresText = hazard.measures.slice(0, 2).join(" | ");
-      } else {
-        // Fallback to procedure-level PPE and safety codes
-        const fallbackMeasures = [];
-        if (procedure.ppe_required?.length) fallbackMeasures.push("EPI: " + procedure.ppe_required.slice(0, 2).join(", "));
-        if (procedure.safety_codes?.length) fallbackMeasures.push(procedure.safety_codes[0]);
-        measuresText = fallbackMeasures.join(" | ");
-      }
-      doc.font("Helvetica").fontSize(6).fillColor(c.text)
-         .text(measuresText.substring(0, 65), rx + 2, y + 8, { width: cols[6] - 6 });
+      // Measures
+      const measures = typeof hazard.measures === 'string' ? hazard.measures :
+                       (Array.isArray(hazard.measures) ? hazard.measures.join(". ") : "");
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(measures.substring(0, 70), rx + 2, y + 4, { width: colWidths.measures - 4 });
+      rx += colWidths.measures;
+
+      // PPE
+      const ppeText = Array.isArray(hazard.ppe) ? hazard.ppe.slice(0, 2).join(", ") : (hazard.ppe || "");
+      doc.font("Helvetica").fontSize(5).fillColor(c.info)
+         .text(ppeText.substring(0, 35), rx + 2, y + 4, { width: colWidths.ppe - 4 });
+      rx += colWidths.ppe;
+
+      // Actions
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text((hazard.actions || "").substring(0, 50), rx + 2, y + 4, { width: colWidths.actions - 4 });
+      rx += colWidths.actions;
+
+      // Responsible
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.responsible || "Tous", rx + 2, y + 12, { width: colWidths.resp - 4, align: "center" });
+      rx += colWidths.resp;
+
+      // G final
+      const gf = hazard.gf || gi;
+      const pf = hazard.pf || Math.max(1, pi - 1);
+      const nirf = gf * pf;
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(gf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(gf), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.gf;
+
+      // P final
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(pf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(pf), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.pf;
+
+      // NIR final
+      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(nirf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(nirf), rx + 2, y + 11, { width: 28, align: "center" });
 
       y += rowH;
+      rowCount++;
     }
   }
 
   // === RISK SCALES ===
-  y = Math.max(y + 10, maxTableY);
+  y = Math.max(y + 10, maxTableY - 60);
   const scaleW = (col1W - 20) / 2;
 
   // Gravity scale
   doc.rect(margin, y, scaleW, 16).fill(c.info);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITE (G)", margin + 5, y + 4);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITÉ (G)", margin + 5, y + 4);
   y += 16;
+
+  const gravityScale = [
+    { level: 5, label: "Catastrophique", color: c.darkRed },
+    { level: 4, label: "Critique", color: c.danger },
+    { level: 3, label: "Grave", color: c.orange },
+    { level: 2, label: "Important", color: c.warning },
+    { level: 1, label: "Mineure", color: c.success },
+  ];
 
   gravityScale.forEach((g, i) => {
     const sw = scaleW / 5;
-    doc.rect(margin + i * sw, y, sw, 32).fillAndStroke(g.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
-       .text(String(g.level), margin + i * sw, y + 3, { width: sw, align: "center" });
-    doc.fontSize(5).text(g.label, margin + i * sw, y + 17, { width: sw, align: "center" });
+    doc.rect(margin + i * sw, y, sw, 28).fillAndStroke(g.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(g.level), margin + i * sw, y + 2, { width: sw, align: "center" });
+    doc.fontSize(5).text(g.label, margin + i * sw, y + 16, { width: sw, align: "center" });
   });
 
   // Probability scale
   const probX = margin + scaleW + 20;
   doc.rect(probX, y - 16, scaleW, 16).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITE (P)", probX + 5, y - 12);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P)", probX + 5, y - 12);
+
+  const probScale = [
+    { level: 5, label: "Très probable", color: c.darkRed },
+    { level: 4, label: "Probable", color: c.danger },
+    { level: 3, label: "Possible", color: c.orange },
+    { level: 2, label: "Peu probable", color: c.warning },
+    { level: 1, label: "Improbable", color: c.success },
+  ];
 
   probScale.forEach((p, i) => {
     const sw = scaleW / 5;
-    doc.rect(probX + i * sw, y, sw, 32).fillAndStroke(p.color, c.border);
-    doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
-       .text(String(p.level), probX + i * sw, y + 3, { width: sw, align: "center" });
-    doc.fontSize(5).text(p.label, probX + i * sw, y + 17, { width: sw, align: "center" });
+    doc.rect(probX + i * sw, y, sw, 28).fillAndStroke(p.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(p.level), probX + i * sw, y + 2, { width: sw, align: "center" });
+    doc.fontSize(5).text(p.label, probX + i * sw, y + 16, { width: sw, align: "center" });
   });
 
-  // === RIGHT COLUMN ===
+  // === RIGHT COLUMN (SIDE PANEL) ===
   let ry = headerH + 8;
 
   // Photos section
   doc.rect(col2X, ry, col2W, 18).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 8, ry + 4);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📷 PHOTOS DES ÉTAPES", col2X + 8, ry + 4);
   ry += 20;
 
   const photoBoxW = (col2W - 15) / 2;
@@ -1625,75 +1776,96 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
 
   if (photosPlaced === 0) {
     doc.rect(col2X, ry, col2W, 60).fillAndStroke(c.lightBg, c.border);
-    doc.fontSize(9).fillColor(c.lightText).text("Aucune photo", col2X + 10, ry + 25);
+    doc.fontSize(8).fillColor(c.lightText).text("Aucune photo disponible", col2X + 10, ry + 25);
     ry += 65;
   } else if (photoCol !== 0) {
     ry += photoBoxH + 8;
   }
 
-  // === EPI SECTION ===
+  // EPI Section
   ry += 5;
-  doc.rect(col2X, ry, col2W, 16).fill(c.warning);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 8, ry + 3);
-  ry += 16;
+  doc.rect(col2X, ry, col2W, 18).fill(c.warning);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("🦺 EPI OBLIGATOIRES", col2X + 8, ry + 4);
+  ry += 18;
 
   const ppeList = procedure.ppe_required || [];
-  const ppeH = Math.max(45, Math.min(75, ppeList.length * 11 + 10));
+  const ppeH = Math.min(90, Math.max(45, ppeList.length * 11 + 10));
   doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
-
   doc.font("Helvetica").fontSize(7).fillColor(c.text);
-  ppeList.slice(0, 6).forEach((ppe, i) => {
+  ppeList.slice(0, 8).forEach((ppe, i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
-    doc.text("[*] " + ppe, col2X + 5 + col * (col2W/2), ry + 5 + row * 11, { width: col2W/2 - 10 });
+    doc.text("☑ " + ppe, col2X + 5 + col * (col2W / 2), ry + 5 + row * 11, { width: col2W / 2 - 10 });
   });
   ry += ppeH + 5;
 
-  // === SAFETY CODES ===
-  doc.rect(col2X, ry, col2W, 16).fill(c.info);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 8, ry + 3);
-  ry += 16;
+  // Safety Codes
+  doc.rect(col2X, ry, col2W, 18).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📋 CONSIGNES SÉCURITÉ", col2X + 8, ry + 4);
+  ry += 18;
 
   const safetyCodes = procedure.safety_codes || [];
-  const scH = Math.max(35, Math.min(55, safetyCodes.length * 11 + 10));
+  const scH = Math.min(55, Math.max(35, safetyCodes.length * 12 + 8));
   doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
-
   doc.font("Helvetica").fontSize(7).fillColor(c.text);
   safetyCodes.slice(0, 4).forEach((code, i) => {
-    doc.text("[>] " + code, col2X + 5, ry + 5 + i * 11, { width: col2W - 10 });
+    doc.text("▸ " + code, col2X + 5, ry + 5 + i * 12, { width: col2W - 10 });
   });
   ry += scH + 5;
 
-  // === EMERGENCY CONTACTS ===
+  // Emergency Contacts
   const contacts = procedure.emergency_contacts || [];
   if (contacts.length > 0) {
-    doc.rect(col2X, ry, col2W, 16).fill(c.danger);
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("URGENCES", col2X + 8, ry + 3);
-    ry += 16;
-    doc.rect(col2X, ry, col2W, 30).fillAndStroke("#fef2f2", c.danger);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger)
-       .text(contacts[0].name + ": " + contacts[0].phone, col2X + 8, ry + 8);
-    ry += 35;
+    doc.rect(col2X, ry, col2W, 18).fill(c.danger);
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("🚨 CONTACTS URGENCE", col2X + 8, ry + 4);
+    ry += 18;
+    const contactH = Math.min(contacts.length * 18 + 8, 60);
+    doc.rect(col2X, ry, col2W, contactH).fillAndStroke("#fef2f2", c.danger);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger);
+    contacts.slice(0, 3).forEach((contact, i) => {
+      doc.text(`${contact.name}: ${contact.phone}`, col2X + 8, ry + 6 + i * 18, { width: col2W - 16 });
+    });
+    ry += contactH + 5;
   }
 
-  // === RISK SUMMARY ===
-  const summaryY = pageHeight - 70;
-  doc.rect(col2X, summaryY, col2W, 45).fillAndStroke(c.headerBg, c.border);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 8, summaryY + 5);
+  // Risk Summary
+  const summaryY = Math.max(ry, pageHeight - 85);
+  doc.rect(col2X, summaryY, col2W, 60).fillAndStroke(c.headerBg, c.border);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📊 SYNTHÈSE RISQUE", col2X + 8, summaryY + 5);
 
-  doc.fontSize(7).fillColor("#a5b4fc");
-  doc.text(`Initial: G${baseGravity} x P${baseProb} = NIR ${initialRisk}`, col2X + 8, summaryY + 18);
-  doc.text(`Mesures: ${measureScore} (EPI: ${ppeCount}, Codes: ${safetyCount})`, col2X + 8, summaryY + 28);
-  doc.text(`Residuel: G${baseGravity} x P${residualProb} = NIR ${residualRisk}`, col2X + 8, summaryY + 38);
-
-  // === FOOTER ===
-  const footerY = pageHeight - 22;
-  doc.rect(0, footerY, pageWidth, 22).fill(c.headerBg);
+  // Calculate summary from AI analysis
+  let maxNirInitial = 0, maxNirFinal = 0, totalHazards = 0;
+  if (aiAnalysis?.steps) {
+    aiAnalysis.steps.forEach(step => {
+      (step.hazards || []).forEach(h => {
+        const niri = (h.gi || h.gravity || 2) * (h.pi || h.probability || 2);
+        const nirf = (h.gf || h.gi || 2) * (h.pf || 1);
+        if (niri > maxNirInitial) maxNirInitial = niri;
+        if (nirf > maxNirFinal) maxNirFinal = nirf;
+        totalHazards++;
+      });
+    });
+  }
 
   doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
-  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 7);
-  doc.text(`RAMS - ${procedure.title} - v${procedure.version || 1}`, pageWidth/2 - 100, footerY + 7, { width: 200, align: "center" });
-  doc.text(`${new Date().toLocaleString("fr-FR")} | ID: ${procedureId.substring(0, 8)}`, pageWidth - margin - 180, footerY + 7, { width: 180, align: "right" });
+  doc.text(`Dangers identifiés: ${totalHazards}`, col2X + 8, summaryY + 20);
+  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 8, summaryY + 32);
+  doc.text(`NIR max résiduel: ${maxNirFinal}`, col2X + 8, summaryY + 44);
+
+  if (maxNirInitial > 0) {
+    const reduction = Math.round((1 - maxNirFinal / maxNirInitial) * 100);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.success)
+       .text(`Réduction: ${reduction}%`, col2X + col2W / 2, summaryY + 44);
+  }
+
+  // === FOOTER ===
+  const footerY = pageHeight - 20;
+  doc.rect(0, footerY, pageWidth, 20).fill(c.headerBg);
+
+  doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
+  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 6);
+  doc.text(`RAMS - ${procedure.title} - v${procedure.version || 1}`, pageWidth / 2 - 100, footerY + 6, { width: 200, align: "center" });
+  doc.text(`${new Date().toLocaleString("fr-FR")} | ID: ${procedureId.substring(0, 8)}`, pageWidth - margin - 180, footerY + 6, { width: 180, align: "right" });
 
   doc.end();
 
@@ -2965,6 +3137,723 @@ app.post("/api/procedures/ai/analyze-photo", uploadPhoto.single("photo"), async 
     });
   } catch (err) {
     console.error("Error analyzing photo:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// EXAMPLE METHOD STATEMENT - Based on RAMS_B20_ATEX Excel Template
+// Professional RAMS format with complete AI-generated risk analysis
+// ------------------------------
+
+// Example data structure based on RAMS_B20_ATEX_Box117_Box110.xlsx
+const EXAMPLE_RAMS_DATA = {
+  activity: "Remplacement de matériel ATEX non conforme (B20 Box 117) + ajout mises à terre (B20 Box 110)",
+  category: "Maintenance électrique",
+  workDate: new Date().toLocaleDateString("fr-FR"),
+  workTime: "07h00 – 16h30",
+  workers: 2,
+  company: "ElectroHub",
+  approver: "Daniel Palha",
+  riskLevel: "medium",
+  version: 1,
+  steps: [
+    {
+      number: 1,
+      title: "Accès et préparation chantier (B20 – Box 117 / Box 110)",
+      hazards: [
+        {
+          checkbox: "Accès / circulation",
+          danger: "Déplacements dans la zone : risque de trébucher/glisser, heurt avec engins ou piétons.",
+          gi: 3, pi: 2,
+          measures: "Briefing sécurité + repérage. Maintenir cheminement dégagé, rangement permanent, éclairage suffisant.",
+          ppe: ["Chaussures de sécurité S3", "Gilet haute visibilité"],
+          actions: "Rester sur cheminements autorisés. Balisage si proximité d'une voie.",
+          responsible: "Chef d'équipe",
+          gf: 3, pf: 1
+        },
+        {
+          checkbox: "Coactivité",
+          danger: "Coactivité avec autres intervenants : interférences, intrusion dans la zone de travail.",
+          gi: 3, pi: 3,
+          measures: "Coordination avec responsable de zone. Informer les parties prenantes.",
+          ppe: ["Gilet haute visibilité", "Casque de sécurité"],
+          actions: "Définir zones interdites, respecter les consignes site.",
+          responsible: "Superviseur",
+          gf: 3, pf: 1
+        },
+        {
+          checkbox: "Manutention / TMS",
+          danger: "Manutention du matériel : postures contraignantes, charges, pincements.",
+          gi: 2, pi: 3,
+          measures: "Techniques de levage appropriées. Utiliser aides mécaniques si > 15kg.",
+          ppe: ["Gants de manutention"],
+          actions: "Formation gestes et postures. Pauses régulières.",
+          responsible: "Tous",
+          gf: 2, pf: 1
+        }
+      ]
+    },
+    {
+      number: 2,
+      title: "Consignation électrique ATEX",
+      hazards: [
+        {
+          checkbox: "Électrique - ATEX",
+          danger: "Risque d'électrocution lors de la consignation. Arc électrique potentiel.",
+          gi: 5, pi: 3,
+          measures: "Procédure LOTO stricte. Vérification VAT. Cadenas personnel.",
+          ppe: ["Gants isolants classe 00", "Écran facial arc", "Vêtements ARC 8 cal/cm²"],
+          actions: "Identifier tous points de coupure. Afficher pancarte CONSIGNÉ. Test VAT avant intervention.",
+          responsible: "Électricien habilité",
+          gf: 5, pf: 1
+        },
+        {
+          checkbox: "Risque ATEX",
+          danger: "Zone ATEX : risque d'inflammation en cas d'étincelle ou source de chaleur.",
+          gi: 5, pi: 2,
+          measures: "Vérification atmosphère (explosimètre). Outillage certifié ATEX. Pas de flamme nue.",
+          ppe: ["Vêtements antistatiques", "Chaussures ESD"],
+          actions: "Contrôle explosimètre avant et pendant travaux. Permis de feu si nécessaire.",
+          responsible: "Chef d'équipe",
+          gf: 5, pf: 1
+        }
+      ]
+    },
+    {
+      number: 3,
+      title: "Dépose ancien matériel Box 117",
+      hazards: [
+        {
+          checkbox: "Coupures / projections",
+          danger: "Risque de coupure lors de manipulations/outillage ; projections lors de dépose.",
+          gi: 3, pi: 3,
+          measures: "Utiliser outillage adapté. Protéger les yeux. Zone de travail dégagée.",
+          ppe: ["Lunettes de protection", "Gants anti-coupures"],
+          actions: "Inspecter outillage avant usage. Évacuer débris immédiatement.",
+          responsible: "Technicien",
+          gf: 3, pf: 1
+        },
+        {
+          checkbox: "Chute d'objets",
+          danger: "Chute d'outils/visserie/matériel pendant la dépose.",
+          gi: 3, pi: 3,
+          measures: "Utiliser bac de rétention. Attacher outils en hauteur. Zone balisée en dessous.",
+          ppe: ["Casque de sécurité"],
+          actions: "Vérifier fixation avant démontage. Communiquer avec équipier.",
+          responsible: "Tous",
+          gf: 3, pf: 1
+        }
+      ]
+    },
+    {
+      number: 4,
+      title: "Installation du nouveau matériel ATEX",
+      hazards: [
+        {
+          checkbox: "Électrique - ATEX",
+          danger: "Risques électriques lors du câblage. Non-conformité installation ATEX.",
+          gi: 5, pi: 3,
+          measures: "Vérifier certification ATEX du matériel. Serrage au couple. Test isolement.",
+          ppe: ["Gants isolants", "Lunettes de protection"],
+          actions: "Contrôle visuel composants. Mesures d'isolement. Documentation complète.",
+          responsible: "Électricien ATEX",
+          gf: 5, pf: 1
+        },
+        {
+          checkbox: "Ergonomie",
+          danger: "Postures contraignantes lors de l'installation en espace confiné.",
+          gi: 2, pi: 3,
+          measures: "Aménager poste de travail. Alterner les tâches. Micro-pauses.",
+          ppe: ["Genouillères si nécessaire"],
+          actions: "Adapter la position. Utiliser support/établi mobile.",
+          responsible: "Tous",
+          gf: 2, pf: 1
+        }
+      ]
+    },
+    {
+      number: 5,
+      title: "Ajout mises à terre (Box 110)",
+      hazards: [
+        {
+          checkbox: "Électrique",
+          danger: "Contact avec conducteurs lors du raccordement terre. Défaut d'équipotentialité.",
+          gi: 4, pi: 3,
+          measures: "Vérifier hors tension. Utiliser connecteurs appropriés. Test continuité.",
+          ppe: ["Gants isolants", "VAT"],
+          actions: "Mesurer résistance terre < 10Ω. Documenter points de raccordement.",
+          responsible: "Électricien habilité",
+          gf: 4, pf: 1
+        },
+        {
+          checkbox: "Perçage / Poussières",
+          danger: "Projections lors du perçage pour fixation. Poussières métalliques.",
+          gi: 2, pi: 3,
+          measures: "Lunettes obligatoires. Aspiration si possible. Masque FFP2.",
+          ppe: ["Lunettes de protection", "Masque FFP2", "Protections auditives"],
+          actions: "Percer à vitesse adaptée. Nettoyer immédiatement les copeaux.",
+          responsible: "Technicien",
+          gf: 2, pf: 1
+        }
+      ]
+    },
+    {
+      number: 6,
+      title: "Déconsignation et tests",
+      hazards: [
+        {
+          checkbox: "Électrique",
+          danger: "Remise sous tension prématurée. Erreur de manipulation lors des tests.",
+          gi: 5, pi: 2,
+          measures: "Procédure de déconsignation stricte. Vérifier absence de personnel dans la zone.",
+          ppe: ["Gants isolants", "Écran facial"],
+          actions: "Communication claire avant remise tension. Tests progressifs. Mesures électriques.",
+          responsible: "Électricien habilité",
+          gf: 5, pf: 1
+        },
+        {
+          checkbox: "Arc électrique",
+          danger: "Risque d'arc flash lors de la première mise sous tension.",
+          gi: 5, pi: 2,
+          measures: "Distance de sécurité. Équipement ARC. Fermeture armoire avant tension.",
+          ppe: ["Vêtements ARC", "Écran facial ARC"],
+          actions: "Respecter périmètre arc flash. Procédure de mise sous tension sécurisée.",
+          responsible: "Chef d'équipe",
+          gf: 5, pf: 1
+        }
+      ]
+    },
+    {
+      number: 7,
+      title: "Repli et nettoyage",
+      hazards: [
+        {
+          checkbox: "Glissade / Chute",
+          danger: "Sol glissant après nettoyage. Encombrement des passages.",
+          gi: 2, pi: 2,
+          measures: "Nettoyage méthodique. Rangement au fur et à mesure. Signaler sol mouillé.",
+          ppe: ["Chaussures de sécurité"],
+          actions: "Évacuer déchets correctement (tri ATEX). Vérification finale zone.",
+          responsible: "Tous",
+          gf: 2, pf: 1
+        },
+        {
+          checkbox: "Organisation",
+          danger: "Oubli de matériel. Documentation incomplète.",
+          gi: 2, pi: 2,
+          measures: "Check-list de repli. Inventaire outillage. Rapport d'intervention.",
+          ppe: [],
+          actions: "Compléter documentation. Signature rapport. Transmission au client.",
+          responsible: "Chef d'équipe",
+          gf: 2, pf: 1
+        }
+      ]
+    }
+  ],
+  ppeRequired: [
+    "Casque de sécurité",
+    "Lunettes de protection",
+    "Gants isolants classe 00",
+    "Chaussures de sécurité S3 ESD",
+    "Vêtements antistatiques",
+    "Gilet haute visibilité",
+    "Protections auditives",
+    "Écran facial ARC"
+  ],
+  safetyCodes: [
+    "Permis de travail ATEX obligatoire",
+    "Procédure LOTO à respecter",
+    "Contrôle explosimètre avant intervention",
+    "Habilitation électrique B2V-BR minimum"
+  ],
+  emergencyContacts: [
+    { name: "Urgences site", phone: "118 / 144" },
+    { name: "Responsable HSE", phone: "+41 79 XXX XX XX" },
+    { name: "Électricien astreinte", phone: "+41 79 XXX XX XX" }
+  ]
+};
+
+// Generate Example Method Statement PDF - Complete RAMS format
+async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.app') {
+  const data = EXAMPLE_RAMS_DATA;
+
+  // Generate QR Code
+  let qrCodeBuffer = null;
+  try {
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures?example=true&ai=true`, {
+      width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
+    });
+  } catch (e) {
+    console.log("[RAMS Example] QR code error:", e.message);
+  }
+
+  // === PDF SETUP - A3 LANDSCAPE ===
+  const pageWidth = 1190.55;
+  const pageHeight = 841.89;
+  const margin = 20;
+
+  const doc = new PDFDocument({
+    size: [pageWidth, pageHeight],
+    margins: { top: margin, bottom: margin, left: margin, right: margin },
+    bufferPages: true,
+    autoFirstPage: true,
+    info: {
+      Title: `RAMS Exemple - ${data.activity}`,
+      Author: data.company,
+      Subject: "Risk Assessment Method Statement - Exemple ATEX",
+      Creator: "ElectroHub RAMS Generator v2",
+    },
+  });
+
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+
+  // Colors
+  const c = {
+    headerBg: "#1e1b4b",
+    primary: "#7c3aed",
+    danger: "#dc2626",
+    warning: "#f59e0b",
+    success: "#16a34a",
+    info: "#2563eb",
+    text: "#1f2937",
+    lightText: "#6b7280",
+    lightBg: "#f8fafc",
+    border: "#d1d5db",
+    white: "#ffffff",
+    darkRed: "#7f1d1d",
+    orange: "#ea580c",
+  };
+
+  // Risk color function
+  const getRiskColor = (nir) => {
+    if (nir >= 15) return c.darkRed;
+    if (nir >= 10) return c.danger;
+    if (nir >= 5) return c.warning;
+    return c.success;
+  };
+
+  const getGravityColor = (g) => {
+    if (g >= 5) return c.darkRed;
+    if (g >= 4) return c.danger;
+    if (g >= 3) return c.orange;
+    if (g >= 2) return c.warning;
+    return c.success;
+  };
+
+  // === PAGE 1: HEADER + RISK TABLE ===
+
+  // Header background
+  const headerH = 65;
+  doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
+
+  // Company name / Logo area
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.white)
+     .text(data.company.toUpperCase(), margin + 5, 12);
+
+  // Method Statement badge
+  doc.roundedRect(margin + 5, 32, 140, 24, 4).fill(c.primary);
+  doc.fontSize(12).fillColor(c.white).text("METHOD STATEMENT", margin + 15, 38);
+
+  // Main title centered
+  const titleW = 550;
+  const titleX = (pageWidth - titleW) / 2;
+  doc.fontSize(14).fillColor(c.white)
+     .text(data.activity.toUpperCase(), titleX, 10, { width: titleW, align: "center" });
+  doc.fontSize(9).fillColor("#a5b4fc")
+     .text(`Activité: ${data.category} | Version ${data.version} | ${data.workDate}`, titleX, 32, { width: titleW, align: "center" });
+  doc.fontSize(8).fillColor("#94a3b8")
+     .text(`Date de travaux: ${data.workDate} | Heure: ${data.workTime} | Collaborateurs: ${data.workers}`, titleX, 46, { width: titleW, align: "center" });
+
+  // Risk badge
+  const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.darkRed };
+  const riskLabels = { low: "FAIBLE", medium: "MODÉRÉ", high: "ÉLEVÉ", critical: "CRITIQUE" };
+  doc.roundedRect(pageWidth - 175, 8, 75, 48, 5).fill(riskColors[data.riskLevel]);
+  doc.fontSize(8).fillColor(c.white).text("RISQUE", pageWidth - 170, 14, { width: 65, align: "center" });
+  doc.fontSize(13).text(riskLabels[data.riskLevel], pageWidth - 170, 30, { width: 65, align: "center" });
+
+  // QR Code
+  if (qrCodeBuffer) {
+    try {
+      doc.image(qrCodeBuffer, pageWidth - margin - 70, 5, { width: 55 });
+    } catch (e) {}
+  }
+
+  // === CONTENT LAYOUT ===
+  let y = headerH + 8;
+  const contentW = pageWidth - margin * 2;
+  const col1W = contentW * 0.70; // Main table area
+  const col2W = contentW * 0.28; // Side panel
+  const col2X = margin + col1W + 15;
+
+  // === REGULATORY NOTE ===
+  doc.roundedRect(margin, y, col1W, 35, 3).fillAndStroke("#fef3c7", c.warning);
+  doc.font("Helvetica").fontSize(6).fillColor(c.text)
+     .text("Règlementation: Les jeunes de 13/18 ans doivent respecter les exigences réglementaires (OLT5). Les entreprises externes doivent détenir une autorisation de travail valide. Zone ATEX - Respect strict des procédures anti-explosion.", margin + 8, y + 6, { width: col1W - 16 });
+  doc.font("Helvetica-Bold").fontSize(6).fillColor(c.danger)
+     .text("⚠ REVUE OBLIGATOIRE Construction Safety si NIR > 9 post mitigation", margin + 8, y + 22, { width: col1W - 16 });
+  y += 40;
+
+  // === MAIN RISK TABLE HEADER ===
+  doc.rect(margin, y, col1W, 20).fill(c.danger);
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+     .text("ANALYSE DES RISQUES - MÉTHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 10, y + 5);
+  y += 20;
+
+  // Table column headers - matching Excel structure
+  const tableHeaderH = 35;
+
+  // Define columns (proportional to Excel)
+  const colWidths = {
+    n: 28,
+    task: col1W * 0.14,
+    danger: col1W * 0.18,
+    gi: 28,
+    pi: 28,
+    niri: 32,
+    measures: col1W * 0.18,
+    ppe: col1W * 0.10,
+    actions: col1W * 0.12,
+    resp: 45,
+    gf: 28,
+    pf: 28,
+    nirf: 32
+  };
+
+  // Header row 1 - Evaluation labels
+  doc.rect(margin, y, col1W, 15).fill(c.lightBg).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text);
+
+  let hx = margin + colWidths.n + colWidths.task + colWidths.danger;
+  doc.text("ÉVALUATION INITIALE", hx, y + 4, { width: colWidths.gi + colWidths.pi + colWidths.niri, align: "center" });
+  hx += colWidths.gi + colWidths.pi + colWidths.niri + colWidths.measures + colWidths.ppe + colWidths.actions + colWidths.resp;
+  doc.text("ÉVALUATION FINALE", hx, y + 4, { width: colWidths.gf + colWidths.pf + colWidths.nirf, align: "center" });
+  y += 15;
+
+  // Header row 2 - Column names
+  doc.rect(margin, y, col1W, tableHeaderH - 15).fill(c.lightBg).stroke(c.border);
+  doc.font("Helvetica-Bold").fontSize(6).fillColor(c.text);
+
+  const headers = [
+    { label: "N", w: colWidths.n },
+    { label: "TÂCHE / ACTIVITÉ", w: colWidths.task },
+    { label: "DANGER - SCÉNARIO", w: colWidths.danger },
+    { label: "G", w: colWidths.gi },
+    { label: "P", w: colWidths.pi },
+    { label: "NIR", w: colWidths.niri },
+    { label: "MESURES PRÉVENTIVES", w: colWidths.measures },
+    { label: "EPI", w: colWidths.ppe },
+    { label: "ACTIONS DÉTAILLÉES", w: colWidths.actions },
+    { label: "RESP.", w: colWidths.resp },
+    { label: "G", w: colWidths.gf },
+    { label: "P", w: colWidths.pf },
+    { label: "NIR", w: colWidths.nirf }
+  ];
+
+  hx = margin;
+  headers.forEach((h, i) => {
+    const align = i < 3 || i >= 6 && i < 10 ? "left" : "center";
+    doc.text(h.label, hx + 2, y + 5, { width: h.w - 4, align });
+    if (i < headers.length - 1) {
+      doc.moveTo(hx + h.w, y).lineTo(hx + h.w, y + tableHeaderH - 15).stroke(c.border);
+    }
+    hx += h.w;
+  });
+  y += tableHeaderH - 15;
+
+  // === TABLE ROWS ===
+  const maxTableY = pageHeight - 130;
+  let rowCount = 0;
+
+  for (const step of data.steps) {
+    if (y > maxTableY - 30) {
+      // Add new page if needed
+      doc.addPage();
+      y = margin;
+      // Re-draw header on new page
+      doc.rect(margin, y, col1W, 18).fill(c.danger);
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text("ANALYSE DES RISQUES (suite)", margin + 10, y + 4);
+      y += 20;
+    }
+
+    for (let hi = 0; hi < step.hazards.length; hi++) {
+      const hazard = step.hazards[hi];
+      const isFirst = hi === 0;
+      const rowH = 32;
+      const isEven = rowCount % 2 === 0;
+
+      doc.rect(margin, y, col1W, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
+
+      let rx = margin;
+
+      // N (step number) - only on first hazard of step
+      if (isFirst) {
+        doc.circle(rx + colWidths.n / 2, y + rowH / 2, 10).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+           .text(String(step.number), rx + colWidths.n / 2 - 4, y + rowH / 2 - 5);
+      }
+      rx += colWidths.n;
+
+      // Task/Activity
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(c.text);
+      if (isFirst) {
+        doc.text(step.title.substring(0, 40), rx + 2, y + 4, { width: colWidths.task - 4 });
+      }
+      rx += colWidths.task;
+
+      // Danger with checkbox
+      doc.font("Helvetica-Bold").fontSize(6).fillColor(c.danger)
+         .text(`☐ ${hazard.checkbox}`, rx + 2, y + 3, { width: colWidths.danger - 4 });
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.danger.substring(0, 70), rx + 2, y + 12, { width: colWidths.danger - 4 });
+      rx += colWidths.danger;
+
+      // G initial
+      const niri = hazard.gi * hazard.pi;
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(hazard.gi));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.gi), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.gi;
+
+      // P initial
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(hazard.pi));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.pi), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.pi;
+
+      // NIR initial
+      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(niri));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(niri), rx + 2, y + 11, { width: 28, align: "center" });
+      rx += colWidths.niri;
+
+      // Measures
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.measures.substring(0, 70), rx + 2, y + 4, { width: colWidths.measures - 4 });
+      rx += colWidths.measures;
+
+      // PPE
+      doc.font("Helvetica").fontSize(5).fillColor(c.info)
+         .text(hazard.ppe.slice(0, 2).join(", ").substring(0, 35), rx + 2, y + 4, { width: colWidths.ppe - 4 });
+      rx += colWidths.ppe;
+
+      // Actions
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.actions.substring(0, 50), rx + 2, y + 4, { width: colWidths.actions - 4 });
+      rx += colWidths.actions;
+
+      // Responsible
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(hazard.responsible, rx + 2, y + 12, { width: colWidths.resp - 4, align: "center" });
+      rx += colWidths.resp;
+
+      // G final
+      const nirf = hazard.gf * hazard.pf;
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(hazard.gf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.gf), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.gf;
+
+      // P final
+      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(hazard.pf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(hazard.pf), rx + 3, y + 11, { width: 22, align: "center" });
+      rx += colWidths.pf;
+
+      // NIR final
+      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(nirf));
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
+         .text(String(nirf), rx + 2, y + 11, { width: 28, align: "center" });
+
+      y += rowH;
+      rowCount++;
+    }
+  }
+
+  // === RISK SCALES ===
+  y = Math.max(y + 10, maxTableY - 60);
+  const scaleW = (col1W - 20) / 2;
+
+  // Gravity scale
+  doc.rect(margin, y, scaleW, 16).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("GRAVITÉ (G)", margin + 5, y + 4);
+  y += 16;
+
+  const gravityScale = [
+    { level: 5, label: "Catastrophique", color: c.darkRed },
+    { level: 4, label: "Critique", color: c.danger },
+    { level: 3, label: "Grave", color: c.orange },
+    { level: 2, label: "Important", color: c.warning },
+    { level: 1, label: "Mineure", color: c.success },
+  ];
+
+  gravityScale.forEach((g, i) => {
+    const sw = scaleW / 5;
+    doc.rect(margin + i * sw, y, sw, 28).fillAndStroke(g.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(g.level), margin + i * sw, y + 2, { width: sw, align: "center" });
+    doc.fontSize(5).text(g.label, margin + i * sw, y + 16, { width: sw, align: "center" });
+  });
+
+  // Probability scale
+  const probX = margin + scaleW + 20;
+  doc.rect(probX, y - 16, scaleW, 16).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PROBABILITÉ (P)", probX + 5, y - 12);
+
+  const probScale = [
+    { level: 5, label: "Très probable", color: c.darkRed },
+    { level: 4, label: "Probable", color: c.danger },
+    { level: 3, label: "Possible", color: c.orange },
+    { level: 2, label: "Peu probable", color: c.warning },
+    { level: 1, label: "Improbable", color: c.success },
+  ];
+
+  probScale.forEach((p, i) => {
+    const sw = scaleW / 5;
+    doc.rect(probX + i * sw, y, sw, 28).fillAndStroke(p.color, c.border);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white)
+       .text(String(p.level), probX + i * sw, y + 2, { width: sw, align: "center" });
+    doc.fontSize(5).text(p.label, probX + i * sw, y + 16, { width: sw, align: "center" });
+  });
+
+  // === RIGHT COLUMN (SIDE PANEL) ===
+  let ry = headerH + 8;
+
+  // Photos section header
+  doc.rect(col2X, ry, col2W, 18).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📷 PHOTOS DES ÉTAPES", col2X + 8, ry + 4);
+  ry += 20;
+
+  // Photos placeholder (in real implementation, this would show actual photos)
+  doc.rect(col2X, ry, col2W, 100).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(8).fillColor(c.lightText)
+     .text("Photos des étapes ajoutées lors de la création de la procédure", col2X + 10, ry + 20, { width: col2W - 20, align: "center" });
+  doc.fontSize(7).fillColor(c.info)
+     .text("Les photos sont générées automatiquement lors de l'intervention et intégrées au Method Statement", col2X + 10, ry + 50, { width: col2W - 20, align: "center" });
+  ry += 105;
+
+  // EPI Section
+  doc.rect(col2X, ry, col2W, 18).fill(c.warning);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("🦺 EPI OBLIGATOIRES", col2X + 8, ry + 4);
+  ry += 18;
+
+  const ppeH = Math.min(90, data.ppeRequired.length * 11 + 10);
+  doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  data.ppeRequired.slice(0, 8).forEach((ppe, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    doc.text("☑ " + ppe, col2X + 5 + col * (col2W / 2), ry + 5 + row * 11, { width: col2W / 2 - 10 });
+  });
+  ry += ppeH + 5;
+
+  // Safety Codes Section
+  doc.rect(col2X, ry, col2W, 18).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📋 CONSIGNES SÉCURITÉ", col2X + 8, ry + 4);
+  ry += 18;
+
+  const scH = Math.min(55, data.safetyCodes.length * 12 + 8);
+  doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  data.safetyCodes.forEach((code, i) => {
+    doc.text("▸ " + code, col2X + 5, ry + 5 + i * 12, { width: col2W - 10 });
+  });
+  ry += scH + 5;
+
+  // Emergency Contacts
+  doc.rect(col2X, ry, col2W, 18).fill(c.danger);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("🚨 CONTACTS URGENCE", col2X + 8, ry + 4);
+  ry += 18;
+
+  const contactH = data.emergencyContacts.length * 18 + 8;
+  doc.rect(col2X, ry, col2W, contactH).fillAndStroke("#fef2f2", c.danger);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger);
+  data.emergencyContacts.forEach((contact, i) => {
+    doc.text(`${contact.name}: ${contact.phone}`, col2X + 8, ry + 6 + i * 18, { width: col2W - 16 });
+  });
+  ry += contactH + 5;
+
+  // Risk Summary
+  const summaryY = Math.max(ry, pageHeight - 85);
+  doc.rect(col2X, summaryY, col2W, 60).fillAndStroke(c.headerBg, c.border);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("📊 SYNTHÈSE RISQUE", col2X + 8, summaryY + 5);
+
+  // Calculate summary stats
+  let maxNirInitial = 0, maxNirFinal = 0, totalHazards = 0;
+  data.steps.forEach(step => {
+    step.hazards.forEach(h => {
+      const niri = h.gi * h.pi;
+      const nirf = h.gf * h.pf;
+      if (niri > maxNirInitial) maxNirInitial = niri;
+      if (nirf > maxNirFinal) maxNirFinal = nirf;
+      totalHazards++;
+    });
+  });
+
+  doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
+  doc.text(`Dangers identifiés: ${totalHazards}`, col2X + 8, summaryY + 20);
+  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 8, summaryY + 32);
+  doc.text(`NIR max résiduel: ${maxNirFinal}`, col2X + 8, summaryY + 44);
+
+  // Risk reduction indicator
+  const reduction = Math.round((1 - maxNirFinal / maxNirInitial) * 100);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.success)
+     .text(`Réduction: ${reduction}%`, col2X + col2W / 2, summaryY + 44);
+
+  // === FOOTER ===
+  const footerY = pageHeight - 20;
+  doc.rect(0, footerY, pageWidth, 20).fill(c.headerBg);
+
+  doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
+  doc.text(`${data.company} - RAMS Example`, margin, footerY + 6);
+  doc.text(`Document généré par IA - ${new Date().toLocaleString("fr-FR")}`, pageWidth / 2 - 100, footerY + 6, { width: 200, align: "center" });
+  doc.text(`Template basé sur RAMS_B20_ATEX`, pageWidth - margin - 180, footerY + 6, { width: 180, align: "right" });
+
+  doc.end();
+
+  return new Promise((resolve) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+// API Endpoint: Generate Example Method Statement PDF
+app.get("/api/procedures/example-method-statement-pdf", async (req, res) => {
+  try {
+    console.log("[RAMS] Generating example Method Statement PDF...");
+
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    const pdfBuffer = await generateExampleMethodStatementPDF(baseUrl);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="RAMS_Exemple_ATEX_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    console.log("[RAMS] Example PDF generated successfully");
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("[RAMS] Error generating example PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API Endpoint: Generate Example Method Statement (returns procedure data)
+app.post("/api/procedures/generate-example-method-statement", async (req, res) => {
+  try {
+    // Return the example data structure for display/editing
+    res.json({
+      success: true,
+      data: EXAMPLE_RAMS_DATA,
+      message: "Exemple RAMS ATEX généré avec succès"
+    });
+  } catch (err) {
+    console.error("Error generating example:", err);
     res.status(500).json({ error: err.message });
   }
 });

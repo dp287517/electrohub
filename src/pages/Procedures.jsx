@@ -3,13 +3,15 @@ import {
   Plus, Search, Filter, FileText, AlertTriangle, Shield,
   Wrench, Play, PowerOff, CheckCircle, Book, Download,
   ChevronDown, Grid, List, Clock, User, Building,
-  Sparkles, X, Loader2
+  Sparkles, X, Loader2, FileSpreadsheet, Zap
 } from 'lucide-react';
 import { ProcedureCreator, ProcedureViewer } from '../components/Procedures';
 import {
   listProcedures,
   getCategories,
   downloadProcedurePdf,
+  downloadExampleMethodStatementPdf,
+  generateExampleMethodStatement,
   RISK_LEVELS,
   STATUS_LABELS,
 } from '../lib/procedures-api';
@@ -150,6 +152,20 @@ export default function Procedures() {
   const [showCreator, setShowCreator] = useState(false);
   const [selectedProcedure, setSelectedProcedure] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [generatingExample, setGeneratingExample] = useState(false);
+
+  // Generate Example Method Statement (ATEX Demo based on Excel reference)
+  const handleGenerateExample = async () => {
+    setGeneratingExample(true);
+    try {
+      await downloadExampleMethodStatementPdf();
+    } catch (error) {
+      console.error('Error generating example:', error);
+      alert('Erreur lors de la génération de l\'exemple. Veuillez réessayer.');
+    } finally {
+      setGeneratingExample(false);
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -198,13 +214,30 @@ export default function Procedures() {
             <h1 className="text-2xl font-bold text-gray-900">Procédures Opérationnelles</h1>
             <p className="text-gray-500 mt-1">Créez et gérez vos procédures de maintenance et sécurité</p>
           </div>
-          <button
-            onClick={() => setShowCreator(true)}
-            className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-medium hover:from-violet-700 hover:to-purple-700 transition-all flex items-center gap-2 shadow-lg shadow-violet-200"
-          >
-            <Plus className="w-5 h-5" />
-            Nouvelle procédure
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Example Method Statement Button */}
+            <button
+              onClick={handleGenerateExample}
+              disabled={generatingExample}
+              className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2 shadow-lg shadow-amber-200 disabled:opacity-50"
+              title="Générer un Method Statement d'exemple basé sur le template ATEX"
+            >
+              {generatingExample ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-5 h-5" />
+              )}
+              {generatingExample ? 'Génération...' : 'Exemple RAMS'}
+            </button>
+
+            <button
+              onClick={() => setShowCreator(true)}
+              className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-medium hover:from-violet-700 hover:to-purple-700 transition-all flex items-center gap-2 shadow-lg shadow-violet-200"
+            >
+              <Plus className="w-5 h-5" />
+              Nouvelle procédure
+            </button>
+          </div>
         </div>
 
         {/* Search and Filters */}
