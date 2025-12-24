@@ -9,6 +9,7 @@ import {
   ClipboardList, Camera, Image, Upload
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
+import { ProcedureCreator } from '../Procedures';
 import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -146,6 +147,9 @@ export default function AvatarChat({
   const [photoPreview, setPhotoPreview] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileUploadMode, setFileUploadMode] = useState(null); // 'import-document' | 'analyze-report'
+  // Procedure Creator modal
+  const [showProcedureCreator, setShowProcedureCreator] = useState(false);
+  const [procedureCreatorContext, setProcedureCreatorContext] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -426,6 +430,50 @@ export default function AvatarChat({
     stopSpeaking();
     setShowQuickActions(false);
 
+    const msgLower = messageText.toLowerCase();
+
+    // >>> DETECTION: Créer une procédure → Ouvrir ProcedureCreator
+    const wantsProcedure = (
+      (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
+      (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
+       msgLower.includes('nouvelle') || msgLower.includes('ajouter') || msgLower.includes('commencer'))
+    );
+
+    if (wantsProcedure) {
+      // Ouvrir le ProcedureCreator avec le contexte
+      setProcedureCreatorContext({ userMessage: messageText });
+      setShowProcedureCreator(true);
+      setInput('');
+      return;
+    }
+
+    // >>> DETECTION: Importer un document
+    const wantsImport = (
+      (msgLower.includes('import') || msgLower.includes('charger') || msgLower.includes('uploader')) &&
+      (msgLower.includes('document') || msgLower.includes('procédure') || msgLower.includes('fichier'))
+    );
+
+    if (wantsImport) {
+      setProcedureCreatorContext({ mode: 'import' });
+      setShowProcedureCreator(true);
+      setInput('');
+      return;
+    }
+
+    // >>> DETECTION: Analyser un rapport
+    const wantsReport = (
+      (msgLower.includes('rapport') || msgLower.includes('audit') || msgLower.includes('inspection')) &&
+      (msgLower.includes('analys') || msgLower.includes('action') || msgLower.includes('import'))
+    );
+
+    if (wantsReport) {
+      setProcedureCreatorContext({ mode: 'report' });
+      setShowProcedureCreator(true);
+      setInput('');
+      return;
+    }
+
+    // >>> Sinon, envoyer au chat AI normal
     const userMessage = {
       id: Date.now(),
       role: 'user',
@@ -890,6 +938,36 @@ export default function AvatarChat({
           )}
         </div>
       </div>
+
+      {/* ProcedureCreator Modal - Ouvre quand l'utilisateur veut créer/importer une procédure */}
+      {showProcedureCreator && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <ProcedureCreator
+            initialContext={procedureCreatorContext}
+            onProcedureCreated={(procedure) => {
+              setShowProcedureCreator(false);
+              setProcedureCreatorContext(null);
+              // Ajouter un message de confirmation
+              const successMessage = {
+                id: Date.now(),
+                role: 'assistant',
+                content: `✅ **Procédure créée !**\n\n📋 **${procedure.title}**\n\n[📥 Télécharger le PDF](/api/procedures/${procedure.id}/pdf)\n\nJe l'ai sauvegardée. Tu peux me demander de la relire ou de te guider !`,
+                actions: [
+                  { label: 'Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` },
+                  { label: 'Voir mes procédures', prompt: 'Montre-moi mes procédures' }
+                ],
+                timestamp: new Date()
+              };
+              setMessages(prev => [...prev, successMessage]);
+              speak(successMessage.content);
+            }}
+            onClose={() => {
+              setShowProcedureCreator(false);
+              setProcedureCreatorContext(null);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
