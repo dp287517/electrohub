@@ -5,9 +5,11 @@ import {
   AlertTriangle, Calendar, Search, FileText,
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
-  Volume2, VolumeX, BarChart3, Play, Loader2
+  Volume2, VolumeX, BarChart3, Play, Loader2,
+  ClipboardList
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
+import { ProcedureCreator } from '../Procedures';
 import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -87,6 +89,12 @@ function AIChart({ chart }) {
 // Suggestions contextuelles
 const QUICK_ACTIONS = [
   {
+    icon: ClipboardList,
+    label: 'Créer une procédure',
+    prompt: 'Je veux créer une procédure',
+    color: 'text-violet-600 bg-violet-50'
+  },
+  {
     icon: AlertTriangle,
     label: 'Non-conformités',
     prompt: 'Montre-moi un résumé des non-conformités actuelles et propose des actions.',
@@ -134,6 +142,10 @@ export default function AvatarChat({
   const [isMuted, setIsMuted] = useState(() => {
     return localStorage.getItem('eh_avatar_muted') === 'true';
   });
+  // Procedure mode state
+  const [showProcedureCreator, setShowProcedureCreator] = useState(false);
+  const [procedureContext, setProcedureContext] = useState(null);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const speechSynthRef = useRef(null);
@@ -333,6 +345,26 @@ Comment puis-je vous aider aujourd'hui ?`,
         conversationHistory: messages.slice(-10) // Derniers 10 messages pour contexte
       });
 
+      // Check if AI wants to launch procedure mode
+      if (response.launchMode === 'procedure') {
+        const assistantMessage = {
+          id: Date.now() + 1,
+          role: 'assistant',
+          content: response.message,
+          provider: response.provider,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+        speak(response.message);
+
+        // Launch procedure creator after a short delay
+        setTimeout(() => {
+          setProcedureContext(response.procedureContext);
+          setShowProcedureCreator(true);
+        }, 1500);
+        return;
+      }
+
       const assistantMessage = {
         id: Date.now() + 1,
         role: 'assistant',
@@ -370,7 +402,35 @@ Comment puis-je vous aider aujourd'hui ?`,
     handleSend(action.prompt);
   };
 
+  // Handle procedure creator close
+  const handleProcedureClose = useCallback((savedProcedure) => {
+    setShowProcedureCreator(false);
+    setProcedureContext(null);
+
+    if (savedProcedure) {
+      // Add a success message to the chat
+      const successMessage = {
+        id: Date.now(),
+        role: 'assistant',
+        content: `✅ **Procédure créée avec succès !**\n\n• Titre: **${savedProcedure.title}**\n• ${savedProcedure.steps?.length || 0} étapes documentées\n\nLa procédure est maintenant disponible dans la section "Procédures".`,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, successMessage]);
+      speak(successMessage.content);
+    }
+  }, [speak]);
+
   if (!isOpen) return null;
+
+  // Show ProcedureCreator if in procedure mode
+  if (showProcedureCreator) {
+    return (
+      <ProcedureCreator
+        onClose={handleProcedureClose}
+        initialContext={procedureContext}
+      />
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">

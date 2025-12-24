@@ -56,7 +56,7 @@ function OptionButton({ label, onClick, selected }) {
   );
 }
 
-export default function ProcedureCreator({ onProcedureCreated, onClose }) {
+export default function ProcedureCreator({ onProcedureCreated, onClose, initialContext }) {
   const [mode, setMode] = useState('choose'); // choose, guided, import, report
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -73,6 +73,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose }) {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
+
+  // Auto-start guided mode if launched from chat with context
+  useEffect(() => {
+    if (initialContext?.initialSubject || initialContext?.userMessage) {
+      const initMessage = initialContext.initialSubject
+        ? `Je veux créer une procédure pour: ${initialContext.initialSubject}`
+        : initialContext.userMessage || 'Je veux créer une nouvelle procédure';
+      startGuidedSession(initMessage);
+    }
+  }, [initialContext]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -157,6 +167,10 @@ export default function ProcedureCreator({ onProcedureCreated, onClose }) {
       const procedure = await finalizeAISession(sessionId);
       if (onProcedureCreated) {
         onProcedureCreated(procedure);
+      }
+      // Also call onClose with the procedure for chat integration
+      if (onClose) {
+        onClose(procedure);
       }
     } catch (error) {
       console.error('Error finalizing procedure:', error);
