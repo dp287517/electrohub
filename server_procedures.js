@@ -843,6 +843,7 @@ async function ensureSchema() {
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS approved_by TEXT",
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ",
+    "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS ai_rams_analysis JSONB",  // Pre-generated AI risk analysis
   ];
   for (const sql of alterColumns) {
     try { await pool.query(sql); } catch {}
@@ -1628,11 +1629,28 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   }
 
   // === RISK ANALYSIS ===
-  // Using instant fallback analysis to prevent Render timeout (AI analysis took >20s)
-  // AI analysis can be cached during finalize for future optimization
-  console.log("[RAMS] Generating risk analysis for procedure:", procedure.title);
-  const aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
-  console.log("[RAMS] Risk analysis completed - Global risk:", aiAnalysis.global_assessment?.overall_risk);
+  // Use pre-generated AI analysis from database (generated during finalize)
+  // Fall back to instant generation if not found
+  let aiAnalysis = null;
+
+  // Check for stored AI analysis first
+  if (procedure.ai_rams_analysis) {
+    try {
+      aiAnalysis = typeof procedure.ai_rams_analysis === 'string'
+        ? JSON.parse(procedure.ai_rams_analysis)
+        : procedure.ai_rams_analysis;
+      console.log("[RAMS] Using stored AI analysis - Global risk:", aiAnalysis.global_assessment?.overall_risk);
+    } catch (e) {
+      console.log("[RAMS] Error parsing stored analysis:", e.message);
+    }
+  }
+
+  // Generate if not found or invalid
+  if (!aiAnalysis || !aiAnalysis.steps) {
+    console.log("[RAMS] No stored analysis, generating fallback for procedure:", procedure.title);
+    aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
+    console.log("[RAMS] Fallback analysis completed - Global risk:", aiAnalysis.global_assessment?.overall_risk);
+  }
 
   // Build hazards map from AI analysis
   const aiHazardsMap = new Map();
@@ -3152,6 +3170,40 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
       `UPDATE procedure_ai_sessions SET procedure_id = $1 WHERE id = $2`,
       [procedure.id, sessionId]
     );
+
+    // === PRE-GENERATE AI RAMS ANALYSIS ===
+    // Generate and store AI analysis now, so PDF download is instant
+    try {
+      console.log(`[RAMS] Pre-generating AI analysis for procedure: ${procedure.title}`);
+
+      // Get the steps we just created
+      const { rows: createdSteps } = await pool.query(
+        `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+        [procedure.id]
+      );
+
+      // Try AI analysis first, fallback if fails
+      let ramsAnalysis = null;
+      try {
+        ramsAnalysis = await analyzeRisksWithAI(procedure, createdSteps);
+        console.log(`[RAMS] AI analysis completed - ${ramsAnalysis?.steps?.length || 0} steps analyzed`);
+      } catch (aiErr) {
+        console.log(`[RAMS] AI analysis failed, using fallback: ${aiErr.message}`);
+        ramsAnalysis = generateFallbackRiskAnalysis(procedure, createdSteps);
+      }
+
+      // Store the analysis in the database
+      if (ramsAnalysis) {
+        await pool.query(
+          `UPDATE procedures SET ai_rams_analysis = $1 WHERE id = $2`,
+          [JSON.stringify(ramsAnalysis), procedure.id]
+        );
+        console.log(`[RAMS] Analysis stored for procedure ${procedure.id}`);
+      }
+    } catch (analysisErr) {
+      console.error(`[RAMS] Pre-generation error (non-blocking): ${analysisErr.message}`);
+      // Don't block the finalization if analysis fails
+    }
 
     res.status(201).json(procedure);
   } catch (err) {
