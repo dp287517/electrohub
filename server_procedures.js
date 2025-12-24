@@ -1728,77 +1728,91 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
 
   const riskLevel = procedure.risk_level || 'low';
 
-  // === HEADER SECTION ===
+  // === HEADER SECTION - Properly spaced layout ===
   const headerH = 65;
   doc.rect(0, 0, pageWidth, headerH).fill(c.headerBg);
 
-  // Logo / Company
+  // LEFT SECTION: Logo + Company (200px)
+  const leftSectionW = 200;
   let logoX = margin;
   if (siteSettings.logo) {
     try {
       doc.image(siteSettings.logo, margin, 8, { height: 48 });
-      logoX = margin + 65;
+      logoX = margin + 55;
     } catch (e) {}
   }
 
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.headerText)
-     .text(siteSettings.company_name || "ELECTROHUB", logoX + 5, 10);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.headerText)
+     .text(siteSettings.company_name || "ELECTROHUB", logoX + 5, 8, { width: leftSectionW - logoX + margin });
 
   // Method Statement badge
-  doc.roundedRect(logoX + 5, 30, 140, 24, 4).fill(c.primary);
-  doc.fontSize(11).fillColor(c.white).text("METHOD STATEMENT", logoX + 15, 36);
+  doc.roundedRect(logoX + 5, 28, 130, 22, 4).fill(c.primary);
+  doc.fontSize(10).fillColor(c.white).text("METHOD STATEMENT", logoX + 12, 33);
 
-  // Title centered - black text on green
-  const titleW = 500;
-  const titleX = (pageWidth - titleW) / 2;
-  doc.fontSize(13).fillColor(c.headerText)
-     .text(procedure.title.toUpperCase(), titleX, 8, { width: titleW, align: "center" });
-  doc.fontSize(9).fillColor("#1a5c00")
-     .text(`Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`, titleX, 28, { width: titleW, align: "center" });
-  doc.fontSize(8).fillColor("#2d7a00")
-     .text(`Site: ${procedure.site || 'N/A'} | Batiment: ${procedure.building || 'N/A'}`, titleX, 44, { width: titleW, align: "center" });
+  // RIGHT SECTION: Risk badge + QR (150px)
+  const rightSectionW = 150;
+  const rightSectionX = pageWidth - margin - rightSectionW;
 
   // Risk badge
   const riskColors = { low: c.success, medium: c.warning, high: c.danger, critical: c.darkRed };
   const riskLabels = { low: "FAIBLE", medium: "MODÉRÉ", high: "ÉLEVÉ", critical: "CRITIQUE" };
-  doc.roundedRect(pageWidth - 175, 8, 75, 48, 5).fill(riskColors[riskLevel] || c.success);
-  doc.fontSize(8).fillColor(c.white).text("RISQUE", pageWidth - 170, 14, { width: 65, align: "center" });
-  doc.fontSize(13).text(riskLabels[riskLevel] || "FAIBLE", pageWidth - 170, 30, { width: 65, align: "center" });
+  doc.roundedRect(rightSectionX, 8, 70, 48, 5).fill(riskColors[riskLevel] || c.success);
+  doc.fontSize(7).fillColor(c.white).text("RISQUE", rightSectionX + 5, 14, { width: 60, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(11).text(riskLabels[riskLevel] || "FAIBLE", rightSectionX + 5, 30, { width: 60, align: "center" });
 
   // QR Code
   if (qrCodeBuffer) {
     try {
-      doc.image(qrCodeBuffer, pageWidth - margin - 70, 5, { width: 55 });
+      doc.image(qrCodeBuffer, rightSectionX + 80, 6, { width: 52 });
     } catch (e) {}
   }
 
-  // === CONTENT LAYOUT - Fixed proportions to avoid overlap ===
+  // CENTER SECTION: Title (between left and right sections)
+  const titleX = margin + leftSectionW + 10;
+  const titleW = rightSectionX - titleX - 15;
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(c.headerText)
+     .text(procedure.title.toUpperCase(), titleX, 6, { width: titleW, align: "center" });
+  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
+     .text(`Activite: ${procedure.category || "Generale"} | Version ${procedure.version || 1} | ${new Date().toLocaleDateString("fr-FR")}`, titleX, 26, { width: titleW, align: "center" });
+  doc.fontSize(7).fillColor("#2d7a00")
+     .text(`Site: ${procedure.site || 'N/A'} | Batiment: ${procedure.building || 'N/A'}`, titleX, 42, { width: titleW, align: "center" });
+
+  // === CONTENT LAYOUT - Precise proportions to avoid overlap ===
   let y = headerH + 8;
   const contentW = pageWidth - margin * 2;
-  const sidebarW = 260;  // Fixed sidebar width
-  const col1W = contentW - sidebarW - 20;  // Table width with gap
+  const sidebarW = 245;  // Compact sidebar width
+  const gapW = 15;       // Gap between table and sidebar
+  const col1W = contentW - sidebarW - gapW;  // Table width
   const col2W = sidebarW;
-  const col2X = margin + col1W + 20;  // Sidebar position
+  const col2X = margin + col1W + gapW;  // Sidebar position
 
   // === MAIN RISK TABLE HEADER ===
-  doc.rect(margin, y, col1W, 20).fill(c.danger);
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-     .text("ANALYSE DES RISQUES - MÉTHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 10, y + 5);
-  y += 20;
+  doc.rect(margin, y, col1W, 18).fill(c.danger);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+     .text("ANALYSE DES RISQUES - MÉTHODOLOGIE ET IDENTIFICATION DES DANGERS", margin + 8, y + 4);
+  y += 18;
 
-  // Column headers with Initial AND Final evaluation
-  const tableHeaderH = 35;
+  // Column widths - FIXED SIZES that add up exactly to col1W
+  // Total fixed pixels: 28 + 26*5 + 28 + 26*3 = 28 + 130 + 28 + 78 = 264
+  // Remaining for text columns: col1W - 264
+  const fixedW = 264;
+  const textColTotal = col1W - fixedW;
+
+  const tableHeaderH = 32;
   const colWidths = {
     n: 28,
-    task: col1W * 0.14,
-    danger: col1W * 0.18,
-    gi: 28, pi: 28, niri: 32,
-    measures: col1W * 0.18,
-    ppe: col1W * 0.10,
-    actions: col1W * 0.12,
-    resp: 45,
-    gf: 28, pf: 28, nirf: 32
+    task: Math.floor(textColTotal * 0.17),       // Task description
+    danger: Math.floor(textColTotal * 0.22),     // Danger scenario
+    gi: 26, pi: 26, niri: 26,                     // Initial G, P, NIR
+    measures: Math.floor(textColTotal * 0.22),   // Preventive measures
+    ppe: Math.floor(textColTotal * 0.13),        // PPE
+    actions: Math.floor(textColTotal * 0.15),    // Actions
+    resp: 28,                                     // Responsible
+    gf: 26, pf: 26, nirf: 26                      // Final G, P, NIR
   };
+  // Adjust task width to absorb rounding errors
+  const usedW = Object.values(colWidths).reduce((a, b) => a + b, 0);
+  colWidths.task += (col1W - usedW);
 
   // Header row 1 - Evaluation labels
   doc.rect(margin, y, col1W, 15).fill(c.lightBg).stroke(c.border);
@@ -1862,110 +1876,111 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
 
     // Show ALL hazards per step (up to 7 max as defined in analysis)
     for (let hi = 0; hi < hazards.length; hi++) {
-      if (y > maxTableY - 30) {
+      if (y > maxTableY - 35) {
         doc.addPage();
         y = margin;
-        doc.rect(margin, y, col1W, 18).fill(c.danger);
-        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-           .text("ANALYSE DES RISQUES (suite)", margin + 10, y + 4);
-        y += 20;
+        doc.rect(margin, y, col1W, 16).fill(c.danger);
+        doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
+           .text("ANALYSE DES RISQUES (suite)", margin + 8, y + 3);
+        y += 18;
       }
 
       const hazard = hazards[hi];
       const isFirst = hi === 0;
-      const rowH = 32;
+      const rowH = 38;  // Taller rows for better text display
       const isEven = rowCount % 2 === 0;
 
       doc.rect(margin, y, col1W, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
 
       let rx = margin;
+      const badgeSize = 18;  // Smaller badges to fit in columns
 
       // N (step number)
       if (isFirst) {
-        doc.circle(rx + colWidths.n / 2, y + rowH / 2, 10).fill(c.primary);
-        doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-           .text(String(step.step_number), rx + colWidths.n / 2 - 4, y + rowH / 2 - 5);
+        doc.circle(rx + colWidths.n / 2, y + rowH / 2, 9).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+           .text(String(step.step_number), rx + 2, y + rowH / 2 - 4, { width: colWidths.n - 4, align: "center" });
       }
       rx += colWidths.n;
 
-      // Task
+      // Task - full text with word wrap
       if (isFirst) {
         doc.font("Helvetica-Bold").fontSize(6).fillColor(c.text)
-           .text(step.title.substring(0, 40), rx + 2, y + 4, { width: colWidths.task - 4 });
+           .text(step.title, rx + 2, y + 3, { width: colWidths.task - 4, height: rowH - 6, ellipsis: true });
       }
       rx += colWidths.task;
 
-      // Danger with checkbox
+      // Danger with checkbox - no substring, use ellipsis
       const checkbox = hazard.checkbox || hazard.category || "Risque";
-      doc.font("Helvetica-Bold").fontSize(6).fillColor(c.danger)
-         .text(`☐ ${checkbox}`, rx + 2, y + 3, { width: colWidths.danger - 4 });
+      doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
+         .text(`☐ ${checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4, lineBreak: false });
       doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text((hazard.danger || "").substring(0, 70), rx + 2, y + 12, { width: colWidths.danger - 4 });
+         .text(hazard.danger || "", rx + 2, y + 10, { width: colWidths.danger - 4, height: rowH - 14, ellipsis: true });
       rx += colWidths.danger;
 
       // G initial
       const gi = hazard.gi || hazard.gravity || 2;
       const pi = hazard.pi || hazard.probability || 2;
       const niri = gi * pi;
-      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(gi));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(gi), rx + 3, y + 11, { width: 22, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize, badgeSize, 2).fill(getGravityColor(gi));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(gi), rx + 2, y + 13, { width: badgeSize, align: "center" });
       rx += colWidths.gi;
 
       // P initial
-      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(pi));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(pi), rx + 3, y + 11, { width: 22, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize, badgeSize, 2).fill(getGravityColor(pi));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(pi), rx + 2, y + 13, { width: badgeSize, align: "center" });
       rx += colWidths.pi;
 
       // NIR initial
-      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(niri));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(niri), rx + 2, y + 11, { width: 28, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize + 2, badgeSize, 2).fill(getRiskColor(niri));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(niri), rx + 2, y + 13, { width: badgeSize + 2, align: "center" });
       rx += colWidths.niri;
 
-      // Measures
+      // Measures - full text with wrap and ellipsis
       const measures = typeof hazard.measures === 'string' ? hazard.measures :
                        (Array.isArray(hazard.measures) ? hazard.measures.join(". ") : "");
       doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(measures.substring(0, 70), rx + 2, y + 4, { width: colWidths.measures - 4 });
+         .text(measures, rx + 2, y + 3, { width: colWidths.measures - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.measures;
 
-      // PPE
-      const ppeText = Array.isArray(hazard.ppe) ? hazard.ppe.slice(0, 2).join(", ") : (hazard.ppe || "");
+      // PPE - full text with wrap
+      const ppeText = Array.isArray(hazard.ppe) ? hazard.ppe.join(", ") : (hazard.ppe || "");
       doc.font("Helvetica").fontSize(5).fillColor(c.info)
-         .text(ppeText.substring(0, 35), rx + 2, y + 4, { width: colWidths.ppe - 4 });
+         .text(ppeText, rx + 2, y + 3, { width: colWidths.ppe - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.ppe;
 
-      // Actions
+      // Actions - full text with wrap
       doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text((hazard.actions || "").substring(0, 50), rx + 2, y + 4, { width: colWidths.actions - 4 });
+         .text(hazard.actions || "", rx + 2, y + 3, { width: colWidths.actions - 4, height: rowH - 6, ellipsis: true });
       rx += colWidths.actions;
 
-      // Responsible
+      // Responsible - centered
       doc.font("Helvetica").fontSize(5).fillColor(c.text)
-         .text(hazard.responsible || "Tous", rx + 2, y + 12, { width: colWidths.resp - 4, align: "center" });
+         .text(hazard.responsible || "Tous", rx + 1, y + 14, { width: colWidths.resp - 2, align: "center", lineBreak: false });
       rx += colWidths.resp;
 
       // G final
       const gf = hazard.gf || gi;
       const pf = hazard.pf || Math.max(1, pi - 1);
       const nirf = gf * pf;
-      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(gf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(gf), rx + 3, y + 11, { width: 22, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize, badgeSize, 2).fill(getGravityColor(gf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(gf), rx + 2, y + 13, { width: badgeSize, align: "center" });
       rx += colWidths.gf;
 
       // P final
-      doc.roundedRect(rx + 3, y + 8, 22, 16, 2).fill(getGravityColor(pf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(pf), rx + 3, y + 11, { width: 22, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize, badgeSize, 2).fill(getGravityColor(pf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(pf), rx + 2, y + 13, { width: badgeSize, align: "center" });
       rx += colWidths.pf;
 
       // NIR final
-      doc.roundedRect(rx + 2, y + 8, 28, 16, 2).fill(getRiskColor(nirf));
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(nirf), rx + 2, y + 11, { width: 28, align: "center" });
+      doc.roundedRect(rx + 2, y + 10, badgeSize + 2, badgeSize, 2).fill(getRiskColor(nirf));
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+         .text(String(nirf), rx + 2, y + 13, { width: badgeSize + 2, align: "center" });
 
       y += rowH;
       rowCount++;
@@ -2025,29 +2040,29 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   let ry = headerH + 8;
 
   // Photos section (NO EMOJI)
-  doc.rect(col2X, ry, col2W, 18).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 8, ry + 4);
-  ry += 20;
+  doc.rect(col2X, ry, col2W, 16).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 6, ry + 3);
+  ry += 18;
 
-  const photoBoxW = (col2W - 15) / 2;
-  const photoBoxH = 95;
+  const photoBoxW = (col2W - 10) / 2;
+  const photoBoxH = 85;
   let photoCol = 0;
   let photosPlaced = 0;
 
-  for (let i = 0; i < steps.length && photosPlaced < 6 && ry + photoBoxH < pageHeight - 200; i++) {
+  for (let i = 0; i < steps.length && photosPlaced < 6 && ry + photoBoxH < pageHeight - 190; i++) {
     const step = steps[i];
     if (!step.photo_content && !step.photo_path) continue;
 
-    const px = col2X + photoCol * (photoBoxW + 10);
-    doc.roundedRect(px, ry, photoBoxW, photoBoxH, 5).fillAndStroke(c.white, c.border);
+    const px = col2X + photoCol * (photoBoxW + 6);
+    doc.roundedRect(px, ry, photoBoxW, photoBoxH, 4).fillAndStroke(c.white, c.border);
 
     // Step badge
-    doc.circle(px + 12, ry + 12, 9).fill(c.primary);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
-       .text(String(step.step_number), px + 7, ry + 8, { width: 10, align: "center" });
+    doc.circle(px + 10, ry + 10, 8).fill(c.primary);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.white)
+       .text(String(step.step_number), px + 5, ry + 6, { width: 10, align: "center" });
 
     // Photo
-    const imgX = px + 5, imgY = ry + 22, imgW = photoBoxW - 10, imgH = photoBoxH - 40;
+    const imgX = px + 4, imgY = ry + 20, imgW = photoBoxW - 8, imgH = photoBoxH - 35;
     let photoOk = false;
 
     if (step.photo_content) {
@@ -2072,72 +2087,72 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
       doc.fontSize(7).fillColor(c.lightText).text("Photo N/A", imgX + 5, imgY + imgH/2 - 5);
     }
 
-    doc.font("Helvetica").fontSize(6).fillColor(c.text)
-       .text(step.title.substring(0, 25), px + 3, ry + photoBoxH - 15, { width: photoBoxW - 6, align: "center" });
+    doc.font("Helvetica").fontSize(5).fillColor(c.text)
+       .text(step.title, px + 3, ry + photoBoxH - 14, { width: photoBoxW - 6, align: "center", lineBreak: false, ellipsis: true });
 
     photosPlaced++;
     photoCol++;
-    if (photoCol >= 2) { photoCol = 0; ry += photoBoxH + 8; }
+    if (photoCol >= 2) { photoCol = 0; ry += photoBoxH + 5; }
   }
 
   if (photosPlaced === 0) {
-    doc.rect(col2X, ry, col2W, 60).fillAndStroke(c.lightBg, c.border);
-    doc.fontSize(8).fillColor(c.lightText).text("Aucune photo disponible", col2X + 10, ry + 25);
-    ry += 65;
+    doc.rect(col2X, ry, col2W, 50).fillAndStroke(c.lightBg, c.border);
+    doc.fontSize(7).fillColor(c.lightText).text("Aucune photo disponible", col2X + 8, ry + 20);
+    ry += 52;
   } else if (photoCol !== 0) {
-    ry += photoBoxH + 8;
+    ry += photoBoxH + 5;
   }
 
-  // EPI Section (NO EMOJI)
-  ry += 5;
-  doc.rect(col2X, ry, col2W, 18).fill(c.warning);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 8, ry + 4);
-  ry += 18;
+  // EPI Section (NO EMOJI) - More compact
+  ry += 3;
+  doc.rect(col2X, ry, col2W, 15).fill(c.warning);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 6, ry + 3);
+  ry += 15;
 
   const ppeList = procedure.ppe_required || [];
-  const ppeH = Math.min(90, Math.max(45, ppeList.length * 11 + 10));
+  const ppeH = Math.min(75, Math.max(35, ppeList.length * 10 + 8));
   doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
-  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  doc.font("Helvetica").fontSize(6).fillColor(c.text);
   ppeList.slice(0, 8).forEach((ppe, i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
-    doc.text("☑ " + ppe, col2X + 5 + col * (col2W / 2), ry + 5 + row * 11, { width: col2W / 2 - 10 });
+    doc.text("☑ " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
   });
-  ry += ppeH + 5;
+  ry += ppeH + 3;
 
-  // Safety Codes (NO EMOJI)
-  doc.rect(col2X, ry, col2W, 18).fill(c.info);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 8, ry + 4);
-  ry += 18;
+  // Safety Codes (NO EMOJI) - Compact
+  doc.rect(col2X, ry, col2W, 15).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 6, ry + 3);
+  ry += 15;
 
   const safetyCodes = procedure.safety_codes || [];
-  const scH = Math.min(55, Math.max(35, safetyCodes.length * 12 + 8));
+  const scH = Math.min(48, Math.max(28, safetyCodes.length * 11 + 6));
   doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
-  doc.font("Helvetica").fontSize(7).fillColor(c.text);
+  doc.font("Helvetica").fontSize(6).fillColor(c.text);
   safetyCodes.slice(0, 4).forEach((code, i) => {
-    doc.text("▸ " + code, col2X + 5, ry + 5 + i * 12, { width: col2W - 10 });
+    doc.text("▸ " + code, col2X + 4, ry + 4 + i * 11, { width: col2W - 8, lineBreak: false, ellipsis: true });
   });
-  ry += scH + 5;
+  ry += scH + 3;
 
-  // Emergency Contacts (NO EMOJI)
+  // Emergency Contacts (NO EMOJI) - Compact
   const contacts = procedure.emergency_contacts || [];
   if (contacts.length > 0) {
-    doc.rect(col2X, ry, col2W, 18).fill(c.danger);
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("CONTACTS URGENCE", col2X + 8, ry + 4);
-    ry += 18;
-    const contactH = Math.min(contacts.length * 18 + 8, 60);
+    doc.rect(col2X, ry, col2W, 15).fill(c.danger);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONTACTS URGENCE", col2X + 6, ry + 3);
+    ry += 15;
+    const contactH = Math.min(contacts.length * 15 + 6, 50);
     doc.rect(col2X, ry, col2W, contactH).fillAndStroke("#fef2f2", c.danger);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.danger);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger);
     contacts.slice(0, 3).forEach((contact, i) => {
-      doc.text(`${contact.name}: ${contact.phone}`, col2X + 8, ry + 6 + i * 18, { width: col2W - 16 });
+      doc.text(`${contact.name}: ${contact.phone}`, col2X + 6, ry + 5 + i * 15, { width: col2W - 12, lineBreak: false });
     });
-    ry += contactH + 5;
+    ry += contactH + 3;
   }
 
-  // Risk Summary (NO EMOJI)
-  const summaryY = Math.max(ry, pageHeight - 85);
-  doc.rect(col2X, summaryY, col2W, 60).fillAndStroke(c.darkBlue, c.border);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 8, summaryY + 5);
+  // Risk Summary (NO EMOJI) - Compact
+  const summaryY = Math.max(ry, pageHeight - 75);
+  doc.rect(col2X, summaryY, col2W, 55).fillAndStroke(c.darkBlue, c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 6, summaryY + 4);
 
   // Calculate summary from AI analysis
   let maxNirInitial = 0, maxNirFinal = 0, totalHazards = 0;
@@ -2153,25 +2168,25 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     });
   }
 
-  doc.font("Helvetica").fontSize(7).fillColor("#a5b4fc");
-  doc.text(`Dangers identifiés: ${totalHazards}`, col2X + 8, summaryY + 20);
-  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 8, summaryY + 32);
-  doc.text(`NIR max résiduel: ${maxNirFinal}`, col2X + 8, summaryY + 44);
+  doc.font("Helvetica").fontSize(6).fillColor("#a5b4fc");
+  doc.text(`Dangers identifiés: ${totalHazards}`, col2X + 6, summaryY + 17);
+  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 6, summaryY + 28);
+  doc.text(`NIR max résiduel: ${maxNirFinal}`, col2X + 6, summaryY + 39);
 
   if (maxNirInitial > 0) {
     const reduction = Math.round((1 - maxNirFinal / maxNirInitial) * 100);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.success)
-       .text(`Réduction: ${reduction}%`, col2X + col2W / 2, summaryY + 44);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
+       .text(`Réduction: ${reduction}%`, col2X + col2W / 2, summaryY + 39);
   }
 
   // === FOOTER ===
-  const footerY = pageHeight - 20;
-  doc.rect(0, footerY, pageWidth, 20).fill(c.headerBg);
+  const footerY = pageHeight - 18;
+  doc.rect(0, footerY, pageWidth, 18).fill(c.headerBg);
 
-  doc.font("Helvetica-Bold").fontSize(7).fillColor(c.headerText);
-  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 6);
-  doc.text(`RAMS - ${procedure.title} - v${procedure.version || 1}`, pageWidth / 2 - 100, footerY + 6, { width: 200, align: "center" });
-  doc.text(`${new Date().toLocaleString("fr-FR")} | ID: ${procedureId.substring(0, 8)}`, pageWidth - margin - 180, footerY + 6, { width: 180, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(6).fillColor(c.headerText);
+  doc.text(siteSettings.company_name || "ElectroHub", margin, footerY + 5);
+  doc.text(`RAMS - ${procedure.title} - v${procedure.version || 1}`, pageWidth / 2 - 120, footerY + 5, { width: 240, align: "center" });
+  doc.text(`${new Date().toLocaleDateString("fr-FR")} | ID: ${procedureId.slice(0, 8)}`, pageWidth - margin - 150, footerY + 5, { width: 150, align: "right" });
 
   doc.end();
 
