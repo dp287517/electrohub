@@ -122,6 +122,149 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const OPENAI_MODEL = process.env.AI_ASSISTANT_OPENAI_MODEL || "gpt-4o-mini";
 
 // ------------------------------
+// AI Risk Analysis for RAMS
+// ------------------------------
+async function analyzeRisksWithAI(procedure, steps) {
+  const prompt = `Tu es un expert HSE (Hygiene Securite Environnement) specialise dans l'analyse de risques professionnels selon la methodologie RAMS (Risk Assessment Method Statement).
+
+Analyse cette procedure operationnelle et genere une evaluation des risques pour chaque etape.
+
+## PROCEDURE
+Titre: ${procedure.title}
+Description: ${procedure.description || 'Non specifie'}
+Categorie: ${procedure.category || 'General'}
+Niveau de risque declare: ${procedure.risk_level || 'low'}
+EPI requis: ${JSON.stringify(procedure.ppe_required || [])}
+Codes securite: ${JSON.stringify(procedure.safety_codes || [])}
+
+## ETAPES
+${steps.map((s, i) => `
+Etape ${s.step_number}: ${s.title}
+- Instructions: ${s.instructions || 'Aucune'}
+- Avertissement: ${s.warning || 'Aucun'}
+- Duree: ${s.duration_minutes || '?'} min
+`).join('\n')}
+
+## ECHELLES DE COTATION
+
+GRAVITE (G) - Consequences potentielles:
+5 = Catastrophique (Deces, incapacite permanente grave)
+4 = Critique (Incapacite permanente, blessure grave)
+3 = Grave (Incapacite temporaire > 7 jours)
+2 = Important (Arret de travail, soins medicaux)
+1 = Mineure (Premiers soins, sans arret)
+
+PROBABILITE (P) - Frequence d'occurrence:
+5 = Tres probable (Quotidien, quasi certain)
+4 = Probable (Hebdomadaire, frequent)
+3 = Possible (Mensuel, occasionnel)
+2 = Peu probable (Annuel, rare)
+1 = Improbable (Exceptionnel, tres rare)
+
+NIR = G x P (Niveau Initial de Risque)
+- NIR >= 15: CRITIQUE (rouge fonce)
+- NIR >= 10: ELEVE (rouge)
+- NIR >= 5: MODERE (orange)
+- NIR < 5: FAIBLE (vert)
+
+## FORMAT DE REPONSE (JSON uniquement)
+{
+  "global_assessment": {
+    "overall_risk": "low|medium|high|critical",
+    "main_hazards": ["liste des dangers principaux"],
+    "critical_steps": [numeros des etapes critiques]
+  },
+  "steps": [
+    {
+      "step_number": 1,
+      "hazards": [
+        {
+          "category": "Electrique|Chute|ATEX|Mecanique|Chimique|Ergonomie|Thermique|Organisationnel",
+          "danger": "Description courte du danger",
+          "scenario": "Scenario d'accident possible",
+          "gravity": 1-5,
+          "probability": 1-5,
+          "measures": ["Mesure preventive 1", "Mesure preventive 2"]
+        }
+      ]
+    }
+  ]
+}
+
+IMPORTANT:
+- Identifie TOUS les dangers pertinents pour chaque etape (1 a 3 dangers par etape)
+- Sois realiste dans les cotations G et P
+- Propose des mesures preventives concretes et applicables
+- Reponds UNIQUEMENT avec le JSON, sans texte avant ou apres`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+      max_tokens: 3000,
+    });
+
+    const content = response.choices[0]?.message?.content || "{}";
+    // Extract JSON from response (handle potential markdown code blocks)
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return null;
+  } catch (error) {
+    console.error("[RAMS] AI risk analysis error:", error.message);
+    return null;
+  }
+}
+
+// Analyze photos with AI for additional risk detection
+async function analyzePhotoForRisks(photoBuffer) {
+  try {
+    const base64Image = photoBuffer.toString('base64');
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Analyse cette photo de chantier/installation et identifie les risques potentiels visibles.
+
+Reponds en JSON:
+{
+  "risks_detected": [
+    {"category": "Type", "description": "Description", "severity": 1-5}
+  ],
+  "safety_observations": ["observation 1", "observation 2"],
+  "ppe_visible": ["epi visible 1"],
+  "ppe_missing": ["epi manquant potentiel"]
+}`
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${base64Image}` }
+            }
+          ]
+        }
+      ],
+      max_tokens: 500,
+    });
+
+    const content = response.choices[0]?.message?.content || "{}";
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return null;
+  } catch (error) {
+    console.error("[RAMS] Photo analysis error:", error.message);
+    return null;
+  }
+}
+
+// ------------------------------
 // Schema
 // ------------------------------
 async function ensureSchema() {
@@ -974,6 +1117,26 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     console.log("[RAMS] Site settings error:", e.message);
   }
 
+  // === AI RISK ANALYSIS ===
+  console.log("[RAMS] Starting AI risk analysis for procedure:", procedure.title);
+  let aiAnalysis = null;
+  try {
+    aiAnalysis = await analyzeRisksWithAI(procedure, steps);
+    if (aiAnalysis) {
+      console.log("[RAMS] AI analysis completed - Global risk:", aiAnalysis.global_assessment?.overall_risk);
+    }
+  } catch (e) {
+    console.log("[RAMS] AI analysis failed, using fallback:", e.message);
+  }
+
+  // Build hazards map from AI analysis
+  const aiHazardsMap = new Map();
+  if (aiAnalysis?.steps) {
+    aiAnalysis.steps.forEach(stepAnalysis => {
+      aiHazardsMap.set(stepAnalysis.step_number, stepAnalysis.hazards || []);
+    });
+  }
+
   // Generate QR Code
   let qrCodeBuffer = null;
   try {
@@ -1128,23 +1291,38 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   for (let i = 0; i < steps.length && y < maxTableY; i++) {
     const step = steps[i];
 
-    // Auto-detect hazards
-    const hazards = [];
-    const combined = ((step.instructions || "") + " " + (step.warning || "") + " " + (step.title || "")).toLowerCase();
+    // Get hazards from AI analysis or fallback to keyword detection
+    let hazards = [];
+    const aiStepHazards = aiHazardsMap.get(step.step_number);
 
-    if (combined.includes("electri") || combined.includes("tension") || combined.includes("consign"))
-      hazards.push({ cat: "Electrique", danger: "Electrisation/Arc", g: 4, p: baseProb });
-    if (combined.includes("hauteur") || combined.includes("echelle") || combined.includes("nacelle"))
-      hazards.push({ cat: "Chute", danger: "Chute de hauteur", g: 4, p: baseProb });
-    if (combined.includes("atex") || combined.includes("explosion") || combined.includes("zone"))
-      hazards.push({ cat: "ATEX", danger: "Inflammation/Explosion", g: 5, p: baseProb });
-    if (combined.includes("manutention") || combined.includes("lourd"))
-      hazards.push({ cat: "Ergonomie", danger: "Manutention/TMS", g: 2, p: 3 });
-    if (combined.includes("coupure") || combined.includes("outil"))
-      hazards.push({ cat: "Mecanique", danger: "Coupure/Blessure", g: 3, p: baseProb });
+    if (aiStepHazards && aiStepHazards.length > 0) {
+      // Use AI-generated hazards
+      hazards = aiStepHazards.map(h => ({
+        cat: h.category || "General",
+        danger: h.danger || "Risque identifie",
+        scenario: h.scenario || "",
+        g: h.gravity || baseGravity,
+        p: h.probability || baseProb,
+        measures: h.measures || []
+      }));
+    } else {
+      // Fallback: Auto-detect hazards from keywords
+      const combined = ((step.instructions || "") + " " + (step.warning || "") + " " + (step.title || "")).toLowerCase();
 
-    if (hazards.length === 0) {
-      hazards.push({ cat: "General", danger: "Risque operationnel", g: baseGravity, p: baseProb });
+      if (combined.includes("electri") || combined.includes("tension") || combined.includes("consign"))
+        hazards.push({ cat: "Electrique", danger: "Electrisation/Arc", g: 4, p: baseProb, measures: [] });
+      if (combined.includes("hauteur") || combined.includes("echelle") || combined.includes("nacelle"))
+        hazards.push({ cat: "Chute", danger: "Chute de hauteur", g: 4, p: baseProb, measures: [] });
+      if (combined.includes("atex") || combined.includes("explosion") || combined.includes("zone"))
+        hazards.push({ cat: "ATEX", danger: "Inflammation/Explosion", g: 5, p: baseProb, measures: [] });
+      if (combined.includes("manutention") || combined.includes("lourd"))
+        hazards.push({ cat: "Ergonomie", danger: "Manutention/TMS", g: 2, p: 3, measures: [] });
+      if (combined.includes("coupure") || combined.includes("outil"))
+        hazards.push({ cat: "Mecanique", danger: "Coupure/Blessure", g: 3, p: baseProb, measures: [] });
+
+      if (hazards.length === 0) {
+        hazards.push({ cat: "General", danger: "Risque operationnel", g: baseGravity, p: baseProb, measures: [] });
+      }
     }
 
     // Draw row for each hazard
@@ -1206,12 +1384,20 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
          .text(String(nir), rx + 3, y + 9, { width: 32, align: "center" });
       rx += cols[5];
 
-      // Measures
-      const measures = [];
-      if (procedure.ppe_required?.length) measures.push("EPI: " + procedure.ppe_required.slice(0, 2).join(", "));
-      if (procedure.safety_codes?.length) measures.push(procedure.safety_codes[0]);
+      // Measures - Use AI-generated measures or fallback to PPE/safety codes
+      let measuresText = "";
+      if (hazard.measures && hazard.measures.length > 0) {
+        // Use AI-generated measures
+        measuresText = hazard.measures.slice(0, 2).join(" | ");
+      } else {
+        // Fallback to procedure-level PPE and safety codes
+        const fallbackMeasures = [];
+        if (procedure.ppe_required?.length) fallbackMeasures.push("EPI: " + procedure.ppe_required.slice(0, 2).join(", "));
+        if (procedure.safety_codes?.length) fallbackMeasures.push(procedure.safety_codes[0]);
+        measuresText = fallbackMeasures.join(" | ");
+      }
       doc.font("Helvetica").fontSize(6).fillColor(c.text)
-         .text(measures.join(" | ").substring(0, 60), rx + 2, y + 8, { width: cols[6] - 6 });
+         .text(measuresText.substring(0, 65), rx + 2, y + 8, { width: cols[6] - 6 });
 
       y += rowH;
     }
