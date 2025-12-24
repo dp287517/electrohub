@@ -764,6 +764,18 @@ Tu guides l'utilisateur étape par étape pour créer une procédure complète e
 5. **Équipements liés** - Demande quels équipements sont concernés
 6. **Validation** - Résume et demande confirmation
 
+## IMPORTANT: Gestion des photos
+
+Quand tu demandes "Voulez-vous ajouter une photo pour cette étape?" et que l'utilisateur répond "oui", "yes", "ok", ou toute réponse affirmative:
+- Tu DOIS répondre avec "expectsPhoto": true
+- Tu DOIS dire "Parfait, veuillez uploader la photo pour cette étape."
+- Tu NE DOIS PAS passer à l'étape suivante ou demander autre chose
+- Tu ATTENDS que l'utilisateur upload la photo (tu recevras l'analyse de la photo dans le prochain message)
+
+Quand tu reçois un message contenant "[Photo analysée:" ou "[Photo:", cela signifie que l'utilisateur a uploadé une photo. Tu peux alors:
+- Confirmer la réception de la photo
+- Passer à la question suivante (durée estimée, ou étape suivante)
+
 ## Format de réponse
 
 Réponds TOUJOURS en JSON avec cette structure:
@@ -772,7 +784,7 @@ Réponds TOUJOURS en JSON avec cette structure:
   "currentStep": "init|risks|steps|contacts|equipment|review|complete",
   "question": "La question spécifique à poser",
   "options": ["option1", "option2"], // optionnel, pour choix multiples
-  "expectsPhoto": false, // true si on attend une photo
+  "expectsPhoto": false, // METTRE true quand on attend une photo de l'utilisateur
   "collectedData": {}, // données collectées jusqu'ici
   "procedureReady": false // true quand la procédure est complète
 }
@@ -3814,20 +3826,12 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   y += tableHeaderH - 14;
 
   // === TABLE ROWS ===
-  const maxTableY = pageHeight - 100;
+  // For example RAMS, we know it fits on 1 page - no page breaks needed
+  const maxTableY = pageHeight - 130; // Leave space for scales and signature
   let rowCount = 0;
 
   for (const step of data.steps) {
-    if (y > maxTableY - 25) {
-      // Add new page if needed
-      doc.addPage();
-      y = margin;
-      // Re-draw header on new page
-      doc.rect(margin, y, tableW, 16).fill(c.danger);
-      doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
-         .text("ANALYSE DES RISQUES (suite)", margin + 10, y + 3);
-      y += 18;
-    }
+    // No page break for example - all content fits on one page
 
     for (let hi = 0; hi < step.hazards.length; hi++) {
       const hazard = step.hazards[hi];
@@ -4087,74 +4091,7 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
      .text(`Reduction: ${reduction}%`, sidebarX + sidebarW / 2, ry + 42);
 
-  // === SIGNATURE SECTION ===
-  // Add new page for signatures
-  doc.addPage();
-
-  // Header for signature page
-  doc.rect(0, 0, pageWidth, 40).fill(c.headerBg);
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
-     .text("SIGNATURES ET APPROBATIONS - RAMS", margin, 12, { width: pageWidth - margin * 2, align: "center" });
-  doc.font("Helvetica").fontSize(8).fillColor("#1a5c00")
-     .text(`Document: ${docRef} | ${data.activity}`, margin, 28, { width: pageWidth - margin * 2, align: "center" });
-
-  let sigY = 60;
-
-  // Creator signature
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("REDACTEUR / CREATEUR", margin, sigY);
-  doc.rect(margin, sigY + 15, 350, 80).stroke(c.border);
-  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
-  doc.text("Nom:", margin + 10, sigY + 25);
-  doc.text("Fonction:", margin + 10, sigY + 45);
-  doc.text("Date:", margin + 10, sigY + 65);
-  doc.text("Signature:", margin + 180, sigY + 25);
-
-  // Approver signature
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("APPROBATEUR HSE", margin + 400, sigY);
-  doc.rect(margin + 400, sigY + 15, 350, 80).stroke(c.border);
-  doc.font("Helvetica").fontSize(8).fillColor(c.lightText);
-  doc.text("Nom:", margin + 410, sigY + 25);
-  doc.text("Fonction:", margin + 410, sigY + 45);
-  doc.text("Date:", margin + 410, sigY + 65);
-  doc.text("Signature:", margin + 580, sigY + 25);
-
-  sigY += 110;
-
-  // Technicians signatures
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.text)
-     .text("TECHNICIENS / INTERVENANTS - Prise de connaissance et engagement", margin, sigY);
-
-  sigY += 20;
-  const techBoxW = (pageWidth - margin * 2 - 30) / 3;
-
-  for (let i = 0; i < 6; i++) {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    const tx = margin + col * (techBoxW + 15);
-    const ty = sigY + row * 90;
-
-    doc.rect(tx, ty, techBoxW, 80).stroke(c.border);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.text)
-       .text(`Intervenant ${i + 1}`, tx + 10, ty + 8);
-    doc.font("Helvetica").fontSize(7).fillColor(c.lightText);
-    doc.text("Nom:", tx + 10, ty + 25);
-    doc.text("Date:", tx + 10, ty + 42);
-    doc.text("Signature:", tx + 10, ty + 59);
-    doc.text("J'ai lu et compris le RAMS", tx + techBoxW / 2, ty + 25, { width: techBoxW / 2 - 15 });
-  }
-
-  sigY += 200;
-
-  // Document linkage info
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(c.primary)
-     .text("DOCUMENTS LIES", margin, sigY);
-  doc.font("Helvetica").fontSize(8).fillColor(c.text);
-  doc.text(`[  ] Methode de Travail - Ref: MT-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 18);
-  doc.text(`[  ] Procedure - Ref: PROC-${data.workDate.replace(/\//g, '')}`, margin + 20, sigY + 34);
-
-  // === FOOTER ===
+  // === FOOTER (on first/main page only) ===
   const footerY = pageHeight - 18;
   doc.rect(0, footerY, pageWidth, 18).fill(c.headerBg);
 
@@ -4162,6 +4099,28 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   doc.text(`${data.company} - RAMS`, margin, footerY + 4);
   doc.text(`Document genere par IA - ${new Date().toLocaleString("fr-FR")}`, pageWidth / 2 - 100, footerY + 4, { width: 200, align: "center" });
   doc.text(`Ref: ${docRef}`, pageWidth - margin - 180, footerY + 4, { width: 180, align: "right" });
+
+  // === COMPACT SIGNATURE BOX (positioned after scales, before footer) ===
+  // Position after risk scales at bottom of table area
+  const sigBoxY = y + 40; // Below the scales
+  const sigBoxW = tableW;
+  const sigBoxH = 35;
+
+  // Only draw if it fits before footer
+  if (sigBoxY + sigBoxH < footerY - 5) {
+    doc.rect(margin, sigBoxY, sigBoxW, sigBoxH).stroke(c.border);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text)
+       .text("SIGNATURES:", margin + 5, sigBoxY + 4);
+
+    // 3 signature areas in one row
+    const sigColW = (sigBoxW - 20) / 3;
+    ["Redacteur", "Approbateur HSE", "Chef d'equipe"].forEach((role, i) => {
+      const sx = margin + 5 + i * (sigColW + 5);
+      doc.font("Helvetica").fontSize(6).fillColor(c.lightText)
+         .text(role + ":", sx, sigBoxY + 14);
+      doc.rect(sx, sigBoxY + 22, sigColW - 10, 10).stroke(c.border);
+    });
+  }
 
   doc.end();
 
@@ -4379,10 +4338,10 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 }
 
 // ====================================
-// PROCEDURE PDF GENERATOR (A4)
-// Clear step-by-step procedure
+// PROCEDURE DOCUMENT PDF GENERATOR (A4)
+// Clear step-by-step procedure - NEW FORMAT
 // ====================================
-async function generateProcedurePDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
+async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
   const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
@@ -4656,7 +4615,7 @@ async function generateExampleWorkMethodPDF(baseUrl = 'https://electrohub.app') 
 // Example Procedure PDF Generator
 async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
   const { procedure, steps } = getExampleDocumentData();
-  return generateProcedurePDF(procedure, steps, baseUrl);
+  return generateProcedureDocPDF(procedure, steps, baseUrl);
 }
 
 // ------------------------------
