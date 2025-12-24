@@ -914,6 +914,12 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     }))
   ];
 
+  // DEBUG: Log the last user message to verify photo is included
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+  console.log(`[PROC-DEBUG] Last user message: ${lastUserMsg?.content?.substring(0, 200)}`);
+  console.log(`[PROC-DEBUG] Contains [Photo:? ${lastUserMsg?.content?.includes('[Photo:')}`);
+
+
   // Call AI with fallback
   const result = await chatWithFallback(messages, {
     temperature: 0.7,
