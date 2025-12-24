@@ -24,6 +24,8 @@ import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceComple
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
+// --- Google Gemini (fallback gratuit pour analyse photo)
+const { GoogleGenerativeAI } = await import("@google/generative-ai");
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2771,14 +2773,20 @@ app.get("/api/atex/logs", async (req, res) => {
 // =====================================================================
 // IA — helpers (à placer juste AVANT le bloc  // ------------------------------------------------- // IA)
 // =====================================================================
-async function atexExtractFromFiles(client, files) {
-  if (!client) throw new Error("OPENAI_API_KEY missing");
-  if (!files?.length) throw new Error("no files");
 
-  console.log(`[ATEX-AI] Analyzing ${files.length} photo(s)...`);
+const ATEX_PROMPT = `Tu es un assistant d'inspection ATEX. Analyse les photos d'équipements et extrait les informations suivantes:
+- manufacturer: le fabricant de l'équipement
+- manufacturer_ref: la référence fabricant / numéro de modèle
+- atex_mark_gas: le marquage ATEX gaz (ex: II 2G, II 1G, etc.)
+- atex_mark_dust: le marquage ATEX poussière (ex: II 2D, II 1D, etc.)
+- type: le type d'équipement (moteur, capteur, luminaire, etc.)
 
-  // Redimensionner les images pour OpenAI (max 1024px, qualité 80%)
-  const images = await Promise.all(
+IMPORTANT: Réponds UNIQUEMENT avec un objet JSON valide contenant ces 5 champs. Pas de texte avant ou après.
+Exemple: {"manufacturer":"ABB","manufacturer_ref":"M2AA 100L","atex_mark_gas":"II 2G","atex_mark_dust":"","type":"moteur"}`;
+
+// Préparer les images (redimensionnement)
+async function prepareImagesForAI(files) {
+  return Promise.all(
     files.map(async (f) => {
       const originalBuffer = await fsp.readFile(f.path);
       const originalSizeKB = Math.round(originalBuffer.length / 1024);
@@ -2787,9 +2795,7 @@ async function atexExtractFromFiles(client, files) {
       let processedBuffer = originalBuffer;
       let mime = f.mimetype;
 
-      // Utiliser sharp pour redimensionner si disponible
       try {
-        const sharp = require("sharp");
         const metadata = await sharp(originalBuffer).metadata();
         const maxDim = 1024;
 
@@ -2803,80 +2809,148 @@ async function atexExtractFromFiles(client, files) {
           console.log(`[ATEX-AI] Resized: ${originalSizeKB} KB → ${newSizeKB} KB`);
         }
       } catch (sharpErr) {
-        console.log(`[ATEX-AI] Sharp not available, using original image`);
+        console.log(`[ATEX-AI] Sharp resize skipped:`, sharpErr.message);
       }
 
       return {
         name: f.originalname,
         mime: mime,
-        data: processedBuffer.toString("base64"),
+        buffer: processedBuffer,
+        base64: processedBuffer.toString("base64"),
       };
     })
   );
+}
 
-  const sys = `Tu es un assistant d'inspection ATEX. Extrait des photos:
-- manufacturer
-- manufacturer_ref
-- atex_mark_gas
-- atex_mark_dust
-- type
-Réponds en JSON strict.`;
-
-  const content = [
-    { role: "system", content: sys },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
-        ...images.map((im) => ({
-          type: "image_url",
-          image_url: { url: `data:${im.mime};base64,${im.data}` },
-        })),
-      ],
-    },
-  ];
-
-  console.log(`[ATEX-AI] Calling OpenAI (model: ${process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini"})...`);
-  const startTime = Date.now();
-
-  let resp;
-  try {
-    resp = await client.chat.completions.create({
-      model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
-      messages: content,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-    });
-  } catch (openaiErr) {
-    const elapsed = Date.now() - startTime;
-    console.error(`[ATEX-AI] OpenAI ERROR after ${elapsed}ms:`, openaiErr.message);
-    console.error(`[ATEX-AI] Error details:`, openaiErr.status, openaiErr.code, openaiErr.type);
-    throw openaiErr;
-  }
-
-  const elapsed = Date.now() - startTime;
-  const rawContent = resp.choices?.[0]?.message?.content || "{}";
-  console.log(`[ATEX-AI] Response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
-
+// Parser le résultat JSON de l'IA
+function parseAtexResult(rawContent) {
   let data = {};
   try {
-    data = JSON.parse(rawContent);
+    // Nettoyer le contenu (enlever markdown code blocks si présent)
+    let cleaned = rawContent.trim();
+    if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
+    if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
+    if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
+    data = JSON.parse(cleaned.trim());
   } catch (parseErr) {
     console.error(`[ATEX-AI] JSON parse error:`, parseErr.message);
+    console.error(`[ATEX-AI] Raw content:`, rawContent.substring(0, 300));
     data = {};
   }
 
-  const result = {
+  return {
     manufacturer: String(data.manufacturer || ""),
     manufacturer_ref: String(data.manufacturer_ref || ""),
     atex_mark_gas: String(data.atex_mark_gas || ""),
     atex_mark_dust: String(data.atex_mark_dust || ""),
     type: String(data.type || ""),
   };
-
-  console.log(`[ATEX-AI] Extracted:`, result);
-  return result;
 }
+
+// ✅ Extraction via Gemini (gratuit)
+async function atexExtractWithGemini(images) {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  console.log(`[ATEX-AI] Calling Gemini (model: gemini-1.5-flash)...`);
+  const startTime = Date.now();
+
+  // Préparer les parts pour Gemini
+  const imageParts = images.map((img) => ({
+    inlineData: {
+      data: img.base64,
+      mimeType: img.mime,
+    },
+  }));
+
+  const result = await model.generateContent([
+    ATEX_PROMPT,
+    ...imageParts,
+  ]);
+
+  const elapsed = Date.now() - startTime;
+  const rawContent = result.response.text();
+  console.log(`[ATEX-AI] Gemini response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+
+  return parseAtexResult(rawContent);
+}
+
+// ✅ Extraction via OpenAI
+async function atexExtractWithOpenAI(client, images) {
+  const model = process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini";
+  console.log(`[ATEX-AI] Calling OpenAI (model: ${model})...`);
+  const startTime = Date.now();
+
+  const resp = await client.chat.completions.create({
+    model,
+    messages: [
+      { role: "system", content: ATEX_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
+          ...images.map((im) => ({
+            type: "image_url",
+            image_url: { url: `data:${im.mime};base64,${im.base64}` },
+          })),
+        ],
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  });
+
+  const elapsed = Date.now() - startTime;
+  const rawContent = resp.choices?.[0]?.message?.content || "{}";
+  console.log(`[ATEX-AI] OpenAI response in ${elapsed}ms: ${rawContent.substring(0, 200)}...`);
+
+  return parseAtexResult(rawContent);
+}
+
+// ✅ Fonction principale avec fallback automatique
+async function atexExtractFromFiles(openaiClient, files) {
+  if (!files?.length) throw new Error("no files");
+
+  console.log(`[ATEX-AI] Analyzing ${files.length} photo(s)...`);
+  const images = await prepareImagesForAI(files);
+
+  const hasOpenAI = !!openaiClient;
+  const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+
+  // Stratégie: OpenAI d'abord, Gemini en fallback
+  if (hasOpenAI) {
+    try {
+      const result = await atexExtractWithOpenAI(openaiClient, images);
+      console.log(`[ATEX-AI] ✅ Extracted (OpenAI):`, result);
+      return result;
+    } catch (openaiErr) {
+      console.error(`[ATEX-AI] OpenAI failed:`, openaiErr.message);
+
+      // Fallback vers Gemini si disponible
+      if (hasGemini && (openaiErr.status === 429 || openaiErr.code === "insufficient_quota")) {
+        console.log(`[ATEX-AI] ⚡ Fallback to Gemini (free tier)...`);
+        const result = await atexExtractWithGemini(images);
+        console.log(`[ATEX-AI] ✅ Extracted (Gemini fallback):`, result);
+        return result;
+      }
+      throw openaiErr;
+    }
+  }
+
+  // Pas d'OpenAI, utiliser Gemini directement
+  if (hasGemini) {
+    console.log(`[ATEX-AI] Using Gemini (no OpenAI key)...`);
+    const result = await atexExtractWithGemini(images);
+    console.log(`[ATEX-AI] ✅ Extracted (Gemini):`, result);
+    return result;
+  }
+
+  throw new Error("No AI provider configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
+}
+
 // -------------------------------------------------
 // IA
 function openaiClient() {
@@ -2884,6 +2958,7 @@ function openaiClient() {
   if (!key) return null;
   return new OpenAI({ apiKey: key });
 }
+
 // ✅ Nouvelle route robuste : multi-photos natif
 app.post("/api/atex/analyzePhotoBatch", multerFiles.array("files"), async (req, res) => {
   try {
@@ -2891,16 +2966,19 @@ app.post("/api/atex/analyzePhotoBatch", multerFiles.array("files"), async (req, 
     const extracted = await atexExtractFromFiles(client, req.files || []);
     res.json({ ok: true, extracted });
   } catch (e) {
+    console.error(`[ATEX-AI] Route error:`, e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.post("/api/atex/extract", multerFiles.array("files"), async (req, res) => {
   try {
     const client = openaiClient();
     const extracted = await atexExtractFromFiles(client, req.files || []);
     res.json({ ok: true, extracted });
   } catch (e) {
-    res.status(500).json({ ok:false, error:e.message });
+    console.error(`[ATEX-AI] Route error:`, e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 function localAtexCompliance(atex_mark_gas, atex_mark_dust, target_gas, target_dust) {
