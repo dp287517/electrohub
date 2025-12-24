@@ -3,7 +3,7 @@ import {
   X, Download, Edit2, Trash2, AlertTriangle, Shield,
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
-  FileText, Loader2, Play, Sparkles
+  FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet
 } from 'lucide-react';
 import {
   getProcedure,
@@ -18,6 +18,7 @@ import {
   removeEquipmentLink,
   searchEquipment,
   downloadProcedurePdf,
+  downloadMethodStatementPdf,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
@@ -230,6 +231,8 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentResults, setEquipmentResults] = useState([]);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingMethodStatement, setDownloadingMethodStatement] = useState(false);
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
   const loadProcedure = async () => {
@@ -343,12 +346,25 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
 
   const handleDownloadPdf = async () => {
     setDownloading(true);
+    setShowPrintMenu(false);
     try {
       await downloadProcedurePdf(procedureId);
     } catch (error) {
       console.error('Error downloading PDF:', error);
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadMethodStatement = async () => {
+    setDownloadingMethodStatement(true);
+    setShowPrintMenu(false);
+    try {
+      await downloadMethodStatementPdf(procedureId);
+    } catch (error) {
+      console.error('Error downloading Method Statement:', error);
+    } finally {
+      setDownloadingMethodStatement(false);
     }
   };
 
@@ -407,14 +423,65 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleDownloadPdf}
-              disabled={downloading}
-              className="p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors text-white"
-              title="Télécharger PDF"
-            >
-              {downloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-            </button>
+            {/* Print Menu Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowPrintMenu(!showPrintMenu)}
+                disabled={downloading || downloadingMethodStatement}
+                className="p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors text-white flex items-center gap-1"
+                title="Options d'impression"
+              >
+                {(downloading || downloadingMethodStatement) ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <>
+                    <Download className="w-5 h-5" />
+                    <ChevronDown className="w-3 h-3" />
+                  </>
+                )}
+              </button>
+
+              {showPrintMenu && (
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border z-50 overflow-hidden">
+                  <div className="p-2 bg-gray-50 border-b">
+                    <span className="text-xs font-medium text-gray-500">FORMATS D'IMPRESSION</span>
+                  </div>
+
+                  {/* PDF A4 Standard */}
+                  <button
+                    onClick={handleDownloadPdf}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-violet-600" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">PDF A4 Standard</p>
+                      <p className="text-xs text-gray-500">Format portrait classique</p>
+                    </div>
+                  </button>
+
+                  {/* Method Statement A3 */}
+                  <button
+                    onClick={handleDownloadMethodStatement}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-violet-50 transition-colors text-left border-t"
+                  >
+                    <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
+                      <FileSpreadsheet className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">Method Statement A3</p>
+                      <p className="text-xs text-gray-500">Format paysage avec QR code</p>
+                      <div className="flex items-center gap-1 mt-1">
+                        <QrCode className="w-3 h-3 text-violet-500" />
+                        <span className="text-xs text-violet-600">Compatible IA Electro</span>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {!isEditing ? (
               <button
                 onClick={() => setIsEditing(true)}

@@ -232,6 +232,34 @@ export async function downloadProcedurePdf(procedureId) {
   document.body.removeChild(a);
 }
 
+// Method Statement A3 Landscape PDF with QR Code
+export function getMethodStatementPdfUrl(procedureId) {
+  return `${API_BASE}/${procedureId}/method-statement-pdf`;
+}
+
+export async function downloadMethodStatementPdf(procedureId) {
+  const response = await fetch(getMethodStatementPdfUrl(procedureId), {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement du Method Statement PDF');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `method_statement_${procedureId}_A3.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
 // ==================== CATEGORIES ====================
 
 export async function getCategories() {

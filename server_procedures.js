@@ -16,6 +16,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
 
@@ -911,6 +912,499 @@ async function generateProcedurePDF(procedureId) {
         doc.image(siteSettings.logo, 510, 10, { width: 40, height: 30 });
       } catch (e) {}
     }
+  }
+
+  doc.end();
+
+  return new Promise((resolve) => {
+    doc.on("end", () => {
+      resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
+// ------------------------------
+// Method Statement A3 Landscape PDF Generation
+// Professional format with QR code for AI interaction
+// ------------------------------
+async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://electrohub.app') {
+  // Get procedure with all related data
+  const { rows: procedures } = await pool.query(
+    `SELECT * FROM procedures WHERE id = $1`,
+    [procedureId]
+  );
+
+  if (procedures.length === 0) {
+    throw new Error("Procédure non trouvée");
+  }
+
+  const procedure = procedures[0];
+
+  // Get steps with photos
+  const { rows: steps } = await pool.query(
+    `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+    [procedureId]
+  );
+
+  // Get equipment links
+  const { rows: equipmentLinks } = await pool.query(
+    `SELECT * FROM procedure_equipment_links WHERE procedure_id = $1`,
+    [procedureId]
+  );
+
+  // Get site settings (logo, company name) from Switchboard settings
+  let siteSettings = {};
+  try {
+    const { rows: settings } = await pool.query(
+      `SELECT logo, logo_mime, company_name, company_address, company_phone FROM site_settings WHERE site = $1`,
+      [procedure.site || 'default']
+    );
+    if (settings.length > 0) {
+      siteSettings = settings[0];
+    }
+  } catch (e) {
+    console.log("[Procedures] Could not fetch site settings:", e.message);
+  }
+
+  // Generate QR Code for this procedure (links to AI Electro interaction)
+  const qrCodeUrl = `${baseUrl}/procedures?id=${procedureId}&ai=true`;
+  let qrCodeBuffer = null;
+  try {
+    qrCodeBuffer = await QRCode.toBuffer(qrCodeUrl, {
+      width: 120,
+      margin: 1,
+      color: { dark: '#7c3aed', light: '#ffffff' }
+    });
+  } catch (e) {
+    console.log("[Procedures] Could not generate QR code:", e.message);
+  }
+
+  // Create A3 Landscape PDF
+  // A3 dimensions: 420mm x 297mm = 1190.55 x 841.89 points
+  const pageWidth = 1190.55;
+  const pageHeight = 841.89;
+  const margin = 40;
+  const columnGap = 30;
+  const leftColumnWidth = (pageWidth - margin * 2 - columnGap) * 0.55; // 55% for steps/info
+  const rightColumnWidth = (pageWidth - margin * 2 - columnGap) * 0.45; // 45% for photos
+
+  const doc = new PDFDocument({
+    size: [pageWidth, pageHeight],
+    margin: margin,
+    bufferPages: true,
+    info: {
+      Title: `Method Statement - ${procedure.title}`,
+      Author: siteSettings.company_name || "ElectroHub",
+      Subject: "Method Statement - Procédure Opérationnelle",
+      Creator: "ElectroHub Method Statement Generator",
+    },
+  });
+
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+
+  // Professional color scheme
+  const colors = {
+    primary: "#7c3aed",      // Violet
+    secondary: "#a78bfa",    // Light violet
+    accent: "#f59e0b",       // Amber for warnings
+    success: "#10b981",      // Green
+    danger: "#ef4444",       // Red
+    text: "#1f2937",         // Dark gray
+    lightText: "#6b7280",    // Medium gray
+    lightBg: "#f8fafc",      // Light background
+    border: "#e5e7eb",       // Border gray
+    headerBg: "#1e1b4b",     // Dark purple for header
+  };
+
+  // Risk level config
+  const riskConfig = {
+    low: { color: colors.success, label: "FAIBLE", bgColor: "#dcfce7" },
+    medium: { color: colors.accent, label: "MODÉRÉ", bgColor: "#fef3c7" },
+    high: { color: colors.danger, label: "ÉLEVÉ", bgColor: "#fee2e2" },
+    critical: { color: "#7f1d1d", label: "CRITIQUE", bgColor: "#fecaca" },
+  };
+  const riskInfo = riskConfig[procedure.risk_level] || riskConfig.low;
+
+  // === HEADER SECTION ===
+  const headerHeight = 100;
+
+  // Header background - dark gradient feel
+  doc.rect(0, 0, pageWidth, headerHeight).fill(colors.headerBg);
+  doc.rect(0, headerHeight - 5, pageWidth, 5).fill(colors.primary);
+
+  // Logo on left
+  let logoEndX = margin + 20;
+  if (siteSettings.logo) {
+    try {
+      doc.image(siteSettings.logo, margin, 15, { width: 100, height: 70 });
+      logoEndX = margin + 115;
+    } catch (e) {
+      console.log("[Procedures] Could not add logo:", e.message);
+    }
+  }
+
+  // Company name and document type
+  doc.fontSize(12).fillColor("#fff").font("Helvetica").text(
+    siteSettings.company_name || "ELECTROHUB",
+    logoEndX, 20, { width: 200 }
+  );
+
+  // Document type badge
+  doc.roundedRect(logoEndX, 45, 140, 28, 4).fill(colors.primary);
+  doc.fontSize(12).fillColor("#fff").font("Helvetica-Bold").text(
+    "METHOD STATEMENT",
+    logoEndX + 10, 52, { width: 120, align: "center" }
+  );
+
+  // Main title - centered
+  const titleX = logoEndX + 160;
+  const titleWidth = pageWidth - titleX - 200;
+  doc.fontSize(24).fillColor("#fff").font("Helvetica-Bold").text(
+    procedure.title.toUpperCase(),
+    titleX, 25, { width: titleWidth, align: "center" }
+  );
+
+  // Subtitle with version and date
+  doc.fontSize(10).fillColor(colors.secondary).font("Helvetica").text(
+    `Version ${procedure.version || 1} • ${new Date().toLocaleDateString("fr-FR")} • ${procedure.category || "Général"}`,
+    titleX, 58, { width: titleWidth, align: "center" }
+  );
+
+  // QR Code on right
+  if (qrCodeBuffer) {
+    try {
+      doc.image(qrCodeBuffer, pageWidth - margin - 80, 10, { width: 80, height: 80 });
+      doc.fontSize(7).fillColor(colors.secondary).text(
+        "Scanner pour IA",
+        pageWidth - margin - 80, 90, { width: 80, align: "center" }
+      );
+    } catch (e) {
+      console.log("[Procedures] Could not add QR code to PDF:", e.message);
+    }
+  }
+
+  // Risk level badge
+  doc.roundedRect(pageWidth - margin - 170, 30, 80, 35, 5).fill(riskInfo.bgColor).stroke(riskInfo.color);
+  doc.fontSize(8).fillColor(colors.lightText).text("RISQUE", pageWidth - margin - 165, 35, { width: 70, align: "center" });
+  doc.fontSize(12).fillColor(riskInfo.color).font("Helvetica-Bold").text(
+    riskInfo.label,
+    pageWidth - margin - 165, 48, { width: 70, align: "center" }
+  );
+
+  // === MAIN CONTENT AREA ===
+  let yPos = headerHeight + 15;
+  const leftX = margin;
+  const rightX = margin + leftColumnWidth + columnGap;
+  const contentEndY = pageHeight - 60; // Leave space for footer
+
+  // === LEFT COLUMN: Steps Table + Safety ===
+  doc.font("Helvetica");
+
+  // Steps table header
+  doc.rect(leftX, yPos, leftColumnWidth, 30).fill(colors.primary);
+  doc.fontSize(12).fillColor("#fff").font("Helvetica-Bold").text(
+    `ÉTAPES DE LA PROCÉDURE (${steps.length} étapes)`,
+    leftX + 15, yPos + 9
+  );
+  yPos += 30;
+
+  // Steps table
+  const stepTableStartY = yPos;
+  const stepNumWidth = 35;
+  const stepTitleWidth = leftColumnWidth * 0.35;
+  const stepInstrWidth = leftColumnWidth - stepNumWidth - stepTitleWidth - 30;
+
+  // Table header row
+  doc.rect(leftX, yPos, leftColumnWidth, 25).fill(colors.lightBg).stroke(colors.border);
+  doc.fontSize(9).fillColor(colors.text).font("Helvetica-Bold");
+  doc.text("N°", leftX + 8, yPos + 8, { width: stepNumWidth });
+  doc.text("ÉTAPE", leftX + stepNumWidth + 10, yPos + 8, { width: stepTitleWidth });
+  doc.text("INSTRUCTIONS / AVERTISSEMENTS", leftX + stepNumWidth + stepTitleWidth + 20, yPos + 8, { width: stepInstrWidth });
+  yPos += 25;
+
+  // Steps rows
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const isEven = i % 2 === 0;
+
+    // Calculate row height based on content
+    const instructionText = step.instructions || "";
+    const warningText = step.warning ? `⚠️ ${step.warning}` : "";
+    const combinedText = instructionText + (warningText ? "\n" + warningText : "");
+
+    doc.fontSize(8);
+    const textHeight = doc.heightOfString(combinedText, { width: stepInstrWidth - 10 });
+    const titleHeight = doc.heightOfString(step.title, { width: stepTitleWidth - 10 });
+    const rowHeight = Math.max(35, Math.min(80, Math.max(textHeight, titleHeight) + 15));
+
+    // Check if we need to continue on available space
+    if (yPos + rowHeight > contentEndY - 150) {
+      // Stop adding more steps if no space
+      doc.fontSize(8).fillColor(colors.lightText).text(
+        `... et ${steps.length - i} étapes supplémentaires`,
+        leftX + 10, yPos + 5
+      );
+      break;
+    }
+
+    // Row background
+    doc.rect(leftX, yPos, leftColumnWidth, rowHeight).fillAndStroke(isEven ? "#fff" : colors.lightBg, colors.border);
+
+    // Step number circle
+    doc.circle(leftX + 18, yPos + rowHeight / 2, 12).fill(colors.primary);
+    doc.fontSize(10).fillColor("#fff").font("Helvetica-Bold").text(
+      String(step.step_number),
+      leftX + 12, yPos + rowHeight / 2 - 5, { width: 12, align: "center" }
+    );
+
+    // Step title
+    doc.fontSize(9).fillColor(colors.text).font("Helvetica-Bold").text(
+      step.title,
+      leftX + stepNumWidth + 10, yPos + 8, { width: stepTitleWidth - 10 }
+    );
+
+    // Duration if available
+    if (step.duration_minutes) {
+      doc.fontSize(7).fillColor(colors.lightText).font("Helvetica").text(
+        `${step.duration_minutes} min`,
+        leftX + stepNumWidth + 10, yPos + rowHeight - 12, { width: stepTitleWidth - 10 }
+      );
+    }
+
+    // Instructions
+    doc.fontSize(8).fillColor(colors.text).font("Helvetica").text(
+      step.instructions || "-",
+      leftX + stepNumWidth + stepTitleWidth + 20, yPos + 8, { width: stepInstrWidth - 15 }
+    );
+
+    // Warning (in amber)
+    if (step.warning) {
+      const instrHeight = step.instructions ? doc.heightOfString(step.instructions, { width: stepInstrWidth - 15 }) : 0;
+      doc.fontSize(7).fillColor(colors.accent).text(
+        `⚠ ${step.warning}`,
+        leftX + stepNumWidth + stepTitleWidth + 20, yPos + 10 + instrHeight, { width: stepInstrWidth - 15 }
+      );
+    }
+
+    yPos += rowHeight;
+  }
+
+  // === SAFETY & PPE SECTION (below steps) ===
+  yPos += 15;
+
+  // Calculate remaining space
+  const remainingSpace = contentEndY - yPos;
+  const safetyBoxHeight = Math.min(200, remainingSpace - 10);
+
+  if (safetyBoxHeight > 80) {
+    // Safety section header
+    doc.rect(leftX, yPos, leftColumnWidth, 25).fill(colors.danger);
+    doc.fontSize(11).fillColor("#fff").font("Helvetica-Bold").text(
+      "🛡️ SÉCURITÉ & EPI REQUIS",
+      leftX + 15, yPos + 7
+    );
+    yPos += 25;
+
+    // PPE and Safety codes in two columns
+    const safetyContentHeight = safetyBoxHeight - 25;
+    doc.rect(leftX, yPos, leftColumnWidth, safetyContentHeight).fillAndStroke(colors.lightBg, colors.border);
+
+    const ppeList = procedure.ppe_required || [];
+    const safetyCodes = procedure.safety_codes || [];
+    const halfWidth = (leftColumnWidth - 20) / 2;
+
+    // PPE Column
+    doc.fontSize(9).fillColor(colors.text).font("Helvetica-Bold").text(
+      "EPI Obligatoires:",
+      leftX + 10, yPos + 10, { width: halfWidth }
+    );
+
+    let ppeY = yPos + 25;
+    doc.fontSize(8).font("Helvetica");
+    ppeList.slice(0, 8).forEach((ppe, i) => {
+      if (ppeY < yPos + safetyContentHeight - 15) {
+        doc.roundedRect(leftX + 10, ppeY, halfWidth - 15, 16, 3).fill("#fef3c7");
+        doc.fillColor(colors.text).text(`• ${ppe}`, leftX + 15, ppeY + 4, { width: halfWidth - 25 });
+        ppeY += 18;
+      }
+    });
+
+    // Safety Codes Column
+    doc.fontSize(9).fillColor(colors.text).font("Helvetica-Bold").text(
+      "Codes de Sécurité:",
+      leftX + halfWidth + 15, yPos + 10, { width: halfWidth }
+    );
+
+    let codeY = yPos + 25;
+    doc.fontSize(8).font("Helvetica");
+    safetyCodes.slice(0, 6).forEach((code, i) => {
+      if (codeY < yPos + safetyContentHeight - 15) {
+        doc.roundedRect(leftX + halfWidth + 15, codeY, halfWidth - 15, 16, 3).fill("#dbeafe");
+        doc.fillColor(colors.text).text(`▸ ${code}`, leftX + halfWidth + 20, codeY + 4, { width: halfWidth - 25 });
+        codeY += 18;
+      }
+    });
+
+    // Emergency contacts at bottom of safety section if space
+    const contacts = procedure.emergency_contacts || [];
+    if (contacts.length > 0 && codeY < yPos + safetyContentHeight - 30) {
+      const contactY = Math.max(ppeY, codeY) + 5;
+      doc.rect(leftX + 10, contactY, leftColumnWidth - 20, 25).fill("#fef2f2").stroke(colors.danger);
+      doc.fontSize(8).fillColor(colors.danger).font("Helvetica-Bold").text(
+        `📞 URGENCE: ${contacts[0].name} - ${contacts[0].phone}`,
+        leftX + 20, contactY + 8, { width: leftColumnWidth - 40 }
+      );
+    }
+  }
+
+  // === RIGHT COLUMN: Photos Gallery ===
+  let photoY = headerHeight + 15;
+
+  // Photos header
+  doc.rect(rightX, photoY, rightColumnWidth, 30).fill(colors.secondary);
+  doc.fontSize(12).fillColor("#fff").font("Helvetica-Bold").text(
+    "📸 PHOTOS DES ÉTAPES",
+    rightX + 15, photoY + 9
+  );
+  photoY += 35;
+
+  // Calculate photo grid layout
+  const photosWithContent = steps.filter(s => s.photo_content || s.photo_path);
+  const photoMargin = 10;
+  const photoColumns = 2;
+  const availablePhotoWidth = rightColumnWidth - photoMargin * 2;
+  const photoBoxWidth = (availablePhotoWidth - photoMargin) / photoColumns;
+  const photoBoxHeight = 140;
+
+  let photoCol = 0;
+  let photosPlaced = 0;
+  const maxPhotos = Math.floor((contentEndY - photoY) / (photoBoxHeight + 10)) * 2;
+
+  for (let i = 0; i < steps.length && photosPlaced < maxPhotos; i++) {
+    const step = steps[i];
+    const hasPhoto = step.photo_content || step.photo_path;
+
+    if (!hasPhoto) continue;
+
+    const photoX = rightX + photoMargin + photoCol * (photoBoxWidth + photoMargin);
+
+    // Check if we need new row
+    if (photoY + photoBoxHeight > contentEndY - 10) break;
+
+    // Photo container
+    doc.roundedRect(photoX, photoY, photoBoxWidth, photoBoxHeight, 8).fillAndStroke("#fff", colors.border);
+
+    // Step number badge
+    doc.circle(photoX + 15, photoY + 15, 12).fill(colors.primary);
+    doc.fontSize(10).fillColor("#fff").font("Helvetica-Bold").text(
+      String(step.step_number),
+      photoX + 9, photoY + 10, { width: 12, align: "center" }
+    );
+
+    // Photo
+    const imgX = photoX + 8;
+    const imgY = photoY + 30;
+    const imgWidth = photoBoxWidth - 16;
+    const imgHeight = photoBoxHeight - 55;
+
+    if (step.photo_content) {
+      try {
+        doc.image(step.photo_content, imgX, imgY, {
+          fit: [imgWidth, imgHeight],
+          align: "center",
+          valign: "center"
+        });
+      } catch (e) {
+        doc.rect(imgX, imgY, imgWidth, imgHeight).fill(colors.lightBg);
+        doc.fontSize(8).fillColor(colors.lightText).text("Photo non disponible", imgX + 10, imgY + imgHeight/2);
+      }
+    } else if (step.photo_path) {
+      try {
+        const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
+        if (fs.existsSync(imgPath)) {
+          doc.image(imgPath, imgX, imgY, {
+            fit: [imgWidth, imgHeight],
+            align: "center",
+            valign: "center"
+          });
+        }
+      } catch (e) {
+        doc.rect(imgX, imgY, imgWidth, imgHeight).fill(colors.lightBg);
+        doc.fontSize(8).fillColor(colors.lightText).text("Photo non disponible", imgX + 10, imgY + imgHeight/2);
+      }
+    }
+
+    // Step title under photo
+    doc.fontSize(7).fillColor(colors.text).font("Helvetica").text(
+      step.title.substring(0, 40) + (step.title.length > 40 ? "..." : ""),
+      photoX + 5, photoY + photoBoxHeight - 18, { width: photoBoxWidth - 10, align: "center" }
+    );
+
+    photosPlaced++;
+    photoCol++;
+
+    if (photoCol >= photoColumns) {
+      photoCol = 0;
+      photoY += photoBoxHeight + 10;
+    }
+  }
+
+  // If no photos, show placeholder
+  if (photosWithContent.length === 0) {
+    doc.rect(rightX + photoMargin, photoY, availablePhotoWidth, 150).fillAndStroke(colors.lightBg, colors.border);
+    doc.fontSize(12).fillColor(colors.lightText).text(
+      "Aucune photo disponible\npour cette procédure",
+      rightX + photoMargin + 20, photoY + 60, { width: availablePhotoWidth - 40, align: "center" }
+    );
+  }
+
+  // === FOOTER ===
+  const footerY = pageHeight - 45;
+
+  // Footer line
+  doc.rect(margin, footerY, pageWidth - margin * 2, 1).fill(colors.border);
+
+  // Footer content
+  doc.fontSize(8).fillColor(colors.lightText).font("Helvetica");
+
+  // Left: Company info
+  doc.text(
+    siteSettings.company_name || "ElectroHub",
+    margin, footerY + 8, { width: 200 }
+  );
+
+  // Center: Document info
+  doc.text(
+    `Method Statement • ${procedure.title} • v${procedure.version || 1}`,
+    pageWidth / 2 - 150, footerY + 8, { width: 300, align: "center" }
+  );
+
+  // Right: Date and ID
+  doc.text(
+    `Généré le ${new Date().toLocaleString("fr-FR")} • ID: ${procedureId.substring(0, 8)}`,
+    pageWidth - margin - 250, footerY + 8, { width: 250, align: "right" }
+  );
+
+  // QR code reminder
+  doc.fontSize(7).fillColor(colors.primary).text(
+    "📱 Scannez le QR code pour interagir avec l'IA Electro",
+    pageWidth / 2 - 100, footerY + 22, { width: 200, align: "center" }
+  );
+
+  // Equipment links at very bottom if any
+  if (equipmentLinks.length > 0) {
+    const typeLabels = {
+      switchboard: "Armoire", vsd: "VSD", meca: "Méca", atex: "ATEX",
+      hv: "HT", glo: "UPS", mobile: "Mobile", doors: "Porte"
+    };
+    const equipText = equipmentLinks.slice(0, 3).map(l =>
+      `${typeLabels[l.equipment_type] || l.equipment_type}: ${l.equipment_name || l.equipment_id.substring(0, 8)}`
+    ).join(" | ");
+    doc.fontSize(7).fillColor(colors.lightText).text(
+      `Équipements: ${equipText}${equipmentLinks.length > 3 ? ` (+${equipmentLinks.length - 3})` : ""}`,
+      margin, footerY + 30, { width: pageWidth - margin * 2, align: "center" }
+    );
   }
 
   doc.end();
@@ -1876,6 +2370,36 @@ app.get("/api/procedures/:id/pdf", async (req, res) => {
     res.end(pdfBuffer);
   } catch (err) {
     console.error("Error generating PDF:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate Method Statement A3 Landscape PDF with QR Code
+app.get("/api/procedures/:id/method-statement-pdf", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get base URL from request or use default
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers.host || "electrohub.app";
+    const baseUrl = `${protocol}://${host}`;
+
+    const pdfBuffer = await generateMethodStatementA3PDF(id, baseUrl);
+
+    // Get procedure title for filename
+    const { rows } = await pool.query(`SELECT title FROM procedures WHERE id = $1`, [id]);
+    const title = rows[0]?.title || "method_statement";
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 50);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="method_statement_${safeTitle}_A3_${new Date().toISOString().split("T")[0]}.pdf"`
+    );
+
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Error generating Method Statement PDF:", err);
     res.status(500).json({ error: err.message });
   }
 });
