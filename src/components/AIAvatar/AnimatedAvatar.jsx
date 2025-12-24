@@ -436,5 +436,5 @@ const AnimatedAvatar = forwardRef(({
 
 AnimatedAvatar.displayName = 'AnimatedAvatar';
 
-export { AnimatedAvatar, AVATAR_STYLES, refreshCustomIcon };
+export { AnimatedAvatar, AVATAR_STYLES };
 export default AnimatedAvatar;
