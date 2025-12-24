@@ -21,6 +21,8 @@ import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceComple
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
+// --- Google Gemini (fallback gratuit pour analyse photo)
+const { GoogleGenerativeAI } = await import("@google/generative-ai");
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -325,19 +327,7 @@ async function logEvent(action, details = {}, user = {}) {
   } catch {}
 }
 
-async function vsdExtractFromFiles(client, files) {
-  if (!client) throw new Error("OPENAI_API_KEY missing");
-  if (!files?.length) throw new Error("no files");
-
-  const images = await Promise.all(
-    files.map(async (f) => ({
-      name: f.originalname,
-      mime: f.mimetype,
-      data: (await fsp.readFile(f.path)).toString("base64"),
-    }))
-  );
-
-  const sys = `Tu es un assistant d'inspection de variateurs de fréquence (VSD). Extrait des photos:
+const VSD_PROMPT = `Tu es un assistant d'inspection de variateurs de fréquence (VSD). Extrait des photos:
 - manufacturer (fabricant)
 - model (modèle)
 - reference (référence commerciale)
@@ -348,36 +338,20 @@ async function vsdExtractFromFiles(client, files) {
 - protocol (protocole de communication: Modbus, Profibus, Ethernet/IP, etc.)
 - ip_rating (indice de protection IP)
 
-Réponds en JSON strict avec ces champs uniquement.`;
+IMPORTANT: Réponds UNIQUEMENT avec un objet JSON valide contenant ces champs. Pas de texte avant ou après.`;
 
-  const content = [
-    { role: "system", content: sys },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
-        ...images.map((im) => ({
-          type: "image_url",
-          image_url: { url: `data:${im.mime};base64,${im.data}` },
-        })),
-      ],
-    },
-  ];
-
-  const resp = await client.chat.completions.create({
-    model: process.env.VSD_OPENAI_MODEL || "gpt-4o-mini",
-    messages: content,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-  });
-
+function parseVsdResult(rawContent) {
   let data = {};
   try {
-    data = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+    let cleaned = rawContent.trim();
+    if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
+    if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
+    if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
+    data = JSON.parse(cleaned.trim());
   } catch {
+    console.error("[VSD-AI] JSON parse error");
     data = {};
   }
-
   return {
     manufacturer: String(data.manufacturer || ""),
     model: String(data.model || ""),
@@ -389,6 +363,101 @@ Réponds en JSON strict avec ces champs uniquement.`;
     protocol: String(data.protocol || ""),
     ip_rating: String(data.ip_rating || ""),
   };
+}
+
+async function vsdExtractWithGemini(images) {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+  const imageParts = images.map((img) => ({
+    inlineData: { data: img.data, mimeType: img.mime },
+  }));
+
+  console.log("[VSD-AI] Calling Gemini...");
+  const result = await model.generateContent([VSD_PROMPT, ...imageParts]);
+  const rawContent = result.response.text();
+  console.log("[VSD-AI] Gemini response received");
+
+  return parseVsdResult(rawContent);
+}
+
+async function vsdExtractWithOpenAI(client, images) {
+  const model = process.env.VSD_OPENAI_MODEL || "gpt-4o-mini";
+  console.log(`[VSD-AI] Calling OpenAI (${model})...`);
+
+  const resp = await client.chat.completions.create({
+    model,
+    messages: [
+      { role: "system", content: VSD_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
+          ...images.map((im) => ({
+            type: "image_url",
+            image_url: { url: `data:${im.mime};base64,${im.data}` },
+          })),
+        ],
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  });
+
+  const rawContent = resp.choices?.[0]?.message?.content || "{}";
+  console.log("[VSD-AI] OpenAI response received");
+  return parseVsdResult(rawContent);
+}
+
+async function vsdExtractFromFiles(openaiClient, files) {
+  if (!files?.length) throw new Error("no files");
+
+  console.log(`[VSD-AI] Analyzing ${files.length} photo(s)...`);
+
+  const images = await Promise.all(
+    files.map(async (f) => ({
+      name: f.originalname,
+      mime: f.mimetype,
+      data: (await fsp.readFile(f.path)).toString("base64"),
+    }))
+  );
+
+  const hasOpenAI = !!openaiClient;
+  const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+
+  console.log(`[VSD-AI] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
+  if (hasOpenAI) {
+    try {
+      const result = await vsdExtractWithOpenAI(openaiClient, images);
+      console.log("[VSD-AI] ✅ Extracted (OpenAI):", result);
+      return result;
+    } catch (openaiErr) {
+      console.error("[VSD-AI] OpenAI failed:", openaiErr.message);
+
+      const isQuotaError = openaiErr.status === 429 || openaiErr.message?.includes("429") || openaiErr.message?.includes("quota");
+
+      if (hasGemini && isQuotaError) {
+        console.log("[VSD-AI] ⚡ Fallback to Gemini...");
+        const result = await vsdExtractWithGemini(images);
+        console.log("[VSD-AI] ✅ Extracted (Gemini fallback):", result);
+        return result;
+      }
+      throw openaiErr;
+    }
+  }
+
+  if (hasGemini) {
+    console.log("[VSD-AI] Using Gemini (no OpenAI key)...");
+    const result = await vsdExtractWithGemini(images);
+    console.log("[VSD-AI] ✅ Extracted (Gemini):", result);
+    return result;
+  }
+
+  throw new Error("No AI provider configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
 }
 
 // -------------------------------------------------

@@ -231,9 +231,14 @@ async function quickQuery(sql, params = [], timeoutMs = 15000, retries = 1) {
 }
 
 // ============================================================
-// OPENAI SETUP
+// AI SETUP (OpenAI + Gemini fallback)
 // ============================================================
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
 let openai = null;
+let gemini = null;
+const GEMINI_MODEL = 'gemini-2.0-flash';
+
 if (process.env.OPENAI_API_KEY) {
   try {
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -241,6 +246,37 @@ if (process.env.OPENAI_API_KEY) {
   } catch (e) {
     console.warn('[SWITCHBOARD] OpenAI init failed:', e.message);
   }
+}
+
+if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
+  try {
+    gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+    console.log('[SWITCHBOARD] Gemini initialized');
+  } catch (e) {
+    console.warn('[SWITCHBOARD] Gemini init failed:', e.message);
+  }
+}
+
+// Helper: Call AI with fallback
+async function callAIWithFallback(openaiCall, geminiCall, context = 'AI') {
+  if (openai) {
+    try {
+      return await openaiCall();
+    } catch (err) {
+      console.error(`[SWITCHBOARD] OpenAI ${context} failed:`, err.message);
+      const isQuotaError = err.status === 429 || err.message?.includes('429') || err.message?.includes('quota');
+      if (gemini && isQuotaError) {
+        console.log(`[SWITCHBOARD] ⚡ Fallback to Gemini for ${context}...`);
+        return await geminiCall();
+      }
+      throw err;
+    }
+  }
+  if (gemini) {
+    console.log(`[SWITCHBOARD] Using Gemini for ${context} (no OpenAI)...`);
+    return await geminiCall();
+  }
+  throw new Error('No AI provider available');
 }
 
 // ============================================================
@@ -2004,7 +2040,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
     if (!req.file) return res.status(400).json({ error: 'No photo provided' });
-    if (!openai) return res.status(503).json({ error: 'OpenAI not available' });
+    if (!openai && !gemini) return res.status(503).json({ error: 'No AI provider available' });
 
     const base64Image = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype || 'image/jpeg';
