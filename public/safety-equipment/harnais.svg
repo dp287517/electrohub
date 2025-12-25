@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#7c3aed" stroke-width="3">
+  <!-- Harnais de sécurité - Safety Harness -->
+  <!-- Shoulder straps -->
+  <path d="M30 15 L35 40 L50 50 L65 40 L70 15" fill="none"/>
+  <path d="M30 15 Q50 5 70 15" fill="none"/>
+  <!-- Back D-ring -->
+  <circle cx="50" cy="25" r="6" fill="#8b5cf6"/>
+  <circle cx="50" cy="25" r="3" fill="none" stroke="#fff"/>
+  <!-- Chest strap -->
+  <line x1="35" y1="35" x2="65" y2="35"/>
+  <rect x="45" y="32" width="10" height="6" rx="1" fill="#6d28d9"/>
+  <!-- Waist belt -->
+  <path d="M25 55 L35 50 L65 50 L75 55 L75 62 L25 62 Z" fill="#8b5cf6"/>
+  <rect x="45" y="52" width="10" height="8" rx="1" fill="#4c1d95"/>
+  <!-- Leg straps -->
+  <path d="M35 62 L30 90 L40 90 L45 65" fill="none"/>
+  <path d="M65 62 L70 90 L60 90 L55 65" fill="none"/>
+  <!-- Leg buckles -->
+  <rect x="30" y="75" width="8" height="5" rx="1" fill="#6d28d9"/>
+  <rect x="62" y="75" width="8" height="5" rx="1" fill="#6d28d9"/>
+  <!-- Side D-rings -->
+  <circle cx="25" cy="58" r="4" fill="#a78bfa"/>
+  <circle cx="75" cy="58" r="4" fill="#a78bfa"/>
+</svg>

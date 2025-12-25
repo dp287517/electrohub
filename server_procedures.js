@@ -26,6 +26,14 @@ import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import archiver from "archiver";
 
+// Safety Equipment Library for PDF generation with images
+import {
+  SAFETY_EQUIPMENT,
+  EQUIPMENT_IMAGES_PATH,
+  getEquipment,
+  getEquipmentForProcedure,
+} from "./server/safety-equipment-library.js";
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2210,21 +2218,94 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     ry += photoBoxH + 5;
   }
 
-  // EPI Section
+  // EPI Section with equipment images
   ry += 3;
   doc.rect(col2X, ry, col2W, 15).fill(c.warning);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 6, ry + 3);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("EQUIPEMENTS DE SECURITE", col2X + 6, ry + 3);
   ry += 15;
 
+  // Get equipment based on procedure steps
+  const detectedEquipment = getEquipmentForProcedure(steps);
   const ppeList = procedure.ppe_required || [];
-  const ppeH = Math.min(75, Math.max(35, ppeList.length * 10 + 8));
+
+  // Combine PPE list with detected equipment, removing duplicates
+  const allEquipmentIds = new Set();
+  detectedEquipment.forEach(eq => allEquipmentIds.add(eq.id));
+
+  // Map PPE names to equipment IDs
+  const ppeToEquipment = {
+    'casque': 'casque', 'casque de protection': 'casque',
+    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes',
+    'gants': 'gants', 'gants de protection': 'gants', 'gants isolants': 'gants',
+    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures',
+    'harnais': 'harnais', 'harnais antichute': 'harnais',
+    'gilet': 'gilet', 'gilet haute visibilité': 'gilet',
+    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit', 'bouchons': 'antibruit'
+  };
+
+  ppeList.forEach(ppe => {
+    const lowerPpe = ppe.toLowerCase();
+    for (const [key, id] of Object.entries(ppeToEquipment)) {
+      if (lowerPpe.includes(key)) {
+        allEquipmentIds.add(id);
+        break;
+      }
+    }
+  });
+
+  // Convert to equipment objects
+  const equipmentToShow = Array.from(allEquipmentIds)
+    .map(id => SAFETY_EQUIPMENT[id])
+    .filter(Boolean)
+    .slice(0, 6); // Max 6 items
+
+  // Calculate height based on equipment count (icons in 2 columns)
+  const iconSize = 32;
+  const iconGap = 8;
+  const rowsNeeded = Math.ceil(equipmentToShow.length / 2);
+  const ppeH = Math.max(45, rowsNeeded * (iconSize + iconGap + 12) + 10);
+
   doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
-  doc.font("Helvetica").fontSize(6).fillColor(c.text);
-  ppeList.slice(0, 8).forEach((ppe, i) => {
+
+  // Render equipment icons in 2-column grid
+  equipmentToShow.forEach((eq, i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
-    doc.text("[x] " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
+    const iconX = col2X + 8 + col * (col2W / 2);
+    const iconY = ry + 6 + row * (iconSize + iconGap + 12);
+
+    // Try to render SVG icon
+    try {
+      if (fs.existsSync(eq.imagePath)) {
+        doc.image(eq.imagePath, iconX, iconY, { width: iconSize, height: iconSize });
+      } else {
+        // Fallback: colored circle with first letter
+        doc.circle(iconX + iconSize / 2, iconY + iconSize / 2, iconSize / 2 - 2).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(14).fillColor(c.white)
+           .text(eq.name[0].toUpperCase(), iconX, iconY + iconSize / 3, { width: iconSize, align: "center" });
+      }
+    } catch (e) {
+      // Fallback on error
+      doc.circle(iconX + iconSize / 2, iconY + iconSize / 2, iconSize / 2 - 2).fill(c.primary);
+      doc.font("Helvetica-Bold").fontSize(12).fillColor(c.white)
+         .text(eq.name[0].toUpperCase(), iconX, iconY + iconSize / 3, { width: iconSize, align: "center" });
+    }
+
+    // Equipment name below icon
+    doc.font("Helvetica").fontSize(5).fillColor(c.text)
+       .text(eq.name, iconX - 5, iconY + iconSize + 2, { width: iconSize + 30, align: "left", lineBreak: false });
   });
+
+  // If no equipment detected, show text list
+  if (equipmentToShow.length === 0) {
+    doc.font("Helvetica").fontSize(6).fillColor(c.text);
+    ppeList.slice(0, 8).forEach((ppe, i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      doc.text("[x] " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
+    });
+  }
+
   ry += ppeH + 3;
 
   // Safety Codes
@@ -4887,6 +4968,62 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
      .text(data.description || data.activity || "Description de l'intervention", margin + 10, y + 10, { width: contentW - 20 });
   y += 60;
 
+  // === EQUIPMENT SECTION WITH IMAGES ===
+  const detectedEquipmentWM = getEquipmentForProcedure(steps);
+  const ppeListWM = data.ppe_required || [];
+
+  const ppeToEquipmentWM = {
+    'casque': 'casque', 'lunettes': 'lunettes', 'gants': 'gants',
+    'chaussures': 'chaussures', 'harnais': 'harnais', 'gilet': 'gilet',
+    'protection auditive': 'antibruit', 'pirl': 'pirl', 'échelle': 'echelle', 'nacelle': 'nacelle'
+  };
+
+  const allEquipmentIdsWM = new Set();
+  detectedEquipmentWM.forEach(eq => allEquipmentIdsWM.add(eq.id));
+  ppeListWM.forEach(ppe => {
+    const lowerPpe = ppe.toLowerCase();
+    for (const [key, id] of Object.entries(ppeToEquipmentWM)) {
+      if (lowerPpe.includes(key)) {
+        allEquipmentIdsWM.add(id);
+        break;
+      }
+    }
+  });
+
+  const equipmentToShowWM = Array.from(allEquipmentIdsWM)
+    .map(id => SAFETY_EQUIPMENT[id])
+    .filter(Boolean)
+    .slice(0, 6);
+
+  if (equipmentToShowWM.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(c.warning)
+       .text("EQUIPEMENTS DE SECURITE", margin, y);
+    y += 18;
+
+    const wmIconSize = 35;
+    const iconsPerRow = Math.min(6, equipmentToShowWM.length);
+    const iconSpacing = (contentW - iconsPerRow * wmIconSize) / (iconsPerRow + 1);
+
+    doc.rect(margin, y, contentW, wmIconSize + 20).fillAndStroke(c.lightBg, c.border);
+
+    equipmentToShowWM.forEach((eq, idx) => {
+      const iconX = margin + iconSpacing + idx * (wmIconSize + iconSpacing);
+      try {
+        if (fs.existsSync(eq.imagePath)) {
+          doc.image(eq.imagePath, iconX, y + 5, { width: wmIconSize, height: wmIconSize });
+        }
+      } catch (e) {
+        doc.circle(iconX + wmIconSize / 2, y + 5 + wmIconSize / 2, wmIconSize / 2 - 2).fill(c.primary);
+        doc.font("Helvetica-Bold").fontSize(14).fillColor(c.white)
+           .text(eq.name[0].toUpperCase(), iconX, y + 5 + wmIconSize / 3, { width: wmIconSize, align: "center" });
+      }
+      doc.font("Helvetica").fontSize(6).fillColor(c.text)
+         .text(eq.name, iconX - 8, y + wmIconSize + 7, { width: wmIconSize + 16, align: "center" });
+    });
+
+    y += wmIconSize + 30;
+  }
+
   // === STEPS WITH PHOTOS ===
   doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
      .text("METHODOLOGIE DETAILLEE", margin, y);
@@ -5091,9 +5228,57 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
   const totalDuration = steps.reduce((sum, s) => sum + (s.duration_minutes || 10), 0);
   doc.fillColor(c.text).text(`${totalDuration} minutes`, margin + 100, y + 40);
 
-  // PPE required
+  // PPE required with equipment images
   const ppeList = data.ppe_required || data.ppeRequired || [];
-  if (ppeList.length > 0) {
+  const detectedEquipmentProc = getEquipmentForProcedure(steps);
+
+  // Map PPE names to equipment IDs
+  const ppeToEquipmentProc = {
+    'casque': 'casque', 'casque de protection': 'casque',
+    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes',
+    'gants': 'gants', 'gants de protection': 'gants', 'gants isolants': 'gants',
+    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures',
+    'harnais': 'harnais', 'harnais antichute': 'harnais',
+    'gilet': 'gilet', 'gilet haute visibilité': 'gilet',
+    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit'
+  };
+
+  const allEquipmentIdsProc = new Set();
+  detectedEquipmentProc.forEach(eq => allEquipmentIdsProc.add(eq.id));
+  ppeList.forEach(ppe => {
+    const lowerPpe = ppe.toLowerCase();
+    for (const [key, id] of Object.entries(ppeToEquipmentProc)) {
+      if (lowerPpe.includes(key)) {
+        allEquipmentIdsProc.add(id);
+        break;
+      }
+    }
+  });
+
+  const equipmentToShowProc = Array.from(allEquipmentIdsProc)
+    .map(id => SAFETY_EQUIPMENT[id])
+    .filter(Boolean)
+    .slice(0, 4);
+
+  if (equipmentToShowProc.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.text)
+       .text("Equipements requis:", margin + 280, y + 10);
+
+    // Show equipment icons in a row
+    const procIconSize = 20;
+    equipmentToShowProc.forEach((eq, idx) => {
+      const iconX = margin + 280 + idx * (procIconSize + 20);
+      try {
+        if (fs.existsSync(eq.imagePath)) {
+          doc.image(eq.imagePath, iconX, y + 22, { width: procIconSize, height: procIconSize });
+        }
+      } catch (e) {
+        doc.circle(iconX + procIconSize / 2, y + 32, procIconSize / 2 - 2).fill(c.primary);
+      }
+      doc.font("Helvetica").fontSize(5).fillColor(c.text)
+         .text(eq.name, iconX - 5, y + 45, { width: procIconSize + 20, align: "center" });
+    });
+  } else if (ppeList.length > 0) {
     doc.font("Helvetica-Bold").fontSize(9).fillColor(c.text)
        .text("EPI requis:", margin + 280, y + 10);
     doc.font("Helvetica").fontSize(8).fillColor(c.info)

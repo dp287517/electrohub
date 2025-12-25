@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#1e40af" stroke-width="3">
+  <!-- PIRL - Plateforme Individuelle Roulante Légère -->
+  <!-- Platform -->
+  <rect x="15" y="25" width="70" height="8" rx="2" fill="#3b82f6"/>
+  <!-- Guardrail -->
+  <line x1="20" y1="25" x2="20" y2="10"/>
+  <line x1="80" y1="25" x2="80" y2="10"/>
+  <line x1="20" y1="10" x2="80" y2="10"/>
+  <!-- Legs -->
+  <line x1="25" y1="33" x2="25" y2="85"/>
+  <line x1="75" y1="33" x2="75" y2="85"/>
+  <!-- Cross brace -->
+  <line x1="25" y1="50" x2="75" y2="70"/>
+  <line x1="75" y1="50" x2="25" y2="70"/>
+  <!-- Wheels -->
+  <circle cx="25" cy="90" r="5" fill="#64748b"/>
+  <circle cx="75" cy="90" r="5" fill="#64748b"/>
+  <!-- Steps -->
+  <line x1="30" y1="45" x2="45" y2="45" stroke-width="4"/>
+  <line x1="30" y1="60" x2="45" y2="60" stroke-width="4"/>
+  <line x1="30" y1="75" x2="45" y2="75" stroke-width="4"/>
+</svg>

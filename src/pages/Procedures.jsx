@@ -199,7 +199,7 @@ function BottomSheet({ isOpen, onClose, title, children }) {
   );
 }
 
-// Quick Stats Component
+// Quick Stats Component - Responsive grid (2x2 on small screens, 4 on large)
 function QuickStats({ procedures, loading }) {
   if (loading) return null;
 
@@ -211,22 +211,24 @@ function QuickStats({ procedures, loading }) {
   };
 
   return (
-    <div className="grid grid-cols-4 gap-2 mb-4">
-      <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl p-3 text-center">
-        <p className="text-2xl font-bold text-white">{stats.total}</p>
-        <p className="text-[10px] text-violet-100 uppercase tracking-wider">Total</p>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+      {/* Row 1: Total, Validées */}
+      <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl p-3 text-center shadow-lg shadow-violet-200">
+        <p className="text-2xl sm:text-3xl font-bold text-white">{stats.total}</p>
+        <p className="text-[10px] sm:text-xs text-violet-100 uppercase tracking-wider font-medium">Total</p>
       </div>
-      <div className="bg-white rounded-2xl p-3 text-center border border-gray-100">
-        <p className="text-2xl font-bold text-green-600">{stats.approved}</p>
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Validées</p>
+      <div className="bg-white rounded-2xl p-3 text-center border border-green-100 shadow-sm">
+        <p className="text-2xl sm:text-3xl font-bold text-green-600">{stats.approved}</p>
+        <p className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wider font-medium">Validées</p>
       </div>
-      <div className="bg-white rounded-2xl p-3 text-center border border-gray-100">
-        <p className="text-2xl font-bold text-gray-600">{stats.draft}</p>
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Brouillons</p>
+      {/* Row 2: Brouillons, Risque+ */}
+      <div className="bg-white rounded-2xl p-3 text-center border border-gray-100 shadow-sm">
+        <p className="text-2xl sm:text-3xl font-bold text-gray-600">{stats.draft}</p>
+        <p className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wider font-medium">Brouillons</p>
       </div>
-      <div className="bg-white rounded-2xl p-3 text-center border border-gray-100">
-        <p className="text-2xl font-bold text-orange-600">{stats.high_risk}</p>
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Risque+</p>
+      <div className="bg-white rounded-2xl p-3 text-center border border-orange-100 shadow-sm">
+        <p className="text-2xl sm:text-3xl font-bold text-orange-600">{stats.high_risk}</p>
+        <p className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wider font-medium">Risque+</p>
       </div>
     </div>
   );
