@@ -2991,13 +2991,52 @@ app.get("/api/procedures/example-all-documents", async (req, res) => {
 // to prevent "safety-equipment" from being interpreted as a UUID
 // ------------------------------
 
+// Permit customizations file path
+const PERMIT_CUSTOMIZATIONS_FILE = path.join(process.cwd(), "data", "permit-customizations.json");
+
+// Ensure data directory exists at startup
+fsp.mkdir(path.join(process.cwd(), "data"), { recursive: true }).catch(() => {});
+
+// Load permit customizations
+async function loadPermitCustomizations() {
+  try {
+    if (fs.existsSync(PERMIT_CUSTOMIZATIONS_FILE)) {
+      const data = await fsp.readFile(PERMIT_CUSTOMIZATIONS_FILE, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Error loading permit customizations:", err);
+  }
+  return {};
+}
+
+// Save permit customizations
+async function savePermitCustomizations(customizations) {
+  try {
+    await fsp.writeFile(PERMIT_CUSTOMIZATIONS_FILE, JSON.stringify(customizations, null, 2));
+  } catch (err) {
+    console.error("Error saving permit customizations:", err);
+    throw err;
+  }
+}
+
 // Get all safety equipment with image status
 app.get("/api/procedures/safety-equipment", async (req, res) => {
   try {
     const { getAllEquipment, getAllPermits } = await import("./server/safety-equipment-library.js");
 
     const equipment = getAllEquipment();
-    const permits = getAllPermits();
+    const basePermits = getAllPermits();
+
+    // Load permit customizations
+    const customizations = await loadPermitCustomizations();
+
+    // Apply customizations to permits
+    const permits = basePermits.map(permit => ({
+      ...permit,
+      name: customizations[permit.id]?.name || permit.name,
+      description: customizations[permit.id]?.description || permit.description,
+    }));
 
     // Check which equipment has custom images vs default SVG
     const equipmentWithStatus = equipment.map(eq => {
@@ -3104,6 +3143,39 @@ app.delete("/api/procedures/safety-equipment/:equipmentId/image", async (req, re
     res.json({ success: true, deleted, equipmentId });
   } catch (err) {
     console.error("Error deleting equipment image:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update permit name/description
+app.put("/api/procedures/permits/:permitId", async (req, res) => {
+  try {
+    const { permitId } = req.params;
+    const { name, description } = req.body;
+
+    // Load current customizations
+    const customizations = await loadPermitCustomizations();
+
+    // Update or create customization for this permit
+    customizations[permitId] = {
+      ...(customizations[permitId] || {}),
+      name: name || customizations[permitId]?.name,
+      description: description || customizations[permitId]?.description,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Save to file
+    await savePermitCustomizations(customizations);
+
+    console.log(`[Permits] Updated permit ${permitId}:`, customizations[permitId]);
+
+    res.json({
+      success: true,
+      permitId,
+      ...customizations[permitId],
+    });
+  } catch (err) {
+    console.error("Error updating permit:", err);
     res.status(500).json({ error: err.message });
   }
 });
