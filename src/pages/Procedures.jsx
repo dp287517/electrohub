@@ -598,6 +598,16 @@ export default function Procedures() {
               <p className="text-gray-500 mt-1">Créez et gérez vos procédures de maintenance et sécurité</p>
             </div>
             <div className="flex items-center gap-3">
+              {/* Equipment Manager Button */}
+              <button
+                onClick={() => setShowEquipmentManager(true)}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2 shadow-lg shadow-amber-200/50 hover:scale-105 active:scale-95"
+                title="Gérer les équipements de sécurité"
+              >
+                <HardHat className="w-5 h-5" />
+                Équipements
+              </button>
+
               {/* Example Documents Dropdown */}
               <div className="relative">
                 <button
