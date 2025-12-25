@@ -194,7 +194,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
       />
 
       {/* Modal - Full screen on mobile */}
-      <div className="relative z-10 mt-auto sm:m-auto w-full sm:max-w-2xl bg-white sm:rounded-2xl rounded-t-2xl flex flex-col max-h-[95vh] sm:max-h-[85vh]">
+      <div className="relative z-10 mt-auto sm:m-auto w-full sm:max-w-2xl bg-white sm:rounded-2xl rounded-t-2xl flex flex-col min-h-[70vh] max-h-[95vh] sm:min-h-0 sm:max-h-[85vh]">
 
         {/* Header - Fixed */}
         <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3 rounded-t-2xl flex-shrink-0">
@@ -219,8 +219,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
 
         {/* Category filter - Horizontal scroll */}
         <div
-          className="px-3 py-2 border-b bg-white flex-shrink-0 overflow-x-auto"
-          style={{ WebkitOverflowScrolling: 'touch' }}
+          className="px-3 py-2 border-b bg-white flex-shrink-0 overflow-x-auto touch-pan-x"
         >
           <div className="flex gap-1.5 min-w-max">
             <button
@@ -256,11 +255,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
         {/* Scrollable Content */}
         <div
           ref={contentRef}
-          className="flex-1 overflow-y-auto overscroll-contain"
-          style={{
-            WebkitOverflowScrolling: 'touch',
-            touchAction: 'pan-y',
-          }}
+          className="flex-1 overflow-y-auto overscroll-contain touch-pan-y"
         >
           <div className="p-3">
             {loading ? (
