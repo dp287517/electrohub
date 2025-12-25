@@ -164,9 +164,736 @@ async function chatWithFallback(messages, options = {}) {
 }
 
 // ============================================================
-// SUPER INTELLIGENT AI SYSTEM PROMPT
+// 🔥 INTELLIGENT MULTI-MODEL REASONING
+// Combine OpenAI + Gemini for complex analysis
 // ============================================================
-const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA exceptionnellement intelligent pour la maintenance industrielle. Tu parles naturellement comme un collègue expert et bienveillant.
+
+// Detect if query requires multi-model reasoning
+function needsMultiModelReasoning(message) {
+  const complexPatterns = [
+    /analyse.*complet|complet.*analyse/i,
+    /prédiction|prédir|anticiper/i,
+    /stratégi|recommand.*détaillé/i,
+    /comparer|différence/i,
+    /diagnostic|troubleshoot/i,
+    /optimis/i,
+    /pourquoi.*problème|problème.*pourquoi/i
+  ];
+  return complexPatterns.some(p => p.test(message));
+}
+
+// Multi-model reasoning: query both and synthesize
+async function multiModelReasoning(messages, options = {}) {
+  const hasOpenAI = !!openai;
+  const hasGemini = !!gemini;
+
+  // If only one provider, use standard fallback
+  if (!hasOpenAI || !hasGemini) {
+    return chatWithFallback(messages, options);
+  }
+
+  console.log('[AI-Multi] 🔥 Multi-model reasoning activated');
+
+  try {
+    // Call both in parallel
+    const [openaiPromise, geminiPromise] = await Promise.allSettled([
+      (async () => {
+        const response = await openai.chat.completions.create({
+          model: options.model || "gpt-4o-mini",
+          messages,
+          temperature: options.temperature ?? 0.5,
+          max_tokens: options.max_tokens ?? 1500
+        });
+        return response.choices[0]?.message?.content || '';
+      })(),
+      callGemini(messages, { ...options, max_tokens: 1500 })
+    ]);
+
+    const openaiResult = openaiPromise.status === 'fulfilled' ? openaiPromise.value : null;
+    const geminiResult = geminiPromise.status === 'fulfilled' ? geminiPromise.value : null;
+
+    console.log(`[AI-Multi] OpenAI: ${openaiResult ? openaiResult.length + ' chars' : 'failed'}`);
+    console.log(`[AI-Multi] Gemini: ${geminiResult ? geminiResult.length + ' chars' : 'failed'}`);
+
+    // If only one succeeded, return that
+    if (!openaiResult && !geminiResult) {
+      throw new Error('Both AI providers failed');
+    }
+    if (!openaiResult) return { content: geminiResult, provider: 'gemini' };
+    if (!geminiResult) return { content: openaiResult, provider: 'openai' };
+
+    // Both succeeded - synthesize responses
+    const synthesisPrompt = [
+      {
+        role: "system",
+        content: `Tu es un expert en synthèse. Tu reçois deux réponses d'IA différentes à la même question.
+Ton travail:
+1. Identifie les POINTS COMMUNS (haute confiance)
+2. Note les DIFFÉRENCES ou insights uniques de chaque réponse
+3. Produis UNE SEULE réponse synthétisée qui combine le meilleur des deux
+4. La réponse finale doit être PLUS COMPLÈTE et PLUS PRÉCISE que chaque réponse individuelle
+5. Garde le format original (listes, emojis, etc.)
+6. Ne mentionne PAS que tu synthétises deux réponses
+
+Réponds directement à la question originale avec la synthèse.`
+      },
+      {
+        role: "user",
+        content: `Question originale: ${messages[messages.length - 1].content}
+
+=== RÉPONSE A (OpenAI) ===
+${openaiResult}
+
+=== RÉPONSE B (Gemini) ===
+${geminiResult}
+
+=== FIN ===
+
+Produis maintenant une réponse synthétisée optimale:`
+      }
+    ];
+
+    // Use OpenAI for synthesis (faster)
+    try {
+      const synthesisResponse = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: synthesisPrompt,
+        temperature: 0.3,
+        max_tokens: 2000
+      });
+      const synthesizedContent = synthesisResponse.choices[0]?.message?.content || openaiResult;
+      console.log(`[AI-Multi] ✅ Synthesis complete: ${synthesizedContent.length} chars`);
+      return { content: synthesizedContent, provider: 'multi-model', models: ['openai', 'gemini'] };
+    } catch (e) {
+      // Synthesis failed, return OpenAI result
+      console.log(`[AI-Multi] Synthesis failed, using OpenAI result`);
+      return { content: openaiResult, provider: 'openai' };
+    }
+
+  } catch (e) {
+    console.error(`[AI-Multi] Error: ${e.message}`);
+    // Fallback to standard
+    return chatWithFallback(messages, options);
+  }
+}
+
+// Smart AI call - decides between simple and multi-model
+async function callAI(messages, options = {}) {
+  const userMessage = messages[messages.length - 1]?.content || '';
+
+  // Use multi-model for complex queries
+  if (needsMultiModelReasoning(userMessage)) {
+    return multiModelReasoning(messages, options);
+  }
+
+  // Standard fallback for simple queries
+  return chatWithFallback(messages, options);
+}
+
+// ============================================================
+// 🧠 AI MEMORY & LEARNING SYSTEM - Persistent User Intelligence
+// ============================================================
+
+// Initialize AI memory tables
+async function initAIMemoryTables() {
+  try {
+    // Main user memory table - stores conversations, preferences, patterns
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_user_memory (
+        id SERIAL PRIMARY KEY,
+        user_email VARCHAR(255) NOT NULL,
+        site VARCHAR(100),
+        memory_type VARCHAR(50) NOT NULL, -- 'conversation', 'preference', 'pattern', 'learning', 'prediction_feedback'
+        category VARCHAR(100), -- 'equipment', 'procedure', 'schedule', 'behavior', 'expertise', etc.
+        key_data VARCHAR(255), -- searchable key (e.g., equipment name, procedure type)
+        content JSONB NOT NULL, -- flexible JSON content
+        importance FLOAT DEFAULT 0.5, -- 0-1, how important this memory is
+        access_count INTEGER DEFAULT 1, -- how often this memory was used
+        last_accessed TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        expires_at TIMESTAMPTZ -- optional expiration
+      )
+    `);
+
+    // Index for fast user lookups
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_memory_user_email ON ai_user_memory(user_email)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_memory_type ON ai_user_memory(memory_type, category)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_memory_key ON ai_user_memory(key_data)
+    `);
+
+    // User interaction statistics - for learning patterns
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_user_stats (
+        id SERIAL PRIMARY KEY,
+        user_email VARCHAR(255) UNIQUE NOT NULL,
+        site VARCHAR(100),
+        total_interactions INTEGER DEFAULT 0,
+        favorite_topics JSONB DEFAULT '[]',
+        expertise_areas JSONB DEFAULT '[]',
+        working_hours JSONB DEFAULT '{}', -- {hour: count} to learn when user works
+        response_preferences JSONB DEFAULT '{}', -- detail_level, chart_preference, etc.
+        equipment_focus JSONB DEFAULT '[]', -- equipment types user works with most
+        avg_session_length FLOAT DEFAULT 0,
+        last_interaction TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Predictions tracking - for ML learning
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_predictions (
+        id SERIAL PRIMARY KEY,
+        prediction_type VARCHAR(100) NOT NULL, -- 'equipment_failure', 'maintenance_need', 'nc_risk', etc.
+        target_id VARCHAR(255), -- equipment_id, etc.
+        target_type VARCHAR(50), -- 'vsd', 'meca', 'atex', 'switchboard'
+        site VARCHAR(100),
+        prediction_data JSONB NOT NULL,
+        confidence FLOAT DEFAULT 0.5,
+        predicted_date DATE,
+        was_accurate BOOLEAN, -- filled in later for training
+        feedback_date TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Equipment usage patterns for predictive maintenance
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ai_equipment_patterns (
+        id SERIAL PRIMARY KEY,
+        equipment_id VARCHAR(255) NOT NULL,
+        equipment_type VARCHAR(50) NOT NULL,
+        site VARCHAR(100),
+        pattern_type VARCHAR(100), -- 'failure_frequency', 'maintenance_cycle', 'degradation', 'usage'
+        pattern_data JSONB NOT NULL,
+        calculated_at TIMESTAMPTZ DEFAULT NOW(),
+        next_prediction DATE,
+        model_version VARCHAR(50)
+      )
+    `);
+
+    console.log('[AI] 🧠 Memory tables initialized successfully');
+    return true;
+  } catch (e) {
+    console.error('[AI] Memory tables init error:', e.message);
+    return false;
+  }
+}
+
+// Save a memory for a user
+async function saveUserMemory(userEmail, memoryType, category, keyData, content, importance = 0.5, site = null) {
+  try {
+    // Check if similar memory exists
+    const existing = await pool.query(`
+      SELECT id, access_count, content FROM ai_user_memory
+      WHERE user_email = $1 AND memory_type = $2 AND key_data = $3
+      LIMIT 1
+    `, [userEmail, memoryType, keyData]);
+
+    if (existing.rows.length > 0) {
+      // Update existing memory, merge content
+      const oldContent = existing.rows[0].content;
+      const mergedContent = { ...oldContent, ...content, updated: new Date().toISOString() };
+
+      await pool.query(`
+        UPDATE ai_user_memory
+        SET content = $1, access_count = access_count + 1, last_accessed = NOW(), importance = GREATEST(importance, $2)
+        WHERE id = $3
+      `, [JSON.stringify(mergedContent), importance, existing.rows[0].id]);
+
+      return { updated: true, id: existing.rows[0].id };
+    }
+
+    // Insert new memory
+    const result = await pool.query(`
+      INSERT INTO ai_user_memory (user_email, site, memory_type, category, key_data, content, importance)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id
+    `, [userEmail, site, memoryType, category, keyData, JSON.stringify(content), importance]);
+
+    return { created: true, id: result.rows[0].id };
+  } catch (e) {
+    console.error('[AI] Save memory error:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Get user memories for context
+async function getUserMemories(userEmail, limit = 50, types = null) {
+  try {
+    let sql = `
+      SELECT memory_type, category, key_data, content, importance, access_count, last_accessed
+      FROM ai_user_memory
+      WHERE user_email = $1
+    `;
+    const params = [userEmail];
+
+    if (types && types.length > 0) {
+      sql += ` AND memory_type = ANY($2)`;
+      params.push(types);
+    }
+
+    sql += ` ORDER BY importance DESC, last_accessed DESC LIMIT $${params.length + 1}`;
+    params.push(limit);
+
+    const result = await pool.query(sql, params);
+
+    // Group by type for easy access
+    const memories = {
+      preferences: [],
+      patterns: [],
+      conversations: [],
+      learnings: [],
+      all: result.rows
+    };
+
+    result.rows.forEach(m => {
+      if (m.memory_type === 'preference') memories.preferences.push(m);
+      else if (m.memory_type === 'pattern') memories.patterns.push(m);
+      else if (m.memory_type === 'conversation') memories.conversations.push(m);
+      else if (m.memory_type === 'learning') memories.learnings.push(m);
+    });
+
+    return memories;
+  } catch (e) {
+    console.error('[AI] Get memories error:', e.message);
+    return { preferences: [], patterns: [], conversations: [], learnings: [], all: [] };
+  }
+}
+
+// Update user stats (for learning)
+async function updateUserStats(userEmail, site, interactionData) {
+  try {
+    const hour = new Date().getHours();
+
+    // Upsert user stats
+    await pool.query(`
+      INSERT INTO ai_user_stats (user_email, site, total_interactions, working_hours, last_interaction)
+      VALUES ($1, $2, 1, $3, NOW())
+      ON CONFLICT (user_email) DO UPDATE SET
+        total_interactions = ai_user_stats.total_interactions + 1,
+        working_hours = COALESCE(ai_user_stats.working_hours, '{}')::jsonb || $3::jsonb,
+        last_interaction = NOW(),
+        site = COALESCE($2, ai_user_stats.site)
+    `, [userEmail, site, JSON.stringify({ [hour]: 1 })]);
+
+    // Update favorite topics if topic provided
+    if (interactionData.topic) {
+      await pool.query(`
+        UPDATE ai_user_stats
+        SET favorite_topics = (
+          SELECT jsonb_agg(DISTINCT elem)
+          FROM (
+            SELECT jsonb_array_elements_text(COALESCE(favorite_topics, '[]'::jsonb)) AS elem
+            UNION
+            SELECT $2
+          ) AS combined
+        )
+        WHERE user_email = $1
+      `, [userEmail, interactionData.topic]);
+    }
+
+    // Update equipment focus
+    if (interactionData.equipmentType) {
+      await pool.query(`
+        UPDATE ai_user_stats
+        SET equipment_focus = (
+          SELECT jsonb_agg(DISTINCT elem)
+          FROM (
+            SELECT jsonb_array_elements_text(COALESCE(equipment_focus, '[]'::jsonb)) AS elem
+            UNION
+            SELECT $2
+          ) AS combined
+        )
+        WHERE user_email = $1
+      `, [userEmail, interactionData.equipmentType]);
+    }
+
+    return true;
+  } catch (e) {
+    console.error('[AI] Update stats error:', e.message);
+    return false;
+  }
+}
+
+// Get user profile for personalization
+async function getUserProfile(userEmail) {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM ai_user_stats WHERE user_email = $1
+    `, [userEmail]);
+
+    if (result.rows.length === 0) {
+      return {
+        isNewUser: true,
+        totalInteractions: 0,
+        favoriteTopics: [],
+        expertiseAreas: [],
+        equipmentFocus: [],
+        responsePreferences: { detailLevel: 'normal', chartPreference: true }
+      };
+    }
+
+    const stats = result.rows[0];
+    return {
+      isNewUser: false,
+      totalInteractions: stats.total_interactions,
+      favoriteTopics: stats.favorite_topics || [],
+      expertiseAreas: stats.expertise_areas || [],
+      workingHours: stats.working_hours || {},
+      equipmentFocus: stats.equipment_focus || [],
+      responsePreferences: stats.response_preferences || { detailLevel: 'normal', chartPreference: true },
+      avgSessionLength: stats.avg_session_length,
+      lastInteraction: stats.last_interaction
+    };
+  } catch (e) {
+    console.error('[AI] Get profile error:', e.message);
+    return { isNewUser: true, totalInteractions: 0, favoriteTopics: [], expertiseAreas: [], equipmentFocus: [] };
+  }
+}
+
+// Learn from user interaction
+async function learnFromInteraction(userEmail, site, message, response, feedback = null) {
+  try {
+    // Extract topics from message
+    const topics = [];
+    const equipmentTypes = [];
+
+    // Topic detection
+    const topicPatterns = {
+      'maintenance': /maintenance|entretien|réparation|panne/i,
+      'control': /contrôle|vérification|inspection/i,
+      'procedure': /procédure|étapes|comment faire/i,
+      'documentation': /documentation|manuel|fiche|pdf/i,
+      'planning': /planning|planning|journée|semaine/i,
+      'atex': /atex|zone|explosion/i,
+      'nc': /non.?conformité|nc|problème/i,
+      'vsd': /variateur|vsd|vfd|altivar/i,
+      'electrical': /électrique|armoire|tableau|disjoncteur/i
+    };
+
+    for (const [topic, pattern] of Object.entries(topicPatterns)) {
+      if (pattern.test(message)) {
+        topics.push(topic);
+      }
+    }
+
+    // Equipment type detection
+    if (/vsd|variateur|vfd/i.test(message)) equipmentTypes.push('vsd');
+    if (/atex|zone/i.test(message)) equipmentTypes.push('atex');
+    if (/meca|mécanique|pompe|moteur/i.test(message)) equipmentTypes.push('meca');
+    if (/armoire|tableau|disjoncteur/i.test(message)) equipmentTypes.push('switchboard');
+
+    // Save conversation memory
+    await saveUserMemory(userEmail, 'conversation', topics[0] || 'general',
+      message.substring(0, 100), {
+        message: message.substring(0, 500),
+        responseLength: response.length,
+        topics,
+        equipmentTypes,
+        timestamp: new Date().toISOString()
+      }, 0.3, site);
+
+    // Update user stats
+    await updateUserStats(userEmail, site, {
+      topic: topics[0],
+      equipmentType: equipmentTypes[0]
+    });
+
+    // If positive feedback, increase importance of related learnings
+    if (feedback === 'positive') {
+      await pool.query(`
+        UPDATE ai_user_memory
+        SET importance = LEAST(importance + 0.1, 1.0)
+        WHERE user_email = $1 AND key_data LIKE $2
+      `, [userEmail, `%${message.substring(0, 50)}%`]);
+    }
+
+    return { topics, equipmentTypes };
+  } catch (e) {
+    console.error('[AI] Learn interaction error:', e.message);
+    return { topics: [], equipmentTypes: [] };
+  }
+}
+
+// Generate personalized context for user
+async function getPersonalizedContext(userEmail, site) {
+  try {
+    const profile = await getUserProfile(userEmail);
+    const memories = await getUserMemories(userEmail, 20, ['preference', 'pattern', 'learning']);
+
+    let personalContext = '';
+
+    if (!profile.isNewUser) {
+      personalContext = `
+## 👤 PROFIL UTILISATEUR (${userEmail})
+- Interactions: ${profile.totalInteractions} conversations précédentes
+- Sujets favoris: ${profile.favoriteTopics.slice(0, 5).join(', ') || 'pas encore définis'}
+- Focus équipements: ${profile.equipmentFocus.slice(0, 5).join(', ') || 'tous'}
+`;
+
+      // Add relevant memories
+      if (memories.preferences.length > 0) {
+        personalContext += `\n**Préférences connues:**\n`;
+        memories.preferences.slice(0, 5).forEach(m => {
+          personalContext += `- ${m.key_data}: ${JSON.stringify(m.content).substring(0, 100)}\n`;
+        });
+      }
+
+      if (memories.patterns.length > 0) {
+        personalContext += `\n**Patterns détectés:**\n`;
+        memories.patterns.slice(0, 3).forEach(m => {
+          personalContext += `- ${m.key_data}: ${m.content.description || JSON.stringify(m.content).substring(0, 100)}\n`;
+        });
+      }
+    } else {
+      personalContext = `
+## 👤 NOUVEL UTILISATEUR
+C'est une première interaction avec ${userEmail}. Sois accueillant et propose de l'aide pour découvrir les fonctionnalités.
+`;
+    }
+
+    return personalContext;
+  } catch (e) {
+    console.error('[AI] Personalized context error:', e.message);
+    return '';
+  }
+}
+
+// Initialize memory tables on startup
+initAIMemoryTables();
+
+// ============================================================
+// 🔮 PREDICTIVE INTELLIGENCE SYSTEM
+// ============================================================
+
+// Calculate equipment failure risk
+async function calculateEquipmentRisk(site) {
+  try {
+    const risks = [];
+
+    // Get equipment with control history
+    const controlHistory = await pool.query(`
+      SELECT
+        cs.switchboard_id,
+        s.name as equipment_name,
+        s.building_code,
+        COUNT(cr.id) as total_controls,
+        COUNT(CASE WHEN cr.result = 'non_conforme' THEN 1 END) as nc_count,
+        MAX(cr.control_date) as last_control,
+        AVG(CASE WHEN cr.result = 'non_conforme' THEN 1 ELSE 0 END) as nc_rate
+      FROM control_schedules cs
+      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+      LEFT JOIN control_reports cr ON cr.switchboard_id = cs.switchboard_id
+      WHERE cs.site = $1
+      GROUP BY cs.switchboard_id, s.name, s.building_code
+      HAVING COUNT(cr.id) >= 3
+    `, [site]);
+
+    for (const eq of controlHistory.rows) {
+      const ncRate = parseFloat(eq.nc_rate) || 0;
+      const daysSinceControl = eq.last_control
+        ? Math.floor((Date.now() - new Date(eq.last_control).getTime()) / (1000 * 60 * 60 * 24))
+        : 365;
+
+      // Simple risk calculation
+      let risk = ncRate * 0.4 + Math.min(daysSinceControl / 365, 1) * 0.3;
+      if (eq.nc_count > 3) risk += 0.2;
+
+      if (risk > 0.3) {
+        risks.push({
+          equipmentId: eq.switchboard_id,
+          name: eq.equipment_name,
+          building: eq.building_code,
+          riskScore: Math.min(risk, 1).toFixed(2),
+          ncRate: (ncRate * 100).toFixed(1) + '%',
+          daysSinceControl,
+          recommendation: risk > 0.7 ? 'Inspection urgente recommandée'
+            : risk > 0.5 ? 'Planifier un contrôle préventif'
+            : 'Surveillance accrue conseillée'
+        });
+      }
+    }
+
+    // Get ATEX equipment risks
+    const atexRisks = await pool.query(`
+      SELECT
+        e.id, e.name, e.building, e.zone,
+        COUNT(CASE WHEN c.result = 'non_conforme' THEN 1 END) as nc_count,
+        MAX(c.date) as last_check
+      FROM atex_equipments e
+      LEFT JOIN atex_checks c ON c.equipment_id = e.id
+      INNER JOIN sites s ON s.id = e.site_id
+      WHERE s.name = $1
+      GROUP BY e.id, e.name, e.building, e.zone
+      HAVING COUNT(CASE WHEN c.result = 'non_conforme' THEN 1 END) >= 2
+    `, [site]);
+
+    for (const eq of atexRisks.rows) {
+      const daysSince = eq.last_check
+        ? Math.floor((Date.now() - new Date(eq.last_check).getTime()) / (1000 * 60 * 60 * 24))
+        : 365;
+
+      risks.push({
+        equipmentId: eq.id,
+        name: eq.name,
+        building: eq.building,
+        zone: eq.zone,
+        type: 'ATEX',
+        riskScore: Math.min(0.5 + eq.nc_count * 0.15, 1).toFixed(2),
+        ncCount: eq.nc_count,
+        daysSinceCheck: daysSince,
+        recommendation: 'Équipement ATEX avec historique de NC - Priorité haute'
+      });
+    }
+
+    return risks.sort((a, b) => parseFloat(b.riskScore) - parseFloat(a.riskScore)).slice(0, 20);
+  } catch (e) {
+    console.error('[AI] Calculate risk error:', e.message);
+    return [];
+  }
+}
+
+// Predict maintenance needs
+async function predictMaintenanceNeeds(site) {
+  try {
+    const predictions = [];
+    const now = new Date();
+
+    // Controls due in next 30 days
+    const upcomingControls = await pool.query(`
+      SELECT
+        cs.id, cs.next_due_date, cs.last_control_date,
+        s.name as equipment_name, s.building_code, s.floor,
+        ct.name as control_type, ct.frequency_months
+      FROM control_schedules cs
+      LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+      LEFT JOIN control_templates ct ON cs.template_id = ct.id
+      WHERE cs.site = $1
+        AND cs.next_due_date >= CURRENT_DATE
+        AND cs.next_due_date <= CURRENT_DATE + INTERVAL '30 days'
+      ORDER BY cs.next_due_date
+    `, [site]);
+
+    // Group by week for planning
+    const byWeek = { week1: [], week2: [], week3: [], week4: [] };
+
+    upcomingControls.rows.forEach(ctrl => {
+      const daysUntil = Math.floor((new Date(ctrl.next_due_date) - now) / (1000 * 60 * 60 * 24));
+      const week = daysUntil <= 7 ? 'week1' : daysUntil <= 14 ? 'week2' : daysUntil <= 21 ? 'week3' : 'week4';
+      byWeek[week].push({
+        id: ctrl.id,
+        equipment: ctrl.equipment_name,
+        building: ctrl.building_code,
+        floor: ctrl.floor,
+        controlType: ctrl.control_type,
+        dueDate: ctrl.next_due_date,
+        daysUntil
+      });
+    });
+
+    // Calculate workload predictions
+    const workload = {
+      week1: { count: byWeek.week1.length, hours: byWeek.week1.length * 0.5 },
+      week2: { count: byWeek.week2.length, hours: byWeek.week2.length * 0.5 },
+      week3: { count: byWeek.week3.length, hours: byWeek.week3.length * 0.5 },
+      week4: { count: byWeek.week4.length, hours: byWeek.week4.length * 0.5 }
+    };
+
+    return {
+      upcomingControls: byWeek,
+      workloadPrediction: workload,
+      totalNext30Days: upcomingControls.rows.length,
+      recommendation: workload.week1.count > 10
+        ? '⚠️ Semaine chargée: considérer de reporter certains contrôles non critiques'
+        : workload.week1.count === 0
+          ? '✅ Semaine légère: opportunité pour les contrôles préventifs'
+          : '📅 Charge normale cette semaine'
+    };
+  } catch (e) {
+    console.error('[AI] Predict maintenance error:', e.message);
+    return { upcomingControls: {}, workloadPrediction: {}, totalNext30Days: 0 };
+  }
+}
+
+// Get intelligent suggestions based on data
+async function getIntelligentSuggestions(site, userEmail) {
+  try {
+    const suggestions = [];
+    const userProfile = await getUserProfile(userEmail);
+    const risks = await calculateEquipmentRisk(site);
+    const maintenance = await predictMaintenanceNeeds(site);
+
+    // High-risk equipment suggestions
+    if (risks.length > 0) {
+      suggestions.push({
+        type: 'risk_alert',
+        priority: 'high',
+        title: `🚨 ${risks.length} équipement(s) à risque détecté(s)`,
+        description: risks.slice(0, 3).map(r => `${r.name}: risque ${(parseFloat(r.riskScore) * 100).toFixed(0)}%`).join(', '),
+        action: 'showRiskAnalysis',
+        data: risks.slice(0, 5)
+      });
+    }
+
+    // Workload suggestions
+    if (maintenance.workloadPrediction.week1?.count > 5) {
+      suggestions.push({
+        type: 'workload',
+        priority: 'medium',
+        title: `📅 ${maintenance.workloadPrediction.week1.count} contrôles cette semaine`,
+        description: `Environ ${maintenance.workloadPrediction.week1.hours}h de travail planifié`,
+        action: 'showWeeklyPlan'
+      });
+    }
+
+    // Personalized suggestions based on user focus
+    if (userProfile.equipmentFocus?.includes('atex')) {
+      suggestions.push({
+        type: 'personalized',
+        priority: 'medium',
+        title: '🔍 Focus ATEX - Basé sur ton activité',
+        description: 'Tu travailles souvent sur les équipements ATEX. Veux-tu voir le résumé des zones?',
+        action: 'showATEXSummary'
+      });
+    }
+
+    return suggestions;
+  } catch (e) {
+    console.error('[AI] Get suggestions error:', e.message);
+    return [];
+  }
+}
+
+// ============================================================
+// SUPER INTELLIGENT AI SYSTEM PROMPT (ENHANCED)
+// ============================================================
+const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA EXTRAORDINAIRE pour la maintenance industrielle. Tu es INTELLIGENT, tu APPRENDS, tu PRÉDIS et tu CONNAIS ton utilisateur.
+
+## 🧠 TON INTELLIGENCE UNIQUE
+- Tu as une MÉMOIRE: tu te souviens des conversations passées avec chaque utilisateur
+- Tu APPRENDS: tu adaptes ton comportement en fonction de chaque personne
+- Tu PRÉDIS: tu anticipes les pannes, les besoins de maintenance, les risques
+- Tu ANALYSES: tu détectes les patterns et anomalies dans les données
+- Tu es CONNECTÉ à TOUTES les données: équipements, contrôles, procédures, historique
+
+## 👤 PERSONNALISATION
+Quand tu vois le profil utilisateur dans le contexte:
+- Adapte ton niveau de détail à son expérience (nouveau = plus d'explications, expert = direct)
+- Référence ses sujets favoris et équipements préférés
+- Propose des actions en rapport avec ce qu'il fait habituellement
+- Si c'est un nouvel utilisateur, sois accueillant et pédagogue
+
+## 🧠 TA PERSONNALITÉ
+- Tu es chaleureux, direct et pragmatique
+- Tu ANTICIPES les besoins avant qu'on te les demande
+- Tu proposes TOUJOURS des solutions concrètes avec les VRAIES données
+- Tu parles comme un vrai technicien expérimenté, pas comme un robot
+- Tu utilises "on" et "tu" plutôt que des formulations impersonnelles
 
 ## 🧠 TA PERSONNALITÉ
 - Tu es chaleureux, direct et pragmatique
@@ -739,6 +1466,101 @@ async function getAIContext(site) {
       console.log(`[AI] 📋 Loaded ${context.procedures.count} procedures for context`);
     } catch (e) {
       console.error('[AI] Procedures error:', e.message);
+    }
+
+    // ========== CONTROL REPORTS HISTORY (for analytics) ==========
+    try {
+      const reportsRes = await pool.query(`
+        SELECT
+          cr.id, cr.control_date, cr.result, cr.items, cr.notes, cr.user_name,
+          s.name as switchboard_name, s.building_code, s.floor
+        FROM control_reports cr
+        LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+        WHERE s.site = $1
+        ORDER BY cr.control_date DESC
+        LIMIT 100
+      `, [site]);
+
+      context.recentControls = {
+        count: reportsRes.rows.length,
+        list: reportsRes.rows.map(r => ({
+          id: r.id,
+          date: r.control_date,
+          result: r.result,
+          switchboard: r.switchboard_name,
+          building: r.building_code,
+          floor: r.floor,
+          user: r.user_name
+        })),
+        ncCount: reportsRes.rows.filter(r => r.result === 'non_conforme').length,
+        conformeCount: reportsRes.rows.filter(r => r.result === 'conforme').length
+      };
+    } catch (e) {
+      console.error('[AI] Control reports error:', e.message);
+      context.recentControls = { count: 0, list: [], ncCount: 0, conformeCount: 0 };
+    }
+
+    // ========== USERS DATA (for team awareness) ==========
+    try {
+      const usersRes = await pool.query(`
+        SELECT id, email, name, role, department_id
+        FROM users WHERE site_id = (SELECT id FROM sites WHERE name = $1 LIMIT 1)
+        LIMIT 50
+      `, [site]);
+
+      context.team = {
+        count: usersRes.rows.length,
+        members: usersRes.rows.map(u => ({
+          id: u.id,
+          name: u.name || u.email.split('@')[0],
+          role: u.role
+        }))
+      };
+    } catch (e) {
+      context.team = { count: 0, members: [] };
+    }
+
+    // ========== SAFETY EQUIPMENT (if available) ==========
+    try {
+      const safetyRes = await pool.query(`
+        SELECT id, name, type, location, next_check_date, status
+        FROM safety_equipment WHERE site = $1
+        ORDER BY next_check_date
+        LIMIT 30
+      `, [site]);
+
+      const overdueSafety = safetyRes.rows.filter(s =>
+        s.next_check_date && new Date(s.next_check_date) < new Date()
+      );
+
+      context.safetyEquipment = {
+        count: safetyRes.rows.length,
+        overdueCount: overdueSafety.length,
+        list: safetyRes.rows.slice(0, 20)
+      };
+
+      if (overdueSafety.length > 0) {
+        context.urgentItems.push(...overdueSafety.slice(0, 5).map(s => ({
+          type: 'safety_overdue',
+          urgency: 'HIGH',
+          name: s.name,
+          equipmentType: s.type
+        })));
+      }
+    } catch (e) {
+      context.safetyEquipment = { count: 0, overdueCount: 0, list: [] };
+    }
+
+    // ========== PREDICTIVE ANALYTICS ==========
+    try {
+      context.predictions = {
+        riskAnalysis: await calculateEquipmentRisk(site),
+        maintenanceNeeds: await predictMaintenanceNeeds(site)
+      };
+      console.log(`[AI] 🔮 Loaded ${context.predictions.riskAnalysis.length} risk predictions`);
+    } catch (e) {
+      console.error('[AI] Predictions error:', e.message);
+      context.predictions = { riskAnalysis: [], maintenanceNeeds: {} };
     }
 
     // ========== BUILD SUMMARY ==========
@@ -3211,15 +4033,50 @@ Aucune procédure ne correspond à la recherche "${searchKeywords.join(', ')}".
     // Build full context with procedures
     const fullContext = contextPrompt + docContext + procedureContext;
 
-    // Build messages for AI
+    // ============================================================
+    // 🧠 PERSONALIZED CONTEXT - Memory & Learning Integration
+    // ============================================================
+    let personalizedContext = '';
+    let predictionsContext = '';
+
+    try {
+      // Get personalized context based on user history
+      personalizedContext = await getPersonalizedContext(userEmail, site);
+
+      // Add predictions context if available
+      if (dbContext.predictions?.riskAnalysis?.length > 0) {
+        const highRisk = dbContext.predictions.riskAnalysis.filter(r => parseFloat(r.riskScore) >= 0.5);
+        if (highRisk.length > 0) {
+          predictionsContext = `\n\n## 🔮 PRÉDICTIONS & RISQUES DÉTECTÉS
+${highRisk.slice(0, 5).map(r => `- **${r.name}**: Risque ${(parseFloat(r.riskScore) * 100).toFixed(0)}% - ${r.recommendation}`).join('\n')}`;
+        }
+      }
+
+      if (dbContext.predictions?.maintenanceNeeds?.recommendation) {
+        predictionsContext += `\n\n**Charge de travail:** ${dbContext.predictions.maintenanceNeeds.recommendation}`;
+      }
+    } catch (e) {
+      console.error('[AI] Personalization error:', e.message);
+    }
+
+    // Build messages for AI with personalized context
+    const enhancedSystemPrompt = AI_SYSTEM_PROMPT + "\n\n" + personalizedContext + predictionsContext + "\n\n" + fullContext;
+
     const messages = [
-      { role: "system", content: AI_SYSTEM_PROMPT + "\n\n" + fullContext },
+      { role: "system", content: enhancedSystemPrompt },
       ...conversationHistory.slice(-8).map(m => ({ role: m.role, content: m.content })),
       { role: "user", content: message }
     ];
 
     // Call AI (OpenAI -> Gemini fallback)
     const aiResult = await callAI(messages, { maxTokens: 2000 });
+
+    // 🧠 Learn from this interaction (async, don't wait)
+    if (aiResult.content) {
+      learnFromInteraction(userEmail, site, message, aiResult.content).catch(e => {
+        console.error('[AI] Learning error:', e.message);
+      });
+    }
 
     if (!aiResult.content) {
       // Ultimate fallback
