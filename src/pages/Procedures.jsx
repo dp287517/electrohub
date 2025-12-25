@@ -4,9 +4,9 @@ import {
   Wrench, Play, PowerOff, CheckCircle, Book, Download,
   ChevronDown, Grid, List, Clock, User, Building,
   Sparkles, X, Loader2, FileSpreadsheet, Zap, Package, ClipboardList, FileCheck,
-  ChevronRight, Eye, MoreVertical, ArrowRight
+  ChevronRight, Eye, MoreVertical, ArrowRight, HardHat
 } from 'lucide-react';
-import { ProcedureCreator, ProcedureViewer } from '../components/Procedures';
+import { ProcedureCreator, ProcedureViewer, SafetyEquipmentManager } from '../components/Procedures';
 import {
   listProcedures,
   getCategories,
@@ -247,6 +247,7 @@ export default function Procedures() {
   const [showFilters, setShowFilters] = useState(false);
   const [showDocMenu, setShowDocMenu] = useState(false);
   const [generatingDoc, setGeneratingDoc] = useState(null);
+  const [showEquipmentManager, setShowEquipmentManager] = useState(false);
 
   const handleDownloadDocument = async (docType) => {
     setGeneratingDoc(docType);
@@ -315,17 +316,27 @@ export default function Procedures() {
                 <h1 className="text-xl font-bold text-white">Procédures</h1>
                 <p className="text-violet-200 text-xs">Gérez vos procédures opérationnelles</p>
               </div>
-              <button
-                onClick={() => setShowDocMenu(true)}
-                disabled={generatingDoc !== null}
-                className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center active:bg-white/30 transition-colors"
-              >
-                {generatingDoc ? (
-                  <Loader2 className="w-5 h-5 text-white animate-spin" />
-                ) : (
-                  <FileSpreadsheet className="w-5 h-5 text-white" />
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Equipment Manager Button */}
+                <button
+                  onClick={() => setShowEquipmentManager(true)}
+                  className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center active:bg-white/30 transition-colors"
+                  title="Équipements de sécurité"
+                >
+                  <HardHat className="w-5 h-5 text-white" />
+                </button>
+                <button
+                  onClick={() => setShowDocMenu(true)}
+                  disabled={generatingDoc !== null}
+                  className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center active:bg-white/30 transition-colors"
+                >
+                  {generatingDoc ? (
+                    <Loader2 className="w-5 h-5 text-white animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="w-5 h-5 text-white" />
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Search bar */}
@@ -771,6 +782,12 @@ export default function Procedures() {
       {/* Desktop overlays */}
       {showFilters && <div className="hidden lg:block fixed inset-0 z-40" onClick={() => setShowFilters(false)} />}
       {showDocMenu && <div className="hidden lg:block fixed inset-0 z-40" onClick={() => setShowDocMenu(false)} />}
+
+      {/* Safety Equipment Manager */}
+      <SafetyEquipmentManager
+        isOpen={showEquipmentManager}
+        onClose={() => setShowEquipmentManager(false)}
+      />
     </div>
   );
 }

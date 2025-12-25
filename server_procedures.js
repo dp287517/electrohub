@@ -1279,6 +1279,7 @@ TU GÉNÈRES AUTOMATIQUEMENT pour chaque étape :
 ### PHASE 3 : FIN (currentStep: "review")
 → "✅ [titre] - [n] étapes. EPI: [liste]. Risque: [niveau]. Créer ?"
 → procedureReady: true
+→ Génère automatiquement la DESCRIPTION (2-3 phrases résumant l'intervention)
 
 ## DÉDUCTION AUTOMATIQUE DES EPI
 - Électricité/disjoncteur/tableau → Gants isolants, Lunettes, Casque, Chaussures sécurité
@@ -1299,6 +1300,7 @@ TU GÉNÈRES AUTOMATIQUEMENT pour chaque étape :
   "expectsPhoto": true/false,
   "collectedData": {
     "title": "...",
+    "description": "Description auto-générée (2-3 phrases décrivant l'intervention, ses objectifs et le contexte)",
     "steps": [{"step_number":1,"title":"...","instructions":"...","warning":"...","duration_minutes":5,"has_photo":true}],
     "ppe_required": ["déduits"],
     "risk_level": "low|medium|high|critical"
@@ -5468,6 +5470,127 @@ async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
   const { procedure, steps } = getExampleDocumentData();
   return generateProcedureDocPDF(procedure, steps, baseUrl);
 }
+
+// ------------------------------
+// Safety Equipment Image Management API
+// ------------------------------
+
+// Get all safety equipment with image status
+app.get("/api/procedures/safety-equipment", async (req, res) => {
+  try {
+    const { getAllEquipment, getAllPermits, EQUIPMENT_IMAGES_PATH } = await import("./server/safety-equipment-library.js");
+
+    const equipment = getAllEquipment();
+    const permits = getAllPermits();
+
+    // Check which equipment has custom images vs default SVG
+    const equipmentWithStatus = equipment.map(eq => {
+      const svgPath = eq.imagePath;
+      const customImagePath = eq.imagePath.replace('.svg', '.png');
+      const customJpgPath = eq.imagePath.replace('.svg', '.jpg');
+
+      let hasCustomImage = false;
+      let imagePath = svgPath;
+
+      if (fs.existsSync(customImagePath)) {
+        hasCustomImage = true;
+        imagePath = customImagePath;
+      } else if (fs.existsSync(customJpgPath)) {
+        hasCustomImage = true;
+        imagePath = customJpgPath;
+      }
+
+      return {
+        ...eq,
+        hasCustomImage,
+        imageUrl: `/safety-equipment/${path.basename(imagePath)}`,
+      };
+    });
+
+    res.json({
+      equipment: equipmentWithStatus,
+      permits,
+      uploadPath: "/api/procedures/safety-equipment/upload",
+    });
+  } catch (err) {
+    console.error("Error fetching safety equipment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload custom equipment image
+const uploadEquipmentImage = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const dir = path.join(process.cwd(), "public", "safety-equipment");
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const equipmentId = req.params.equipmentId;
+      const ext = path.extname(file.originalname).toLowerCase() || '.png';
+      cb(null, `${equipmentId}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Seules les images sont acceptées"), false);
+    }
+  },
+});
+
+app.post("/api/procedures/safety-equipment/:equipmentId/upload",
+  uploadEquipmentImage.single("image"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Aucune image fournie" });
+      }
+
+      const equipmentId = req.params.equipmentId;
+      console.log(`[Safety Equipment] Uploaded image for ${equipmentId}: ${req.file.filename}`);
+
+      res.json({
+        success: true,
+        equipmentId,
+        imagePath: req.file.filename,
+        imageUrl: `/safety-equipment/${req.file.filename}`,
+      });
+    } catch (err) {
+      console.error("Error uploading equipment image:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Delete custom equipment image (revert to SVG)
+app.delete("/api/procedures/safety-equipment/:equipmentId/image", async (req, res) => {
+  try {
+    const equipmentId = req.params.equipmentId;
+    const dir = path.join(process.cwd(), "public", "safety-equipment");
+
+    // Try to delete PNG and JPG versions
+    const pngPath = path.join(dir, `${equipmentId}.png`);
+    const jpgPath = path.join(dir, `${equipmentId}.jpg`);
+    const jpegPath = path.join(dir, `${equipmentId}.jpeg`);
+
+    let deleted = false;
+    for (const imgPath of [pngPath, jpgPath, jpegPath]) {
+      if (fs.existsSync(imgPath)) {
+        await fsp.unlink(imgPath);
+        deleted = true;
+        console.log(`[Safety Equipment] Deleted custom image: ${imgPath}`);
+      }
+    }
+
+    res.json({ success: true, deleted, equipmentId });
+  } catch (err) {
+    console.error("Error deleting equipment image:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ------------------------------
 // Start Server
