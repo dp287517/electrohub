@@ -683,40 +683,102 @@ function generateFallbackRiskAnalysis(procedure, steps) {
     'terre|mise.*terre|équipotentiel': ['electrical', 'esd']
   };
 
-  // Analyze each step and generate comprehensive hazards
+  // Analyze each step and generate TARGETED hazards based on activity type
   const stepsAnalysis = steps.map((step, idx) => {
     const combined = ((step.title || '') + ' ' + (step.instructions || '') + ' ' + (step.warning || '')).toLowerCase();
     const hazardKeys = new Set();
 
-    // Always add base hazards
-    hazardKeys.add('access');
-    hazardKeys.add('organization');
+    // === STEP TYPE DETECTION ===
+    // Determine what type of activity this step represents
+    const isAccessStep = /accès|préparation|repérage|arrivée|installation|déplacement/.test(combined);
+    const isLockoutStep = /consign|loto|condamn|verrouill|sécuris.*énergie|mise.*hors/.test(combined);
+    const isMeasurementStep = /mesur|contrôl.*tension|vérif.*tension|test|multimètre|pince.*ampère|vat|absence.*tension/.test(combined);
+    const isElectricalWork = /électri|câbl|raccord|connect|disjonct|armoire|coffret|variateur|bornier/.test(combined);
+    const isAtexStep = /atex|zone.*ex|permis|explosive|inflammable/.test(combined);
+    const isHeightStep = /hauteur|échelle|escabeau|nacelle|échafaud|pirl|plateforme/.test(combined);
+    const isMechanicalWork = /méca|démontage|montage|remplac|pose|dépose|vissage|serrage|assemblage/.test(combined);
+    const isFinishStep = /fin|remise.*service|contrôle.*final|nettoyage|rangement|repli/.test(combined);
 
-    // Detect hazards based on keywords
-    Object.entries(KEYWORD_HAZARDS).forEach(([pattern, hazardIds]) => {
-      if (new RegExp(pattern, 'i').test(combined)) {
-        hazardIds.forEach(id => hazardKeys.add(id));
+    // === HAZARD SELECTION BASED ON STEP TYPE ===
+    // Only add hazards that are REALLY relevant to this specific step
+
+    if (isAccessStep || idx === 0) {
+      // First steps: access and preparation
+      hazardKeys.add('access');
+      if (/coactivité|zone.*travaux|chantier/.test(combined)) {
+        hazardKeys.add('coactivity');
       }
-    });
-
-    // Add some variety based on step number
-    if (idx === 0) {
-      hazardKeys.add('coactivity');
-      hazardKeys.add('communication');
+      if (/manutention|transport|matériel|équipement|outillage/.test(combined)) {
+        hazardKeys.add('handling');
+      }
     }
-    if (idx === steps.length - 1) {
+
+    if (isLockoutStep) {
+      // Lockout/Tagout step - electrical safety with consignation
+      hazardKeys.add('electrical');
+      hazardKeys.add('residual_energy');
+      if (/arc|court-circuit/.test(combined)) {
+        hazardKeys.add('arc_flash');
+      }
+      hazardKeys.add('communication');  // Coordination with operations
+    }
+
+    if (isMeasurementStep && !isLockoutStep) {
+      // Live measurement - NO consignation, specific hazards
+      hazardKeys.add('live_measurement');
+      if (/vat|absence.*tension/.test(combined)) {
+        hazardKeys.add('vat_test');
+      }
+      // Don't add 'electrical' which requires consignation
+    }
+
+    if (isElectricalWork && !isMeasurementStep && !isLockoutStep) {
+      // General electrical work (assume needs lockout)
+      hazardKeys.add('electrical');
+      hazardKeys.add('residual_energy');
+    }
+
+    if (isAtexStep) {
+      // ATEX zone work
+      hazardKeys.add('atex');
+      hazardKeys.add('esd');
+    }
+
+    if (isHeightStep) {
+      // Height work
+      hazardKeys.add('fall_height');
+      if (/échelle|escabeau|pirl/.test(combined)) {
+        hazardKeys.add('ladder');
+      }
+      hazardKeys.add('falling_objects');
+    }
+
+    if (isMechanicalWork) {
+      // Mechanical work
+      hazardKeys.add('handling');
+      if (/couper|coupure|tranchant|perceuse|meuleuse/.test(combined)) {
+        hazardKeys.add('cuts');
+      }
+      if (/bruit|perceuse|meuleuse|disqueuse/.test(combined)) {
+        hazardKeys.add('noise');
+      }
+    }
+
+    if (isFinishStep) {
+      // Finishing steps
+      hazardKeys.add('organization');
+      if (/remise.*service|test.*final/.test(combined)) {
+        hazardKeys.add('electrical');
+      }
+    }
+
+    // === MINIMUM HAZARDS ===
+    // If no hazards detected, add organization (generic but always applicable)
+    if (hazardKeys.size === 0) {
       hazardKeys.add('organization');
     }
 
-    // Ensure minimum 4 hazards per step
-    const defaultHazards = ['handling', 'cuts', 'falling_objects', 'coactivity'];
-    let hazardIndex = 0;
-    while (hazardKeys.size < 4 && hazardIndex < defaultHazards.length) {
-      hazardKeys.add(defaultHazards[hazardIndex]);
-      hazardIndex++;
-    }
-
-    // Build hazards array with full details
+    // === BUILD HAZARD LIST ===
     const hazards = [];
     hazardKeys.forEach(key => {
       const template = HAZARD_LIBRARY[key];
@@ -724,9 +786,8 @@ function generateFallbackRiskAnalysis(procedure, steps) {
         const gi = template.gi;
         const pi = Math.min(template.pi, baseProb);
         const nir_initial = gi * pi;
-        // Final probability reduced by measures
         const pf = Math.max(1, pi - 2);
-        const gf = gi; // Gravity stays same
+        const gf = gi;
         const nir_final = gf * pf;
 
         hazards.push({
@@ -747,13 +808,13 @@ function generateFallbackRiskAnalysis(procedure, steps) {
       }
     });
 
-    // Sort by initial NIR (highest first)
+    // Sort by initial NIR (highest first) and limit to 5 hazards max
     hazards.sort((a, b) => b.nir_initial - a.nir_initial);
 
     return {
       step_number: step.step_number,
       step_title: step.title || `Étape ${step.step_number}`,
-      hazards: hazards.slice(0, 7) // Max 7 hazards per step
+      hazards: hazards.slice(0, 5) // Max 5 hazards per step - focused, not overwhelming
     };
   });
 
@@ -1283,7 +1344,6 @@ async function generateProcedurePDF(procedureId) {
   const doc = new PDFDocument({
     size: "A4",
     margin: 50,
-    bufferPages: true,
     info: {
       Title: procedure.title,
       Author: siteSettings.company_name || "ElectroHub",
@@ -1710,7 +1770,6 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   const doc = new PDFDocument({
     size: [pageWidth, pageHeight],
     margins: { top: margin, bottom: margin, left: margin, right: margin },
-    bufferPages: true,
     autoFirstPage: true,
     info: {
       Title: `RAMS - ${procedure.title}`,
