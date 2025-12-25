@@ -6,7 +6,7 @@ import {
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
   Volume2, VolumeX, BarChart3, Play, Loader2,
-  ClipboardList, Camera, Image, Upload
+  ClipboardList, Camera, Image, Upload, FileUp, FileSearch
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator } from '../Procedures';
@@ -95,6 +95,24 @@ const QUICK_ACTIONS = [
     color: 'text-violet-600 bg-violet-50'
   },
   {
+    icon: FileUp,
+    label: 'Importer un document',
+    prompt: 'Je veux importer un document de procédure',
+    color: 'text-blue-600 bg-blue-50'
+  },
+  {
+    icon: FileSearch,
+    label: 'Analyser un rapport',
+    prompt: 'Je veux analyser un rapport d\'audit',
+    color: 'text-orange-600 bg-orange-50'
+  },
+  {
+    icon: Wrench,
+    label: 'Assistance travail',
+    prompt: 'Je vais effectuer un travail, accompagne-moi',
+    color: 'text-green-600 bg-green-50'
+  },
+  {
     icon: AlertTriangle,
     label: 'Non-conformités',
     prompt: 'Montre-moi un résumé des non-conformités actuelles et propose des actions.',
@@ -105,24 +123,6 @@ const QUICK_ACTIONS = [
     label: 'Contrôles à venir',
     prompt: 'Quels sont les contrôles à venir dans les 30 prochains jours ? Fais-moi une liste d\'actions prioritaires.',
     color: 'text-blue-600 bg-blue-50'
-  },
-  {
-    icon: Building,
-    label: 'Par bâtiment',
-    prompt: 'Regroupe les équipements et contrôles par bâtiment et étage.',
-    color: 'text-green-600 bg-green-50'
-  },
-  {
-    icon: Search,
-    label: 'Rechercher doc',
-    prompt: 'J\'ai besoin de documentation technique. Que cherches-tu ?',
-    color: 'text-purple-600 bg-purple-50'
-  },
-  {
-    icon: TrendingUp,
-    label: 'Analyse globale',
-    prompt: 'Donne-moi une analyse globale de la situation : équipements, contrôles, tendances.',
-    color: 'text-amber-600 bg-amber-50'
   }
 ];
 
@@ -468,6 +468,32 @@ export default function AvatarChat({
 
     if (wantsReport) {
       setProcedureCreatorContext({ mode: 'report' });
+      setShowProcedureCreator(true);
+      setInput('');
+      return;
+    }
+
+    // >>> DETECTION: Assistance travail temps réel
+    // Quand l'utilisateur dit "je vais...", "je dois...", "je fais..."
+    const workIntentPatterns = [
+      /je vais (changer|contrôler|vérifier|remplacer|nettoyer|inspecter|tester|réparer|maintenir|installer)/i,
+      /je dois (changer|contrôler|vérifier|remplacer|nettoyer|inspecter|tester|réparer|maintenir|installer)/i,
+      /je fais (un|une|le|la|les|du|de la) (contrôle|maintenance|vérification|inspection|test|remplacement)/i,
+      /accompagne(-| )moi/i,
+      /assiste(-| )moi/i,
+      /guide(-| )moi/i,
+      /(intervention|travail|opération) sur/i
+    ];
+
+    const wantsWorkAssistance = workIntentPatterns.some(pattern => pattern.test(msgLower));
+
+    if (wantsWorkAssistance) {
+      // Ouvrir le ProcedureCreator en mode assistance
+      setProcedureCreatorContext({
+        mode: 'assist',
+        userMessage: messageText,
+        workDescription: messageText
+      });
       setShowProcedureCreator(true);
       setInput('');
       return;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   X, Camera, Trash2, Check, Loader2, Shield,
-  AlertTriangle, ChevronDown, ChevronUp, Image
+  AlertTriangle, ChevronDown, ChevronUp, Image, Edit3, Save
 } from 'lucide-react';
 
 // Category display info
@@ -97,11 +97,97 @@ function EquipmentCard({ equipment, onUpload, onDelete, uploading }) {
   );
 }
 
+// Permit card with inline editing
+function PermitCard({ permit, onUpdate, saving }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(permit.name);
+  const [editDescription, setEditDescription] = useState(permit.description);
+
+  const handleSave = async () => {
+    await onUpdate(permit.id, { name: editName, description: editDescription });
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditName(permit.name);
+    setEditDescription(permit.description);
+    setIsEditing(false);
+  };
+
+  if (isEditing) {
+    return (
+      <div
+        className="p-3 rounded-lg border-2 border-purple-300"
+        style={{ backgroundColor: permit.color + '10' }}
+      >
+        <div className="flex items-start gap-2">
+          <span className="text-xl">{permit.icon}</span>
+          <div className="flex-1 space-y-2">
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className="w-full px-2 py-1 text-sm font-medium border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              placeholder="Nom du permis"
+            />
+            <input
+              type="text"
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+              className="w-full px-2 py-1 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              placeholder="Description"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex-1 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center justify-center gap-1"
+              >
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                Enregistrer
+              </button>
+              <button
+                onClick={handleCancel}
+                className="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-300"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-100 group"
+      style={{ backgroundColor: permit.color + '10' }}
+    >
+      <span className="text-xl">{permit.icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-xs" style={{ color: permit.color }}>
+          {permit.name}
+        </p>
+        <p className="text-[10px] text-gray-500 truncate">{permit.description}</p>
+      </div>
+      <button
+        onClick={() => setIsEditing(true)}
+        className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity sm:opacity-100"
+        title="Modifier"
+      >
+        <Edit3 className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
 export default function SafetyEquipmentManager({ isOpen, onClose }) {
   const [equipment, setEquipment] = useState([]);
   const [permits, setPermits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(null);
+  const [savingPermit, setSavingPermit] = useState(null);
   const [showPermits, setShowPermits] = useState(false);
   const [filter, setFilter] = useState('all');
   const contentRef = useRef(null);
@@ -170,6 +256,28 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
       }
     } catch (err) {
       console.error('Error deleting image:', err);
+    }
+  };
+
+  const handleUpdatePermit = async (permitId, updates) => {
+    try {
+      setSavingPermit(permitId);
+      const res = await fetch(`/api/procedures/permits/${permitId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+
+      if (res.ok) {
+        // Update local state
+        setPermits(prev => prev.map(p =>
+          p.id === permitId ? { ...p, ...updates } : p
+        ));
+      }
+    } catch (err) {
+      console.error('Error updating permit:', err);
+    } finally {
+      setSavingPermit(null);
     }
   };
 
@@ -287,6 +395,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
                     <span className="font-medium text-purple-900 flex-1 text-sm">
                       Permis de Travail ({permits.length})
                     </span>
+                    <span className="text-[10px] text-purple-500 mr-1">Cliquez pour modifier</span>
                     {showPermits ? (
                       <ChevronUp className="w-4 h-4 text-purple-600" />
                     ) : (
@@ -297,19 +406,12 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
                   {showPermits && (
                     <div className="mt-2 space-y-1.5">
                       {permits.map(permit => (
-                        <div
+                        <PermitCard
                           key={permit.id}
-                          className="flex items-center gap-2 p-2.5 rounded-lg border border-gray-100"
-                          style={{ backgroundColor: permit.color + '10' }}
-                        >
-                          <span className="text-xl">{permit.icon}</span>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-xs" style={{ color: permit.color }}>
-                              {permit.name}
-                            </p>
-                            <p className="text-[10px] text-gray-500 truncate">{permit.description}</p>
-                          </div>
-                        </div>
+                          permit={permit}
+                          onUpdate={handleUpdatePermit}
+                          saving={savingPermit === permit.id}
+                        />
                       ))}
                     </div>
                   )}
@@ -323,7 +425,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
         <div className="px-3 py-2 bg-gray-50 border-t flex-shrink-0 pb-safe">
           <div className="flex items-center gap-2 text-[10px] text-gray-500">
             <Image className="w-3.5 h-3.5 flex-shrink-0" />
-            <p>Touchez une image pour la remplacer par votre photo.</p>
+            <p>Touchez une image pour la remplacer. Survolez un permis pour le modifier.</p>
           </div>
         </div>
       </div>
