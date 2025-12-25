@@ -487,7 +487,6 @@ export {
   SAFETY_EQUIPMENT,
   EQUIPMENT_CATEGORIES,
   EQUIPMENT_KEYWORDS,
-  WORK_PERMITS,
   detectEquipmentFromText,
   detectPermitsFromText,
   getEquipment,
