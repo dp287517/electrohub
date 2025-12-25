@@ -6,7 +6,8 @@ import {
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
   Volume2, VolumeX, BarChart3, Play, Loader2,
-  ClipboardList, Camera, Image, Upload, FileUp, FileSearch
+  ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
+  ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator } from '../Procedures';
@@ -89,6 +90,12 @@ function AIChart({ chart }) {
 // Suggestions contextuelles
 const QUICK_ACTIONS = [
   {
+    icon: Brain,
+    label: 'Prédictions IA',
+    prompt: 'Donne-moi une analyse prédictive complète avec les risques de panne et recommandations',
+    color: 'text-purple-600 bg-purple-50'
+  },
+  {
     icon: ClipboardList,
     label: 'Créer une procédure',
     prompt: 'Je veux créer une procédure',
@@ -99,12 +106,6 @@ const QUICK_ACTIONS = [
     label: 'Importer un document',
     prompt: 'Je veux importer un document de procédure',
     color: 'text-blue-600 bg-blue-50'
-  },
-  {
-    icon: FileSearch,
-    label: 'Analyser un rapport',
-    prompt: 'Je veux analyser un rapport d\'audit',
-    color: 'text-orange-600 bg-orange-50'
   },
   {
     icon: Wrench,
@@ -150,6 +151,13 @@ export default function AvatarChat({
   // Procedure Creator modal
   const [showProcedureCreator, setShowProcedureCreator] = useState(false);
   const [procedureCreatorContext, setProcedureCreatorContext] = useState(null);
+  // Feedback state
+  const [feedbackGiven, setFeedbackGiven] = useState({});
+  // Predictions state
+  const [predictions, setPredictions] = useState(null);
+  const [showPredictions, setShowPredictions] = useState(false);
+  // User profile
+  const [userProfile, setUserProfile] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -198,10 +206,33 @@ export default function AvatarChat({
   // Charger le contexte de l'application
   const loadContext = async () => {
     try {
-      const ctx = await aiAssistant.getGlobalContext();
+      const [ctx, preds, profile] = await Promise.all([
+        aiAssistant.getGlobalContext(),
+        aiAssistant.getPredictions(),
+        aiAssistant.getUserAIProfile()
+      ]);
       setContext(ctx);
+      if (preds?.ok) setPredictions(preds.predictions);
+      if (profile?.ok) setUserProfile(profile.profile);
     } catch (error) {
       console.error('Erreur chargement contexte:', error);
+    }
+  };
+
+  // Handle feedback
+  const handleFeedback = async (messageId, feedback, userMessage, aiResponse) => {
+    if (feedbackGiven[messageId]) return;
+
+    setFeedbackGiven(prev => ({ ...prev, [messageId]: feedback }));
+
+    try {
+      await aiAssistant.submitFeedback(messageId, feedback, userMessage, aiResponse);
+      // Update the message to show feedback was received
+      setMessages(prev => prev.map(m =>
+        m.id === messageId ? { ...m, feedbackReceived: feedback } : m
+      ));
+    } catch (error) {
+      console.error('Feedback error:', error);
     }
   };
 
@@ -611,6 +642,22 @@ export default function AvatarChat({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Predictions Button */}
+            {predictions?.risks?.high > 0 && (
+              <button
+                onClick={() => setShowPredictions(!showPredictions)}
+                className={`p-2 rounded-lg transition-colors relative ${
+                  showPredictions ? 'bg-orange-500/30' : 'hover:bg-white/10'
+                }`}
+                title="Voir les prédictions"
+              >
+                <Brain className="w-5 h-5 text-white" />
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-orange-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                  {predictions.risks.high}
+                </span>
+              </button>
+            )}
+
             {/* Mute Button */}
             <button
               onClick={toggleMute}
@@ -634,6 +681,80 @@ export default function AvatarChat({
             </button>
           </div>
         </div>
+
+        {/* Predictions Panel */}
+        {showPredictions && predictions && (
+          <div className="bg-gradient-to-r from-orange-50 to-red-50 px-4 py-3 border-b border-orange-200 shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Brain className="w-5 h-5 text-orange-600" />
+                <h4 className="font-semibold text-orange-800">Prédictions IA</h4>
+              </div>
+              <button
+                onClick={() => setShowPredictions(false)}
+                className="p-1 hover:bg-orange-200 rounded"
+              >
+                <X className="w-4 h-4 text-orange-600" />
+              </button>
+            </div>
+
+            {/* Risk Summary */}
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="bg-white rounded-lg p-2 text-center shadow-sm">
+                <div className="text-2xl font-bold text-red-600">{predictions.risks?.high || 0}</div>
+                <div className="text-xs text-gray-500">Risque élevé</div>
+              </div>
+              <div className="bg-white rounded-lg p-2 text-center shadow-sm">
+                <div className="text-2xl font-bold text-orange-500">{predictions.risks?.medium || 0}</div>
+                <div className="text-xs text-gray-500">Risque moyen</div>
+              </div>
+              <div className="bg-white rounded-lg p-2 text-center shadow-sm">
+                <div className="text-2xl font-bold text-blue-600">{predictions.maintenance?.totalNext30Days || 0}</div>
+                <div className="text-xs text-gray-500">Contrôles 30j</div>
+              </div>
+            </div>
+
+            {/* Top Risks */}
+            {predictions.risks?.list?.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-orange-700">Équipements à risque:</p>
+                {predictions.risks.list.slice(0, 3).map((risk, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white rounded p-2 text-sm shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className={`w-4 h-4 ${
+                        parseFloat(risk.riskScore) >= 0.7 ? 'text-red-500' : 'text-orange-500'
+                      }`} />
+                      <span className="font-medium truncate max-w-[150px]">{risk.name}</span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      parseFloat(risk.riskScore) >= 0.7
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-orange-100 text-orange-700'
+                    }`}>
+                      {(parseFloat(risk.riskScore) * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+                <button
+                  onClick={() => handleSend("Montre-moi l'analyse des risques complète")}
+                  className="w-full text-center text-xs text-orange-600 hover:text-orange-800 py-1"
+                >
+                  Voir tous les risques →
+                </button>
+              </div>
+            )}
+
+            {/* Workload Recommendation */}
+            {predictions.maintenance?.recommendation && (
+              <div className="mt-2 p-2 bg-white rounded-lg text-sm shadow-sm">
+                <div className="flex items-center gap-2">
+                  <TrendingDown className="w-4 h-4 text-blue-500" />
+                  <span>{predictions.maintenance.recommendation}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -772,18 +893,57 @@ export default function AvatarChat({
                   </div>
                 )}
 
-                {/* Provider badge + Timestamp */}
+                {/* Provider badge + Timestamp + Feedback */}
                 <div className={`flex items-center justify-between text-xs mt-2 ${
                   message.role === 'user' ? 'text-brand-200' : 'text-gray-400'
                 }`}>
                   <span>
                     {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                  {message.provider && (
-                    <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase">
-                      {message.provider}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {message.provider && (
+                      <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase">
+                        {message.provider === 'multi-model' ? '🔥 Multi-AI' : message.provider}
+                      </span>
+                    )}
+                    {/* Feedback buttons for assistant messages */}
+                    {message.role === 'assistant' && !message.isError && (
+                      <div className="flex items-center gap-1 ml-2">
+                        {message.feedbackReceived ? (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            message.feedbackReceived === 'positive'
+                              ? 'bg-green-100 text-green-600'
+                              : 'bg-orange-100 text-orange-600'
+                          }`}>
+                            {message.feedbackReceived === 'positive' ? '👍 Utile' : '👎 Noté'}
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                const prevMsg = messages.find(m => m.id === message.id - 1);
+                                handleFeedback(message.id, 'positive', prevMsg?.content, message.content);
+                              }}
+                              className="p-1 hover:bg-green-100 rounded transition-colors group"
+                              title="Réponse utile"
+                            >
+                              <ThumbsUp className="w-3 h-3 text-gray-400 group-hover:text-green-600" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const prevMsg = messages.find(m => m.id === message.id - 1);
+                                handleFeedback(message.id, 'negative', prevMsg?.content, message.content);
+                              }}
+                              className="p-1 hover:bg-orange-100 rounded transition-colors group"
+                              title="Réponse à améliorer"
+                            >
+                              <ThumbsDown className="w-3 h-3 text-gray-400 group-hover:text-orange-600" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

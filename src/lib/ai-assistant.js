@@ -1075,6 +1075,214 @@ Comment puis-je vous aider plus précisément ?`,
       this.scheduleMorningBrief();
     }, delay);
   }
+
+  // ============================================================
+  // 🧠 FEEDBACK & LEARNING - Help AI improve
+  // ============================================================
+
+  /**
+   * Submit feedback on an AI response
+   */
+  async submitFeedback(messageId, feedback, message, response) {
+    try {
+      const data = await post(`${this.baseUrl}/feedback`, {
+        messageId,
+        feedback, // 'positive' or 'negative'
+        message,
+        response,
+        site: this.getCurrentUser()?.site,
+        user: this.getCurrentUser()
+      });
+      return data;
+    } catch (error) {
+      console.error('[Feedback] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  // ============================================================
+  // 🔮 PREDICTIONS - Risk analysis and forecasting
+  // ============================================================
+
+  /**
+   * Get AI predictions for equipment risks
+   */
+  async getPredictions() {
+    try {
+      const data = await get(`${this.baseUrl}/predictions`);
+      return data;
+    } catch (error) {
+      console.error('[Predictions] Error:', error);
+      return { ok: false, predictions: null };
+    }
+  }
+
+  /**
+   * Get ML-based prediction for specific equipment
+   */
+  async getMLPrediction(equipmentData, type = 'failure') {
+    try {
+      const data = await post(`${this.baseUrl}/ml/predict`, {
+        equipmentData,
+        type
+      });
+      return data;
+    } catch (error) {
+      console.error('[ML Prediction] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get pattern analysis from ML service
+   */
+  async getPatternAnalysis() {
+    try {
+      const data = await post(`${this.baseUrl}/ml/analyze-patterns`, {
+        site: this.getCurrentUser()?.site
+      });
+      return data;
+    } catch (error) {
+      console.error('[Pattern Analysis] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  // ============================================================
+  // 👤 USER PROFILE - Personalization data
+  // ============================================================
+
+  /**
+   * Get user AI profile (memories, preferences, stats)
+   */
+  async getUserAIProfile() {
+    try {
+      const user = this.getCurrentUser();
+      if (!user?.email) return { ok: false, error: 'Not logged in' };
+
+      const data = await get(`${this.baseUrl}/profile?email=${encodeURIComponent(user.email)}`);
+      return data;
+    } catch (error) {
+      console.error('[Profile] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  // ============================================================
+  // 🔔 PROACTIVE NOTIFICATIONS
+  // ============================================================
+
+  /**
+   * Check for alerts and show notifications
+   */
+  async checkForAlerts() {
+    try {
+      const predictions = await this.getPredictions();
+
+      if (predictions.ok && predictions.predictions?.risks?.high > 0) {
+        const highRiskCount = predictions.predictions.risks.high;
+        this.showNotification(
+          `⚠️ ${highRiskCount} équipement(s) à risque élevé`,
+          {
+            body: 'Des équipements nécessitent une attention urgente',
+            tag: 'risk-alert',
+            url: '/controls'
+          }
+        );
+      }
+
+      return predictions;
+    } catch (error) {
+      console.error('[Alerts] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Schedule periodic alert checks
+   */
+  scheduleAlertChecks(intervalMinutes = 30) {
+    // Initial check after 5 seconds
+    setTimeout(() => this.checkForAlerts(), 5000);
+
+    // Then check periodically
+    setInterval(() => this.checkForAlerts(), intervalMinutes * 60 * 1000);
+  }
+
+  // ============================================================
+  // 📊 ADVANCED CHARTS DATA
+  // ============================================================
+
+  /**
+   * Get data for trend charts
+   */
+  async getTrendData(period = 30) {
+    try {
+      const data = await get(`${this.baseUrl}/historical-stats?period=${period}`);
+      return data;
+    } catch (error) {
+      console.error('[TrendData] Error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Generate chart config for Recharts
+   */
+  generateChartConfig(type, data) {
+    const colors = {
+      primary: '#3B82F6',
+      success: '#10B981',
+      warning: '#F59E0B',
+      danger: '#EF4444',
+      purple: '#8B5CF6'
+    };
+
+    switch (type) {
+      case 'trend':
+        return {
+          type: 'line',
+          data: data.controlHistory?.map(d => ({
+            date: new Date(d.date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }),
+            conforme: d.conforme,
+            nonConforme: d.nonConforme,
+            total: d.total
+          })) || [],
+          colors: [colors.success, colors.danger, colors.primary]
+        };
+
+      case 'buildings':
+        return {
+          type: 'bar',
+          data: data.buildingDistribution?.map(b => ({
+            name: b.building || 'N/A',
+            equipments: b.count,
+            overdue: b.overdue
+          })) || [],
+          colors: [colors.primary, colors.warning]
+        };
+
+      case 'types':
+        return {
+          type: 'pie',
+          data: data.equipmentTypes?.map(t => ({
+            name: t.type.toUpperCase(),
+            value: t.count
+          })) || [],
+          colors: [colors.primary, colors.success, colors.warning, colors.purple]
+        };
+
+      case 'risks':
+        return {
+          type: 'gauge',
+          data: data.risks || [],
+          colors: [colors.success, colors.warning, colors.danger]
+        };
+
+      default:
+        return null;
+    }
+  }
 }
 
 // Export singleton
