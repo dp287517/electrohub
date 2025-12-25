@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#059669" stroke-width="2">
+  <!-- Détecteur multi-gaz portable -->
+  <!-- Main body -->
+  <rect x="25" y="15" width="50" height="70" rx="8" fill="#10b981" stroke="#059669" stroke-width="3"/>
+  <!-- Screen -->
+  <rect x="32" y="22" width="36" height="25" rx="3" fill="#064e3b"/>
+  <!-- Gas readings on screen -->
+  <text x="35" y="33" font-size="6" fill="#34d399" font-family="monospace">O2  20.9%</text>
+  <text x="35" y="41" font-size="6" fill="#34d399" font-family="monospace">CO    0ppm</text>
+  <!-- Sensors at top -->
+  <circle cx="35" cy="55" r="6" fill="#065f46" stroke="#047857"/>
+  <circle cx="50" cy="55" r="6" fill="#065f46" stroke="#047857"/>
+  <circle cx="65" cy="55" r="6" fill="#065f46" stroke="#047857"/>
+  <!-- Sensor labels -->
+  <text x="32" y="58" font-size="5" fill="#a7f3d0">O2</text>
+  <text x="47" y="58" font-size="5" fill="#a7f3d0">CO</text>
+  <text x="61" y="58" font-size="5" fill="#a7f3d0">H2S</text>
+  <!-- Buttons -->
+  <rect x="32" y="68" width="12" height="8" rx="2" fill="#047857"/>
+  <rect x="56" y="68" width="12" height="8" rx="2" fill="#047857"/>
+  <!-- Clip at top -->
+  <rect x="40" y="8" width="20" height="10" rx="2" fill="#6b7280"/>
+  <!-- Status LED -->
+  <circle cx="70" cy="18" r="3" fill="#22c55e"/>
+</svg>

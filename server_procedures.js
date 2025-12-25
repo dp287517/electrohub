@@ -30,8 +30,10 @@ import archiver from "archiver";
 import {
   SAFETY_EQUIPMENT,
   EQUIPMENT_IMAGES_PATH,
+  WORK_PERMITS,
   getEquipment,
   getEquipmentForProcedure,
+  getPermitsForProcedure,
 } from "./server/safety-equipment-library.js";
 
 dotenv.config();
@@ -2335,6 +2337,29 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
       doc.text(`${contact.name}: ${contact.phone}`, col2X + 6, ry + 5 + i * 15, { width: col2W - 12, lineBreak: false });
     });
     ry += contactH + 3;
+  }
+
+  // Work Permits Section - Detected from procedure content
+  const requiredPermits = getPermitsForProcedure(steps, procedure);
+  if (requiredPermits.length > 0) {
+    doc.rect(col2X, ry, col2W, 15).fill("#7c3aed");
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PERMIS REQUIS", col2X + 6, ry + 3);
+    ry += 15;
+
+    const permitH = Math.min(requiredPermits.length * 22 + 6, 90);
+    doc.rect(col2X, ry, col2W, permitH).fillAndStroke("#f5f3ff", "#7c3aed");
+
+    requiredPermits.slice(0, 4).forEach((permit, i) => {
+      const py = ry + 5 + i * 22;
+      // Permit badge with color
+      doc.roundedRect(col2X + 4, py, col2W - 8, 18, 3).fill(permit.color || "#7c3aed");
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.white)
+         .text(permit.name, col2X + 8, py + 2, { width: col2W - 16 });
+      doc.font("Helvetica").fontSize(5).fillColor("#f5f5f5")
+         .text(permit.validity || "", col2X + 8, py + 11, { width: col2W - 16 });
+    });
+
+    ry += permitH + 3;
   }
 
   // Risk Summary

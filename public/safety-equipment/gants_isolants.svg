@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#ea580c" stroke-width="2">
+  <!-- Gants isolants électriques (orange) -->
+  <!-- Left glove -->
+  <path d="M15 90 L15 55 Q15 50 20 50 L25 50 L25 35 Q25 30 28 30 Q31 30 31 35 L31 50 L35 50 L35 25 Q35 20 38 20 Q41 20 41 25 L41 50 L45 50 L45 20 Q45 15 48 15 Q51 15 51 20 L51 50 L55 50 L55 30 Q55 25 58 25 Q61 25 61 30 L61 50 Q65 50 65 55 L65 90 Q65 95 50 95 L30 95 Q15 95 15 90 Z" fill="#f97316"/>
+  <!-- Gauntlet cuff -->
+  <rect x="12" y="85" width="56" height="12" rx="4" fill="#ea580c"/>
+  <!-- Electrical symbol -->
+  <path d="M38 65 L42 55 L35 55 L42 45 L38 45 L45 35 L43 48 L48 48 L40 65 Z" fill="#fcd34d" stroke="#eab308" stroke-width="1"/>
+  <!-- Class marking -->
+  <text x="30" y="98" font-size="8" fill="#fff" font-weight="bold">CLASSE 2</text>
+  <!-- Texture lines on glove -->
+  <line x1="20" y1="70" x2="60" y2="70" stroke="#c2410c" stroke-width="1"/>
+  <line x1="22" y1="78" x2="58" y2="78" stroke="#c2410c" stroke-width="1"/>
+</svg>
