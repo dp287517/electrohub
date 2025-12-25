@@ -668,6 +668,255 @@ C'est une première interaction avec ${userEmail}. Sois accueillant et propose d
 initAIMemoryTables();
 
 // ============================================================
+// 🔄 AUTO-LEARNING SYSTEM - Continuous AI Improvement
+// ============================================================
+
+// Analyze feedback patterns to improve AI
+async function analyzeFeedbackPatterns() {
+  try {
+    console.log('[AI-AutoLearn] 🔄 Analyzing feedback patterns...');
+
+    // Get recent feedback data
+    const feedbackStats = await pool.query(`
+      SELECT
+        category,
+        key_data,
+        content->>'feedback' as feedback,
+        COUNT(*) as count,
+        AVG(importance) as avg_importance
+      FROM ai_user_memory
+      WHERE memory_type = 'feedback'
+        AND created_at > NOW() - INTERVAL '7 days'
+      GROUP BY category, key_data, content->>'feedback'
+      ORDER BY count DESC
+      LIMIT 50
+    `);
+
+    // Identify patterns
+    const positivePatterns = [];
+    const negativePatterns = [];
+
+    for (const row of feedbackStats.rows) {
+      if (row.feedback === 'positive') {
+        positivePatterns.push({
+          category: row.category,
+          key: row.key_data,
+          count: parseInt(row.count),
+          importance: parseFloat(row.avg_importance)
+        });
+      } else if (row.feedback === 'negative') {
+        negativePatterns.push({
+          category: row.category,
+          key: row.key_data,
+          count: parseInt(row.count),
+          importance: parseFloat(row.avg_importance)
+        });
+      }
+    }
+
+    // Store analysis results
+    const analysisResult = {
+      analyzedAt: new Date().toISOString(),
+      totalFeedback: feedbackStats.rows.length,
+      positiveCount: positivePatterns.length,
+      negativeCount: negativePatterns.length,
+      topPositive: positivePatterns.slice(0, 5),
+      topNegative: negativePatterns.slice(0, 5),
+      recommendations: []
+    };
+
+    // Generate recommendations based on patterns
+    if (negativePatterns.length > 0) {
+      const topNegative = negativePatterns[0];
+      analysisResult.recommendations.push(
+        `Améliorer les réponses sur "${topNegative.category}" (${topNegative.count} feedbacks négatifs)`
+      );
+    }
+
+    if (positivePatterns.length > 0) {
+      const topPositive = positivePatterns[0];
+      analysisResult.recommendations.push(
+        `Continuer à utiliser le style pour "${topPositive.category}" (${topPositive.count} feedbacks positifs)`
+      );
+    }
+
+    console.log(`[AI-AutoLearn] ✅ Analysis complete: ${analysisResult.positiveCount} positive, ${analysisResult.negativeCount} negative patterns`);
+
+    return analysisResult;
+  } catch (e) {
+    console.error('[AI-AutoLearn] Analysis error:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Auto-update user expertise based on interactions
+async function updateUserExpertise() {
+  try {
+    console.log('[AI-AutoLearn] 👤 Updating user expertise levels...');
+
+    // Find users with significant interaction history
+    const activeUsers = await pool.query(`
+      SELECT
+        user_email,
+        site,
+        total_interactions,
+        favorite_topics,
+        equipment_focus
+      FROM ai_user_stats
+      WHERE total_interactions >= 10
+        AND last_interaction > NOW() - INTERVAL '30 days'
+    `);
+
+    let updatedCount = 0;
+
+    for (const user of activeUsers.rows) {
+      // Analyze user's memory for expertise patterns
+      const userMemories = await pool.query(`
+        SELECT category, COUNT(*) as count
+        FROM ai_user_memory
+        WHERE user_email = $1 AND memory_type = 'conversation'
+        GROUP BY category
+        ORDER BY count DESC
+        LIMIT 5
+      `, [user.user_email]);
+
+      // Determine expertise areas based on frequency
+      const expertiseAreas = userMemories.rows
+        .filter(m => parseInt(m.count) >= 5)
+        .map(m => m.category);
+
+      if (expertiseAreas.length > 0) {
+        await pool.query(`
+          UPDATE ai_user_stats
+          SET expertise_areas = $1
+          WHERE user_email = $2
+        `, [JSON.stringify(expertiseAreas), user.user_email]);
+        updatedCount++;
+      }
+    }
+
+    console.log(`[AI-AutoLearn] ✅ Updated expertise for ${updatedCount} users`);
+    return { updatedUsers: updatedCount };
+  } catch (e) {
+    console.error('[AI-AutoLearn] Expertise update error:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Trigger ML model retraining
+const ML_SERVICE_URL_INTERNAL = process.env.ML_SERVICE_URL || 'http://localhost:8089';
+
+async function triggerMLRetraining(site = null) {
+  try {
+    console.log('[AI-AutoLearn] 🧠 Triggering ML model retraining...');
+
+    const response = await fetch(`${ML_SERVICE_URL_INTERNAL}/train`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site })
+    });
+
+    if (!response.ok) {
+      throw new Error(`ML service returned ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log(`[AI-AutoLearn] ✅ ML training complete: accuracy ${result.accuracy || 'N/A'}`);
+    return result;
+  } catch (e) {
+    console.error('[AI-AutoLearn] ML training error:', e.message);
+    // Not critical - built-in predictions still work
+    return { success: false, error: e.message };
+  }
+}
+
+// Clean up old memories (keep system running efficiently)
+async function cleanupOldMemories() {
+  try {
+    console.log('[AI-AutoLearn] 🧹 Cleaning up old memories...');
+
+    // Delete low-importance conversations older than 90 days
+    const deleteResult = await pool.query(`
+      DELETE FROM ai_user_memory
+      WHERE memory_type = 'conversation'
+        AND importance < 0.3
+        AND created_at < NOW() - INTERVAL '90 days'
+      RETURNING id
+    `);
+
+    // Delete expired memories
+    const expiredResult = await pool.query(`
+      DELETE FROM ai_user_memory
+      WHERE expires_at IS NOT NULL AND expires_at < NOW()
+      RETURNING id
+    `);
+
+    const deletedCount = deleteResult.rowCount + expiredResult.rowCount;
+    console.log(`[AI-AutoLearn] ✅ Cleaned up ${deletedCount} old memories`);
+
+    return { deletedCount };
+  } catch (e) {
+    console.error('[AI-AutoLearn] Cleanup error:', e.message);
+    return { error: e.message };
+  }
+}
+
+// Run all auto-learning tasks
+async function runAutoLearning() {
+  console.log('[AI-AutoLearn] 🚀 Starting auto-learning cycle...');
+  const startTime = Date.now();
+
+  const results = {
+    timestamp: new Date().toISOString(),
+    tasks: {}
+  };
+
+  // Run all tasks
+  results.tasks.feedbackAnalysis = await analyzeFeedbackPatterns();
+  results.tasks.expertiseUpdate = await updateUserExpertise();
+  results.tasks.cleanup = await cleanupOldMemories();
+
+  // Only try ML training if we have significant new data
+  const recentFeedback = await pool.query(`
+    SELECT COUNT(*) as count FROM ai_user_memory
+    WHERE memory_type = 'feedback'
+      AND created_at > NOW() - INTERVAL '24 hours'
+  `);
+
+  if (parseInt(recentFeedback.rows[0]?.count) >= 10) {
+    results.tasks.mlRetraining = await triggerMLRetraining();
+  } else {
+    results.tasks.mlRetraining = { skipped: true, reason: 'Not enough new feedback' };
+  }
+
+  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(`[AI-AutoLearn] ✅ Auto-learning cycle complete in ${duration}s`);
+
+  results.duration = duration;
+  return results;
+}
+
+// Schedule auto-learning (runs every 6 hours)
+const AUTO_LEARN_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+
+function scheduleAutoLearning() {
+  console.log('[AI-AutoLearn] 📅 Scheduled auto-learning every 6 hours');
+
+  // Initial run after 5 minutes (let server stabilize)
+  setTimeout(() => {
+    runAutoLearning().catch(e => console.error('[AI-AutoLearn] Error:', e.message));
+  }, 5 * 60 * 1000);
+
+  // Then every 6 hours
+  setInterval(() => {
+    runAutoLearning().catch(e => console.error('[AI-AutoLearn] Error:', e.message));
+  }, AUTO_LEARN_INTERVAL);
+}
+
+// Start auto-learning scheduler
+scheduleAutoLearning();
+
+// ============================================================
 // 🔮 PREDICTIVE INTELLIGENCE SYSTEM
 // ============================================================
 
@@ -2714,33 +2963,6 @@ function parseAIResponse(responseText) {
 }
 
 // ============================================================
-// AI CALL WITH FALLBACK - OpenAI -> Gemini -> Local
-// ============================================================
-async function callAI(messages, options = {}) {
-  const { maxTokens = 2000, temperature = 0.7, model } = options;
-
-  try {
-    const result = await chatWithFallback(messages, {
-      max_tokens: maxTokens,
-      temperature,
-      model: model || process.env.AI_MODEL || "gpt-4o-mini"
-    });
-    return {
-      content: result.content,
-      provider: result.provider,
-      model: result.provider === 'openai' ? (model || process.env.AI_MODEL || 'gpt-4o-mini') : GEMINI_MODEL
-    };
-  } catch (e) {
-    console.error('[AI] All providers failed:', e.message);
-    return {
-      content: null,
-      provider: 'none',
-      error: 'Aucun service IA disponible'
-    };
-  }
-}
-
-// ============================================================
 // AUTH AUDIT LOG - Traçage des connexions/déconnexions
 // ============================================================
 async function ensureAuthAuditTable() {
@@ -4415,6 +4637,68 @@ app.get("/api/ai-assistant/historical-stats", async (req, res) => {
   } catch (e) {
     console.error('[AI] Historical stats error:', e.message);
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 🔄 AUTO-LEARNING ENDPOINT - Manual trigger
+// ============================================================
+app.post("/api/ai-assistant/auto-learn", express.json(), async (req, res) => {
+  try {
+    console.log('[AI] Manual auto-learning triggered');
+    const results = await runAutoLearning();
+    res.json({ ok: true, results });
+  } catch (e) {
+    console.error('[AI] Manual auto-learn error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/ai-assistant/learning-stats", async (req, res) => {
+  try {
+    // Get learning statistics
+    const [memoryStats, feedbackStats, userStats] = await Promise.all([
+      pool.query(`
+        SELECT memory_type, COUNT(*) as count
+        FROM ai_user_memory
+        GROUP BY memory_type
+      `),
+      pool.query(`
+        SELECT
+          content->>'feedback' as feedback,
+          COUNT(*) as count
+        FROM ai_user_memory
+        WHERE memory_type = 'feedback'
+          AND created_at > NOW() - INTERVAL '7 days'
+        GROUP BY content->>'feedback'
+      `),
+      pool.query(`
+        SELECT COUNT(*) as total_users,
+               SUM(total_interactions) as total_interactions
+        FROM ai_user_stats
+      `)
+    ]);
+
+    res.json({
+      ok: true,
+      stats: {
+        memories: memoryStats.rows.reduce((acc, r) => {
+          acc[r.memory_type] = parseInt(r.count);
+          return acc;
+        }, {}),
+        recentFeedback: feedbackStats.rows.reduce((acc, r) => {
+          acc[r.feedback || 'unknown'] = parseInt(r.count);
+          return acc;
+        }, {}),
+        users: {
+          total: parseInt(userStats.rows[0]?.total_users || 0),
+          totalInteractions: parseInt(userStats.rows[0]?.total_interactions || 0)
+        }
+      }
+    });
+  } catch (e) {
+    console.error('[AI] Learning stats error:', e.message);
+    res.json({ ok: false, error: e.message });
   }
 });
 
