@@ -243,9 +243,13 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   // Mode Selection Screen
   if (mode === 'choose') {
     return (
-      <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-2xl w-full mx-auto">
+      <div className="bg-white rounded-t-3xl lg:rounded-2xl shadow-xl overflow-hidden w-full">
         {/* Header */}
-        <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-5">
+        <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-4 sm:px-6 py-4 sm:py-5">
+          {/* Mobile handle */}
+          <div className="lg:hidden flex justify-center mb-3">
+            <div className="w-10 h-1 bg-white/30 rounded-full" />
+          </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
@@ -253,13 +257,13 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-white">Nouvelle Procédure</h2>
-                <p className="text-sm text-white/80">Choisissez comment créer votre procédure</p>
+                <p className="text-sm text-white/80 hidden sm:block">Choisissez comment créer votre procédure</p>
               </div>
             </div>
             {onClose && (
               <button
                 onClick={onClose}
-                className="text-white/80 hover:text-white transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/20 active:bg-white/30 text-white"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -268,66 +272,66 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
         </div>
 
         {/* Options */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-3 sm:space-y-4">
           {/* Guided AI Creation */}
           <button
             onClick={() => startGuidedSession()}
-            className="w-full p-5 bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl border-2 border-violet-200 hover:border-violet-400 transition-all group text-left"
+            className="w-full p-4 sm:p-5 bg-gradient-to-r from-violet-50 to-purple-50 rounded-2xl border-2 border-violet-200 active:border-violet-400 active:scale-[0.98] transition-all text-left touch-manipulation"
           >
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center group-hover:bg-violet-200 transition-colors">
-                <Sparkles className="w-6 h-6 text-violet-600" />
+            <div className="flex items-start gap-3 sm:gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                <Sparkles className="w-6 h-6 text-white" />
               </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-                  Création guidée avec LIA
-                  <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                    RAMS + Méthodo + Procédure
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-gray-900 flex flex-wrap items-center gap-2">
+                  <span>Création avec LIA</span>
+                  <span className="text-[10px] sm:text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    3 docs
                   </span>
                 </h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Titre → Décrivez chaque étape + 📸 photo → LIA génère les 3 documents complets
+                <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                  Décrivez + photo → RAMS, Méthodo, Procédure
                 </p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-violet-600 transition-colors" />
+              <ChevronRight className="w-5 h-5 text-violet-400 flex-shrink-0" />
             </div>
           </button>
 
           {/* Import existing procedure */}
           <button
             onClick={() => setMode('import')}
-            className="w-full p-5 bg-gray-50 rounded-xl border-2 border-gray-200 hover:border-blue-400 transition-all group text-left"
+            className="w-full p-4 sm:p-5 bg-gray-50 rounded-2xl border-2 border-gray-200 active:border-blue-400 active:scale-[0.98] transition-all text-left touch-manipulation"
           >
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center group-hover:bg-blue-200 transition-colors">
-                <Upload className="w-6 h-6 text-blue-600" />
+            <div className="flex items-start gap-3 sm:gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                <Upload className="w-6 h-6 text-white" />
               </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-gray-900">Importer une procédure existante</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Uploadez un document PDF ou texte, l'IA l'analyse et crée une mini-procédure structurée.
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-gray-900">Importer un document</h3>
+                <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                  PDF ou texte → analyse IA automatique
                 </p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
+              <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0" />
             </div>
           </button>
 
           {/* Analyze report for actions */}
           <button
             onClick={() => setMode('report')}
-            className="w-full p-5 bg-gray-50 rounded-xl border-2 border-gray-200 hover:border-amber-400 transition-all group text-left"
+            className="w-full p-4 sm:p-5 bg-gray-50 rounded-2xl border-2 border-gray-200 active:border-amber-400 active:scale-[0.98] transition-all text-left touch-manipulation"
           >
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center group-hover:bg-amber-200 transition-colors">
-                <AlertTriangle className="w-6 h-6 text-amber-600" />
+            <div className="flex items-start gap-3 sm:gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-6 h-6 text-white" />
               </div>
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <h3 className="font-semibold text-gray-900">Analyser un rapport</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Uploadez un rapport de contrôle ou d'audit, l'IA génère une liste d'actions correctives.
+                <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                  Audit/contrôle → liste d'actions correctives
                 </p>
               </div>
-              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-amber-600 transition-colors" />
+              <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0" />
             </div>
           </button>
         </div>
@@ -498,26 +502,30 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
   // Guided Creation Mode
   return (
-    <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-2xl w-full mx-auto flex flex-col" style={{ height: '80vh', maxHeight: '700px' }}>
+    <div className="bg-white rounded-t-3xl lg:rounded-2xl shadow-xl overflow-hidden w-full flex flex-col h-[85vh] lg:h-[80vh] lg:max-h-[700px]">
       {/* Header */}
-      <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4 flex-shrink-0">
+      <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-4 sm:px-6 py-3 sm:py-4 flex-shrink-0">
+        {/* Mobile handle */}
+        <div className="lg:hidden flex justify-center mb-2">
+          <div className="w-10 h-1 bg-white/30 rounded-full" />
+        </div>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-white" />
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 bg-white/20 rounded-xl flex items-center justify-center">
+              <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">LIA - Création rapide</h2>
-              <p className="text-sm text-white/80">
+              <h2 className="text-base sm:text-lg font-semibold text-white">LIA</h2>
+              <p className="text-xs sm:text-sm text-white/80">
                 {currentStep === 'init' && '1/3 - Titre'}
-                {currentStep === 'steps' && '2/3 - Étapes'}
+                {currentStep === 'steps' && '2/3 - Étapes + Photos'}
                 {(currentStep === 'review' || currentStep === 'complete') && '3/3 - Finalisation'}
               </p>
             </div>
           </div>
           <button
             onClick={() => { setMode('choose'); setMessages([]); setSessionId(null); }}
-            className="text-white/80 hover:text-white transition-colors"
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/20 active:bg-white/30 text-white"
           >
             <X className="w-5 h-5" />
           </button>
@@ -533,7 +541,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
             return (
               <div
                 key={step}
-                className={`h-1.5 flex-1 rounded-full transition-all ${
+                className={`h-1 sm:h-1.5 flex-1 rounded-full transition-all ${
                   isCompleted || isCurrent ? 'bg-white' : 'bg-white/30'
                 }`}
               />
@@ -561,7 +569,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
       {/* Options */}
       {options.length > 0 && !isLoading && (
-        <div className="px-4 py-2 border-t flex flex-wrap gap-2">
+        <div className="px-3 sm:px-4 py-2 border-t flex flex-wrap gap-1.5 sm:gap-2 overflow-x-auto">
           {options.map((option, i) => (
             <OptionButton
               key={i}
@@ -573,12 +581,12 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
       )}
 
       {/* Input area */}
-      <div className="p-4 border-t flex-shrink-0">
+      <div className="p-3 sm:p-4 border-t flex-shrink-0 safe-area-bottom bg-white">
         {procedureReady ? (
           <button
             onClick={handleFinalize}
             disabled={isLoading}
-            className="w-full bg-green-600 text-white rounded-xl py-3 font-medium hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-2xl py-3.5 sm:py-3 font-semibold active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-green-200"
           >
             {isLoading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
@@ -593,19 +601,19 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           <div className="space-y-2">
             {/* Photo preview when pending */}
             {pendingPhoto && (
-              <div className="flex items-center gap-2 bg-green-50 border border-green-200 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 bg-green-50 border border-green-200 px-3 py-2 rounded-xl">
                 <img
                   src={URL.createObjectURL(pendingPhoto)}
                   alt="Photo en attente"
-                  className="w-12 h-12 object-cover rounded"
+                  className="w-10 h-10 sm:w-12 sm:h-12 object-cover rounded-lg"
                 />
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-green-700">✓ Photo prête</p>
-                  <p className="text-xs text-green-600">{pendingPhoto.name}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-green-700">Photo prête</p>
+                  <p className="text-xs text-green-600 truncate">{pendingPhoto.name}</p>
                 </div>
                 <button
                   onClick={() => setPendingPhoto(null)}
-                  className="p-1 text-green-600 hover:text-red-500 transition-colors"
+                  className="p-2 text-green-600 active:text-red-500 transition-colors"
                   title="Supprimer la photo"
                 >
                   <X className="w-4 h-4" />
@@ -614,9 +622,9 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
             )}
             {/* Photo requirement hint when in steps mode and no photo pending */}
             {currentStep === 'steps' && !pendingPhoto && (
-              <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
-                <Camera className="w-3.5 h-3.5" />
-                <span>📸 <strong>Photo obligatoire</strong> - cliquez sur l'icône caméra</span>
+              <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-xl">
+                <Camera className="w-4 h-4 flex-shrink-0" />
+                <span><strong>Photo obligatoire</strong> pour chaque étape</span>
               </div>
             )}
             <div className="flex gap-2">
@@ -624,18 +632,18 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               {(expectsPhoto || currentStep === 'steps') && (
                 <button
                   onClick={() => photoInputRef.current?.click()}
-                  className={`p-3 rounded-xl transition-colors relative ${
+                  className={`p-3 sm:p-3 rounded-xl transition-all relative flex-shrink-0 ${
                     pendingPhoto
-                      ? 'bg-green-100 text-green-600 hover:bg-green-200'
-                      : 'bg-amber-100 text-amber-600 hover:bg-amber-200 animate-pulse'
+                      ? 'bg-green-100 text-green-600 active:bg-green-200'
+                      : 'bg-amber-100 text-amber-600 active:bg-amber-200 animate-pulse'
                   }`}
                   title={pendingPhoto ? "Changer la photo" : "Ajouter une photo (obligatoire)"}
                 >
                   <Camera className="w-5 h-5" />
                   {pendingPhoto ? (
-                    <span className="absolute -top-1 -right-1 text-[10px] bg-green-500 text-white px-1 rounded font-medium">✓</span>
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] rounded-full flex items-center justify-center">✓</span>
                   ) : (
-                    <span className="absolute -top-1 -right-1 text-[10px] bg-amber-500 text-white px-1 rounded font-medium">!</span>
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[10px] rounded-full flex items-center justify-center font-bold">!</span>
                   )}
                 </button>
               )}
@@ -653,21 +661,21 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder={
-                  currentStep === 'init' ? "Ex: Remplacement disjoncteur, Maintenance moteur..." :
-                  currentStep === 'steps' ? (pendingPhoto ? "Décrivez l'étape puis envoyez →" : "Décrivez l'étape + ajoutez une photo 📸") :
-                  currentStep === 'review' ? "Tapez 'oui' pour créer ou modifiez..." :
+                  currentStep === 'init' ? "Ex: Remplacement disjoncteur..." :
+                  currentStep === 'steps' ? (pendingPhoto ? "Décrivez l'étape..." : "Photo + description") :
+                  currentStep === 'review' ? "'oui' pour créer" :
                   "Votre réponse..."
                 }
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                className="flex-1 min-w-0 px-3 sm:px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-gray-50 focus:bg-white text-base"
                 disabled={isLoading}
               />
               <button
                 onClick={() => sendMessage()}
                 disabled={isLoading || (!input.trim() && !pendingPhoto)}
-                className={`p-3 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 flex-shrink-0 ${
                   pendingPhoto && input.trim()
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-violet-600 text-white hover:bg-violet-700'
+                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white'
+                    : 'bg-gradient-to-r from-violet-600 to-purple-600 text-white'
                 }`}
               >
                 <Send className="w-5 h-5" />
