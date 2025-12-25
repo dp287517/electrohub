@@ -654,33 +654,167 @@ function generateFallbackRiskAnalysis(procedure, steps) {
       ppe: ['Gilet haute visibilité'],
       actions: 'Informer PC sécurité. Contact permanent avec exploitation. Affichage travaux.',
       responsible: 'Chef d\'équipe'
+    },
+    // === ELECTROMECANIQUE ===
+    'motor': {
+      checkbox: '[ ] Moteur electrique',
+      danger: 'Intervention sur moteur : risque electrique, pieces tournantes, echauffement.',
+      gi: 4, pi: 2,
+      measures: '[ ] Consignation electrique\n[ ] Attendre refroidissement',
+      ppe: ['Gants isolants', 'Lunettes de protection', 'Chaussures de securite'],
+      actions: 'Consigner moteur. Verifier arret complet. Attendre refroidissement si necessaire.',
+      responsible: 'Electromecanicien'
+    },
+    'pump': {
+      checkbox: '[ ] Pompe / hydraulique',
+      danger: 'Intervention sur pompe : pression residuelle, fluides chauds, pieces tournantes.',
+      gi: 4, pi: 2,
+      measures: '[ ] Purge pression\n[ ] Vidange si necessaire',
+      ppe: ['Gants etanches', 'Lunettes de protection', 'Combinaison'],
+      actions: 'Isoler alimentation. Purger pression. Vidanger si intervention ouverte.',
+      responsible: 'Electromecanicien'
+    },
+    'belt_chain': {
+      checkbox: '[ ] Courroie / chaine',
+      danger: 'Risque de happement par elements en rotation, pincement, projection.',
+      gi: 4, pi: 2,
+      measures: '[ ] Arret machine\n[ ] Consignation',
+      ppe: ['Gants anti-coupure', 'Lunettes de protection'],
+      actions: 'Consigner machine. Ne jamais intervenir en marche. Verifier tension avant remise en service.',
+      responsible: 'Mecanicien'
+    },
+    'bearing': {
+      checkbox: '[ ] Roulement / alignement',
+      danger: 'Manutention de pieces lourdes, risque de pincement, outillage specifique.',
+      gi: 3, pi: 2,
+      measures: '[ ] Outillage adapte\n[ ] Manutention assistee',
+      ppe: ['Gants de manutention', 'Chaussures de securite'],
+      actions: 'Utiliser extracteur/chauffe-roulement. Lever avec equipement adapte.',
+      responsible: 'Mecanicien'
+    },
+    // === UTILITIES / CVC ===
+    'compressed_air': {
+      checkbox: '[ ] Air comprime',
+      danger: 'Pression residuelle, projection air, bruit, risque de souffle.',
+      gi: 3, pi: 2,
+      measures: '[ ] Purge reseau\n[ ] Fermeture vanne amont',
+      ppe: ['Lunettes de protection', 'Bouchons d\'oreilles'],
+      actions: 'Fermer vanne d\'isolement. Purger pression. Verifier manometre a zero.',
+      responsible: 'Technicien utilites'
+    },
+    'steam': {
+      checkbox: '[ ] Vapeur / eau chaude',
+      danger: 'Brulures par vapeur ou eau chaude, pression, tuyauteries chaudes.',
+      gi: 5, pi: 2,
+      measures: '[ ] Isolement vapeur\n[ ] Attendre refroidissement',
+      ppe: ['Gants thermiques', 'Combinaison', 'Ecran facial'],
+      actions: 'Isoler arrivee vapeur. Purger et refroidir. Verifier temperature avant ouverture.',
+      responsible: 'Technicien utilites'
+    },
+    'hvac': {
+      checkbox: '[ ] CVC / climatisation',
+      danger: 'Fluides frigorigenes, pieces tournantes, intervention en hauteur.',
+      gi: 3, pi: 2,
+      measures: '[ ] Recuperation fluide\n[ ] Consignation',
+      ppe: ['Gants isolants', 'Lunettes de protection'],
+      actions: 'Recuperer fluide frigorigene. Consigner ventilateurs. Verifier absence de fuite.',
+      responsible: 'Frigoriste'
+    },
+    'water_system': {
+      checkbox: '[ ] Reseau eau',
+      danger: 'Fuite, inondation, eau sous pression, contamination.',
+      gi: 3, pi: 2,
+      measures: '[ ] Fermeture vanne\n[ ] Vidange',
+      ppe: ['Gants etanches', 'Bottes de securite'],
+      actions: 'Fermer vanne amont/aval. Vidanger troncon. Prevoir evacuation eau.',
+      responsible: 'Plombier'
+    },
+    // === PLOMBERIE ===
+    'pipe_work': {
+      checkbox: '[ ] Tuyauterie',
+      danger: 'Intervention sur tuyauterie : pression, fluides, soudure, manutention.',
+      gi: 3, pi: 2,
+      measures: '[ ] Isolement\n[ ] Purge',
+      ppe: ['Gants de protection', 'Lunettes de protection'],
+      actions: 'Isoler et purger. Verifier absence de pression. Evacuer fluides.',
+      responsible: 'Plombier'
+    },
+    'welding': {
+      checkbox: '[ ] Soudure / brasure',
+      danger: 'Brulures, fumees toxiques, incendie, rayonnement UV.',
+      gi: 4, pi: 2,
+      measures: '[ ] Permis de feu\n[ ] Protection incendie',
+      ppe: ['Masque de soudeur', 'Gants soudeur', 'Tablier ignifuge'],
+      actions: 'Permis de feu obligatoire. Extincteur a proximite. Ventilation des fumees.',
+      responsible: 'Soudeur qualifie'
+    },
+    'confined_space': {
+      checkbox: '[ ] Espace confine',
+      danger: 'Atmosphere dangereuse, manque d\'oxygene, difficulte d\'evacuation.',
+      gi: 5, pi: 2,
+      measures: '[ ] Permis de penetration\n[ ] Detection atmosphere',
+      ppe: ['Detecteur 4 gaz', 'Harnais evacuation', 'Masque respiratoire'],
+      actions: 'Permis obligatoire. Ventilation. Surveillant en permanence. Detection continue.',
+      responsible: 'Responsable securite'
+    },
+    'chemical': {
+      checkbox: '[ ] Produits chimiques',
+      danger: 'Contact peau/yeux, inhalation, reaction chimique, corrosion.',
+      gi: 4, pi: 2,
+      measures: '[ ] FDS consultee\n[ ] Ventilation',
+      ppe: ['Gants chimiques', 'Lunettes etanches', 'Masque respiratoire'],
+      actions: 'Consulter FDS. Ventiler. Douche de securite accessible. Ne pas melanger produits.',
+      responsible: 'Operateur forme'
     }
   };
 
   // Keywords to detect hazards based on step content
-  // Separate live measurement work from lockout work
+  // Covers electrical, electromechanical, utilities, plumbing, mechanical
   const KEYWORD_HAZARDS = {
-    // Mesures et contrôles sous tension (PAS de consignation)
+    // === ELECTRIQUE ===
     'mesur.*tension|contrôl.*tension|vérif.*tension|test.*tension|relev.*tension': ['live_measurement', 'arc_flash'],
     'multimètre|pince.*ampère|oscilloscope|mesur.*courant|mesur.*intensité': ['live_measurement'],
     'vat|absence.*tension|présence.*tension': ['vat_test', 'electrical'],
-    // Travaux électriques nécessitant consignation
     'consign|loto|déconnect|remplacer.*disjonct|changer.*câble|modifier.*circuit': ['electrical', 'residual_energy', 'arc_flash'],
     'débranch|raccord|câbl|connect|démont|raccordement': ['electrical', 'residual_energy'],
     'armoire|coffret|tableau.*électr|disjoncteur|variateur|vsd': ['electrical', 'residual_energy', 'arc_flash'],
-    // Zones ATEX
+    'terre|mise.*terre|équipotentiel': ['electrical', 'esd'],
+
+    // === ELECTROMECANIQUE ===
+    'moteur|motor|rotation|ventilateur|turbine': ['motor', 'electrical'],
+    'pompe|pump|hydraulique|circuit.*huile': ['pump', 'handling'],
+    'courroie|belt|chaîne|chain|transmission': ['belt_chain'],
+    'roulement|bearing|alignement|accouplement|coupling': ['bearing', 'handling'],
+    'réducteur|gearbox|engrenage': ['bearing', 'handling', 'cuts'],
+
+    // === UTILITIES / CVC ===
+    'air.*comprimé|compresseur|pneumatique': ['compressed_air'],
+    'vapeur|steam|chaudière|échangeur': ['steam'],
+    'climatisation|cvc|hvac|froid|frigorigène|split|groupe.*froid': ['hvac'],
+    'eau|water|réseau.*eau|plomberie|sanitaire': ['water_system'],
+
+    // === PLOMBERIE / TUYAUTERIE ===
+    'tuyau|pipe|canalisation|conduite': ['pipe_work'],
+    'vanne|valve|robinet': ['pipe_work', 'water_system'],
+    'soudure|soudage|brasure|chalumeau': ['welding'],
+
+    // === ESPACES CONFINES / CHIMIE ===
+    'espace.*confiné|cuve|réservoir|fosse|regard': ['confined_space'],
+    'produit.*chimique|acide|base|solvant|nettoyant': ['chemical'],
+
+    // === ATEX ===
     'atex|zone.*ex|explosive|inflammable': ['atex', 'esd'],
-    // Travail en hauteur
-    'hauteur|échelle|escabeau|nacelle|échafaud|pirl': ['fall_height', 'ladder', 'falling_objects'],
-    // Manutention
+
+    // === TRAVAIL EN HAUTEUR ===
+    'hauteur|échelle|escabeau|nacelle|échafaud|pirl|plateforme': ['fall_height', 'ladder', 'falling_objects'],
+
+    // === MANUTENTION / OUTILS ===
     'manutention|porter|soulever|charge|lourd': ['handling'],
-    // Outils
     'couper|coupure|tranchant|outil|visser|percer': ['cuts'],
     'bruit|perceuse|meuleuse|disqueuse': ['noise'],
-    // Accès
-    'accès|déplacement|circulation': ['access', 'coactivity'],
-    // Mise à terre
-    'terre|mise.*terre|équipotentiel': ['electrical', 'esd']
+
+    // === ACCES / ORGANISATION ===
+    'accès|déplacement|circulation': ['access', 'coactivity']
   };
 
   // Analyze each step and generate TARGETED hazards based on activity type
@@ -699,11 +833,24 @@ function generateFallbackRiskAnalysis(procedure, steps) {
     const isMechanicalWork = /méca|démontage|montage|remplac|pose|dépose|vissage|serrage|assemblage/.test(combined);
     const isFinishStep = /fin|remise.*service|contrôle.*final|nettoyage|rangement|repli/.test(combined);
 
+    // === NEW: Electromechanical, Utilities, Plumbing detection ===
+    const isMotorWork = /moteur|motor|ventilateur|turbine|rotation|bobinage/.test(combined);
+    const isPumpWork = /pompe|pump|hydraulique|circuit.*huile|pression/.test(combined);
+    const isBeltChainWork = /courroie|belt|chaîne|chain|transmission|tension/.test(combined);
+    const isBearingWork = /roulement|bearing|alignement|accouplement|coupling|réducteur/.test(combined);
+    const isCompressedAir = /air.*comprimé|compresseur|pneumatique|soufflette/.test(combined);
+    const isSteamWork = /vapeur|steam|chaudière|échangeur|eau.*chaude/.test(combined);
+    const isHvacWork = /climatisation|cvc|hvac|froid|frigorigène|split|groupe.*froid/.test(combined);
+    const isWaterWork = /eau|water|plomberie|sanitaire|vidange|purge/.test(combined);
+    const isPipeWork = /tuyau|pipe|canalisation|conduite|vanne|valve|robinet/.test(combined);
+    const isWeldingWork = /soudure|soudage|brasure|chalumeau|meulage/.test(combined);
+    const isConfinedSpace = /espace.*confiné|cuve|réservoir|fosse|regard|puit/.test(combined);
+    const isChemicalWork = /produit.*chimique|acide|base|solvant|nettoyant|dégrai/.test(combined);
+
     // === HAZARD SELECTION BASED ON STEP TYPE ===
     // Only add hazards that are REALLY relevant to this specific step
 
     if (isAccessStep || idx === 0) {
-      // First steps: access and preparation
       hazardKeys.add('access');
       if (/coactivité|zone.*travaux|chantier/.test(combined)) {
         hazardKeys.add('coactivity');
@@ -714,38 +861,32 @@ function generateFallbackRiskAnalysis(procedure, steps) {
     }
 
     if (isLockoutStep) {
-      // Lockout/Tagout step - electrical safety with consignation
       hazardKeys.add('electrical');
       hazardKeys.add('residual_energy');
       if (/arc|court-circuit/.test(combined)) {
         hazardKeys.add('arc_flash');
       }
-      hazardKeys.add('communication');  // Coordination with operations
+      hazardKeys.add('communication');
     }
 
     if (isMeasurementStep && !isLockoutStep) {
-      // Live measurement - NO consignation, specific hazards
       hazardKeys.add('live_measurement');
       if (/vat|absence.*tension/.test(combined)) {
         hazardKeys.add('vat_test');
       }
-      // Don't add 'electrical' which requires consignation
     }
 
     if (isElectricalWork && !isMeasurementStep && !isLockoutStep) {
-      // General electrical work (assume needs lockout)
       hazardKeys.add('electrical');
       hazardKeys.add('residual_energy');
     }
 
     if (isAtexStep) {
-      // ATEX zone work
       hazardKeys.add('atex');
       hazardKeys.add('esd');
     }
 
     if (isHeightStep) {
-      // Height work
       hazardKeys.add('fall_height');
       if (/échelle|escabeau|pirl/.test(combined)) {
         hazardKeys.add('ladder');
@@ -754,7 +895,6 @@ function generateFallbackRiskAnalysis(procedure, steps) {
     }
 
     if (isMechanicalWork) {
-      // Mechanical work
       hazardKeys.add('handling');
       if (/couper|coupure|tranchant|perceuse|meuleuse/.test(combined)) {
         hazardKeys.add('cuts');
@@ -764,8 +904,54 @@ function generateFallbackRiskAnalysis(procedure, steps) {
       }
     }
 
+    // === ELECTROMECANIQUE ===
+    if (isMotorWork) {
+      hazardKeys.add('motor');
+      hazardKeys.add('electrical');
+    }
+    if (isPumpWork) {
+      hazardKeys.add('pump');
+      hazardKeys.add('handling');
+    }
+    if (isBeltChainWork) {
+      hazardKeys.add('belt_chain');
+    }
+    if (isBearingWork) {
+      hazardKeys.add('bearing');
+      hazardKeys.add('handling');
+    }
+
+    // === UTILITIES / CVC ===
+    if (isCompressedAir) {
+      hazardKeys.add('compressed_air');
+    }
+    if (isSteamWork) {
+      hazardKeys.add('steam');
+    }
+    if (isHvacWork) {
+      hazardKeys.add('hvac');
+    }
+    if (isWaterWork) {
+      hazardKeys.add('water_system');
+    }
+
+    // === PLOMBERIE / TUYAUTERIE ===
+    if (isPipeWork) {
+      hazardKeys.add('pipe_work');
+    }
+    if (isWeldingWork) {
+      hazardKeys.add('welding');
+    }
+
+    // === ESPACES CONFINES / CHIMIE ===
+    if (isConfinedSpace) {
+      hazardKeys.add('confined_space');
+    }
+    if (isChemicalWork) {
+      hazardKeys.add('chemical');
+    }
+
     if (isFinishStep) {
-      // Finishing steps
       hazardKeys.add('organization');
       if (/remise.*service|test.*final/.test(combined)) {
         hazardKeys.add('electrical');
@@ -1961,9 +2147,155 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   });
   y += tableHeaderH - 15;
 
+  // === RENDER SIDEBAR FIRST (before table rows to ensure it's on page 1) ===
+  let ry = contentStartY;
+
+  // Photos section
+  doc.rect(col2X, ry, col2W, 16).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 6, ry + 3);
+  ry += 18;
+
+  const photoBoxW = (col2W - 10) / 2;
+  const photoBoxH = 85;
+  let photoCol = 0;
+  let photosPlaced = 0;
+
+  for (let i = 0; i < steps.length && photosPlaced < 6 && ry + photoBoxH < pageHeight - 190; i++) {
+    const step = steps[i];
+    if (!step.photo_content && !step.photo_path) continue;
+
+    const px = col2X + photoCol * (photoBoxW + 6);
+    doc.roundedRect(px, ry, photoBoxW, photoBoxH, 4).fillAndStroke(c.white, c.border);
+
+    doc.circle(px + 10, ry + 10, 8).fill(c.primary);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.white)
+       .text(String(step.step_number), px + 5, ry + 6, { width: 10, align: "center" });
+
+    const imgX = px + 4, imgY = ry + 20, imgW = photoBoxW - 8, imgH = photoBoxH - 35;
+    let photoOk = false;
+
+    if (step.photo_content) {
+      try {
+        doc.image(step.photo_content, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
+        photoOk = true;
+      } catch (e) {}
+    }
+    if (!photoOk && step.photo_path) {
+      try {
+        const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
+        if (fs.existsSync(imgPath)) {
+          doc.image(imgPath, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
+          photoOk = true;
+        }
+      } catch (e) {}
+    }
+    if (!photoOk) {
+      doc.rect(imgX, imgY, imgW, imgH).fill(c.lightBg);
+      doc.fontSize(7).fillColor(c.lightText).text("Photo N/A", imgX + 5, imgY + imgH/2 - 5);
+    }
+
+    doc.font("Helvetica").fontSize(5).fillColor(c.text)
+       .text(step.title, px + 3, ry + photoBoxH - 14, { width: photoBoxW - 6, align: "center", lineBreak: false, ellipsis: true });
+
+    photosPlaced++;
+    photoCol++;
+    if (photoCol >= 2) { photoCol = 0; ry += photoBoxH + 5; }
+  }
+
+  if (photosPlaced === 0) {
+    doc.rect(col2X, ry, col2W, 50).fillAndStroke(c.lightBg, c.border);
+    doc.fontSize(7).fillColor(c.lightText).text("Aucune photo disponible", col2X + 8, ry + 20);
+    ry += 52;
+  } else if (photoCol !== 0) {
+    ry += photoBoxH + 5;
+  }
+
+  // EPI Section
+  ry += 3;
+  doc.rect(col2X, ry, col2W, 15).fill(c.warning);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 6, ry + 3);
+  ry += 15;
+
+  const ppeList = procedure.ppe_required || [];
+  const ppeH = Math.min(75, Math.max(35, ppeList.length * 10 + 8));
+  doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(6).fillColor(c.text);
+  ppeList.slice(0, 8).forEach((ppe, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    doc.text("[x] " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
+  });
+  ry += ppeH + 3;
+
+  // Safety Codes
+  doc.rect(col2X, ry, col2W, 15).fill(c.info);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 6, ry + 3);
+  ry += 15;
+
+  const safetyCodes = procedure.safety_codes || [];
+  const scH = Math.min(48, Math.max(28, safetyCodes.length * 11 + 6));
+  doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
+  doc.font("Helvetica").fontSize(6).fillColor(c.text);
+  safetyCodes.slice(0, 4).forEach((code, i) => {
+    doc.text("> " + code, col2X + 4, ry + 4 + i * 11, { width: col2W - 8, lineBreak: false, ellipsis: true });
+  });
+  ry += scH + 3;
+
+  // Emergency Contacts
+  const contacts = procedure.emergency_contacts || [];
+  if (contacts.length > 0) {
+    doc.rect(col2X, ry, col2W, 15).fill(c.danger);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONTACTS URGENCE", col2X + 6, ry + 3);
+    ry += 15;
+    const contactH = Math.min(contacts.length * 15 + 6, 50);
+    doc.rect(col2X, ry, col2W, contactH).fillAndStroke("#fef2f2", c.danger);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger);
+    contacts.slice(0, 3).forEach((contact, i) => {
+      doc.text(`${contact.name}: ${contact.phone}`, col2X + 6, ry + 5 + i * 15, { width: col2W - 12, lineBreak: false });
+    });
+    ry += contactH + 3;
+  }
+
+  // Risk Summary
+  const summaryY = Math.max(ry, pageHeight - 75);
+  doc.rect(col2X, summaryY, col2W, 55).fillAndStroke(c.darkBlue, c.border);
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 6, summaryY + 4);
+
+  let maxNirInitial = 0, maxNirFinal = 0, totalHazards = 0;
+  if (aiAnalysis?.steps) {
+    aiAnalysis.steps.forEach(step => {
+      (step.hazards || []).forEach(h => {
+        const niri = (h.gi || h.gravity || 2) * (h.pi || h.probability || 2);
+        const nirf = (h.gf || h.gi || 2) * (h.pf || 1);
+        if (niri > maxNirInitial) maxNirInitial = niri;
+        if (nirf > maxNirFinal) maxNirFinal = nirf;
+        totalHazards++;
+      });
+    });
+  }
+
+  doc.font("Helvetica").fontSize(6).fillColor("#a5b4fc");
+  doc.text(`Dangers identifies: ${totalHazards}`, col2X + 6, summaryY + 17);
+  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 6, summaryY + 28);
+  doc.text(`NIR max residuel: ${maxNirFinal}`, col2X + 6, summaryY + 39);
+
+  if (maxNirInitial > 0) {
+    const reduction = Math.round((1 - maxNirFinal / maxNirInitial) * 100);
+    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
+       .text(`Reduction: ${reduction}%`, col2X + col2W / 2, summaryY + 39);
+  }
+
   // === TABLE ROWS ===
   const maxTableY = pageHeight - 130;
   let rowCount = 0;
+  let currentPage = 1;
+
+  // Calculate total rows needed to check if we need multiple pages
+  let totalRows = 0;
+  for (const step of steps) {
+    const aiStepHazards = aiHazardsMap.get(step.step_number) || [];
+    totalRows += Math.max(1, aiStepHazards.length);
+  }
 
   for (const step of steps) {
     const aiStepHazards = aiHazardsMap.get(step.step_number) || [];
@@ -1980,10 +2312,13 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
       gf: 2, pf: 1
     }];
 
-    // Show ALL hazards per step (up to 7 max as defined in analysis)
+    // Show hazards per step (max 5 as defined in analysis)
     for (let hi = 0; hi < hazards.length; hi++) {
-      if (y > maxTableY - 35) {
+      // Check if we need a new page AND if there's actually more content to render
+      const remainingRows = totalRows - rowCount;
+      if (y > maxTableY - 35 && remainingRows > 0) {
         doc.addPage();
+        currentPage++;
         y = margin;
         doc.rect(margin, y, col1W, 16).fill(c.danger);
         doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
@@ -2141,149 +2476,6 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     doc.fontSize(5).text(p.label, probX + i * sw, y + 15, { width: sw, align: "center" });
     doc.fontSize(4).fillColor("#ffffff99").text(p.desc, probX + i * sw, y + 23, { width: sw, align: "center" });
   });
-
-  // === RIGHT COLUMN (SIDE PANEL) - Aligned with table ===
-  let ry = contentStartY;  // Same Y as table start
-
-  // Photos section (NO EMOJI)
-  doc.rect(col2X, ry, col2W, 16).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("PHOTOS DES ETAPES", col2X + 6, ry + 3);
-  ry += 18;
-
-  const photoBoxW = (col2W - 10) / 2;
-  const photoBoxH = 85;
-  let photoCol = 0;
-  let photosPlaced = 0;
-
-  for (let i = 0; i < steps.length && photosPlaced < 6 && ry + photoBoxH < pageHeight - 190; i++) {
-    const step = steps[i];
-    if (!step.photo_content && !step.photo_path) continue;
-
-    const px = col2X + photoCol * (photoBoxW + 6);
-    doc.roundedRect(px, ry, photoBoxW, photoBoxH, 4).fillAndStroke(c.white, c.border);
-
-    // Step badge
-    doc.circle(px + 10, ry + 10, 8).fill(c.primary);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.white)
-       .text(String(step.step_number), px + 5, ry + 6, { width: 10, align: "center" });
-
-    // Photo
-    const imgX = px + 4, imgY = ry + 20, imgW = photoBoxW - 8, imgH = photoBoxH - 35;
-    let photoOk = false;
-
-    if (step.photo_content) {
-      try {
-        doc.image(step.photo_content, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
-        photoOk = true;
-      } catch (e) { console.log("[RAMS] Photo content error:", e.message); }
-    }
-
-    if (!photoOk && step.photo_path) {
-      try {
-        const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
-        if (fs.existsSync(imgPath)) {
-          doc.image(imgPath, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
-          photoOk = true;
-        }
-      } catch (e) { console.log("[RAMS] Photo path error:", e.message); }
-    }
-
-    if (!photoOk) {
-      doc.rect(imgX, imgY, imgW, imgH).fill(c.lightBg);
-      doc.fontSize(7).fillColor(c.lightText).text("Photo N/A", imgX + 5, imgY + imgH/2 - 5);
-    }
-
-    doc.font("Helvetica").fontSize(5).fillColor(c.text)
-       .text(step.title, px + 3, ry + photoBoxH - 14, { width: photoBoxW - 6, align: "center", lineBreak: false, ellipsis: true });
-
-    photosPlaced++;
-    photoCol++;
-    if (photoCol >= 2) { photoCol = 0; ry += photoBoxH + 5; }
-  }
-
-  if (photosPlaced === 0) {
-    doc.rect(col2X, ry, col2W, 50).fillAndStroke(c.lightBg, c.border);
-    doc.fontSize(7).fillColor(c.lightText).text("Aucune photo disponible", col2X + 8, ry + 20);
-    ry += 52;
-  } else if (photoCol !== 0) {
-    ry += photoBoxH + 5;
-  }
-
-  // EPI Section (NO EMOJI) - More compact
-  ry += 3;
-  doc.rect(col2X, ry, col2W, 15).fill(c.warning);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("EPI OBLIGATOIRES", col2X + 6, ry + 3);
-  ry += 15;
-
-  const ppeList = procedure.ppe_required || [];
-  const ppeH = Math.min(75, Math.max(35, ppeList.length * 10 + 8));
-  doc.rect(col2X, ry, col2W, ppeH).fillAndStroke(c.lightBg, c.border);
-  doc.font("Helvetica").fontSize(6).fillColor(c.text);
-  ppeList.slice(0, 8).forEach((ppe, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    doc.text("[x] " + ppe, col2X + 4 + col * (col2W / 2), ry + 4 + row * 10, { width: col2W / 2 - 8, lineBreak: false, ellipsis: true });
-  });
-  ry += ppeH + 3;
-
-  // Safety Codes (NO EMOJI) - Compact
-  doc.rect(col2X, ry, col2W, 15).fill(c.info);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONSIGNES SECURITE", col2X + 6, ry + 3);
-  ry += 15;
-
-  const safetyCodes = procedure.safety_codes || [];
-  const scH = Math.min(48, Math.max(28, safetyCodes.length * 11 + 6));
-  doc.rect(col2X, ry, col2W, scH).fillAndStroke(c.lightBg, c.border);
-  doc.font("Helvetica").fontSize(6).fillColor(c.text);
-  safetyCodes.slice(0, 4).forEach((code, i) => {
-    doc.text("> " + code, col2X + 4, ry + 4 + i * 11, { width: col2W - 8, lineBreak: false, ellipsis: true });
-  });
-  ry += scH + 3;
-
-  // Emergency Contacts (NO EMOJI) - Compact
-  const contacts = procedure.emergency_contacts || [];
-  if (contacts.length > 0) {
-    doc.rect(col2X, ry, col2W, 15).fill(c.danger);
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("CONTACTS URGENCE", col2X + 6, ry + 3);
-    ry += 15;
-    const contactH = Math.min(contacts.length * 15 + 6, 50);
-    doc.rect(col2X, ry, col2W, contactH).fillAndStroke("#fef2f2", c.danger);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.danger);
-    contacts.slice(0, 3).forEach((contact, i) => {
-      doc.text(`${contact.name}: ${contact.phone}`, col2X + 6, ry + 5 + i * 15, { width: col2W - 12, lineBreak: false });
-    });
-    ry += contactH + 3;
-  }
-
-  // Risk Summary (NO EMOJI) - Compact
-  const summaryY = Math.max(ry, pageHeight - 75);
-  doc.rect(col2X, summaryY, col2W, 55).fillAndStroke(c.darkBlue, c.border);
-  doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("SYNTHESE RISQUE", col2X + 6, summaryY + 4);
-
-  // Calculate summary from AI analysis
-  let maxNirInitial = 0, maxNirFinal = 0, totalHazards = 0;
-  if (aiAnalysis?.steps) {
-    aiAnalysis.steps.forEach(step => {
-      (step.hazards || []).forEach(h => {
-        const niri = (h.gi || h.gravity || 2) * (h.pi || h.probability || 2);
-        const nirf = (h.gf || h.gi || 2) * (h.pf || 1);
-        if (niri > maxNirInitial) maxNirInitial = niri;
-        if (nirf > maxNirFinal) maxNirFinal = nirf;
-        totalHazards++;
-      });
-    });
-  }
-
-  doc.font("Helvetica").fontSize(6).fillColor("#a5b4fc");
-  doc.text(`Dangers identifiés: ${totalHazards}`, col2X + 6, summaryY + 17);
-  doc.text(`NIR max initial: ${maxNirInitial}`, col2X + 6, summaryY + 28);
-  doc.text(`NIR max résiduel: ${maxNirFinal}`, col2X + 6, summaryY + 39);
-
-  if (maxNirInitial > 0) {
-    const reduction = Math.round((1 - maxNirFinal / maxNirInitial) * 100);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor(c.success)
-       .text(`Réduction: ${reduction}%`, col2X + col2W / 2, summaryY + 39);
-  }
 
   // === FOOTER ===
   const footerY = pageHeight - 18;
