@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#0369a1" stroke-width="2">
+  <!-- Lunettes de protection - Safety Glasses -->
+  <!-- Left lens -->
+  <path d="M10 35 Q10 25 25 25 L40 25 Q50 25 50 35 L50 55 Q50 65 40 65 L25 65 Q10 65 10 55 Z" fill="#bae6fd" stroke="#0284c7" stroke-width="2"/>
+  <!-- Right lens -->
+  <path d="M50 35 Q50 25 60 25 L75 25 Q90 25 90 35 L90 55 Q90 65 75 65 L60 65 Q50 65 50 55 Z" fill="#bae6fd" stroke="#0284c7" stroke-width="2"/>
+  <!-- Bridge -->
+  <path d="M40 45 Q50 40 60 45" fill="none" stroke="#0369a1" stroke-width="3"/>
+  <!-- Temple arms -->
+  <line x1="10" y1="35" x2="5" y2="30" stroke-width="3"/>
+  <line x1="90" y1="35" x2="95" y2="30" stroke-width="3"/>
+  <!-- Side shields -->
+  <rect x="5" y="35" width="5" height="20" rx="2" fill="#0ea5e9"/>
+  <rect x="90" y="35" width="5" height="20" rx="2" fill="#0ea5e9"/>
+</svg>

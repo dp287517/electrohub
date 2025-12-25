@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke="#ea580c" stroke-width="3">
+  <!-- Échelle - Ladder -->
+  <!-- Left rail -->
+  <line x1="30" y1="5" x2="35" y2="95"/>
+  <!-- Right rail -->
+  <line x1="70" y1="5" x2="65" y2="95"/>
+  <!-- Rungs -->
+  <line x1="31" y1="15" x2="69" y2="15" stroke-width="4"/>
+  <line x1="32" y1="30" x2="68" y2="30" stroke-width="4"/>
+  <line x1="33" y1="45" x2="67" y2="45" stroke-width="4"/>
+  <line x1="33" y1="60" x2="67" y2="60" stroke-width="4"/>
+  <line x1="34" y1="75" x2="66" y2="75" stroke-width="4"/>
+  <line x1="35" y1="90" x2="65" y2="90" stroke-width="4"/>
+  <!-- Anti-slip feet -->
+  <rect x="33" y="93" width="8" height="4" rx="1" fill="#f97316"/>
+  <rect x="60" y="93" width="8" height="4" rx="1" fill="#f97316"/>
+</svg>

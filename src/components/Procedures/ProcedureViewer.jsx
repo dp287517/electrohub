@@ -3,7 +3,8 @@ import {
   X, Download, Edit2, Trash2, AlertTriangle, Shield,
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
-  FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet
+  FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
+  BadgeCheck, FileEdit
 } from 'lucide-react';
 import {
   getProcedure,
@@ -245,6 +246,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
         title: data.title,
         description: data.description,
         category: data.category,
+        status: data.status,
         risk_level: data.risk_level,
         ppe_required: data.ppe_required || [],
         emergency_contacts: data.emergency_contacts || [],
@@ -253,6 +255,18 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
       console.error('Error loading procedure:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Toggle status between draft and approved
+  const handleToggleStatus = async () => {
+    const newStatus = procedure.status === 'approved' ? 'draft' : 'approved';
+    try {
+      await updateProcedure(procedureId, { status: newStatus });
+      loadProcedure();
+    } catch (error) {
+      console.error('Error updating status:', error);
+      alert('Erreur lors de la mise à jour du statut');
     }
   };
 
@@ -418,10 +432,29 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
             ) : (
               <h2 className="text-xl font-bold text-white">{procedure.title}</h2>
             )}
-            <div className="flex items-center gap-3 mt-2">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.bgColor} ${statusInfo.textColor}`}>
-                {statusInfo.label}
-              </span>
+            <div className="flex items-center gap-3 mt-2 flex-wrap">
+              {/* Status button - clickable to toggle */}
+              <button
+                onClick={handleToggleStatus}
+                className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 ${
+                  procedure.status === 'approved'
+                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+                title={procedure.status === 'approved' ? 'Cliquez pour repasser en brouillon' : 'Cliquez pour valider'}
+              >
+                {procedure.status === 'approved' ? (
+                  <>
+                    <BadgeCheck className="w-3.5 h-3.5" />
+                    Validée
+                  </>
+                ) : (
+                  <>
+                    <FileEdit className="w-3.5 h-3.5" />
+                    Brouillon
+                  </>
+                )}
+              </button>
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${riskInfo.bgColor} ${riskInfo.textColor}`}>
                 Risque: {riskInfo.label}
               </span>
