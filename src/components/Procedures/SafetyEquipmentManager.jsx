@@ -31,32 +31,36 @@ function EquipmentCard({ equipment, onUpload, onDelete, uploading }) {
     }
   };
 
+  const handleImageClick = () => {
+    fileInputRef.current?.click();
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      {/* Image section */}
-      <div className="relative aspect-square bg-gray-50 flex items-center justify-center p-4">
+      {/* Image section - clickable for upload */}
+      <button
+        type="button"
+        onClick={handleImageClick}
+        className="relative aspect-square bg-gray-50 flex items-center justify-center p-4 w-full cursor-pointer active:bg-gray-100 transition-colors"
+      >
         {uploading === equipment.id ? (
           <Loader2 className="w-10 h-10 text-violet-500 animate-spin" />
         ) : (
-          <img
-            src={equipment.imageUrl}
-            alt={equipment.name}
-            className="max-w-full max-h-full object-contain"
-            onError={(e) => {
-              e.target.src = '/safety-equipment/casque.svg'; // Fallback
-            }}
-          />
+          <>
+            <img
+              src={equipment.imageUrl}
+              alt={equipment.name}
+              className="max-w-full max-h-full object-contain"
+              onError={(e) => {
+                e.target.src = '/safety-equipment/casque.svg'; // Fallback
+              }}
+            />
+            {/* Upload hint - always visible on mobile */}
+            <div className="absolute bottom-2 right-2 bg-violet-600 text-white rounded-full p-1.5 shadow-lg">
+              <Camera className="w-3.5 h-3.5" />
+            </div>
+          </>
         )}
-
-        {/* Upload overlay */}
-        <div className="absolute inset-0 bg-black/0 hover:bg-black/30 transition-all flex items-center justify-center opacity-0 hover:opacity-100">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="bg-white rounded-full p-3 shadow-lg active:scale-95 transition-transform"
-          >
-            <Camera className="w-5 h-5 text-violet-600" />
-          </button>
-        </div>
 
         {/* Custom badge */}
         {equipment.hasCustomImage && (
@@ -65,7 +69,7 @@ function EquipmentCard({ equipment, onUpload, onDelete, uploading }) {
             Perso
           </div>
         )}
-      </div>
+      </button>
 
       {/* Info section */}
       <div className="p-3">
@@ -93,6 +97,7 @@ function EquipmentCard({ equipment, onUpload, onDelete, uploading }) {
         ref={fileInputRef}
         type="file"
         accept="image/*"
+        capture="environment"
         onChange={handleFileChange}
         className="hidden"
       />
