@@ -186,7 +186,6 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col"
-      style={{ touchAction: 'none' }}
     >
       {/* Backdrop */}
       <div
@@ -195,7 +194,7 @@ export default function SafetyEquipmentManager({ isOpen, onClose }) {
       />
 
       {/* Modal - Full screen on mobile */}
-      <div className="relative mt-auto sm:m-auto w-full sm:max-w-2xl bg-white sm:rounded-2xl rounded-t-2xl flex flex-col max-h-[95vh] sm:max-h-[85vh]">
+      <div className="relative z-10 mt-auto sm:m-auto w-full sm:max-w-2xl bg-white sm:rounded-2xl rounded-t-2xl flex flex-col max-h-[95vh] sm:max-h-[85vh]">
 
         {/* Header - Fixed */}
         <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3 rounded-t-2xl flex-shrink-0">
