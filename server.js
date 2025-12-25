@@ -4204,6 +4204,26 @@ ${highRisk.slice(0, 5).map(r => `- **${r.name}**: Risque ${(parseFloat(r.riskSco
       }
     }
 
+    // Add predictions to response for frontend display
+    if (dbContext.predictions?.riskAnalysis?.length > 0) {
+      response.predictions = {
+        highRiskCount: dbContext.predictions.riskAnalysis.filter(r => parseFloat(r.riskScore) >= 0.5).length,
+        risks: dbContext.predictions.riskAnalysis.slice(0, 5)
+      };
+    }
+
+    // Add user profile info for personalization display
+    try {
+      const profile = await getUserProfile(userEmail);
+      response.userProfile = {
+        isNewUser: profile.isNewUser,
+        totalInteractions: profile.totalInteractions,
+        favoriteTopics: profile.favoriteTopics?.slice(0, 3) || []
+      };
+    } catch (e) {
+      // Ignore profile errors
+    }
+
     res.json(response);
 
   } catch (error) {
@@ -4214,6 +4234,268 @@ ${highRisk.slice(0, 5).map(r => `- **${r.name}**: Risque ${(parseFloat(r.riskSco
     const dbContext = await getAIContext(site).catch(() => ({}));
 
     res.json(generateIntelligentFallback(req.body?.message || '', dbContext));
+  }
+});
+
+// ============================================================
+// 🧠 AI FEEDBACK ENDPOINT - Learn from user feedback
+// ============================================================
+app.post("/api/ai-assistant/feedback", express.json(), async (req, res) => {
+  try {
+    const { messageId, feedback, message, response, site } = req.body;
+    const userEmail = req.body.user?.email || 'anonymous';
+
+    console.log(`[AI] 📝 Feedback received: ${feedback} from ${userEmail}`);
+
+    // Save feedback to memory
+    await saveUserMemory(
+      userEmail,
+      'feedback',
+      feedback === 'positive' ? 'helpful' : 'unhelpful',
+      `feedback_${messageId}`,
+      {
+        messageId,
+        feedback,
+        userMessage: message?.substring(0, 200),
+        aiResponse: response?.substring(0, 200),
+        timestamp: new Date().toISOString()
+      },
+      feedback === 'positive' ? 0.8 : 0.3,
+      site
+    );
+
+    // Learn from interaction with feedback
+    if (message && response) {
+      await learnFromInteraction(userEmail, site, message, response, feedback);
+    }
+
+    res.json({ ok: true, message: 'Merci pour ton feedback !' });
+  } catch (e) {
+    console.error('[AI] Feedback error:', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 🔮 AI PREDICTIONS ENDPOINT - Get risk analysis
+// ============================================================
+app.get("/api/ai-assistant/predictions", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || req.query.site || process.env.DEFAULT_SITE || 'Nyon';
+
+    const [risks, maintenance] = await Promise.all([
+      calculateEquipmentRisk(site),
+      predictMaintenanceNeeds(site)
+    ]);
+
+    res.json({
+      ok: true,
+      predictions: {
+        risks: {
+          total: risks.length,
+          high: risks.filter(r => parseFloat(r.riskScore) >= 0.7).length,
+          medium: risks.filter(r => parseFloat(r.riskScore) >= 0.5 && parseFloat(r.riskScore) < 0.7).length,
+          list: risks.slice(0, 10)
+        },
+        maintenance: {
+          totalNext30Days: maintenance.totalNext30Days,
+          workload: maintenance.workloadPrediction,
+          recommendation: maintenance.recommendation,
+          upcoming: maintenance.upcomingControls
+        }
+      }
+    });
+  } catch (e) {
+    console.error('[AI] Predictions error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 💡 AI SUGGESTIONS ENDPOINT - Personalized suggestions
+// ============================================================
+app.get("/api/ai-assistant/suggestions", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || req.query.site || process.env.DEFAULT_SITE || 'Nyon';
+    const userEmail = req.query.email || 'anonymous';
+
+    const suggestions = await getIntelligentSuggestions(site, userEmail);
+
+    res.json({
+      ok: true,
+      suggestions
+    });
+  } catch (e) {
+    console.error('[AI] Suggestions error:', e.message);
+    res.json({ ok: false, suggestions: [] });
+  }
+});
+
+// ============================================================
+// 📊 AI HISTORICAL STATS - For dynamic charts
+// ============================================================
+app.get("/api/ai-assistant/historical-stats", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || req.query.site || process.env.DEFAULT_SITE || 'Nyon';
+    const period = parseInt(req.query.period) || 30;
+
+    // Get control history for charts
+    const controlStats = await pool.query(`
+      SELECT
+        DATE_TRUNC('day', cr.control_date) as day,
+        COUNT(*) as total,
+        SUM(CASE WHEN cr.result = 'conforme' THEN 1 ELSE 0 END) as conforme,
+        SUM(CASE WHEN cr.result = 'non_conforme' THEN 1 ELSE 0 END) as non_conforme
+      FROM control_reports cr
+      LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+      WHERE s.site = $1
+        AND cr.control_date >= CURRENT_DATE - INTERVAL '${period} days'
+      GROUP BY DATE_TRUNC('day', cr.control_date)
+      ORDER BY day
+    `, [site]);
+
+    // Get building distribution
+    const buildingStats = await pool.query(`
+      SELECT
+        building_code,
+        COUNT(*) as equipment_count,
+        SUM(CASE WHEN last_control < CURRENT_DATE - INTERVAL '1 year' THEN 1 ELSE 0 END) as overdue
+      FROM switchboards
+      WHERE site = $1
+      GROUP BY building_code
+      ORDER BY equipment_count DESC
+    `, [site]);
+
+    // Get equipment type distribution
+    const typeStats = await pool.query(`
+      SELECT 'switchboard' as type, COUNT(*) as count FROM switchboards WHERE site = $1
+      UNION ALL
+      SELECT 'vsd' as type, COUNT(*) as count FROM vsd_equipments WHERE site = $1
+      UNION ALL
+      SELECT 'atex' as type, COUNT(*) as count FROM atex_equipments e
+        INNER JOIN sites s ON e.site_id = s.id WHERE s.name = $1
+      UNION ALL
+      SELECT 'meca' as type, COUNT(*) as count FROM meca_equipments e
+        INNER JOIN sites s ON e.site_id = s.id WHERE s.name = $1
+    `, [site]);
+
+    // Calculate trends
+    const recentControls = controlStats.rows.slice(-7);
+    const olderControls = controlStats.rows.slice(-14, -7);
+    const recentTotal = recentControls.reduce((sum, r) => sum + parseInt(r.total), 0);
+    const olderTotal = olderControls.reduce((sum, r) => sum + parseInt(r.total), 0);
+    const trend = olderTotal > 0 ? ((recentTotal - olderTotal) / olderTotal * 100).toFixed(1) : 0;
+
+    res.json({
+      ok: true,
+      stats: {
+        controlHistory: controlStats.rows.map(r => ({
+          date: r.day,
+          total: parseInt(r.total),
+          conforme: parseInt(r.conforme),
+          nonConforme: parseInt(r.non_conforme)
+        })),
+        buildingDistribution: buildingStats.rows.map(r => ({
+          building: r.building_code,
+          count: parseInt(r.equipment_count),
+          overdue: parseInt(r.overdue)
+        })),
+        equipmentTypes: typeStats.rows.map(r => ({
+          type: r.type,
+          count: parseInt(r.count)
+        })),
+        trends: {
+          controlsThisWeek: recentTotal,
+          controlsLastWeek: olderTotal,
+          percentChange: parseFloat(trend),
+          direction: parseFloat(trend) >= 0 ? 'up' : 'down'
+        }
+      }
+    });
+  } catch (e) {
+    console.error('[AI] Historical stats error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 🔗 ML SERVICE PROXY - Connect to Python ML service
+// ============================================================
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8089';
+
+app.post("/api/ai-assistant/ml/predict", express.json(), async (req, res) => {
+  try {
+    const { equipmentData, type = 'failure' } = req.body;
+
+    const response = await fetch(`${ML_SERVICE_URL}/predict/${type}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(equipmentData)
+    });
+
+    if (!response.ok) {
+      throw new Error(`ML service error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    res.json(result);
+  } catch (e) {
+    console.error('[ML Proxy] Error:', e.message);
+    // Fallback to built-in predictions if ML service unavailable
+    res.json({
+      ok: false,
+      fallback: true,
+      error: 'ML service unavailable, using built-in predictions'
+    });
+  }
+});
+
+app.post("/api/ai-assistant/ml/analyze-patterns", express.json(), async (req, res) => {
+  try {
+    const site = req.body.site || req.header('X-Site') || process.env.DEFAULT_SITE || 'Nyon';
+
+    const response = await fetch(`${ML_SERVICE_URL}/analyze/patterns`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site })
+    });
+
+    if (!response.ok) {
+      throw new Error(`ML service error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    res.json(result);
+  } catch (e) {
+    console.error('[ML Proxy] Pattern analysis error:', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================
+// 👤 AI USER PROFILE ENDPOINT
+// ============================================================
+app.get("/api/ai-assistant/profile", async (req, res) => {
+  try {
+    const userEmail = req.query.email;
+    if (!userEmail) {
+      return res.json({ ok: false, error: 'Email required' });
+    }
+
+    const profile = await getUserProfile(userEmail);
+    const memories = await getUserMemories(userEmail, 10, ['preference', 'learning']);
+
+    res.json({
+      ok: true,
+      profile: {
+        ...profile,
+        recentLearnings: memories.learnings?.slice(0, 5) || [],
+        preferences: memories.preferences?.slice(0, 5) || []
+      }
+    });
+  } catch (e) {
+    console.error('[AI] Profile error:', e.message);
+    res.json({ ok: false, error: e.message });
   }
 });
 
