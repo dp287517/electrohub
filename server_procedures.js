@@ -4500,10 +4500,21 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
   // === TABLE ROWS ===
   const maxTableY = pageHeight - 100;
   let rowCount = 0;
+  const allHazards = [];
 
-  for (const step of data.steps) {
-    if (y > maxTableY - 25) {
-      // Add new page if needed
+  // Flatten all hazards with step info for proper pagination
+  data.steps.forEach(step => {
+    step.hazards.forEach((hazard, hi) => {
+      allHazards.push({ step, hazard, isFirst: hi === 0 });
+    });
+  });
+
+  for (let hazardIdx = 0; hazardIdx < allHazards.length; hazardIdx++) {
+    const { step, hazard, isFirst } = allHazards[hazardIdx];
+    const hasMoreRows = hazardIdx < allHazards.length - 1;
+
+    // Only add page if we need more space AND there are more rows to render
+    if (y > maxTableY - 25 && hasMoreRows) {
       doc.addPage();
       y = margin;
       // Re-draw header on new page
@@ -4513,98 +4524,94 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
       y += 18;
     }
 
-    for (let hi = 0; hi < step.hazards.length; hi++) {
-      const hazard = step.hazards[hi];
-      const isFirst = hi === 0;
-      const rowH = 28;
-      const isEven = rowCount % 2 === 0;
+    const rowH = 28;
+    const isEven = rowCount % 2 === 0;
 
-      doc.rect(margin, y, tableW, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
+    doc.rect(margin, y, tableW, rowH).fillAndStroke(isEven ? c.white : c.lightBg, c.border);
 
-      let rx = margin;
+    let rx = margin;
 
-      // N (step number) - only on first hazard of step
-      if (isFirst) {
-        doc.circle(rx + colWidths.n / 2, y + rowH / 2, 9).fill(c.primary);
-        doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-           .text(String(step.number), rx + colWidths.n / 2 - 3, y + rowH / 2 - 4);
-      }
-      rx += colWidths.n;
-
-      // Task/Activity
-      doc.font("Helvetica-Bold").fontSize(5).fillColor(c.text);
-      if (isFirst) {
-        doc.text(step.title.substring(0, 35), rx + 2, y + 3, { width: colWidths.task - 4 });
-      }
-      rx += colWidths.task;
-
-      // Danger with checkbox (no emoji, use simple checkbox)
-      doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
-         .text(`[x] ${hazard.checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4 });
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.danger.substring(0, 65), rx + 2, y + 10, { width: colWidths.danger - 4 });
-      rx += colWidths.danger;
-
-      // G initial
-      const niri = hazard.gi * hazard.pi;
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gi));
+    // N (step number) - only on first hazard of step
+    if (isFirst) {
+      doc.circle(rx + colWidths.n / 2, y + rowH / 2, 9).fill(c.primary);
       doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.gi), rx + 2, y + 9, { width: 20, align: "center" });
-      rx += colWidths.gi;
-
-      // P initial
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pi));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.pi), rx + 2, y + 9, { width: 20, align: "center" });
-      rx += colWidths.pi;
-
-      // NIR initial
-      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(niri));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(niri), rx + 1, y + 9, { width: 26, align: "center" });
-      rx += colWidths.niri;
-
-      // Measures
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.measures.substring(0, 65), rx + 2, y + 3, { width: colWidths.measures - 4 });
-      rx += colWidths.measures;
-
-      // PPE
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.info)
-         .text(hazard.ppe.slice(0, 2).join(", ").substring(0, 30), rx + 2, y + 3, { width: colWidths.ppe - 4 });
-      rx += colWidths.ppe;
-
-      // Actions
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.actions.substring(0, 45), rx + 2, y + 3, { width: colWidths.actions - 4 });
-      rx += colWidths.actions;
-
-      // Responsible
-      doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
-         .text(hazard.responsible, rx + 2, y + 10, { width: colWidths.resp - 4, align: "center" });
-      rx += colWidths.resp;
-
-      // G final
-      const nirf = hazard.gf * hazard.pf;
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.gf), rx + 2, y + 9, { width: 20, align: "center" });
-      rx += colWidths.gf;
-
-      // P final
-      doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(hazard.pf), rx + 2, y + 9, { width: 20, align: "center" });
-      rx += colWidths.pf;
-
-      // NIR final
-      doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(nirf));
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
-         .text(String(nirf), rx + 1, y + 9, { width: 26, align: "center" });
-
-      y += rowH;
-      rowCount++;
+         .text(String(step.number), rx + colWidths.n / 2 - 3, y + rowH / 2 - 4);
     }
+    rx += colWidths.n;
+
+    // Task/Activity
+    doc.font("Helvetica-Bold").fontSize(5).fillColor(c.text);
+    if (isFirst) {
+      doc.text(step.title.substring(0, 35), rx + 2, y + 3, { width: colWidths.task - 4 });
+    }
+    rx += colWidths.task;
+
+    // Danger with checkbox (no emoji, use simple checkbox)
+    doc.font("Helvetica-Bold").fontSize(5).fillColor(c.danger)
+       .text(`[x] ${hazard.checkbox}`, rx + 2, y + 2, { width: colWidths.danger - 4 });
+    doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+       .text(hazard.danger.substring(0, 65), rx + 2, y + 10, { width: colWidths.danger - 4 });
+    rx += colWidths.danger;
+
+    // G initial
+    const niri = hazard.gi * hazard.pi;
+    doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gi));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(hazard.gi), rx + 2, y + 9, { width: 20, align: "center" });
+    rx += colWidths.gi;
+
+    // P initial
+    doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pi));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(hazard.pi), rx + 2, y + 9, { width: 20, align: "center" });
+    rx += colWidths.pi;
+
+    // NIR initial
+    doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(niri));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(niri), rx + 1, y + 9, { width: 26, align: "center" });
+    rx += colWidths.niri;
+
+    // Measures
+    doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+       .text(hazard.measures.substring(0, 65), rx + 2, y + 3, { width: colWidths.measures - 4 });
+    rx += colWidths.measures;
+
+    // PPE
+    doc.font("Helvetica").fontSize(4.5).fillColor(c.info)
+       .text(hazard.ppe.slice(0, 2).join(", ").substring(0, 30), rx + 2, y + 3, { width: colWidths.ppe - 4 });
+    rx += colWidths.ppe;
+
+    // Actions
+    doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+       .text(hazard.actions.substring(0, 45), rx + 2, y + 3, { width: colWidths.actions - 4 });
+    rx += colWidths.actions;
+
+    // Responsible
+    doc.font("Helvetica").fontSize(4.5).fillColor(c.text)
+       .text(hazard.responsible, rx + 2, y + 10, { width: colWidths.resp - 4, align: "center" });
+    rx += colWidths.resp;
+
+    // G final
+    const nirf = hazard.gf * hazard.pf;
+    doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.gf));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(hazard.gf), rx + 2, y + 9, { width: 20, align: "center" });
+    rx += colWidths.gf;
+
+    // P final
+    doc.roundedRect(rx + 2, y + 6, 20, 14, 2).fill(getGravityColor(hazard.pf));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(hazard.pf), rx + 2, y + 9, { width: 20, align: "center" });
+    rx += colWidths.pf;
+
+    // NIR final
+    doc.roundedRect(rx + 1, y + 6, 26, 14, 2).fill(getRiskColor(nirf));
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white)
+       .text(String(nirf), rx + 1, y + 9, { width: 26, align: "center" });
+
+    y += rowH;
+    rowCount++;
   }
 
   // === RISK SCALES ===
