@@ -92,31 +92,71 @@ const PHOTOS_DIR = path.join(DATA_ROOT, "photos");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(PHOTOS_DIR, { recursive: true });
 
-// Helper function to get the correct equipment image path
-// Checks for custom uploaded images (PNG/JPG) before falling back to default SVG
-function getEquipmentImagePath(equipment) {
-  if (!equipment || !equipment.imagePath) return null;
+// Helper function to get the correct equipment image path or buffer
+// Checks database for custom images, then falls back to default SVG
+// Returns { path, buffer } - use buffer if available for PDFs
+async function getEquipmentImageForPdf(equipment) {
+  if (!equipment || !equipment.imagePath) return { path: null, buffer: null };
 
-  const customDir = path.join(process.cwd(), "public", "safety-equipment");
   const equipmentId = equipment.id;
 
-  // Check for custom images first (PNG, then JPG)
-  const customPngPath = path.join(customDir, `${equipmentId}.png`);
-  const customJpgPath = path.join(customDir, `${equipmentId}.jpg`);
-  const customJpegPath = path.join(customDir, `${equipmentId}.jpeg`);
+  // Check database for custom image
+  try {
+    const { rows } = await pool.query(
+      "SELECT image_data, mime_type FROM equipment_custom_images WHERE equipment_id = $1",
+      [equipmentId]
+    );
 
-  if (fs.existsSync(customPngPath)) {
-    return customPngPath;
-  }
-  if (fs.existsSync(customJpgPath)) {
-    return customJpgPath;
-  }
-  if (fs.existsSync(customJpegPath)) {
-    return customJpegPath;
+    if (rows.length > 0) {
+      // Return buffer for PDF generation
+      return { path: null, buffer: rows[0].image_data };
+    }
+  } catch (err) {
+    console.error("Error fetching equipment image from DB:", err);
   }
 
   // Fall back to default SVG
+  return { path: equipment.imagePath, buffer: null };
+}
+
+// Synchronous version for backwards compatibility - only checks filesystem
+// Note: This only works with old filesystem images, use getEquipmentImageForPdf for DB images
+function getEquipmentImagePath(equipment) {
+  if (!equipment || !equipment.imagePath) return null;
+  // Fall back to default SVG
   return equipment.imagePath;
+}
+
+// Pre-load all custom equipment images from database
+async function loadCustomEquipmentImages() {
+  try {
+    const { rows } = await pool.query("SELECT equipment_id, image_data FROM equipment_custom_images");
+    const imageMap = new Map();
+    for (const row of rows) {
+      imageMap.set(row.equipment_id, row.image_data);
+    }
+    return imageMap;
+  } catch (err) {
+    console.error("Error loading custom equipment images:", err);
+    return new Map();
+  }
+}
+
+// Get image source for equipment (buffer from DB or path to SVG)
+function getEquipmentImageSource(equipment, customImagesMap) {
+  if (!equipment) return null;
+
+  // Check if custom image exists in database
+  if (customImagesMap && customImagesMap.has(equipment.id)) {
+    return customImagesMap.get(equipment.id); // Returns Buffer
+  }
+
+  // Fall back to default SVG path
+  if (equipment.imagePath && fs.existsSync(equipment.imagePath)) {
+    return equipment.imagePath;
+  }
+
+  return null;
 }
 
 // Multer for file uploads
@@ -1247,6 +1287,31 @@ async function ensureSchema() {
     );
   `);
 
+  // Custom equipment images - stored in database instead of filesystem
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS equipment_custom_images (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipment_id TEXT NOT NULL UNIQUE,
+      image_data BYTEA NOT NULL,
+      mime_type TEXT NOT NULL,
+      original_filename TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // Permit customizations - stored in database
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS permit_customizations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      permit_id TEXT NOT NULL UNIQUE,
+      name TEXT,
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
   console.log("[Procedures] Schema ensured");
 }
 
@@ -1945,6 +2010,9 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     console.log("[RAMS] Site settings error:", e.message);
   }
 
+  // Load custom equipment images from database
+  const customImagesMap = await loadCustomEquipmentImages();
+
   // === RISK ANALYSIS ===
   // Use pre-generated AI analysis from database (generated during finalize)
   // Fall back to instant generation if not found
@@ -2305,11 +2373,12 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     const iconX = col2X + 8 + col * (col2W / 2);
     const iconY = ry + 6 + row * (iconSize + iconGap + 12);
 
-    // Try to render equipment icon (custom image or default SVG)
-    const imagePath = getEquipmentImagePath(eq);
+    // Try to render equipment icon (custom image from DB or default SVG)
+    const imageSource = getEquipmentImageSource(eq, customImagesMap);
     try {
-      if (imagePath && fs.existsSync(imagePath)) {
-        doc.image(imagePath, iconX, iconY, { width: iconSize, height: iconSize });
+      if (imageSource) {
+        // imageSource can be a Buffer (from DB) or a path (SVG)
+        doc.image(imageSource, iconX, iconY, { width: iconSize, height: iconSize });
       } else {
         // Fallback: colored circle with first letter
         doc.circle(iconX + iconSize / 2, iconY + iconSize / 2, iconSize / 2 - 2).fill(c.primary);
@@ -2997,25 +3066,32 @@ const PERMIT_CUSTOMIZATIONS_FILE = path.join(process.cwd(), "data", "permit-cust
 // Ensure data directory exists at startup
 fsp.mkdir(path.join(process.cwd(), "data"), { recursive: true }).catch(() => {});
 
-// Load permit customizations
+// Load permit customizations from database
 async function loadPermitCustomizations() {
   try {
-    if (fs.existsSync(PERMIT_CUSTOMIZATIONS_FILE)) {
-      const data = await fsp.readFile(PERMIT_CUSTOMIZATIONS_FILE, 'utf-8');
-      return JSON.parse(data);
+    const { rows } = await pool.query("SELECT permit_id, name, description FROM permit_customizations");
+    const customizations = {};
+    for (const row of rows) {
+      customizations[row.permit_id] = { name: row.name, description: row.description };
     }
+    return customizations;
   } catch (err) {
     console.error("Error loading permit customizations:", err);
+    return {};
   }
-  return {};
 }
 
-// Save permit customizations
-async function savePermitCustomizations(customizations) {
+// Save permit customization to database
+async function savePermitCustomization(permitId, name, description) {
   try {
-    await fsp.writeFile(PERMIT_CUSTOMIZATIONS_FILE, JSON.stringify(customizations, null, 2));
+    await pool.query(`
+      INSERT INTO permit_customizations (permit_id, name, description, updated_at)
+      VALUES ($1, $2, $3, now())
+      ON CONFLICT (permit_id)
+      DO UPDATE SET name = $2, description = $3, updated_at = now()
+    `, [permitId, name, description]);
   } catch (err) {
-    console.error("Error saving permit customizations:", err);
+    console.error("Error saving permit customization:", err);
     throw err;
   }
 }
@@ -3028,7 +3104,7 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
     const equipment = getAllEquipment();
     const basePermits = getAllPermits();
 
-    // Load permit customizations
+    // Load permit customizations from database
     const customizations = await loadPermitCustomizations();
 
     // Apply customizations to permits
@@ -3038,27 +3114,22 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
       description: customizations[permit.id]?.description || permit.description,
     }));
 
-    // Check which equipment has custom images vs default SVG
+    // Check which equipment has custom images in database
+    const { rows: customImages } = await pool.query(
+      "SELECT equipment_id FROM equipment_custom_images"
+    );
+    const customImageIds = new Set(customImages.map(r => r.equipment_id));
+
     const equipmentWithStatus = equipment.map(eq => {
-      const svgPath = eq.imagePath;
-      const customImagePath = eq.imagePath.replace('.svg', '.png');
-      const customJpgPath = eq.imagePath.replace('.svg', '.jpg');
-
-      let hasCustomImage = false;
-      let imagePath = svgPath;
-
-      if (fs.existsSync(customImagePath)) {
-        hasCustomImage = true;
-        imagePath = customImagePath;
-      } else if (fs.existsSync(customJpgPath)) {
-        hasCustomImage = true;
-        imagePath = customJpgPath;
-      }
+      const hasCustomImage = customImageIds.has(eq.id);
 
       return {
         ...eq,
         hasCustomImage,
-        imageUrl: `/safety-equipment/${path.basename(imagePath)}`,
+        // Use database endpoint for custom images, otherwise default SVG
+        imageUrl: hasCustomImage
+          ? `/api/procedures/safety-equipment/${eq.id}/image`
+          : `/safety-equipment/${path.basename(eq.imagePath)}`,
       };
     });
 
@@ -3073,19 +3144,33 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
   }
 });
 
-// Upload custom equipment image
-const uploadEquipmentImage = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => {
-      const dir = path.join(process.cwd(), "public", "safety-equipment");
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const equipmentId = req.params.equipmentId;
-      const ext = path.extname(file.originalname).toLowerCase() || '.png';
-      cb(null, `${equipmentId}${ext}`);
-    },
-  }),
+// Serve custom equipment image from database
+app.get("/api/procedures/safety-equipment/:equipmentId/image", async (req, res) => {
+  try {
+    const { equipmentId } = req.params;
+
+    const { rows } = await pool.query(
+      "SELECT image_data, mime_type FROM equipment_custom_images WHERE equipment_id = $1",
+      [equipmentId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    const { image_data, mime_type } = rows[0];
+    res.set("Content-Type", mime_type);
+    res.set("Cache-Control", "public, max-age=86400"); // Cache for 1 day
+    res.send(image_data);
+  } catch (err) {
+    console.error("Error serving equipment image:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload custom equipment image - store in database
+const uploadEquipmentImageToDb = multer({
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/")) {
@@ -3097,7 +3182,7 @@ const uploadEquipmentImage = multer({
 });
 
 app.post("/api/procedures/safety-equipment/:equipmentId/upload",
-  uploadEquipmentImage.single("image"),
+  uploadEquipmentImageToDb.single("image"),
   async (req, res) => {
     try {
       if (!req.file) {
@@ -3105,13 +3190,22 @@ app.post("/api/procedures/safety-equipment/:equipmentId/upload",
       }
 
       const equipmentId = req.params.equipmentId;
-      console.log(`[Safety Equipment] Uploaded image for ${equipmentId}: ${req.file.filename}`);
+      const { buffer, mimetype, originalname } = req.file;
+
+      // Upsert image in database
+      await pool.query(`
+        INSERT INTO equipment_custom_images (equipment_id, image_data, mime_type, original_filename, updated_at)
+        VALUES ($1, $2, $3, $4, now())
+        ON CONFLICT (equipment_id)
+        DO UPDATE SET image_data = $2, mime_type = $3, original_filename = $4, updated_at = now()
+      `, [equipmentId, buffer, mimetype, originalname]);
+
+      console.log(`[Safety Equipment] Stored image in DB for ${equipmentId}`);
 
       res.json({
         success: true,
         equipmentId,
-        imagePath: req.file.filename,
-        imageUrl: `/safety-equipment/${req.file.filename}`,
+        imageUrl: `/api/procedures/safety-equipment/${equipmentId}/image`,
       });
     } catch (err) {
       console.error("Error uploading equipment image:", err);
@@ -3124,23 +3218,16 @@ app.post("/api/procedures/safety-equipment/:equipmentId/upload",
 app.delete("/api/procedures/safety-equipment/:equipmentId/image", async (req, res) => {
   try {
     const equipmentId = req.params.equipmentId;
-    const dir = path.join(process.cwd(), "public", "safety-equipment");
 
-    // Try to delete PNG and JPG versions
-    const pngPath = path.join(dir, `${equipmentId}.png`);
-    const jpgPath = path.join(dir, `${equipmentId}.jpg`);
-    const jpegPath = path.join(dir, `${equipmentId}.jpeg`);
+    // Delete from database
+    const { rowCount } = await pool.query(
+      "DELETE FROM equipment_custom_images WHERE equipment_id = $1",
+      [equipmentId]
+    );
 
-    let deleted = false;
-    for (const imgPath of [pngPath, jpgPath, jpegPath]) {
-      if (fs.existsSync(imgPath)) {
-        await fsp.unlink(imgPath);
-        deleted = true;
-        console.log(`[Safety Equipment] Deleted custom image: ${imgPath}`);
-      }
-    }
+    console.log(`[Safety Equipment] Deleted custom image from DB for ${equipmentId}`);
 
-    res.json({ success: true, deleted, equipmentId });
+    res.json({ success: true, deleted: rowCount > 0, equipmentId });
   } catch (err) {
     console.error("Error deleting equipment image:", err);
     res.status(500).json({ error: err.message });
@@ -3153,26 +3240,16 @@ app.put("/api/procedures/permits/:permitId", async (req, res) => {
     const { permitId } = req.params;
     const { name, description } = req.body;
 
-    // Load current customizations
-    const customizations = await loadPermitCustomizations();
+    // Save to database
+    await savePermitCustomization(permitId, name, description);
 
-    // Update or create customization for this permit
-    customizations[permitId] = {
-      ...(customizations[permitId] || {}),
-      name: name || customizations[permitId]?.name,
-      description: description || customizations[permitId]?.description,
-      updatedAt: new Date().toISOString(),
-    };
-
-    // Save to file
-    await savePermitCustomizations(customizations);
-
-    console.log(`[Permits] Updated permit ${permitId}:`, customizations[permitId]);
+    console.log(`[Permits] Updated permit ${permitId} in DB:`, { name, description });
 
     res.json({
       success: true,
       permitId,
-      ...customizations[permitId],
+      name,
+      description,
     });
   } catch (err) {
     console.error("Error updating permit:", err);
@@ -5147,6 +5224,9 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
     console.log("[Work Method] QR code error:", e.message);
   }
 
+  // Load custom equipment images from database
+  const customImagesMap = await loadCustomEquipmentImages();
+
   // A4 Portrait
   const pageWidth = 595.28;
   const pageHeight = 841.89;
@@ -5262,10 +5342,14 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 
     equipmentToShowWM.forEach((eq, idx) => {
       const iconX = margin + iconSpacing + idx * (wmIconSize + iconSpacing);
-      const imagePath = getEquipmentImagePath(eq);
+      const imageSource = getEquipmentImageSource(eq, customImagesMap);
       try {
-        if (imagePath && fs.existsSync(imagePath)) {
-          doc.image(imagePath, iconX, y + 5, { width: wmIconSize, height: wmIconSize });
+        if (imageSource) {
+          doc.image(imageSource, iconX, y + 5, { width: wmIconSize, height: wmIconSize });
+        } else {
+          doc.circle(iconX + wmIconSize / 2, y + 5 + wmIconSize / 2, wmIconSize / 2 - 2).fill(c.primary);
+          doc.font("Helvetica-Bold").fontSize(14).fillColor(c.white)
+             .text(eq.name[0].toUpperCase(), iconX, y + 5 + wmIconSize / 3, { width: wmIconSize, align: "center" });
         }
       } catch (e) {
         doc.circle(iconX + wmIconSize / 2, y + 5 + wmIconSize / 2, wmIconSize / 2 - 2).fill(c.primary);
@@ -5400,6 +5484,9 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
     console.log("[Procedure] QR code error:", e.message);
   }
 
+  // Load custom equipment images from database
+  const customImagesMap = await loadCustomEquipmentImages();
+
   // A4 Portrait
   const pageWidth = 595.28;
   const pageHeight = 841.89;
@@ -5523,10 +5610,12 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
     const procIconSize = 20;
     equipmentToShowProc.forEach((eq, idx) => {
       const iconX = margin + 280 + idx * (procIconSize + 20);
-      const imagePath = getEquipmentImagePath(eq);
+      const imageSource = getEquipmentImageSource(eq, customImagesMap);
       try {
-        if (imagePath && fs.existsSync(imagePath)) {
-          doc.image(imagePath, iconX, y + 22, { width: procIconSize, height: procIconSize });
+        if (imageSource) {
+          doc.image(imageSource, iconX, y + 22, { width: procIconSize, height: procIconSize });
+        } else {
+          doc.circle(iconX + procIconSize / 2, y + 32, procIconSize / 2 - 2).fill(c.primary);
         }
       } catch (e) {
         doc.circle(iconX + procIconSize / 2, y + 32, procIconSize / 2 - 2).fill(c.primary);
