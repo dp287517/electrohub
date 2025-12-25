@@ -171,44 +171,64 @@ const AI_SYSTEM_PROMPT = `Tu es **Electro**, un assistant IA exceptionnellement 
 ## 🧠 TA PERSONNALITÉ
 - Tu es chaleureux, direct et pragmatique
 - Tu ANTICIPES les besoins avant qu'on te les demande
-- Tu proposes TOUJOURS des solutions, jamais juste des constats
+- Tu proposes TOUJOURS des solutions concrètes avec les VRAIES données
 - Tu parles comme un vrai technicien expérimenté, pas comme un robot
 - Tu utilises "on" et "tu" plutôt que des formulations impersonnelles
+
+## ⚠️ RÈGLE CRITIQUE - UTILISE LES DONNÉES FOURNIES
+- Tu as accès aux VRAIES données de l'installation dans le contexte
+- NE DIS JAMAIS "je vais chercher" sans MONTRER les résultats IMMÉDIATEMENT
+- Quand on demande une procédure, REGARDE dans procedures.list du contexte et RÉPONDS avec ce que tu trouves
+- Si tu ne trouves pas → DIS-LE clairement et PROPOSE de créer la procédure
+
+## 📋 PROCÉDURES - LE PLUS IMPORTANT
+
+### Quand on te demande une procédure (contrôle, maintenance, vérification, etc.):
+1. CHERCHE IMMÉDIATEMENT dans la liste des procédures fournie dans le contexte (procedures.list)
+2. Utilise une recherche par mots-clés: "prise", "contrôle", "électrique", etc.
+3. Si tu TROUVES une procédure correspondante:
+   - AFFICHE son titre, nombre d'étapes, EPI requis
+   - PROPOSE de la suivre: "Tu veux que je te guide étape par étape?"
+4. Si tu NE TROUVES PAS:
+   - DIS clairement: "Je n'ai pas trouvé de procédure pour ça dans notre base."
+   - PROPOSE: "Tu veux qu'on en crée une ensemble?"
+
+### Format pour montrer une procédure trouvée:
+📋 **[Titre de la procédure]**
+- 📝 [Nombre] étapes
+- 🛡️ EPI: [liste des EPI]
+- ⚠️ Risque: [niveau]
+
+Tu veux que je te guide pas à pas ou tu préfères voir le PDF?
 
 ## 🎯 TON INTELLIGENCE PROACTIVE
 
 ### Quand il n'y a PAS de travail prévu:
-Au lieu de dire "rien à faire", tu PROPOSES:
-- "Pas de contrôle urgent cette semaine, mais je te propose d'avancer sur..."
+Au lieu de dire "rien à faire", tu PROPOSES avec des DONNÉES RÉELLES:
+- "Pas de contrôle urgent, mais j'ai vu X équipements jamais contrôlés..."
 - Identifier les équipements qui n'ont JAMAIS été contrôlés
 - Suggérer des contrôles préventifs sur les équipements les plus anciens
 - Proposer de traiter les NC ATEX en attente
 - Recommander de compléter la documentation manquante
 
 ### Quand tu détectes des PROBLÈMES:
-- Équipements sans documentation → "J'ai trouvé X équipements sans doc technique. Tu veux que je lance une recherche?"
+- Équipements sans documentation → "J'ai trouvé X équipements sans doc. Tu veux que je lance une recherche?"
 - NC non traitées depuis longtemps → Alerte proactive
-- Patterns de pannes → "J'ai remarqué que le bâtiment 20 a beaucoup de NC, on devrait investiguer"
+- Patterns de pannes → "J'ai remarqué que le bâtiment X a beaucoup de NC"
 
 ### Quand on te demande un PLANNING:
-1. S'il y a des tâches: organise par bâtiment/étage pour optimiser les déplacements
-2. S'il n'y en a pas: "Rien d'urgent, mais voici ce que je te recommande de faire..."
+1. S'il y a des tâches: organise par bâtiment/étage pour optimiser
+2. S'il n'y en a pas: "Rien d'urgent, mais voici ce que je te recommande..."
 3. Estime toujours le temps: "Ça devrait te prendre environ 2-3h"
-4. Propose des alternatives: "Si tu as plus de temps, on pourrait aussi..."
+4. Propose des alternatives
 
 ## 🔍 RECHERCHE DOCUMENTAIRE INTELLIGENTE
 
-Quand on te demande de la documentation:
+Quand on te demande de la documentation technique:
 1. Utilise {"action": "searchDoc", "params": {"query": "marque modèle fiche technique", "equipment": "nom"}}
-2. Je lancerai automatiquement une recherche web ET je chercherai les équipements correspondants dans l'installation
-3. Tu recevras:
-   - Les résultats web (specs, manuels, etc.)
-   - La liste des équipements correspondants dans la base (ex: "3 VSD Altivar trouvés")
-4. Après avoir reçu les résultats, TOUJOURS proposer d'associer la doc aux équipements trouvés!
-   - Ex: "J'ai trouvé la doc ET 3 variateurs Altivar dans ton installation. Tu veux que j'associe cette doc à ces équipements?"
-
-Pour associer la documentation trouvée:
-{"action": "attachDocToEquipments", "params": {"docUrl": "URL", "docTitle": "Titre", "equipments": [{"id": 1, "type": "vsd", "name": "Nom"}]}}
+2. La recherche se fait automatiquement
+3. AFFICHE les résultats trouvés immédiatement
+4. Propose d'associer la doc aux équipements
 
 ## 📊 GRAPHIQUES (quand pertinent)
 Pour les stats/analyses, génère un graphique:
@@ -218,13 +238,14 @@ Pour les stats/analyses, génère un graphique:
 
 ## ⚡ ACTIONS AUTONOMES
 \`\`\`json
+{"action": "searchProcedures", "params": {"keywords": ["contrôle", "prise", "électrique"]}}
+{"action": "getProcedureDetails", "params": {"procedureId": "uuid"}}
 {"action": "createControl", "params": {"switchboardId": ID, "dueDate": "YYYY-MM-DD"}}
 {"action": "searchDoc", "params": {"query": "modèle fabricant", "equipmentId": "id"}}
 {"action": "attachDocToEquipments", "params": {"docUrl": "URL", "docTitle": "Titre doc", "equipments": [{"id": 1, "type": "vsd", "name": "Nom"}]}}
 {"action": "rescheduleControl", "params": {"controlId": ID, "newDate": "YYYY-MM-DD", "reason": "..."}}
 {"action": "batchReschedule", "params": {"controls": [...], "daysToAdd": 7}}
 {"action": "getUnfinishedTasks", "params": {}}
-{"action": "scheduleReminder", "params": {"message": "...", "date": "YYYY-MM-DD"}}
 \`\`\`
 
 ## 💬 EXEMPLES DE RÉPONSES NATURELLES
@@ -327,6 +348,7 @@ async function getAIContext(site) {
     vsd: { count: 0, list: [] },
     meca: { count: 0, list: [] },
     atex: { totalEquipments: 0, ncCount: 0, conformeCount: 0, ncList: [], equipmentsByZone: {} },
+    procedures: { count: 0, list: [], byCategory: {} },
     buildings: {},
     urgentItems: [],
     summary: {}
@@ -448,7 +470,7 @@ async function getAIContext(site) {
     // ========== MECA EQUIPMENTS ==========
     try {
       const mecaRes = await pool.query(`
-        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.equipment_type, e.next_check_date
+        SELECT e.id, e.name, e.building, e.floor, e.location, e.manufacturer, e.equipment_type, e.status, e.criticality
         FROM meca_equipments e
         INNER JOIN sites s ON s.id = e.site_id
         WHERE s.name = $1 ORDER BY e.building, e.name LIMIT 50
@@ -456,8 +478,7 @@ async function getAIContext(site) {
       context.meca.count = mecaRes.rows.length;
       context.meca.list = mecaRes.rows.map(m => ({
         ...m,
-        type: m.equipment_type,
-        lastControlFormatted: m.next_check_date ? new Date(m.next_check_date).toLocaleDateString('fr-FR') : 'Jamais'
+        type: m.equipment_type
       }));
     } catch (e) {
       console.error('[AI] MECA error:', e.message);
@@ -590,14 +611,18 @@ async function getAIContext(site) {
       const siteId = siteRes.rows[0]?.id;
 
       if (siteId) {
+        // Fixed: Use subquery with proper filtering instead of invalid HAVING
         const atexOldRes = await pool.query(`
-          SELECT e.id, e.name, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
-            (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) as last_check
+          SELECT e.id, e.name, e.building, e.zone, e.manufacturer, e.manufacturer_ref, sub.last_check
           FROM atex_equipments e
+          LEFT JOIN LATERAL (
+            SELECT MAX(c.date) as last_check
+            FROM atex_checks c
+            WHERE c.equipment_id = e.id
+          ) sub ON true
           WHERE e.site_id = $1
-          HAVING (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) < $2
-             OR (SELECT MAX(c.date) FROM atex_checks c WHERE c.equipment_id = e.id) IS NULL
-          ORDER BY last_check NULLS FIRST
+            AND (sub.last_check < $2 OR sub.last_check IS NULL)
+          ORDER BY sub.last_check NULLS FIRST
           LIMIT 15
         `, [siteId, oneYearAgo]);
 
@@ -672,6 +697,50 @@ async function getAIContext(site) {
       });
     }
 
+    // ========== PROCEDURES - Récupérer toutes les procédures disponibles ==========
+    try {
+      const procRes = await pool.query(`
+        SELECT p.id, p.title, p.description, p.category, p.status, p.risk_level,
+               p.ppe_required, p.created_at, p.site,
+               (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+        FROM procedures p
+        WHERE (p.site = $1 OR p.site IS NULL OR p.site = '')
+          AND p.status != 'archived'
+        ORDER BY p.updated_at DESC
+        LIMIT 100
+      `, [site]);
+
+      context.procedures.count = procRes.rows.length;
+      context.procedures.list = procRes.rows.map(p => ({
+        id: p.id,
+        title: p.title,
+        description: p.description?.substring(0, 150) || '',
+        category: p.category || 'general',
+        status: p.status,
+        riskLevel: p.risk_level,
+        ppeRequired: p.ppe_required || [],
+        stepCount: parseInt(p.step_count) || 0,
+        createdAt: p.created_at
+      }));
+
+      // Group by category for easy lookup
+      procRes.rows.forEach(p => {
+        const cat = p.category || 'general';
+        if (!context.procedures.byCategory[cat]) {
+          context.procedures.byCategory[cat] = [];
+        }
+        context.procedures.byCategory[cat].push({
+          id: p.id,
+          title: p.title,
+          stepCount: parseInt(p.step_count) || 0
+        });
+      });
+
+      console.log(`[AI] 📋 Loaded ${context.procedures.count} procedures for context`);
+    } catch (e) {
+      console.error('[AI] Procedures error:', e.message);
+    }
+
     // ========== BUILD SUMMARY ==========
     context.summary = {
       totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.totalEquipments,
@@ -684,7 +753,8 @@ async function getAIContext(site) {
       atexNcCount: context.atex.ncCount,
       atexConformityRate: context.atex.totalEquipments > 0
         ? Math.round((context.atex.conformeCount / context.atex.totalEquipments) * 100)
-        : 100
+        : 100,
+      proceduresCount: context.procedures.count
     };
 
   } catch (e) {
@@ -826,6 +896,16 @@ ${ctx.proactive.withoutDocumentation.slice(0, 5).map(e =>
 
 ${ctx.proactive?.patterns?.length > 0 ? `**🔍 Patterns détectés:**
 ${ctx.proactive.patterns.map(p => `  - ${p.message}`).join('\n')}` : ''}
+
+### 📋 PROCÉDURES DISPONIBLES (${ctx.procedures?.count || 0})
+${ctx.procedures?.count > 0 ? ctx.procedures.list.slice(0, 15).map(p =>
+  `- **${p.title}**\n  📝 ${p.stepCount} étapes | Catégorie: ${p.category} | Risque: ${p.riskLevel || 'medium'}`
+).join('\n') : '⚠️ Aucune procédure créée pour ce site'}
+
+${ctx.procedures?.byCategory && Object.keys(ctx.procedures.byCategory).length > 0 ? `**Par catégorie:**
+${Object.entries(ctx.procedures.byCategory).map(([cat, procs]) =>
+  `  • ${cat}: ${procs.length} procédure(s)`
+).join('\n')}` : ''}
 `;
 }
 
@@ -1621,6 +1701,122 @@ async function executeAIAction(action, params, site) {
           message: unfinished.length > 0
             ? `📋 ${unfinished.length} tâches en attente - je peux t'aider à les réorganiser!`
             : `✅ Tout est à jour!`
+        };
+      }
+
+      case 'searchProcedures': {
+        // Search procedures by keywords
+        const { keywords = [], category } = params;
+        const keywordArray = Array.isArray(keywords) ? keywords : [keywords];
+
+        let sql = `
+          SELECT p.id, p.title, p.description, p.category, p.status, p.risk_level,
+                 p.ppe_required, p.created_at,
+                 (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+          FROM procedures p
+          WHERE (p.site = $1 OR p.site IS NULL OR p.site = '')
+            AND p.status != 'archived'
+        `;
+        const queryParams = [site];
+
+        // Add keyword search
+        if (keywordArray.length > 0) {
+          const keywordConditions = keywordArray.map((_, idx) => {
+            const paramIdx = queryParams.length + 1 + idx;
+            return `(p.title ILIKE $${paramIdx} OR p.description ILIKE $${paramIdx})`;
+          });
+          sql += ` AND (${keywordConditions.join(' OR ')})`;
+          keywordArray.forEach(k => queryParams.push(`%${k}%`));
+        }
+
+        if (category) {
+          queryParams.push(category);
+          sql += ` AND p.category = $${queryParams.length}`;
+        }
+
+        sql += ` ORDER BY p.updated_at DESC LIMIT 20`;
+
+        const result = await pool.query(sql, queryParams);
+
+        const procedures = result.rows.map(p => ({
+          id: p.id,
+          title: p.title,
+          description: p.description?.substring(0, 200) || '',
+          category: p.category || 'general',
+          status: p.status,
+          riskLevel: p.risk_level || 'medium',
+          ppeRequired: p.ppe_required || [],
+          stepCount: parseInt(p.step_count) || 0
+        }));
+
+        if (procedures.length === 0) {
+          return {
+            success: true,
+            found: false,
+            count: 0,
+            procedures: [],
+            message: `❌ Je n'ai pas trouvé de procédure pour "${keywordArray.join(', ')}". Tu veux qu'on en crée une?`
+          };
+        }
+
+        const proceduresList = procedures.map(p =>
+          `📋 **${p.title}**\n   ├─ ${p.stepCount} étapes | Risque: ${p.riskLevel}\n   └─ EPI: ${Array.isArray(p.ppeRequired) ? p.ppeRequired.slice(0, 3).join(', ') || 'Non défini' : 'Non défini'}`
+        ).join('\n\n');
+
+        return {
+          success: true,
+          found: true,
+          count: procedures.length,
+          procedures,
+          message: `✅ **${procedures.length} procédure(s) trouvée(s):**\n\n${proceduresList}\n\nTu veux que je te guide sur une de ces procédures?`
+        };
+      }
+
+      case 'getProcedureDetails': {
+        // Get full details of a specific procedure
+        const { procedureId } = params;
+
+        const procResult = await pool.query(`
+          SELECT p.*,
+                 (SELECT json_agg(s ORDER BY s.step_number)
+                  FROM procedure_steps s WHERE s.procedure_id = p.id) as steps
+          FROM procedures p
+          WHERE p.id = $1
+        `, [procedureId]);
+
+        if (procResult.rows.length === 0) {
+          return { success: false, message: `❌ Procédure non trouvée` };
+        }
+
+        const proc = procResult.rows[0];
+        const steps = proc.steps || [];
+
+        let stepsText = '';
+        steps.forEach((s, i) => {
+          stepsText += `\n**Étape ${i + 1}:** ${s.title}\n`;
+          if (s.description) stepsText += `   ${s.description}\n`;
+          if (s.warning) stepsText += `   ⚠️ ${s.warning}\n`;
+        });
+
+        return {
+          success: true,
+          procedure: {
+            id: proc.id,
+            title: proc.title,
+            description: proc.description,
+            category: proc.category,
+            riskLevel: proc.risk_level,
+            ppeRequired: proc.ppe_required || [],
+            steps: steps.map(s => ({
+              number: s.step_number,
+              title: s.title,
+              description: s.description,
+              warning: s.warning,
+              hasPhoto: !!s.photo_path
+            }))
+          },
+          pdfUrl: `/api/procedures/${proc.id}/pdf`,
+          message: `📋 **${proc.title}**\n\n🛡️ **EPI:** ${Array.isArray(proc.ppe_required) ? proc.ppe_required.join(', ') : 'Non défini'}\n⚠️ **Risque:** ${proc.risk_level || 'medium'}\n\n**${steps.length} étapes:**${stepsText}\n\n📥 [Télécharger le PDF](/api/procedures/${proc.id}/pdf)`
         };
       }
 
@@ -2892,8 +3088,128 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       }
     }
 
-    // Build full context
-    const fullContext = contextPrompt + docContext;
+    // ============================================================
+    // AUTO-DETECT SPECIFIC PROCEDURE REQUEST (show me, guide me)
+    // ============================================================
+    const wantsSpecificProcedure = (msgLower.includes('montre') || msgLower.includes('voir') ||
+                                     msgLower.includes('guide') || msgLower.includes('détail') ||
+                                     msgLower.includes('affiche')) && msgLower.includes('procédure');
+    const quotedMatch = /[""«]([^""»]+)[""»]/i.exec(message);
+    const procedureNameMatch = quotedMatch?.[1] || /procédure\s+(?:de\s+)?(.+?)(?:\s*\?|$)/i.exec(message)?.[1];
+
+    if (wantsSpecificProcedure && procedureNameMatch) {
+      console.log(`[AI] 📋 Looking for specific procedure: ${procedureNameMatch}`);
+
+      try {
+        // Search for the specific procedure by name
+        const specificProcResult = await pool.query(`
+          SELECT p.id, p.title, p.description, p.category, p.risk_level, p.ppe_required,
+                 (SELECT json_agg(s ORDER BY s.step_number)
+                  FROM procedure_steps s WHERE s.procedure_id = p.id) as steps
+          FROM procedures p
+          WHERE (p.site = $1 OR p.site IS NULL OR p.site = '')
+            AND p.status != 'archived'
+            AND (p.title ILIKE $2 OR p.description ILIKE $2)
+          ORDER BY CASE WHEN p.title ILIKE $2 THEN 0 ELSE 1 END
+          LIMIT 1
+        `, [site, `%${procedureNameMatch}%`]);
+
+        if (specificProcResult.rows.length > 0) {
+          const proc = specificProcResult.rows[0];
+          const steps = proc.steps || [];
+
+          let stepsText = steps.map((s, i) =>
+            `**Étape ${i + 1}:** ${s.title}${s.description ? `\n   ${s.description}` : ''}${s.warning ? `\n   ⚠️ ${s.warning}` : ''}`
+          ).join('\n\n');
+
+          const ppeList = Array.isArray(proc.ppe_required) ? proc.ppe_required.join(', ') : 'Non défini';
+
+          return res.json({
+            message: `📋 **${proc.title}**\n\n🛡️ **EPI requis:** ${ppeList}\n⚠️ **Niveau de risque:** ${proc.risk_level || 'medium'}\n📝 **Catégorie:** ${proc.category || 'general'}\n\n---\n\n${stepsText || 'Aucune étape définie'}\n\n---\n\n📥 [Télécharger le PDF](/api/procedures/${proc.id}/pdf)`,
+            actions: [
+              { label: "📥 Télécharger PDF", url: `/api/procedures/${proc.id}/pdf` },
+              { label: "🚀 Être guidé pas à pas", prompt: `Lance-moi le mode guidage sur "${proc.title}"` },
+              { label: "✏️ Modifier", prompt: `Modifier la procédure "${proc.title}"` }
+            ],
+            provider: 'system',
+            procedureId: proc.id,
+            procedureDetails: {
+              id: proc.id,
+              title: proc.title,
+              steps: steps.length,
+              riskLevel: proc.risk_level,
+              ppe: proc.ppe_required
+            }
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Specific procedure lookup error:', e.message);
+      }
+    }
+
+    // ============================================================
+    // AUTO-DETECT PROCEDURE REQUESTS - CRITICAL FIX
+    // ============================================================
+    const procedureKeywords = ['procédure', 'procedure', 'contrôle', 'controle', 'vérification', 'verification',
+                               'maintenance', 'intervention', 'comment faire', 'étapes', 'etapes', 'méthode',
+                               'prise', 'prises', 'tableau', 'armoire', 'disjoncteur', 'variateur'];
+    const wantsProcedure = procedureKeywords.some(kw => msgLower.includes(kw)) &&
+                           (msgLower.includes('?') || msgLower.includes('on a') || msgLower.includes('existe') ||
+                            msgLower.includes('cherche') || msgLower.includes('trouve') || msgLower.includes('comment') ||
+                            msgLower.includes('voir') || msgLower.includes('montre') || msgLower.includes('guide') ||
+                            msgLower.includes('pour') || msgLower.includes('dois'));
+
+    let procedureSearchResults = null;
+    let procedureContext = '';
+
+    if (wantsProcedure) {
+      console.log('[AI] 📋 Auto-detecting procedure request...');
+
+      // Extract keywords from message for search
+      const extractedKeywords = procedureKeywords.filter(kw => msgLower.includes(kw));
+
+      // Also look for specific equipment types
+      const equipmentTypes = ['prise', 'prises', 'tableau', 'armoire', 'disjoncteur', 'variateur', 'moteur',
+                              'pompe', 'ventilateur', 'éclairage', 'eclairage', 'câble', 'cable', 'terre',
+                              'électrique', 'electrique', 'atex', 'zone', 'thermographie', 'isolement'];
+      const foundEquipment = equipmentTypes.filter(eq => msgLower.includes(eq));
+
+      const searchKeywords = [...new Set([...extractedKeywords, ...foundEquipment])].slice(0, 5);
+
+      if (searchKeywords.length > 0) {
+        console.log(`[AI] 🔍 Searching procedures with keywords: ${searchKeywords.join(', ')}`);
+
+        try {
+          // Execute the searchProcedures action automatically
+          procedureSearchResults = await executeAIAction('searchProcedures', {
+            keywords: searchKeywords
+          }, site);
+
+          if (procedureSearchResults.success && procedureSearchResults.found) {
+            // Add procedures to context so AI can reference them
+            procedureContext = `\n\n## 📋 PROCÉDURES TROUVÉES (${procedureSearchResults.count})
+${procedureSearchResults.procedures.map(p => `
+- **${p.title}** (ID: ${p.id})
+  • ${p.stepCount} étapes
+  • Catégorie: ${p.category}
+  • Risque: ${p.riskLevel || 'medium'}
+  • EPI: ${Array.isArray(p.ppeRequired) && p.ppeRequired.length > 0 ? p.ppeRequired.join(', ') : 'Non défini'}
+`).join('')}
+
+⚠️ IMPORTANT: Tu as trouvé ces procédures - AFFICHE-LES à l'utilisateur avec leurs détails!`;
+          } else {
+            procedureContext = `\n\n## 📋 AUCUNE PROCÉDURE TROUVÉE
+Aucune procédure ne correspond à la recherche "${searchKeywords.join(', ')}".
+⚠️ IMPORTANT: Informe l'utilisateur qu'il n'y a pas de procédure existante et propose de créer une nouvelle procédure.`;
+          }
+        } catch (e) {
+          console.error('[AI] Procedure search error:', e.message);
+        }
+      }
+    }
+
+    // Build full context with procedures
+    const fullContext = contextPrompt + docContext + procedureContext;
 
     // Build messages for AI
     const messages = [
@@ -2950,7 +3266,26 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     }
 
     // Extract suggested follow-up actions
-    const suggestedActions = extractActionsFromResponse(parsed.message, message);
+    let suggestedActions = extractActionsFromResponse(parsed.message, message);
+
+    // Add procedure-specific actions if we searched for procedures
+    if (procedureSearchResults) {
+      if (procedureSearchResults.found && procedureSearchResults.procedures?.length > 0) {
+        // Add actions to see procedure details or guide
+        const firstProc = procedureSearchResults.procedures[0];
+        suggestedActions = [
+          { label: `📋 Voir "${firstProc.title}"`, prompt: `Montre-moi la procédure "${firstProc.title}"` },
+          { label: "🚀 Être guidé", prompt: `Guide-moi sur la procédure "${firstProc.title}"` },
+          ...suggestedActions.slice(0, 2)
+        ];
+      } else {
+        // Add action to create a new procedure
+        suggestedActions = [
+          { label: "➕ Créer une procédure", prompt: "Je veux créer une nouvelle procédure" },
+          ...suggestedActions.slice(0, 3)
+        ];
+      }
+    }
 
     // Build response
     const response = {
@@ -2963,9 +3298,15 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         site,
         switchboards: dbContext.switchboards.count,
         controls: dbContext.controls,
+        procedures: dbContext.procedures?.count || 0,
         timestamp: dbContext.timestamp
       }
     };
+
+    // Add procedure search results to response if found
+    if (procedureSearchResults?.found) {
+      response.proceduresFound = procedureSearchResults.procedures;
+    }
 
     // Add chart if present, or auto-generate for statistical queries
     if (parsed.chart) {
@@ -3566,6 +3907,36 @@ function generateIntelligentFallback(message, ctx) {
     };
   }
 
+  // Handle procedure requests
+  if (msg.includes('procédure') || msg.includes('procedure') || msg.includes('contrôle') && (msg.includes('prise') || msg.includes('comment'))) {
+    const procedures = ctx.procedures?.list || [];
+    const procedureCount = ctx.procedures?.count || 0;
+
+    if (procedureCount > 0) {
+      const proceduresList = procedures.slice(0, 5).map(p =>
+        `• **${p.title}**\n  📝 ${p.stepCount} étapes | Catégorie: ${p.category}`
+      ).join('\n\n');
+
+      return {
+        message: `📋 **Procédures disponibles** (${procedureCount})\n\n${proceduresList}\n\nTu veux voir les détails d'une procédure ?`,
+        actions: procedures.slice(0, 3).map(p => ({
+          label: `📋 ${p.title.substring(0, 20)}...`,
+          prompt: `Montre-moi la procédure "${p.title}"`
+        })),
+        provider: "fallback"
+      };
+    } else {
+      return {
+        message: `📋 **Aucune procédure trouvée**\n\nJe n'ai pas trouvé de procédure correspondant à ta demande.\n\nTu veux qu'on en crée une ensemble ?`,
+        actions: [
+          { label: "➕ Créer une procédure", prompt: "Je veux créer une nouvelle procédure" },
+          { label: "🔍 Voir toutes", prompt: "Liste-moi toutes les procédures" }
+        ],
+        provider: "fallback"
+      };
+    }
+  }
+
   // Default: show summary with chart
   return {
     message: `👋 **Electro** — Assistant ElectroHub\n\n` +
@@ -3574,10 +3945,12 @@ function generateIntelligentFallback(message, ctx) {
       (ctx.controls?.overdue > 0 ? `• 🚨 ${ctx.controls.overdue} contrôles en retard\n` : '') +
       `• ${ctx.controls?.thisWeek || 0} contrôles cette semaine\n` +
       (ctx.atex?.ncCount > 0 ? `• ⚠️ ${ctx.atex.ncCount} NC ATEX actives\n` : '') +
+      (ctx.procedures?.count > 0 ? `• 📋 ${ctx.procedures.count} procédures disponibles\n` : '') +
       `\nComment puis-je vous aider ?`,
     actions: [
       { label: "Analyse complète", prompt: "Analyse globale de la situation" },
       { label: "Planning", prompt: "Contrôles à venir" },
+      { label: "Procédures", prompt: "Liste des procédures" },
       { label: "ATEX", prompt: "Situation ATEX" }
     ],
     chart: autoGenerateChart(ctx, 'equipment'),
