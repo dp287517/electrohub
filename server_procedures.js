@@ -92,6 +92,33 @@ const PHOTOS_DIR = path.join(DATA_ROOT, "photos");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(PHOTOS_DIR, { recursive: true });
 
+// Helper function to get the correct equipment image path
+// Checks for custom uploaded images (PNG/JPG) before falling back to default SVG
+function getEquipmentImagePath(equipment) {
+  if (!equipment || !equipment.imagePath) return null;
+
+  const customDir = path.join(process.cwd(), "public", "safety-equipment");
+  const equipmentId = equipment.id;
+
+  // Check for custom images first (PNG, then JPG)
+  const customPngPath = path.join(customDir, `${equipmentId}.png`);
+  const customJpgPath = path.join(customDir, `${equipmentId}.jpg`);
+  const customJpegPath = path.join(customDir, `${equipmentId}.jpeg`);
+
+  if (fs.existsSync(customPngPath)) {
+    return customPngPath;
+  }
+  if (fs.existsSync(customJpgPath)) {
+    return customJpgPath;
+  }
+  if (fs.existsSync(customJpegPath)) {
+    return customJpegPath;
+  }
+
+  // Fall back to default SVG
+  return equipment.imagePath;
+}
+
 // Multer for file uploads
 const uploadPhoto = multer({
   storage: multer.diskStorage({
@@ -2278,10 +2305,11 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     const iconX = col2X + 8 + col * (col2W / 2);
     const iconY = ry + 6 + row * (iconSize + iconGap + 12);
 
-    // Try to render SVG icon
+    // Try to render equipment icon (custom image or default SVG)
+    const imagePath = getEquipmentImagePath(eq);
     try {
-      if (fs.existsSync(eq.imagePath)) {
-        doc.image(eq.imagePath, iconX, iconY, { width: iconSize, height: iconSize });
+      if (imagePath && fs.existsSync(imagePath)) {
+        doc.image(imagePath, iconX, iconY, { width: iconSize, height: iconSize });
       } else {
         // Fallback: colored circle with first letter
         doc.circle(iconX + iconSize / 2, iconY + iconSize / 2, iconSize / 2 - 2).fill(c.primary);
@@ -5035,9 +5063,10 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 
     equipmentToShowWM.forEach((eq, idx) => {
       const iconX = margin + iconSpacing + idx * (wmIconSize + iconSpacing);
+      const imagePath = getEquipmentImagePath(eq);
       try {
-        if (fs.existsSync(eq.imagePath)) {
-          doc.image(eq.imagePath, iconX, y + 5, { width: wmIconSize, height: wmIconSize });
+        if (imagePath && fs.existsSync(imagePath)) {
+          doc.image(imagePath, iconX, y + 5, { width: wmIconSize, height: wmIconSize });
         }
       } catch (e) {
         doc.circle(iconX + wmIconSize / 2, y + 5 + wmIconSize / 2, wmIconSize / 2 - 2).fill(c.primary);
@@ -5295,9 +5324,10 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
     const procIconSize = 20;
     equipmentToShowProc.forEach((eq, idx) => {
       const iconX = margin + 280 + idx * (procIconSize + 20);
+      const imagePath = getEquipmentImagePath(eq);
       try {
-        if (fs.existsSync(eq.imagePath)) {
-          doc.image(eq.imagePath, iconX, y + 22, { width: procIconSize, height: procIconSize });
+        if (imagePath && fs.existsSync(imagePath)) {
+          doc.image(imagePath, iconX, y + 22, { width: procIconSize, height: procIconSize });
         }
       } catch (e) {
         doc.circle(iconX + procIconSize / 2, y + 32, procIconSize / 2 - 2).fill(c.primary);
