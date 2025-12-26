@@ -87,42 +87,42 @@ function AIChart({ chart }) {
   );
 }
 
-// Suggestions contextuelles
+// Suggestions contextuelles (v2.0 - Procedure focused)
 const QUICK_ACTIONS = [
   {
-    icon: Brain,
-    label: 'Analyse prédictive',
-    prompt: 'Fais-moi une analyse prédictive complète: quels équipements sont à risque de panne et quelles sont tes recommandations?',
-    color: 'text-purple-600 bg-purple-50'
-  },
-  {
     icon: Search,
-    label: 'Trouver une procédure',
-    prompt: 'Quelles procédures sont disponibles? Montre-moi la liste.',
+    label: 'Mes procédures',
+    prompt: 'Liste toutes les procédures disponibles',
     color: 'text-blue-600 bg-blue-50'
   },
   {
     icon: ClipboardList,
     label: 'Créer une procédure',
-    prompt: 'Je veux créer une nouvelle procédure',
+    prompt: 'Créer une nouvelle procédure',
     color: 'text-violet-600 bg-violet-50'
+  },
+  {
+    icon: Brain,
+    label: 'Analyse prédictive',
+    prompt: 'Fais-moi une analyse prédictive complète: quels équipements sont à risque de panne?',
+    color: 'text-purple-600 bg-purple-50'
   },
   {
     icon: AlertTriangle,
     label: 'Non-conformités',
-    prompt: 'Montre-moi toutes les non-conformités actuelles avec leurs détails et propose des actions correctives.',
+    prompt: 'Montre-moi toutes les non-conformités actuelles avec leurs détails.',
     color: 'text-red-600 bg-red-50'
   },
   {
     icon: Calendar,
     label: 'Contrôles à venir',
-    prompt: 'Quels sont les contrôles planifiés pour les 30 prochains jours? Fais-moi une liste prioritaire.',
+    prompt: 'Quels sont les contrôles planifiés pour les 30 prochains jours?',
     color: 'text-orange-600 bg-orange-50'
   },
   {
     icon: TrendingUp,
     label: 'Tableau de bord',
-    prompt: 'Donne-moi un résumé complet de la situation: équipements, contrôles, NC, et statistiques.',
+    prompt: 'Donne-moi un résumé complet de la situation: équipements, contrôles, NC.',
     color: 'text-green-600 bg-green-50'
   }
 ];
@@ -185,7 +185,7 @@ export default function AvatarChat({
     }
   }, [isOpen]);
 
-  // Message de bienvenue
+  // Message de bienvenue (v2.0 - Procedure focused)
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       const welcomeMessage = {
@@ -193,11 +193,14 @@ export default function AvatarChat({
         role: 'assistant',
         content: `Salut ! Je suis ${avatar.name}. 👋
 
-**Que veux-tu faire ?**
-• 📋 Créer une procédure (avec photos)
+**Je peux t'aider à :**
+• 📋 **Trouver** une procédure existante
+• ⚡ **Te guider** étape par étape
+• 📝 **Créer** une nouvelle procédure
 • ⚠️ Voir les non-conformités
-• 📅 Contrôles à venir
-• 🔍 Rechercher un équipement`,
+• 🔍 Rechercher un équipement
+
+Dis-moi ce que tu cherches !`,
         timestamp: new Date()
       };
       setMessages([welcomeMessage]);
@@ -465,22 +468,14 @@ export default function AvatarChat({
 
     const msgLower = messageText.toLowerCase();
 
-    // >>> DETECTION: Créer une procédure → Ouvrir ProcedureCreator
-    // UNIQUEMENT quand l'utilisateur veut CRÉER une NOUVELLE procédure
-    const wantsProcedure = (
-      (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('nouvelle')) &&
-      (msgLower.includes('procédure') || msgLower.includes('procedure'))
-    );
+    // >>> L'IA gère maintenant TOUTES les intentions procédures:
+    // - Recherche de procédures existantes
+    // - Affichage des détails
+    // - Guidage étape par étape
+    // - Création de nouvelles procédures
+    // - Assistance générale
 
-    if (wantsProcedure) {
-      // Ouvrir le ProcedureCreator avec le contexte
-      setProcedureCreatorContext({ userMessage: messageText });
-      setShowProcedureCreator(true);
-      setInput('');
-      return;
-    }
-
-    // >>> DETECTION: Importer un document
+    // >>> DETECTION: Importer un document (reste côté client pour l'instant)
     const wantsImport = (
       (msgLower.includes('import') || msgLower.includes('charger') || msgLower.includes('uploader')) &&
       (msgLower.includes('document') || msgLower.includes('fichier'))
@@ -493,13 +488,7 @@ export default function AvatarChat({
       return;
     }
 
-    // >>> Tout le reste va à l'IA - elle gère:
-    // - Recherche de procédures existantes
-    // - Assistance travail
-    // - Guidage étape par étape
-    // - Questions générales
-
-    // >>> Sinon, envoyer au chat AI normal
+    // >>> Tout le reste va à l'IA backend
     const userMessage = {
       id: Date.now(),
       role: 'user',
@@ -531,12 +520,20 @@ export default function AvatarChat({
         pendingAction: response.pendingAction,
         provider: response.provider,
         model: response.model,
-        // Procedure tracking (microservice sessions)
+        // ===============================
+        // PROCEDURE INTEGRATION (v2.0)
+        // ===============================
+        proceduresFound: response.proceduresFound,
+        procedureToOpen: response.procedureToOpen,
+        procedureDetails: response.procedureDetails,
+        procedureGuidance: response.procedureGuidance,
+        openProcedureCreator: response.openProcedureCreator,
+        procedureCreatorContext: response.procedureCreatorContext,
+        // Legacy procedure fields
         procedureSessionId: response.procedureSessionId,
         procedureStep: response.procedureStep,
         expectsPhoto: response.expectsPhoto,
         procedureReady: response.procedureReady,
-        // Legacy procedure fields
         procedureId: response.procedureId,
         procedureMode: response.procedureMode,
         pdfUrl: response.pdfUrl,
@@ -550,7 +547,16 @@ export default function AvatarChat({
       setMessages(prev => [...prev, assistantMessage]);
       speak(response.message);
 
-      // 📋 PROCEDURE MODAL - Open ProcedureViewer when procedure found
+      // 📝 OPEN PROCEDURE CREATOR - When AI detects create intent
+      if (response.openProcedureCreator) {
+        console.log('[AI Chat] Opening procedure creator:', response.procedureCreatorContext);
+        setTimeout(() => {
+          setProcedureCreatorContext(response.procedureCreatorContext || {});
+          setShowProcedureCreator(true);
+        }, 800); // Delay to let user see the message
+      }
+
+      // 📋 OPEN PROCEDURE VIEWER - When procedure details are available
       if (response.procedureToOpen?.id) {
         console.log('[AI Chat] Opening procedure modal:', response.procedureToOpen);
         setTimeout(() => {
@@ -969,6 +975,32 @@ export default function AvatarChat({
 
         {/* Input Area */}
         <div className="p-4 border-t bg-gray-50 shrink-0">
+          {/* Procedure Guidance Indicator */}
+          {messages.some(m => m.procedureGuidance?.active) && (
+            <div className="mb-3 p-2 bg-gradient-to-r from-violet-50 to-blue-50 border border-violet-200 rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="animate-pulse">⚡</span>
+                <span className="text-sm font-medium text-violet-700">
+                  Mode guidage actif
+                </span>
+                {(() => {
+                  const lastGuidance = messages.filter(m => m.procedureGuidance?.active).pop()?.procedureGuidance;
+                  return lastGuidance ? (
+                    <span className="text-xs text-violet-500">
+                      • Étape {lastGuidance.currentStep}/{lastGuidance.totalSteps}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
+              <button
+                onClick={() => handleSend("Arrêter le guidage")}
+                className="text-xs text-gray-500 hover:text-red-500 transition-colors"
+              >
+                Arrêter
+              </button>
+            </div>
+          )}
+
           {/* Photo Preview */}
           {photoPreview && (
             <div className="mb-3 relative inline-block">
