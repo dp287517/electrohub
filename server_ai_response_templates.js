@@ -636,10 +636,10 @@ const IntegrationTemplates = {
 };
 
 // ============================================================
-// 📤 EXPORTS
+// 📤 EXPORTS (ES Module)
 // ============================================================
 
-module.exports = {
+export {
   EMOJIS,
   LABELS,
 
