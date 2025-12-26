@@ -28,17 +28,14 @@ import OpenAI from "openai";
 import multer from "multer";
 import fs from "fs";
 
-// Response Templates
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const ResponseTemplates = require('./server_ai_response_templates.js');
-const {
+// Response Templates (ES Module)
+import {
   EMOJIS, LABELS,
   formatRiskBadge, formatCategoryBadge, formatEquipmentBadge,
   formatDuration, formatDate, formatNumber, createProgressBar, createDivider,
   ProcedureTemplates, DashboardTemplates, EquipmentTemplates,
   ConversationTemplates, IntegrationTemplates
-} = ResponseTemplates;
+} from './server_ai_response_templates.js';
 
 dotenv.config();
 
