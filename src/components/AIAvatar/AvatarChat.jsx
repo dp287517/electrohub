@@ -10,7 +10,7 @@ import {
   ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
-import { ProcedureCreator } from '../Procedures';
+import { ProcedureCreator, ProcedureViewer } from '../Procedures';
 import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -151,6 +151,8 @@ export default function AvatarChat({
   // Procedure Creator modal
   const [showProcedureCreator, setShowProcedureCreator] = useState(false);
   const [procedureCreatorContext, setProcedureCreatorContext] = useState(null);
+  // Procedure Viewer modal
+  const [viewProcedureId, setViewProcedureId] = useState(null);
   // Feedback state
   const [feedbackGiven, setFeedbackGiven] = useState({});
   // Predictions state
@@ -547,6 +549,14 @@ export default function AvatarChat({
 
       setMessages(prev => [...prev, assistantMessage]);
       speak(response.message);
+
+      // 📋 PROCEDURE MODAL - Open ProcedureViewer when procedure found
+      if (response.procedureToOpen?.id) {
+        console.log('[AI Chat] Opening procedure modal:', response.procedureToOpen);
+        setTimeout(() => {
+          setViewProcedureId(response.procedureToOpen.id);
+        }, 500); // Small delay to let user see the message
+      }
 
       // Si un PDF est disponible, on pourrait l'ouvrir automatiquement
       if (response.pdfUrl && response.procedureComplete) {
@@ -1118,6 +1128,16 @@ export default function AvatarChat({
               setShowProcedureCreator(false);
               setProcedureCreatorContext(null);
             }}
+          />
+        </div>
+      )}
+
+      {/* ProcedureViewer Modal - Ouvre quand l'IA trouve une procédure */}
+      {viewProcedureId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <ProcedureViewer
+            procedureId={viewProcedureId}
+            onClose={() => setViewProcedureId(null)}
           />
         </div>
       )}
