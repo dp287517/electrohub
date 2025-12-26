@@ -1570,6 +1570,239 @@ app.get("/history/:userId", async (req, res) => {
   }
 });
 
+// =============================================================================
+// AI PLANNING - Day/Week control scheduling
+// =============================================================================
+
+// Get AI-generated planning for controls
+app.get("/planning", async (req, res) => {
+  try {
+    const { period = 'day' } = req.query;
+    const userEmail = req.headers['x-user-email'];
+    const site = req.headers['x-site'];
+
+    // Get controls due based on period
+    const daysAhead = period === 'week' ? 7 : 1;
+    const today = new Date();
+    const endDate = new Date(today);
+    endDate.setDate(endDate.getDate() + daysAhead);
+
+    // Fetch upcoming controls
+    const controlsResult = await pool.query(`
+      SELECT
+        se.id, se.equipment_name, se.building_code, se.floor, se.zone,
+        ct.control_type, ct.next_control_date, ct.frequency,
+        ct.last_control_date, ct.status
+      FROM switchboard_equipment se
+      LEFT JOIN control_tasks ct ON ct.equipment_id = se.id AND ct.equipment_type = 'switchboard'
+      WHERE ct.next_control_date BETWEEN $1 AND $2
+      ${site ? "AND (se.site = $3 OR se.site IS NULL)" : ""}
+      ORDER BY ct.next_control_date ASC
+    `, site ? [today, endDate, site] : [today, endDate]);
+
+    // Fetch overdue controls
+    const overdueResult = await pool.query(`
+      SELECT
+        se.id, se.equipment_name, se.building_code, se.floor,
+        ct.control_type, ct.next_control_date, ct.last_control_date
+      FROM switchboard_equipment se
+      LEFT JOIN control_tasks ct ON ct.equipment_id = se.id AND ct.equipment_type = 'switchboard'
+      WHERE ct.next_control_date < $1
+      ${site ? "AND (se.site = $2 OR se.site IS NULL)" : ""}
+      ORDER BY ct.next_control_date ASC
+      LIMIT 10
+    `, site ? [today, site] : [today]);
+
+    // Fetch relevant procedures
+    const proceduresResult = await pool.query(`
+      SELECT id, title, category, risk_level
+      FROM procedures
+      WHERE status = 'approved'
+      AND category IN ('controle', 'maintenance', 'securite')
+      ORDER BY updated_at DESC
+      LIMIT 5
+    `);
+
+    // Group controls by day
+    const controlsByDay = {};
+    controlsResult.rows.forEach(control => {
+      const date = new Date(control.next_control_date).toISOString().split('T')[0];
+      if (!controlsByDay[date]) {
+        controlsByDay[date] = [];
+      }
+      controlsByDay[date].push(control);
+    });
+
+    // Generate AI insight
+    const totalControls = controlsResult.rows.length;
+    const overdueCount = overdueResult.rows.length;
+    let aiInsight = '';
+
+    if (overdueCount > 0) {
+      aiInsight = `⚠️ ${overdueCount} contrôle(s) en retard à traiter en priorité. `;
+    }
+    if (totalControls > 0) {
+      aiInsight += `📋 ${totalControls} contrôle(s) planifié(s) ${period === 'week' ? 'cette semaine' : 'aujourd\'hui'}.`;
+    } else {
+      aiInsight = `✅ Aucun contrôle planifié ${period === 'week' ? 'cette semaine' : 'aujourd\'hui'}.`;
+    }
+
+    res.json({
+      ok: true,
+      period,
+      planning: {
+        controlsByDay,
+        overdue: overdueResult.rows,
+        recommendedProcedures: proceduresResult.rows,
+        summary: {
+          total: totalControls,
+          overdue: overdueCount,
+          buildings: [...new Set(controlsResult.rows.map(c => c.building_code))].length
+        }
+      },
+      aiInsight
+    });
+  } catch (error) {
+    console.error('[Planning] Error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Generate AI planning with OpenAI
+app.post("/generate-planning", async (req, res) => {
+  try {
+    const { period = 'week', user } = req.body;
+    const site = user?.site;
+
+    // Get current situation
+    const daysAhead = period === 'week' ? 7 : 1;
+    const today = new Date();
+    const endDate = new Date(today);
+    endDate.setDate(endDate.getDate() + daysAhead);
+
+    // Fetch data for AI
+    const [controls, overdue, procedures] = await Promise.all([
+      pool.query(`
+        SELECT se.equipment_name, se.building_code, ct.control_type, ct.next_control_date
+        FROM switchboard_equipment se
+        LEFT JOIN control_tasks ct ON ct.equipment_id = se.id
+        WHERE ct.next_control_date BETWEEN $1 AND $2
+        ${site ? "AND se.site = $3" : ""}
+        LIMIT 20
+      `, site ? [today, endDate, site] : [today, endDate]),
+      pool.query(`
+        SELECT COUNT(*) as count FROM control_tasks
+        WHERE next_control_date < $1
+      `, [today]),
+      pool.query(`
+        SELECT title, category FROM procedures
+        WHERE status = 'approved' LIMIT 10
+      `)
+    ]);
+
+    // Generate AI planning
+    const prompt = `Tu es un planificateur expert en maintenance électrique.
+Génère un planning optimisé pour ${period === 'week' ? 'la semaine' : 'la journée'}.
+
+Données:
+- ${controls.rows.length} contrôles planifiés
+- ${overdue.rows[0]?.count || 0} contrôles en retard
+- Procédures disponibles: ${procedures.rows.map(p => p.title).join(', ') || 'aucune'}
+
+Réponds en JSON avec cette structure:
+{
+  "planning": [
+    { "date": "YYYY-MM-DD", "priority": 1, "task": "...", "procedure": "...", "duration": 30 }
+  ],
+  "tips": ["conseil 1", "conseil 2"],
+  "summary": "résumé en une phrase"
+}`;
+
+    const messages = [{ role: "user", content: prompt }];
+    let aiResponse;
+
+    try {
+      aiResponse = await chatWithOpenAI(messages, null);
+    } catch {
+      aiResponse = await chatWithGemini(messages, null);
+    }
+
+    // Parse response
+    try {
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const plan = JSON.parse(jsonMatch[0]);
+        return res.json({ ok: true, ...plan });
+      }
+    } catch (e) {
+      console.log('Could not parse AI planning');
+    }
+
+    res.json({
+      ok: true,
+      planning: controls.rows.map((c, i) => ({
+        date: c.next_control_date,
+        priority: i + 1,
+        task: `Contrôle ${c.control_type} - ${c.equipment_name}`,
+        duration: 30
+      })),
+      tips: ['Commencez par les contrôles en retard', 'Regroupez par bâtiment'],
+      summary: aiResponse
+    });
+  } catch (error) {
+    console.error('[GeneratePlanning] Error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Get procedure recommendations based on predictions
+app.get("/procedure-recommendations", async (req, res) => {
+  try {
+    const site = req.headers['x-site'];
+
+    // Get high-risk equipment
+    const risksResult = await pool.query(`
+      SELECT
+        se.id, se.equipment_name, se.building_code,
+        COALESCE(
+          (SELECT COUNT(*) FROM non_conformities nc WHERE nc.equipment_id = se.id::text),
+          0
+        ) as nc_count
+      FROM switchboard_equipment se
+      WHERE se.status = 'active'
+      ${site ? "AND se.site = $1" : ""}
+      ORDER BY nc_count DESC
+      LIMIT 10
+    `, site ? [site] : []);
+
+    // Get recommended procedures based on equipment types
+    const proceduresResult = await pool.query(`
+      SELECT p.id, p.title, p.category, p.risk_level,
+        (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+      FROM procedures p
+      WHERE p.status = 'approved'
+      ORDER BY
+        CASE p.risk_level WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+        p.updated_at DESC
+      LIMIT 5
+    `);
+
+    res.json({
+      ok: true,
+      recommendations: proceduresResult.rows.map(p => ({
+        procedure: p,
+        reason: p.risk_level === 'critical' || p.risk_level === 'high'
+          ? 'Procédure à risque élevé - révision recommandée'
+          : 'Procédure fréquemment utilisée'
+      })),
+      highRiskEquipment: risksResult.rows.filter(e => parseInt(e.nc_count) > 0)
+    });
+  } catch (error) {
+    console.error('[ProcedureRecommendations] Error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // -----------------------------------------------------------------------------
 // Create logs table if needed
 // -----------------------------------------------------------------------------

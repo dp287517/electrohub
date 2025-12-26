@@ -5,7 +5,7 @@ import {
   Zap, Cog, Battery, Shield, Flame, Activity, RefreshCw, Mic, MicOff,
   ChevronRight, ChevronDown, Sparkles, Building2, Calendar, Target,
   BarChart3, PieChart, Bell, BellOff, ExternalLink, Volume2, Image,
-  LineChart, ArrowUpRight, ArrowDownRight, Minus, Play
+  LineChart, ArrowUpRight, ArrowDownRight, Minus, Play, ClipboardList
 } from 'lucide-react';
 import { Doughnut, Bar, Line } from 'react-chartjs-2';
 import {
@@ -247,6 +247,12 @@ export default function MorningBrief({ userName, onStoryClick }) {
     }
   });
 
+  // Planning and procedures state
+  const [planning, setPlanning] = useState(null);
+  const [procedureStats, setProcedureStats] = useState(null);
+  const [drafts, setDrafts] = useState([]);
+  const [showPlanning, setShowPlanning] = useState(false);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -261,7 +267,7 @@ export default function MorningBrief({ userName, onStoryClick }) {
     setIsLoading(true);
     setError(null);
     try {
-      const [briefData, suggestionsData] = await Promise.all([
+      const [briefData, suggestionsData, planningData, procStats, draftsData] = await Promise.all([
         aiAssistant.getMorningBrief().catch(e => {
           console.error('Morning brief error:', e);
           return null;
@@ -269,10 +275,25 @@ export default function MorningBrief({ userName, onStoryClick }) {
         aiAssistant.getSuggestions().catch(e => {
           console.error('Suggestions error:', e);
           return { suggestions: [] };
+        }),
+        aiAssistant.getAIPlanning('day').catch(e => {
+          console.error('Planning error:', e);
+          return null;
+        }),
+        aiAssistant.getProcedureStats().catch(e => {
+          console.error('Procedure stats error:', e);
+          return null;
+        }),
+        aiAssistant.getProcedureDrafts().catch(e => {
+          console.error('Drafts error:', e);
+          return { drafts: [] };
         })
       ]);
       setBrief(briefData);
       setSuggestions(suggestionsData?.suggestions || []);
+      setPlanning(planningData);
+      setProcedureStats(procStats?.stats);
+      setDrafts(draftsData?.drafts || []);
     } catch (err) {
       console.error('Failed to load morning brief:', err);
       setError(err.message);
@@ -562,6 +583,139 @@ export default function MorningBrief({ userName, onStoryClick }) {
                     <p className="text-slate-700 text-sm leading-relaxed">{brief.aiInsight}</p>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* AI Planning Section */}
+          {planning?.ok && (
+            <div className="px-4 sm:px-6 pb-4 sm:pb-6">
+              <button
+                onClick={() => setShowPlanning(!showPlanning)}
+                className="w-full flex items-center justify-between p-3 bg-gradient-to-r from-violet-50 to-purple-50 hover:from-violet-100 hover:to-purple-100 border border-violet-200 rounded-xl transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Calendar size={18} className="text-violet-600" />
+                  <span className="text-violet-700 font-medium">Planning du jour</span>
+                  {planning.planning?.summary?.overdue > 0 && (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded-full">
+                      {planning.planning.summary.overdue} en retard
+                    </span>
+                  )}
+                </div>
+                <ChevronDown size={18} className={`text-violet-400 transform transition-transform ${showPlanning ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showPlanning && (
+                <div className="mt-3 bg-white rounded-xl border border-violet-100 p-4 space-y-4">
+                  {/* AI Insight */}
+                  {planning.aiInsight && (
+                    <div className="flex items-start gap-2 p-3 bg-violet-50 rounded-lg">
+                      <Sparkles size={16} className="text-violet-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-violet-800">{planning.aiInsight}</p>
+                    </div>
+                  )}
+
+                  {/* Overdue controls */}
+                  {planning.planning?.overdue?.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-red-700 mb-2 flex items-center gap-1">
+                        <AlertTriangle size={14} />
+                        Contrôles en retard
+                      </h4>
+                      <div className="space-y-2">
+                        {planning.planning.overdue.slice(0, 3).map((ctrl, i) => (
+                          <div key={i} className="flex items-center justify-between p-2 bg-red-50 rounded-lg text-sm">
+                            <span className="text-red-900 font-medium truncate">{ctrl.equipment_name}</span>
+                            <span className="text-red-600 text-xs">{ctrl.building_code}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Recommended procedures */}
+                  {planning.planning?.recommendedProcedures?.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-700 mb-2">Procédures recommandées</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {planning.planning.recommendedProcedures.map((proc, i) => (
+                          <button
+                            key={i}
+                            onClick={() => navigate(`/app/procedures/${proc.id}`)}
+                            className="px-3 py-1.5 bg-violet-100 text-violet-700 rounded-lg text-xs font-medium hover:bg-violet-200 transition-colors"
+                          >
+                            {proc.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => navigate('/app/switchboard-controls')}
+                    className="w-full text-center text-sm text-violet-600 hover:text-violet-800 py-2 font-medium"
+                  >
+                    Voir le planning complet →
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Procedure Stats & Drafts */}
+          {(procedureStats || drafts.length > 0) && (
+            <div className="px-4 sm:px-6 pb-4 sm:pb-6">
+              <div className="bg-gradient-to-r from-blue-50 to-cyan-50 border border-blue-100 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-blue-800 font-semibold flex items-center gap-2">
+                    <ClipboardList size={16} />
+                    Procédures
+                  </h4>
+                  <button
+                    onClick={() => navigate('/app/procedures')}
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                  >
+                    Voir tout →
+                  </button>
+                </div>
+
+                {/* Stats */}
+                {procedureStats && (
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className="text-center p-2 bg-white rounded-lg">
+                      <p className="text-lg font-bold text-blue-700">{procedureStats.total || 0}</p>
+                      <p className="text-[10px] text-slate-500">Total</p>
+                    </div>
+                    <div className="text-center p-2 bg-white rounded-lg">
+                      <p className="text-lg font-bold text-green-600">{procedureStats.approved || 0}</p>
+                      <p className="text-[10px] text-slate-500">Approuvées</p>
+                    </div>
+                    <div className="text-center p-2 bg-white rounded-lg">
+                      <p className="text-lg font-bold text-amber-600">{procedureStats.drafts || 0}</p>
+                      <p className="text-[10px] text-slate-500">Brouillons</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Drafts to resume */}
+                {drafts.length > 0 && (
+                  <div className="border-t border-blue-100 pt-3 mt-3">
+                    <p className="text-xs text-blue-700 font-medium mb-2">Reprendre un brouillon :</p>
+                    <div className="space-y-1">
+                      {drafts.slice(0, 2).map((draft, i) => (
+                        <button
+                          key={i}
+                          onClick={() => navigate(`/app/procedures/new?draft=${draft.id}`)}
+                          className="w-full flex items-center justify-between p-2 bg-white hover:bg-blue-50 rounded-lg text-sm transition-colors"
+                        >
+                          <span className="text-slate-700 truncate">{draft.title || 'Brouillon sans titre'}</span>
+                          <ChevronRight size={14} className="text-blue-400" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
