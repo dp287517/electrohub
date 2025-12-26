@@ -4201,12 +4201,20 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                            (msgLower.includes('?') || msgLower.includes('on a') || msgLower.includes('existe') ||
                             msgLower.includes('cherche') || msgLower.includes('trouve') || msgLower.includes('comment') ||
                             msgLower.includes('voir') || msgLower.includes('montre') || msgLower.includes('guide') ||
-                            msgLower.includes('pour') || msgLower.includes('dois'));
+                            msgLower.includes('pour') || msgLower.includes('dois') || msgLower.includes('oui'));
+
+    // Detect if user wants to SEE a specific procedure (not just search)
+    const wantsToSeeProcedure = (msgLower.includes('montre') || msgLower.includes('voir') ||
+                                  msgLower.includes('affiche') || msgLower.includes('oui') ||
+                                  msgLower.includes('guide-moi') || msgLower.includes('guide moi')) &&
+                                 (msgLower.includes('procédure') || msgLower.includes('procedure') ||
+                                  msgLower.includes('étape') || msgLower.includes('etape'));
 
     let procedureSearchResults = null;
     let procedureContext = '';
+    let procedureDetailsLoaded = null;
 
-    if (wantsProcedure) {
+    if (wantsProcedure || wantsToSeeProcedure) {
       console.log('[AI] 📋 Auto-detecting procedure request...');
 
       // Extract keywords from message for search
@@ -4229,9 +4237,42 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             keywords: searchKeywords
           }, site);
 
-          if (procedureSearchResults.success && procedureSearchResults.found) {
-            // Add procedures to context so AI can reference them
-            procedureContext = `\n\n## 📋 PROCÉDURES TROUVÉES (${procedureSearchResults.count})
+          if (procedureSearchResults.success && procedureSearchResults.found && procedureSearchResults.procedures.length > 0) {
+            // If user wants to SEE the procedure AND we found exactly 1, or user says "oui", load full details
+            const shouldLoadDetails = wantsToSeeProcedure || procedureSearchResults.procedures.length === 1;
+
+            if (shouldLoadDetails) {
+              const procId = procedureSearchResults.procedures[0].id;
+              console.log(`[AI] 📖 Loading full procedure details for ID: ${procId}`);
+
+              procedureDetailsLoaded = await executeAIAction('getProcedureDetails', {
+                procedureId: procId
+              }, site);
+
+              if (procedureDetailsLoaded.success) {
+                const proc = procedureDetailsLoaded.procedure;
+                const steps = proc.steps || [];
+
+                procedureContext = `\n\n## 📋 PROCÉDURE COMPLÈTE: ${proc.title}
+
+**Description:** ${proc.description || 'N/A'}
+**Catégorie:** ${proc.category || 'N/A'}
+**Risque:** ${proc.riskLevel || 'medium'}
+**EPI requis:** ${Array.isArray(proc.ppeRequired) && proc.ppeRequired.length > 0 ? proc.ppeRequired.join(', ') : 'Non défini'}
+
+### ÉTAPES (${steps.length}):
+${steps.map((s, i) => `
+**Étape ${i + 1}: ${s.title}**
+${s.description || ''}
+${s.warning ? `⚠️ ATTENTION: ${s.warning}` : ''}`).join('\n')}
+
+📥 PDF disponible: /api/procedures/${proc.id}/pdf
+
+⚠️ IMPORTANT: Tu as le contenu COMPLET de la procédure - AFFICHE TOUTES LES ÉTAPES à l'utilisateur!`;
+              }
+            } else {
+              // Just list the procedures found
+              procedureContext = `\n\n## 📋 PROCÉDURES TROUVÉES (${procedureSearchResults.count})
 ${procedureSearchResults.procedures.map(p => `
 - **${p.title}** (ID: ${p.id})
   • ${p.stepCount} étapes
@@ -4240,7 +4281,8 @@ ${procedureSearchResults.procedures.map(p => `
   • EPI: ${Array.isArray(p.ppeRequired) && p.ppeRequired.length > 0 ? p.ppeRequired.join(', ') : 'Non défini'}
 `).join('')}
 
-⚠️ IMPORTANT: Tu as trouvé ces procédures - AFFICHE-LES à l'utilisateur avec leurs détails!`;
+⚠️ IMPORTANT: Présente ces procédures et demande laquelle l'utilisateur veut voir en détail.`;
+            }
           } else {
             procedureContext = `\n\n## 📋 AUCUNE PROCÉDURE TROUVÉE
 Aucune procédure ne correspond à la recherche "${searchKeywords.join(', ')}".

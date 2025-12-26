@@ -91,39 +91,39 @@ function AIChart({ chart }) {
 const QUICK_ACTIONS = [
   {
     icon: Brain,
-    label: 'Prédictions IA',
-    prompt: 'Donne-moi une analyse prédictive complète avec les risques de panne et recommandations',
+    label: 'Analyse prédictive',
+    prompt: 'Fais-moi une analyse prédictive complète: quels équipements sont à risque de panne et quelles sont tes recommandations?',
     color: 'text-purple-600 bg-purple-50'
+  },
+  {
+    icon: Search,
+    label: 'Trouver une procédure',
+    prompt: 'Quelles procédures sont disponibles? Montre-moi la liste.',
+    color: 'text-blue-600 bg-blue-50'
   },
   {
     icon: ClipboardList,
     label: 'Créer une procédure',
-    prompt: 'Je veux créer une procédure',
+    prompt: 'Je veux créer une nouvelle procédure',
     color: 'text-violet-600 bg-violet-50'
-  },
-  {
-    icon: FileUp,
-    label: 'Importer un document',
-    prompt: 'Je veux importer un document de procédure',
-    color: 'text-blue-600 bg-blue-50'
-  },
-  {
-    icon: Wrench,
-    label: 'Assistance travail',
-    prompt: 'Je vais effectuer un travail, accompagne-moi',
-    color: 'text-green-600 bg-green-50'
   },
   {
     icon: AlertTriangle,
     label: 'Non-conformités',
-    prompt: 'Montre-moi un résumé des non-conformités actuelles et propose des actions.',
+    prompt: 'Montre-moi toutes les non-conformités actuelles avec leurs détails et propose des actions correctives.',
     color: 'text-red-600 bg-red-50'
   },
   {
     icon: Calendar,
     label: 'Contrôles à venir',
-    prompt: 'Quels sont les contrôles à venir dans les 30 prochains jours ? Fais-moi une liste d\'actions prioritaires.',
-    color: 'text-blue-600 bg-blue-50'
+    prompt: 'Quels sont les contrôles planifiés pour les 30 prochains jours? Fais-moi une liste prioritaire.',
+    color: 'text-orange-600 bg-orange-50'
+  },
+  {
+    icon: TrendingUp,
+    label: 'Tableau de bord',
+    prompt: 'Donne-moi un résumé complet de la situation: équipements, contrôles, NC, et statistiques.',
+    color: 'text-green-600 bg-green-50'
   }
 ];
 
@@ -464,10 +464,10 @@ export default function AvatarChat({
     const msgLower = messageText.toLowerCase();
 
     // >>> DETECTION: Créer une procédure → Ouvrir ProcedureCreator
+    // UNIQUEMENT quand l'utilisateur veut CRÉER une NOUVELLE procédure
     const wantsProcedure = (
-      (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
-      (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
-       msgLower.includes('nouvelle') || msgLower.includes('ajouter') || msgLower.includes('commencer'))
+      (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('nouvelle')) &&
+      (msgLower.includes('procédure') || msgLower.includes('procedure'))
     );
 
     if (wantsProcedure) {
@@ -481,7 +481,7 @@ export default function AvatarChat({
     // >>> DETECTION: Importer un document
     const wantsImport = (
       (msgLower.includes('import') || msgLower.includes('charger') || msgLower.includes('uploader')) &&
-      (msgLower.includes('document') || msgLower.includes('procédure') || msgLower.includes('fichier'))
+      (msgLower.includes('document') || msgLower.includes('fichier'))
     );
 
     if (wantsImport) {
@@ -491,44 +491,11 @@ export default function AvatarChat({
       return;
     }
 
-    // >>> DETECTION: Analyser un rapport
-    const wantsReport = (
-      (msgLower.includes('rapport') || msgLower.includes('audit') || msgLower.includes('inspection')) &&
-      (msgLower.includes('analys') || msgLower.includes('action') || msgLower.includes('import'))
-    );
-
-    if (wantsReport) {
-      setProcedureCreatorContext({ mode: 'report' });
-      setShowProcedureCreator(true);
-      setInput('');
-      return;
-    }
-
-    // >>> DETECTION: Assistance travail temps réel
-    // Quand l'utilisateur dit "je vais...", "je dois...", "je fais..."
-    const workIntentPatterns = [
-      /je vais (changer|contrôler|vérifier|remplacer|nettoyer|inspecter|tester|réparer|maintenir|installer)/i,
-      /je dois (changer|contrôler|vérifier|remplacer|nettoyer|inspecter|tester|réparer|maintenir|installer)/i,
-      /je fais (un|une|le|la|les|du|de la) (contrôle|maintenance|vérification|inspection|test|remplacement)/i,
-      /accompagne(-| )moi/i,
-      /assiste(-| )moi/i,
-      /guide(-| )moi/i,
-      /(intervention|travail|opération) sur/i
-    ];
-
-    const wantsWorkAssistance = workIntentPatterns.some(pattern => pattern.test(msgLower));
-
-    if (wantsWorkAssistance) {
-      // Ouvrir le ProcedureCreator en mode assistance
-      setProcedureCreatorContext({
-        mode: 'assist',
-        userMessage: messageText,
-        workDescription: messageText
-      });
-      setShowProcedureCreator(true);
-      setInput('');
-      return;
-    }
+    // >>> Tout le reste va à l'IA - elle gère:
+    // - Recherche de procédures existantes
+    // - Assistance travail
+    // - Guidage étape par étape
+    // - Questions générales
 
     // >>> Sinon, envoyer au chat AI normal
     const userMessage = {
