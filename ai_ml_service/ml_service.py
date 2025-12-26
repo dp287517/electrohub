@@ -259,20 +259,39 @@ class MLModelsManager:
     def analyze_patterns(self, site: str) -> Dict:
         """Analyze patterns in control and NC data"""
         try:
-            # Get control history
-            controls = db_query("""
-                SELECT
-                    cr.control_date,
-                    cr.result,
-                    s.building_code,
-                    EXTRACT(DOW FROM cr.control_date) as day_of_week,
-                    EXTRACT(MONTH FROM cr.control_date) as month
-                FROM control_reports cr
-                LEFT JOIN switchboards s ON cr.switchboard_id = s.id
-                WHERE s.site = %s
-                ORDER BY cr.control_date DESC
-                LIMIT 1000
-            """, (site,))
+            # Get control history - try control_reports view first, fallback to control_records
+            try:
+                controls = db_query("""
+                    SELECT
+                        cr.control_date,
+                        cr.result,
+                        s.building_code,
+                        EXTRACT(DOW FROM cr.control_date) as day_of_week,
+                        EXTRACT(MONTH FROM cr.control_date) as month
+                    FROM control_reports cr
+                    LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+                    WHERE s.site = %s
+                    ORDER BY cr.control_date DESC
+                    LIMIT 1000
+                """, (site,))
+            except Exception as view_error:
+                # Fallback to control_records table directly
+                print(f"[ML] control_reports view not available, trying control_records: {view_error}")
+                controls = db_query("""
+                    SELECT
+                        cr.performed_at as control_date,
+                        CASE WHEN cr.status = 'conform' THEN 'conforme'
+                             WHEN cr.status = 'non_conform' THEN 'non_conforme'
+                             ELSE cr.status END as result,
+                        s.building_code,
+                        EXTRACT(DOW FROM cr.performed_at) as day_of_week,
+                        EXTRACT(MONTH FROM cr.performed_at) as month
+                    FROM control_records cr
+                    LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+                    WHERE s.site = %s
+                    ORDER BY cr.performed_at DESC
+                    LIMIT 1000
+                """, (site,))
 
             if not controls:
                 return {"patterns": [], "insights": ["Pas assez de données pour l'analyse"]}
@@ -362,23 +381,45 @@ class MLModelsManager:
     def train_models(self, site: str = None) -> Dict:
         """Train/retrain ML models with current data"""
         try:
-            # Get training data
-            controls = db_query("""
-                SELECT
-                    cr.switchboard_id,
-                    cr.result,
-                    cr.control_date,
-                    s.building_code,
-                    (SELECT COUNT(*) FROM control_reports cr2
-                     WHERE cr2.switchboard_id = cr.switchboard_id
-                     AND cr2.result = 'non_conforme') as nc_count,
-                    (SELECT COUNT(*) FROM control_reports cr2
-                     WHERE cr2.switchboard_id = cr.switchboard_id) as total_controls
-                FROM control_reports cr
-                LEFT JOIN switchboards s ON cr.switchboard_id = s.id
-                WHERE s.site = %s OR %s IS NULL
-                ORDER BY cr.control_date
-            """, (site, site))
+            # Get training data - try control_reports view first, fallback to control_records
+            try:
+                controls = db_query("""
+                    SELECT
+                        cr.switchboard_id,
+                        cr.result,
+                        cr.control_date,
+                        s.building_code,
+                        (SELECT COUNT(*) FROM control_reports cr2
+                         WHERE cr2.switchboard_id = cr.switchboard_id
+                         AND cr2.result = 'non_conforme') as nc_count,
+                        (SELECT COUNT(*) FROM control_reports cr2
+                         WHERE cr2.switchboard_id = cr.switchboard_id) as total_controls
+                    FROM control_reports cr
+                    LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+                    WHERE s.site = %s OR %s IS NULL
+                    ORDER BY cr.control_date
+                """, (site, site))
+            except Exception as view_error:
+                # Fallback to control_records table directly
+                print(f"[ML] control_reports view not available for training, trying control_records: {view_error}")
+                controls = db_query("""
+                    SELECT
+                        cr.switchboard_id,
+                        CASE WHEN cr.status = 'conform' THEN 'conforme'
+                             WHEN cr.status = 'non_conform' THEN 'non_conforme'
+                             ELSE cr.status END as result,
+                        cr.performed_at as control_date,
+                        s.building_code,
+                        (SELECT COUNT(*) FROM control_records cr2
+                         WHERE cr2.switchboard_id = cr.switchboard_id
+                         AND cr2.status = 'non_conform') as nc_count,
+                        (SELECT COUNT(*) FROM control_records cr2
+                         WHERE cr2.switchboard_id = cr.switchboard_id) as total_controls
+                    FROM control_records cr
+                    LEFT JOIN switchboards s ON cr.switchboard_id = s.id
+                    WHERE s.site = %s OR %s IS NULL
+                    ORDER BY cr.performed_at
+                """, (site, site))
 
             if len(controls) < 50:
                 return {

@@ -637,6 +637,32 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_control_attachments_site ON control_attachments(site);
 
     -- =======================================================
+    -- VIEW: control_reports (compatibility alias for control_records)
+    -- Maps old column names to new column names for legacy code
+    -- =======================================================
+    CREATE OR REPLACE VIEW control_reports AS
+    SELECT
+      id,
+      site,
+      schedule_id,
+      template_id,
+      switchboard_id,
+      device_id,
+      performed_by AS user_name,
+      performed_by_email AS user_email,
+      performed_at AS control_date,
+      CASE
+        WHEN status = 'conform' THEN 'conforme'
+        WHEN status = 'non_conform' THEN 'non_conforme'
+        ELSE status
+      END AS result,
+      checklist_results AS items,
+      global_notes AS notes,
+      signature_base64,
+      created_at
+    FROM control_records;
+
+    -- =======================================================
     -- MIGRATIONS: Ajouter colonnes manquantes
     -- =======================================================
     DO $$
