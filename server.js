@@ -4207,6 +4207,37 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ============================================================
     // AUTO-DETECT PROCEDURE REQUESTS - CRITICAL FIX
     // ============================================================
+
+    // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", etc.)
+    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
+
+    // If user confirms, check conversation history for recent procedure list
+    if (isConfirmation && conversationHistory?.length > 0) {
+      const lastAssistantMsg = conversationHistory.filter(m => m.role === 'assistant').slice(-1)[0];
+      if (lastAssistantMsg?.content?.includes('procédure')) {
+        console.log('[AI] 📋 User confirmed - checking for procedure context...');
+
+        // Look for procedure in context
+        const procedures = dbContext.procedures?.list || [];
+        if (procedures.length > 0) {
+          const firstProc = procedures[0];
+          console.log(`[AI] 📖 CONFIRMATION DETECTED - Opening first procedure: ${firstProc.id} - "${firstProc.title}"`);
+
+          return res.json({
+            message: `📋 **${firstProc.title}**\n\nJ'ouvre la procédure pour toi...`,
+            procedureToOpen: {
+              id: firstProc.id,
+              title: firstProc.title
+            },
+            actions: [
+              { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${firstProc.title}"` }
+            ],
+            provider: "Electro"
+          });
+        }
+      }
+    }
+
     const procedureKeywords = ['procédure', 'procedure', 'contrôle', 'controle', 'vérification', 'verification',
                                'maintenance', 'intervention', 'comment faire', 'étapes', 'etapes', 'méthode',
                                'prise', 'prises', 'tableau', 'armoire', 'disjoncteur', 'variateur'];
@@ -4251,55 +4282,49 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           }, site);
 
           if (procedureSearchResults.success && procedureSearchResults.found && procedureSearchResults.procedures.length > 0) {
-            // If user wants to SEE the procedure AND we found exactly 1, or user says "oui", load full details
-            const shouldLoadDetails = wantsToSeeProcedure || procedureSearchResults.procedures.length === 1;
+            // If user wants to SEE the procedure, SKIP AI and directly return procedure to open in modal
+            const shouldOpenModal = wantsToSeeProcedure || procedureSearchResults.procedures.length === 1;
 
-            if (shouldLoadDetails) {
-              const procId = procedureSearchResults.procedures[0].id;
-              console.log(`[AI] 📖 Loading full procedure details for ID: ${procId}`);
+            if (shouldOpenModal) {
+              const proc = procedureSearchResults.procedures[0];
+              console.log(`[AI] 📖 OPENING PROCEDURE MODAL for ID: ${proc.id} - "${proc.title}"`);
 
-              procedureDetailsLoaded = await executeAIAction('getProcedureDetails', {
-                procedureId: procId
-              }, site);
-
-              if (procedureDetailsLoaded.success) {
-                const proc = procedureDetailsLoaded.procedure;
-                const steps = proc.steps || [];
-
-                procedureContext = `\n\n## 📋 PROCÉDURE COMPLÈTE: ${proc.title}
-
-**Description:** ${proc.description || 'N/A'}
-**Catégorie:** ${proc.category || 'N/A'}
-**Risque:** ${proc.riskLevel || 'medium'}
-**EPI requis:** ${Array.isArray(proc.ppeRequired) && proc.ppeRequired.length > 0 ? proc.ppeRequired.join(', ') : 'Non défini'}
-
-### ÉTAPES (${steps.length}):
-${steps.map((s, i) => `
-**Étape ${i + 1}: ${s.title}**
-${s.description || ''}
-${s.warning ? `⚠️ ATTENTION: ${s.warning}` : ''}`).join('\n')}
-
-📥 PDF disponible: /api/procedures/${proc.id}/pdf
-
-⚠️ IMPORTANT: Tu as le contenu COMPLET de la procédure - AFFICHE TOUTES LES ÉTAPES à l'utilisateur!`;
-              }
+              // BYPASS AI - Return directly to open modal
+              return res.json({
+                message: `📋 **${proc.title}**\n\nJ'ouvre la procédure pour toi...`,
+                procedureToOpen: {
+                  id: proc.id,
+                  title: proc.title
+                },
+                actions: [
+                  { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${proc.title}"` }
+                ],
+                provider: "Electro"
+              });
             } else {
-              // Just list the procedures found
-              procedureContext = `\n\n## 📋 PROCÉDURES TROUVÉES (${procedureSearchResults.count})
-${procedureSearchResults.procedures.map(p => `
-- **${p.title}** (ID: ${p.id})
-  • ${p.stepCount} étapes
-  • Catégorie: ${p.category}
-  • Risque: ${p.riskLevel || 'medium'}
-  • EPI: ${Array.isArray(p.ppeRequired) && p.ppeRequired.length > 0 ? p.ppeRequired.join(', ') : 'Non défini'}
-`).join('')}
-
-⚠️ IMPORTANT: Présente ces procédures et demande laquelle l'utilisateur veut voir en détail.`;
+              // Multiple procedures found - list them and ask which one
+              const procList = procedureSearchResults.procedures.slice(0, 5);
+              return res.json({
+                message: `📋 **${procedureSearchResults.count} procédure(s) trouvée(s):**\n\n` +
+                  procList.map((p, i) => `${i + 1}. **${p.title}** (${p.stepCount} étapes)`).join('\n') +
+                  `\n\nLaquelle veux-tu voir ?`,
+                proceduresFound: procList,
+                actions: procList.slice(0, 3).map(p => ({
+                  label: p.title.substring(0, 25),
+                  prompt: `Montre-moi la procédure "${p.title}"`
+                })),
+                provider: "Electro"
+              });
             }
           } else {
-            procedureContext = `\n\n## 📋 AUCUNE PROCÉDURE TROUVÉE
-Aucune procédure ne correspond à la recherche "${searchKeywords.join(', ')}".
-⚠️ IMPORTANT: Informe l'utilisateur qu'il n'y a pas de procédure existante et propose de créer une nouvelle procédure.`;
+            // No procedure found - suggest creating one
+            return res.json({
+              message: `📋 **Aucune procédure trouvée** pour "${searchKeywords.join(', ')}".\n\nVeux-tu en créer une ?`,
+              actions: [
+                { label: "➕ Créer une procédure", prompt: "Je veux créer une nouvelle procédure" }
+              ],
+              provider: "Electro"
+            });
           }
         } catch (e) {
           console.error('[AI] Procedure search error:', e.message);
