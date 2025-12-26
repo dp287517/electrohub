@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 import {
-  X, Send, Mic, MicOff, Settings, Sparkles,
+  X, Send, Mic, MicOff, Settings,
   AlertTriangle, Calendar, Search, FileText,
   Building, Wrench, Zap, RefreshCw, ChevronDown,
   ExternalLink, CheckCircle, Clock, TrendingUp,
@@ -87,45 +87,7 @@ function AIChart({ chart }) {
   );
 }
 
-// Suggestions contextuelles (v2.0 - Procedure focused)
-const QUICK_ACTIONS = [
-  {
-    icon: Search,
-    label: 'Mes procédures',
-    prompt: 'Liste toutes les procédures disponibles',
-    color: 'text-blue-600 bg-blue-50'
-  },
-  {
-    icon: ClipboardList,
-    label: 'Créer une procédure',
-    prompt: 'Créer une nouvelle procédure',
-    color: 'text-violet-600 bg-violet-50'
-  },
-  {
-    icon: Brain,
-    label: 'Analyse prédictive',
-    prompt: 'Fais-moi une analyse prédictive complète: quels équipements sont à risque de panne?',
-    color: 'text-purple-600 bg-purple-50'
-  },
-  {
-    icon: AlertTriangle,
-    label: 'Non-conformités',
-    prompt: 'Montre-moi toutes les non-conformités actuelles avec leurs détails.',
-    color: 'text-red-600 bg-red-50'
-  },
-  {
-    icon: Calendar,
-    label: 'Contrôles à venir',
-    prompt: 'Quels sont les contrôles planifiés pour les 30 prochains jours?',
-    color: 'text-orange-600 bg-orange-50'
-  },
-  {
-    icon: TrendingUp,
-    label: 'Tableau de bord',
-    prompt: 'Donne-moi un résumé complet de la situation: équipements, contrôles, NC.',
-    color: 'text-green-600 bg-green-50'
-  }
-];
+// Quick Actions removed - users should type naturally to the AI
 
 export default function AvatarChat({
   isOpen,
@@ -138,7 +100,6 @@ export default function AvatarChat({
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [showQuickActions, setShowQuickActions] = useState(true);
   const [context, setContext] = useState(null);
   const [isMuted, setIsMuted] = useState(() => {
     return localStorage.getItem('eh_avatar_muted') === 'true';
@@ -409,7 +370,6 @@ Dis-moi ce que tu cherches !`,
     if (!selectedFile || isLoading) return;
 
     stopSpeaking();
-    setShowQuickActions(false);
 
     const userMessage = {
       id: Date.now(),
@@ -464,7 +424,6 @@ Dis-moi ce que tu cherches !`,
     if ((!messageText.trim() && !selectedPhoto) || isLoading) return;
 
     stopSpeaking();
-    setShowQuickActions(false);
 
     const msgLower = messageText.toLowerCase();
 
@@ -586,10 +545,6 @@ Dis-moi ce que tu cherches !`,
     }
   };
 
-  // Action rapide
-  const handleQuickAction = (action) => {
-    handleSend(action.prompt);
-  };
 
   if (!isOpen) return null;
 
@@ -616,7 +571,7 @@ Dis-moi ce que tu cherches !`,
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-white">{avatar.name}</h3>
-                <Sparkles className="w-4 h-4 text-brand-200" />
+                <Zap className="w-4 h-4 text-brand-200" />
               </div>
               <p className="text-xs text-brand-200">
                 {isLoading ? 'Réflexion...' : isSpeaking ? 'Parle...' : 'En ligne'}
@@ -950,28 +905,6 @@ Dis-moi ce que tu cherches !`,
 
           <div ref={messagesEndRef} />
         </div>
-
-        {/* Quick Actions */}
-        {showQuickActions && messages.length <= 1 && (
-          <div className="px-4 pb-2 shrink-0">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="w-4 h-4 text-brand-500" />
-              <span className="text-sm font-medium text-gray-700">Actions rapides</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_ACTIONS.map((action, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleQuickAction(action)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium transition-all hover:scale-105 ${action.color}`}
-                >
-                  <action.icon className="w-4 h-4" />
-                  {action.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Input Area */}
         <div className="p-4 border-t bg-gray-50 shrink-0">

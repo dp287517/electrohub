@@ -173,6 +173,122 @@ async function getProcedureStats(pool, site = null) {
   }
 }
 
+/**
+ * Generate chart data based on query type
+ */
+async function generateChartData(pool, chartType, site = null) {
+  try {
+    switch (chartType) {
+      case 'procedures_by_category': {
+        const result = await pool.query(`
+          SELECT category, COUNT(*) as count
+          FROM procedures
+          WHERE status IN ('approved', 'review', 'draft')
+          ${site ? "AND (site = $1 OR site IS NULL)" : ""}
+          GROUP BY category
+          ORDER BY count DESC
+        `, site ? [site] : []);
+
+        const categoryLabels = {
+          maintenance: 'Maintenance',
+          securite: 'Sécurité',
+          general: 'Général',
+          mise_en_service: 'Mise en service',
+          urgence: 'Urgence',
+          controle: 'Contrôle'
+        };
+
+        return {
+          type: 'pie',
+          title: 'Procédures par catégorie',
+          labels: result.rows.map(r => categoryLabels[r.category] || r.category),
+          data: result.rows.map(r => parseInt(r.count))
+        };
+      }
+
+      case 'procedures_by_risk': {
+        const result = await pool.query(`
+          SELECT risk_level, COUNT(*) as count
+          FROM procedures
+          WHERE status IN ('approved', 'review', 'draft')
+          ${site ? "AND (site = $1 OR site IS NULL)" : ""}
+          GROUP BY risk_level
+          ORDER BY
+            CASE risk_level
+              WHEN 'critical' THEN 1
+              WHEN 'high' THEN 2
+              WHEN 'medium' THEN 3
+              WHEN 'low' THEN 4
+            END
+        `, site ? [site] : []);
+
+        const riskLabels = { critical: 'Critique', high: 'Élevé', medium: 'Modéré', low: 'Faible' };
+
+        return {
+          type: 'bar',
+          title: 'Procédures par niveau de risque',
+          labels: result.rows.map(r => riskLabels[r.risk_level] || r.risk_level),
+          data: result.rows.map(r => parseInt(r.count))
+        };
+      }
+
+      case 'equipment_by_building': {
+        // Query from switchboard equipment (most common)
+        const result = await pool.query(`
+          SELECT building_code as building, COUNT(*) as count
+          FROM switchboard_equipment
+          WHERE building_code IS NOT NULL
+          GROUP BY building_code
+          ORDER BY count DESC
+          LIMIT 10
+        `);
+
+        return {
+          type: 'bar',
+          title: 'Équipements par bâtiment',
+          labels: result.rows.map(r => r.building || 'Non assigné'),
+          data: result.rows.map(r => parseInt(r.count))
+        };
+      }
+
+      default:
+        return null;
+    }
+  } catch (error) {
+    console.error('[AI-Charts] Error generating chart:', error);
+    return null;
+  }
+}
+
+/**
+ * Detect if message requests a chart/graph
+ */
+function detectChartRequest(message) {
+  const m = message.toLowerCase();
+
+  const chartKeywords = ['graphique', 'graphe', 'chart', 'diagramme', 'visualise', 'montre-moi en graphique', 'répartition'];
+  const hasChartKeyword = chartKeywords.some(k => m.includes(k));
+
+  if (!hasChartKeyword) return null;
+
+  if (m.includes('procédure') && (m.includes('catégorie') || m.includes('type'))) {
+    return 'procedures_by_category';
+  }
+  if (m.includes('procédure') && m.includes('risque')) {
+    return 'procedures_by_risk';
+  }
+  if (m.includes('équipement') && m.includes('bâtiment')) {
+    return 'equipment_by_building';
+  }
+
+  // Default chart based on context
+  if (m.includes('procédure')) {
+    return 'procedures_by_category';
+  }
+
+  return null;
+}
+
 // Multer for file uploads
 const upload = multer({
   dest: '/tmp/ai-assistant-uploads/',
@@ -320,6 +436,8 @@ const INTENT_TYPES = {
   CREATE: 'create',           // Créer une nouvelle procédure
   LIST: 'list',               // Lister toutes les procédures
   NEXT_STEP: 'next_step',     // Passer à l'étape suivante
+  ANALYZE_REPORT: 'analyze_report', // Analyser un rapport
+  EQUIPMENT: 'equipment',     // Question sur un équipement
   NONE: 'none'                // Pas d'intention procédure
 };
 
@@ -415,7 +533,33 @@ function detectProcedureIntent(message, conversationHistory = []) {
     return { type: INTENT_TYPES.LIST };
   }
 
-  // 7. Fallback - Check for procedure keywords without clear action
+  // 7. ANALYZE_REPORT - Analyser un rapport
+  const reportPatterns = [
+    /analyse[r]?\s+(?:ce\s+|le\s+|un\s+)?rapport/i,
+    /rapport\s+(?:à\s+)?analyse[r]?/i,
+    /importer?\s+(?:un\s+)?rapport/i,
+    /(?:extraire|créer)\s+(?:des\s+)?actions?\s+(?:du|depuis)\s+(?:un\s+)?rapport/i
+  ];
+  if (reportPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.ANALYZE_REPORT };
+  }
+
+  // 8. EQUIPMENT - Question sur un équipement spécifique
+  const equipmentPatterns = [
+    /tableau\s+(?:électrique|general|principal|divisionnaire|tgbt|td)/i,
+    /armoire\s+(?:électrique|de\s+commande)/i,
+    /variateur|vsd|altivar|danfoss|abb/i,
+    /disjoncteur|interrupteur|sectionneur/i,
+    /transformateur|transfo/i,
+    /groupe\s+électrogène|gélectrogène/i,
+    /moteur|pompe|ventilateur|compresseur/i,
+    /(?:quel|où|combien|statut|état)\s+.*(?:équipement|appareil|matériel)/i
+  ];
+  if (equipmentPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.EQUIPMENT, query: m };
+  }
+
+  // 9. Fallback - Check for procedure keywords without clear action
   if (hasProcedure && !hasCreate) {
     const subject = extractProcedureSubject(m);
     if (subject) {
@@ -679,22 +823,7 @@ app.get("/procedures/search", async (req, res) => {
   }
 });
 
-// Get procedure with steps
-app.get("/procedures/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const procedure = await getProcedureWithSteps(pool, id);
-    if (!procedure) {
-      return res.status(404).json({ ok: false, error: 'Procedure not found' });
-    }
-    res.json({ ok: true, procedure });
-  } catch (error) {
-    console.error('[Procedures Get]', error);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-// Get procedure stats
+// Get procedure stats (MUST be before :id route)
 app.get("/procedures/stats", async (req, res) => {
   try {
     const { site } = req.query;
@@ -706,13 +835,28 @@ app.get("/procedures/stats", async (req, res) => {
   }
 });
 
-// Get categories with counts
+// Get categories with counts (MUST be before :id route)
 app.get("/procedures/categories", async (req, res) => {
   try {
     const categories = await getProcedureCategories(pool);
     res.json({ ok: true, categories });
   } catch (error) {
     console.error('[Procedures Categories]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Get procedure with steps (parameterized route MUST be last)
+app.get("/procedures/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const procedure = await getProcedureWithSteps(pool, id);
+    if (!procedure) {
+      return res.status(404).json({ ok: false, error: 'Procedure not found' });
+    }
+    res.json({ ok: true, procedure });
+  } catch (error) {
+    console.error('[Procedures Get]', error);
     res.status(500).json({ ok: false, error: error.message });
   }
 });
@@ -1029,12 +1173,41 @@ app.post("/chat", async (req, res) => {
             provider: 'system'
           });
         }
+
+        // -----------------------------------------------------------------
+        // ANALYZE_REPORT: Analyser un rapport pour créer des actions
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.ANALYZE_REPORT: {
+          return res.json({
+            message: `📊 **Analyse de rapport**\n\nJe peux analyser un rapport (PDF, Word, TXT) pour en extraire automatiquement des actions et créer des procédures.\n\n→ L'outil d'import s'ouvre...`,
+            openProcedureCreator: true,
+            procedureCreatorContext: { mode: 'report' },
+            provider: 'system'
+          });
+        }
+
+        // -----------------------------------------------------------------
+        // EQUIPMENT: Question sur un équipement
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.EQUIPMENT: {
+          // Let the AI handle equipment questions with context
+          // Don't return here - fall through to standard AI chat
+          break;
+        }
       }
     }
 
     // =========================================================================
     // STANDARD AI CHAT (no procedure intent)
     // =========================================================================
+
+    // Check for chart request
+    const chartType = detectChartRequest(message);
+    let chart = null;
+    if (chartType) {
+      const site = user?.site || context?.user?.site;
+      chart = await generateChartData(pool, chartType, site);
+    }
 
     // Build messages array
     const messages = [
@@ -1135,6 +1308,7 @@ app.post("/chat", async (req, res) => {
       message: aiResponse,
       actions,
       sources,
+      chart, // Dynamic chart data if requested
       provider
     });
 
