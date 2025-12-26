@@ -1,5 +1,6 @@
 // server_ai_assistant.js — ElectroHub AI Assistant Backend
 // Supports OpenAI and Google Gemini for intelligent assistance
+// VERSION 2.0 - Full Procedures Integration
 
 import express from "express";
 import cors from "cors";
@@ -28,6 +29,149 @@ import multer from "multer";
 import fs from "fs";
 
 dotenv.config();
+
+// =============================================================================
+// PROCEDURES DATABASE INTEGRATION
+// =============================================================================
+
+/**
+ * Search procedures by keywords, category, or equipment
+ * Returns matching procedures from database
+ */
+async function searchProcedures(pool, query, options = {}) {
+  const { category, limit = 10, site } = options;
+
+  try {
+    let sql = `
+      SELECT
+        p.id, p.title, p.description, p.category, p.risk_level, p.status,
+        p.site, p.building, p.zone, p.created_at,
+        COUNT(ps.id) as step_count
+      FROM procedures p
+      LEFT JOIN procedure_steps ps ON ps.procedure_id = p.id
+      WHERE p.status IN ('approved', 'review', 'draft')
+    `;
+    const params = [];
+    let paramIndex = 1;
+
+    // Full-text search on title and description
+    if (query && query.trim()) {
+      sql += ` AND (
+        p.title ILIKE $${paramIndex}
+        OR p.description ILIKE $${paramIndex}
+        OR p.category ILIKE $${paramIndex}
+      )`;
+      params.push(`%${query.trim()}%`);
+      paramIndex++;
+    }
+
+    // Filter by category
+    if (category) {
+      sql += ` AND p.category = $${paramIndex}`;
+      params.push(category);
+      paramIndex++;
+    }
+
+    // Filter by site (tenant)
+    if (site) {
+      sql += ` AND (p.site = $${paramIndex} OR p.site IS NULL)`;
+      params.push(site);
+      paramIndex++;
+    }
+
+    sql += ` GROUP BY p.id ORDER BY p.updated_at DESC LIMIT $${paramIndex}`;
+    params.push(limit);
+
+    const result = await pool.query(sql, params);
+    return result.rows;
+  } catch (error) {
+    console.error('[AI-Procedures] Search error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get a single procedure with all its steps
+ */
+async function getProcedureWithSteps(pool, procedureId) {
+  try {
+    // Get procedure
+    const procResult = await pool.query(`
+      SELECT p.*,
+        (SELECT json_agg(pel.* ORDER BY pel.created_at)
+         FROM procedure_equipment_links pel
+         WHERE pel.procedure_id = p.id) as equipment_links
+      FROM procedures p
+      WHERE p.id = $1
+    `, [procedureId]);
+
+    if (procResult.rows.length === 0) return null;
+
+    const procedure = procResult.rows[0];
+
+    // Get steps
+    const stepsResult = await pool.query(`
+      SELECT * FROM procedure_steps
+      WHERE procedure_id = $1
+      ORDER BY step_number ASC
+    `, [procedureId]);
+
+    procedure.steps = stepsResult.rows;
+
+    return procedure;
+  } catch (error) {
+    console.error('[AI-Procedures] Get procedure error:', error);
+    return null;
+  }
+}
+
+/**
+ * Get all procedure categories with counts
+ */
+async function getProcedureCategories(pool) {
+  try {
+    const result = await pool.query(`
+      SELECT category, COUNT(*) as count
+      FROM procedures
+      WHERE status IN ('approved', 'review', 'draft')
+      GROUP BY category
+      ORDER BY count DESC
+    `);
+    return result.rows;
+  } catch (error) {
+    console.error('[AI-Procedures] Categories error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get procedure statistics for context
+ */
+async function getProcedureStats(pool, site = null) {
+  try {
+    let sql = `
+      SELECT
+        COUNT(*) as total,
+        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved,
+        COUNT(CASE WHEN status = 'draft' THEN 1 END) as drafts,
+        COUNT(CASE WHEN risk_level = 'critical' THEN 1 END) as critical,
+        COUNT(CASE WHEN risk_level = 'high' THEN 1 END) as high_risk
+      FROM procedures
+    `;
+    const params = [];
+
+    if (site) {
+      sql += ` WHERE site = $1 OR site IS NULL`;
+      params.push(site);
+    }
+
+    const result = await pool.query(sql, params);
+    return result.rows[0] || { total: 0, approved: 0, drafts: 0, critical: 0, high_risk: 0 };
+  } catch (error) {
+    console.error('[AI-Procedures] Stats error:', error);
+    return { total: 0, approved: 0, drafts: 0, critical: 0, high_risk: 0 };
+  }
+}
 
 // Multer for file uploads
 const upload = multer({
@@ -69,112 +213,253 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.AI_ASSISTANT_GEMINI_MODEL || "gemini-2.0-flash";
 
 // -----------------------------------------------------------------------------
-// System Prompt - Le coeur de l'intelligence
+// System Prompt - Le coeur de l'intelligence (v2.0 - Procedures Integration)
 // -----------------------------------------------------------------------------
-const SYSTEM_PROMPT = `Tu es un assistant IA expert pour ElectroHub, une plateforme de gestion d'équipements électriques.
+const SYSTEM_PROMPT = `Tu es un assistant IA expert pour ElectroHub, une plateforme de gestion d'équipements électriques et de procédures opérationnelles.
 
 ## RÈGLES CRITIQUES
 1. **SOIS BREF** - Pas de blabla. Réponses courtes et directes.
 2. **AGIS** - Ne demande pas de confirmation, fais directement.
-3. **UNE CHOSE À LA FOIS** - Pose UNE question, attends la réponse.
+3. **UTILISE LES VRAIES DONNÉES** - Tu as accès aux procédures en base de données. NE JAMAIS INVENTER.
 
 ## Ton rôle
 Tu aides à:
 - Gérer les équipements électriques
 - Planifier les contrôles
 - Résoudre les non-conformités
-- **CRÉER DES PROCÉDURES** étape par étape avec photos
+- **TROUVER et AFFICHER des procédures existantes**
+- **GUIDER l'utilisateur étape par étape** dans une procédure
+- **CRÉER de nouvelles procédures** avec photos
 
-## Création de procédures (MODE SIMPLE)
+## PROCÉDURES - FONCTIONNALITÉS CLÉS
 
-⛔ INTERDICTIONS:
-- NE DEMANDE JAMAIS les EPI → tu les DÉDUIS
-- NE DEMANDE JAMAIS les codes de sécurité → tu les DÉDUIS
-- NE DEMANDE JAMAIS le niveau de risque → tu le DÉDUIS
+### 1. RECHERCHER une procédure
+Quand l'utilisateur cherche une procédure:
+- Tu reçois les procédures trouvées dans le contexte
+- Tu AFFICHES la liste avec: titre, catégorie, niveau de risque, nombre d'étapes
+- Tu proposes d'OUVRIR une procédure spécifique
 
-✅ PROCESSUS:
-1. Demande le titre
-2. Pour chaque étape: description + photo obligatoire 📸
-3. Quand "terminé" → DÉDUIS automatiquement EPI et risques selon le contexte
-4. Génère la procédure
+**Format de réponse pour une recherche:**
+📋 **[X] procédure(s) trouvée(s):**
 
-**DÉDUCTION AUTOMATIQUE:**
+1. **[Titre]** - [Catégorie]
+   • Risque: [Niveau] | [N] étapes
+   • [Description courte]
+
+→ Dis-moi le numéro pour l'ouvrir ou "détails [titre]"
+
+### 2. AFFICHER une procédure
+Quand tu dois afficher une procédure:
+- Tu reçois la procédure complète avec ses étapes
+- Tu AFFICHES un résumé clair
+- Tu retournes procedureToOpen avec l'ID pour que le frontend ouvre le modal
+
+**Format:**
+📋 **[Titre]**
+• Catégorie: [catégorie]
+• Risque: [niveau]
+• EPI requis: [liste]
+
+**Étapes:**
+1. [Titre étape 1] - [durée]min
+2. [Titre étape 2] - [durée]min
+...
+
+→ Je peux te guider étape par étape. Dis "commencer" !
+
+### 3. GUIDER étape par étape
+Mode guidage activé quand l'utilisateur dit "commencer", "guider", "étape suivante":
+- Tu affiches UNE étape à la fois
+- Tu donnes les instructions détaillées
+- Tu demandes confirmation avant de passer à la suivante
+- Tu rappelles les avertissements de sécurité
+
+**Format guidage:**
+⚡ **Étape [N]/[Total]: [Titre]**
+
+📝 **Instructions:**
+[Instructions détaillées]
+
+⚠️ **Attention:** [Avertissement si présent]
+
+⏱️ Durée estimée: [X] min
+
+→ Dis "suivant" quand tu as fini, ou "aide" si besoin.
+
+### 4. CRÉER une procédure
+Quand l'utilisateur veut CRÉER une NOUVELLE procédure:
+- Tu indiques que tu vas ouvrir l'assistant de création
+- Le frontend ouvrira le modal ProcedureCreator
+
+## DÉDUCTION AUTOMATIQUE (création)
 - Électricité → Gants isolants, Lunettes, Casque
 - Hauteur → Harnais, Casque
 - Manutention → Gants, Chaussures sécurité
-
-**EXEMPLE:**
-User: "Procédure changement pompe"
-Toi: "📋 Procédure : Changement pompe. Étape 1 + 📸 photo ?"
-User: "Couper l'alimentation" + photo
-Toi: "✓ Étape 1 OK. Étape 2 + 📸 ?"
-User: "terminé"
-Toi: "✅ Changement pompe - 1 étape. EPI: Gants isolants, Casque. Risque: Modéré. Créer ?"
+- ATEX → Vêtements antistatiques, Chaussures ESD
 
 ## Format réponse
-- COURT
+- COURT et STRUCTURÉ
 - Utilise **gras** pour les mots clés
-- ✓ pour confirmer réception
-- 📸 pour demander photo
+- ✓ pour confirmer
+- 📋 pour les procédures
+- ⚠️ pour les avertissements
+- ⚡ pour les étapes en cours
 
 ## Équipements disponibles
 Switchboards, VSD, Meca, ATEX, HV, GLO, Datahub, Projects, OIBT, Doors, Mobile Equipment`;
 
 // -----------------------------------------------------------------------------
-// Intent Detection - Procédures
+// Intent Detection - Procédures (v2.0 - Multi-intent)
 // -----------------------------------------------------------------------------
 
-const PROCEDURE_INTENT_PATTERNS = [
-  /créer?\s+(une\s+)?procédure/i,
-  /nouvelle\s+procédure/i,
-  /faire\s+(une\s+)?procédure/i,
-  /ajouter\s+(une\s+)?procédure/i,
-  /excellence[s]?\s+opérationnelle/i,
-  /créer?\s+(une\s+)?excellence/i,
-  /documenter\s+(une\s+)?(intervention|opération|procédure|maintenance)/i,
-  /procédure\s+(de|pour|d')\s+\w+/i,
-  /faire\s+une\s+fiche/i,
-  /créer?\s+(une\s+)?fiche\s+(technique|intervention|maintenance)/i,
-  /mode\s+procédure/i,
-  /assistant\s+procédure/i,
-  /guide[r]?\s+moi\s+(pour|à)\s+(créer|faire|documenter)/i,
-];
+// Intent types
+const INTENT_TYPES = {
+  SEARCH: 'search',           // Rechercher une procédure
+  VIEW: 'view',               // Voir/afficher une procédure spécifique
+  GUIDE: 'guide',             // Être guidé étape par étape
+  CREATE: 'create',           // Créer une nouvelle procédure
+  LIST: 'list',               // Lister toutes les procédures
+  NEXT_STEP: 'next_step',     // Passer à l'étape suivante
+  NONE: 'none'                // Pas d'intention procédure
+};
 
-function detectProcedureIntent(message) {
-  if (!message) return false;
-  const m = message.toLowerCase();
+/**
+ * Détecte l'intention de l'utilisateur concernant les procédures
+ * @returns {{ type: string, query: string|null, procedureId: string|null }}
+ */
+function detectProcedureIntent(message, conversationHistory = []) {
+  if (!message) return { type: INTENT_TYPES.NONE };
+  const m = message.toLowerCase().trim();
 
-  // SIMPLE: cherche juste les mots clés
-  const keywords = ['procédure', 'procedure', 'excellence', 'étape', 'etape'];
-  const actions = ['créer', 'creer', 'faire', 'nouvelle', 'ajouter', 'commencer'];
+  // Check if we're in a guidance session
+  const lastAssistant = conversationHistory
+    .filter(msg => msg.role === 'assistant')
+    .pop();
+  const isInGuidance = lastAssistant?.procedureGuidance?.active;
 
-  const hasKeyword = keywords.some(k => m.includes(k));
-  const hasAction = actions.some(a => m.includes(a));
+  // 1. NEXT STEP - En mode guidage
+  if (isInGuidance) {
+    const nextStepPatterns = ['suivant', 'next', 'étape suivante', 'continue', 'ok', 'fait', 'terminé', 'fini'];
+    if (nextStepPatterns.some(p => m.includes(p) || m === p)) {
+      return {
+        type: INTENT_TYPES.NEXT_STEP,
+        procedureId: lastAssistant.procedureGuidance.procedureId,
+        currentStep: lastAssistant.procedureGuidance.currentStep
+      };
+    }
+  }
 
-  // Debug
-  console.log(`[DETECT] "${m}" → keyword=${hasKeyword}, action=${hasAction}`);
+  // 2. CREATE - Créer une nouvelle procédure
+  const createKeywords = ['créer', 'creer', 'nouvelle', 'ajouter', 'faire'];
+  const procedureWords = ['procédure', 'procedure', 'excellence'];
+  const hasCreate = createKeywords.some(k => m.includes(k));
+  const hasProcedure = procedureWords.some(k => m.includes(k));
 
-  return hasKeyword && hasAction;
+  if (hasCreate && hasProcedure) {
+    const subject = extractProcedureSubject(m);
+    return { type: INTENT_TYPES.CREATE, query: subject };
+  }
+
+  // 3. GUIDE - Demande de guidage
+  const guidePatterns = [
+    /guide[r]?\s*(moi|nous)?/i,
+    /commence[r]?\s*(la\s+)?procédure/i,
+    /lance[r]?\s*(la\s+)?procédure/i,
+    /faire\s+la\s+procédure/i,
+    /exécute[r]?\s*(la\s+)?procédure/i,
+    /^commencer$/i,
+    /^guider$/i,
+    /étape\s+par\s+étape/i
+  ];
+  if (guidePatterns.some(p => p.test(m))) {
+    // Check if there's a procedure ID in context
+    const procedureId = extractProcedureIdFromContext(conversationHistory);
+    return { type: INTENT_TYPES.GUIDE, procedureId };
+  }
+
+  // 4. VIEW - Voir une procédure spécifique
+  const viewPatterns = [
+    /(?:voir|affiche[r]?|ouvre?|montre|détails?)\s+(?:la\s+)?(?:procédure\s+)?(?:n[°o]?\s*)?(\d+|"[^"]+"|'[^']+')/i,
+    /procédure\s+(?:n[°o]?\s*)?(\d+)/i,
+    /^(\d+)$/  // Just a number
+  ];
+  for (const pattern of viewPatterns) {
+    const match = m.match(pattern);
+    if (match) {
+      return { type: INTENT_TYPES.VIEW, query: match[1]?.replace(/['"]/g, '') };
+    }
+  }
+
+  // 5. SEARCH - Rechercher une procédure
+  const searchPatterns = [
+    /(?:cherche|trouve|recherche|où\s+est)\s+(?:une?\s+)?(?:procédure|proc)/i,
+    /procédure\s+(?:de|pour|sur)\s+(.+)/i,
+    /(?:y\s+a|existe|as-tu|avez-vous)\s+(?:une?\s+)?procédure/i,
+    /(?:liste|montre|affiche)\s+(?:les\s+)?procédures/i,
+    /quelles?\s+procédures?/i
+  ];
+  for (const pattern of searchPatterns) {
+    if (pattern.test(m)) {
+      const subject = extractProcedureSubject(m);
+      return { type: INTENT_TYPES.SEARCH, query: subject };
+    }
+  }
+
+  // 6. LIST - Lister les procédures
+  const listPatterns = [
+    /(?:liste|toutes)\s+(?:les\s+)?procédures/i,
+    /combien\s+(?:de\s+)?procédures/i,
+    /(?:mes|nos)\s+procédures/i
+  ];
+  if (listPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.LIST };
+  }
+
+  // 7. Fallback - Check for procedure keywords without clear action
+  if (hasProcedure && !hasCreate) {
+    const subject = extractProcedureSubject(m);
+    if (subject) {
+      return { type: INTENT_TYPES.SEARCH, query: subject };
+    }
+  }
+
+  return { type: INTENT_TYPES.NONE };
 }
 
-// Extract what kind of procedure the user wants
-function extractProcedureContext(message) {
-  const lowerMessage = message.toLowerCase();
-
-  // Try to extract the subject
+/**
+ * Extract the subject/topic from a procedure query
+ */
+function extractProcedureSubject(message) {
   const patterns = [
     /procédure\s+(?:de\s+|pour\s+|d[''])?(.+?)(?:\?|$|\.)/i,
-    /documenter\s+(?:une?\s+)?(.+?)(?:\?|$|\.)/i,
-    /excellence\s+(?:pour\s+|de\s+)?(.+?)(?:\?|$|\.)/i,
+    /cherche.*procédure.*(?:de\s+|pour\s+|sur\s+)(.+?)(?:\?|$|\.)/i,
+    /(?:maintenance|intervention|contrôle)\s+(?:de\s+|du\s+|des?\s+)?(.+?)(?:\?|$|\.)/i
   ];
 
   for (const pattern of patterns) {
-    const match = lowerMessage.match(pattern);
-    if (match && match[1]) {
+    const match = message.match(pattern);
+    if (match && match[1] && match[1].length > 2) {
       return match[1].trim();
     }
   }
 
+  return null;
+}
+
+/**
+ * Extract procedure ID from conversation history
+ */
+function extractProcedureIdFromContext(history) {
+  // Look for the last procedure that was viewed/searched
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg.procedureToOpen?.id) {
+      return msg.procedureToOpen.id;
+    }
+    if (msg.procedureGuidance?.procedureId) {
+      return msg.procedureGuidance.procedureId;
+    }
+  }
   return null;
 }
 
@@ -359,9 +644,12 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     service: "ai-assistant",
-    version: "2.0-procedures", // Added to verify deployment
+    version: "2.1-full-procedures-integration",
     features: {
-      procedureDetection: true,
+      procedureSearch: true,
+      procedureView: true,
+      procedureGuidance: true,
+      procedureCreate: true,
       photoAnalysis: true
     },
     providers: {
@@ -369,6 +657,64 @@ app.get("/health", (req, res) => {
       gemini: !!GEMINI_API_KEY
     }
   });
+});
+
+// =============================================================================
+// PROCEDURES API - Direct access for frontend
+// =============================================================================
+
+// Search procedures
+app.get("/procedures/search", async (req, res) => {
+  try {
+    const { q, category, site, limit = 10 } = req.query;
+    const procedures = await searchProcedures(pool, q, {
+      category,
+      site,
+      limit: parseInt(limit)
+    });
+    res.json({ ok: true, procedures });
+  } catch (error) {
+    console.error('[Procedures Search]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Get procedure with steps
+app.get("/procedures/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const procedure = await getProcedureWithSteps(pool, id);
+    if (!procedure) {
+      return res.status(404).json({ ok: false, error: 'Procedure not found' });
+    }
+    res.json({ ok: true, procedure });
+  } catch (error) {
+    console.error('[Procedures Get]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Get procedure stats
+app.get("/procedures/stats", async (req, res) => {
+  try {
+    const { site } = req.query;
+    const stats = await getProcedureStats(pool, site);
+    res.json({ ok: true, stats });
+  } catch (error) {
+    console.error('[Procedures Stats]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// Get categories with counts
+app.get("/procedures/categories", async (req, res) => {
+  try {
+    const categories = await getProcedureCategories(pool);
+    res.json({ ok: true, categories });
+  } catch (error) {
+    console.error('[Procedures Categories]', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 // Main chat endpoint
@@ -387,30 +733,308 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "Message requis" });
     }
 
-    // =========================================================================
-    // PROCEDURE INTENT DETECTION - Direct inline response
-    // =========================================================================
     console.log(`[CHAT] Message reçu: "${message}"`);
-    const isProcedure = detectProcedureIntent(message);
-    console.log(`[CHAT] Procedure intent detected: ${isProcedure}`);
 
-    if (isProcedure) {
-      const procedureSubject = extractProcedureContext(message);
-      console.log(`[CHAT] Procedure subject: ${procedureSubject}`);
+    // =========================================================================
+    // PROCEDURE INTENT DETECTION (v2.0 - Multi-intent)
+    // =========================================================================
+    const intent = detectProcedureIntent(message, conversationHistory);
+    console.log(`[CHAT] Intent detected:`, intent);
 
-      // Direct, simple question - no blabla
-      const directResponse = procedureSubject
-        ? `OK, procédure pour **${procedureSubject}**.\n\n📷 **Première étape** - décris ce qu'il faut faire et envoie une photo.`
-        : `**C'est quoi le titre de la procédure ?**`;
+    // Handle procedure intents
+    if (intent.type !== INTENT_TYPES.NONE) {
+      const site = user?.site || context?.user?.site;
 
-      console.log(`[CHAT] Returning direct procedure response`);
-      return res.json({
-        message: directResponse,
-        procedureMode: true,
-        procedureStep: procedureSubject ? 'step1' : 'title',
-        provider: 'system'
-      });
+      switch (intent.type) {
+        // -----------------------------------------------------------------
+        // SEARCH: Rechercher des procédures
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.SEARCH:
+        case INTENT_TYPES.LIST: {
+          const procedures = await searchProcedures(pool, intent.query, {
+            site,
+            limit: intent.type === INTENT_TYPES.LIST ? 20 : 10
+          });
+
+          console.log(`[CHAT] Found ${procedures.length} procedures for query: "${intent.query}"`);
+
+          if (procedures.length === 0) {
+            return res.json({
+              message: intent.query
+                ? `📋 Aucune procédure trouvée pour **"${intent.query}"**.\n\n→ Tu veux que je t'aide à en créer une ?`
+                : `📋 Aucune procédure n'existe encore.\n\n→ Tu veux en créer une ?`,
+              actions: [
+                { label: 'Créer une procédure', prompt: `Créer une procédure ${intent.query || ''}` },
+                { label: 'Voir les catégories', prompt: 'Quelles catégories de procédures existent ?' }
+              ],
+              provider: 'system'
+            });
+          }
+
+          // Format procedure list
+          const riskEmoji = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
+          const categoryLabels = {
+            maintenance: 'Maintenance',
+            securite: 'Sécurité',
+            general: 'Général',
+            mise_en_service: 'Mise en service',
+            mise_hors_service: 'Mise hors service',
+            urgence: 'Urgence',
+            controle: 'Contrôle',
+            formation: 'Formation'
+          };
+
+          let responseText = `📋 **${procedures.length} procédure(s) trouvée(s)${intent.query ? ` pour "${intent.query}"` : ''}:**\n\n`;
+
+          procedures.forEach((p, i) => {
+            const risk = riskEmoji[p.risk_level] || '⚪';
+            const cat = categoryLabels[p.category] || p.category || 'Général';
+            responseText += `**${i + 1}. ${p.title}** - ${cat}\n`;
+            responseText += `   ${risk} Risque: ${p.risk_level || 'non défini'} | ${p.step_count || 0} étapes\n`;
+            if (p.description) {
+              responseText += `   _${p.description.substring(0, 80)}${p.description.length > 80 ? '...' : ''}_\n`;
+            }
+            responseText += '\n';
+          });
+
+          responseText += `→ Dis-moi le numéro pour voir les détails ou "guider [n°]" pour être accompagné.`;
+
+          return res.json({
+            message: responseText,
+            proceduresFound: procedures.map(p => ({ id: p.id, title: p.title, index: procedures.indexOf(p) + 1 })),
+            actions: procedures.slice(0, 3).map((p, i) => ({
+              label: `Voir ${i + 1}. ${p.title.substring(0, 20)}...`,
+              prompt: `Voir la procédure ${i + 1}`
+            })),
+            provider: 'system'
+          });
+        }
+
+        // -----------------------------------------------------------------
+        // VIEW: Voir une procédure spécifique
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.VIEW: {
+          // Get the procedure - either by index or ID
+          let procedure = null;
+          const viewQuery = intent.query;
+
+          // Check if it's a number (index from previous search)
+          if (/^\d+$/.test(viewQuery)) {
+            const index = parseInt(viewQuery) - 1;
+            // Look for procedures in conversation history
+            const lastProcedures = conversationHistory
+              .filter(m => m.proceduresFound)
+              .pop()?.proceduresFound;
+
+            if (lastProcedures && lastProcedures[index]) {
+              procedure = await getProcedureWithSteps(pool, lastProcedures[index].id);
+            } else {
+              // Fallback: search and take the nth result
+              const searchResults = await searchProcedures(pool, null, { site, limit: 20 });
+              if (searchResults[index]) {
+                procedure = await getProcedureWithSteps(pool, searchResults[index].id);
+              }
+            }
+          } else {
+            // Search by title
+            const searchResults = await searchProcedures(pool, viewQuery, { site, limit: 1 });
+            if (searchResults[0]) {
+              procedure = await getProcedureWithSteps(pool, searchResults[0].id);
+            }
+          }
+
+          if (!procedure) {
+            return res.json({
+              message: `❌ Procédure non trouvée. Dis "liste procédures" pour voir ce qui est disponible.`,
+              provider: 'system'
+            });
+          }
+
+          // Format procedure details
+          const riskLabels = { critical: 'Critique 🔴', high: 'Élevé 🟠', medium: 'Modéré 🟡', low: 'Faible 🟢' };
+          const ppeList = (procedure.ppe_required || []).map(p => p.name || p).join(', ') || 'Aucun spécifié';
+
+          let responseText = `📋 **${procedure.title}**\n\n`;
+          responseText += `• **Catégorie:** ${procedure.category || 'Général'}\n`;
+          responseText += `• **Risque:** ${riskLabels[procedure.risk_level] || procedure.risk_level || 'Non défini'}\n`;
+          responseText += `• **EPI requis:** ${ppeList}\n`;
+
+          if (procedure.steps && procedure.steps.length > 0) {
+            responseText += `\n**📝 ${procedure.steps.length} étape(s):**\n`;
+            procedure.steps.forEach(step => {
+              const duration = step.duration_minutes ? ` _(${step.duration_minutes}min)_` : '';
+              responseText += `${step.step_number}. ${step.title}${duration}\n`;
+            });
+          }
+
+          responseText += `\n→ Dis **"commencer"** pour que je te guide étape par étape !`;
+
+          return res.json({
+            message: responseText,
+            procedureToOpen: { id: procedure.id, title: procedure.title },
+            procedureDetails: procedure,
+            actions: [
+              { label: '▶️ Commencer le guidage', prompt: 'Commencer la procédure' },
+              { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` }
+            ],
+            provider: 'system'
+          });
+        }
+
+        // -----------------------------------------------------------------
+        // GUIDE: Démarrer le guidage étape par étape
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.GUIDE: {
+          let procedureId = intent.procedureId;
+
+          // If no ID, look in recent conversation
+          if (!procedureId) {
+            const lastProcedure = conversationHistory
+              .filter(m => m.procedureToOpen || m.procedureDetails)
+              .pop();
+            procedureId = lastProcedure?.procedureToOpen?.id || lastProcedure?.procedureDetails?.id;
+          }
+
+          if (!procedureId) {
+            return res.json({
+              message: `❓ Quelle procédure veux-tu exécuter ?\n\nDis "liste procédures" pour voir les options.`,
+              actions: [{ label: 'Lister les procédures', prompt: 'Liste des procédures' }],
+              provider: 'system'
+            });
+          }
+
+          const procedure = await getProcedureWithSteps(pool, procedureId);
+          if (!procedure || !procedure.steps?.length) {
+            return res.json({
+              message: `❌ Cette procédure n'a pas d'étapes définies.`,
+              provider: 'system'
+            });
+          }
+
+          // Start at step 1
+          const step = procedure.steps[0];
+          const totalSteps = procedure.steps.length;
+
+          let responseText = `⚡ **Démarrage: ${procedure.title}**\n\n`;
+          responseText += `---\n\n`;
+          responseText += `**Étape 1/${totalSteps}: ${step.title}**\n\n`;
+
+          if (step.instructions) {
+            responseText += `📝 **Instructions:**\n${step.instructions}\n\n`;
+          }
+
+          if (step.warning) {
+            responseText += `⚠️ **ATTENTION:** ${step.warning}\n\n`;
+          }
+
+          if (step.duration_minutes) {
+            responseText += `⏱️ Durée estimée: ${step.duration_minutes} min\n\n`;
+          }
+
+          responseText += `→ Dis **"suivant"** quand tu as terminé cette étape.`;
+
+          return res.json({
+            message: responseText,
+            procedureGuidance: {
+              active: true,
+              procedureId: procedure.id,
+              procedureTitle: procedure.title,
+              currentStep: 1,
+              totalSteps,
+              stepData: step
+            },
+            provider: 'system'
+          });
+        }
+
+        // -----------------------------------------------------------------
+        // NEXT_STEP: Passer à l'étape suivante
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.NEXT_STEP: {
+          const { procedureId, currentStep } = intent;
+          const nextStepNumber = (currentStep || 0) + 1;
+
+          const procedure = await getProcedureWithSteps(pool, procedureId);
+          if (!procedure) {
+            return res.json({
+              message: `❌ Procédure non trouvée. Recommence avec "liste procédures".`,
+              provider: 'system'
+            });
+          }
+
+          const step = procedure.steps.find(s => s.step_number === nextStepNumber);
+          const totalSteps = procedure.steps.length;
+
+          // Procedure completed
+          if (!step || nextStepNumber > totalSteps) {
+            return res.json({
+              message: `✅ **Procédure terminée !**\n\n🎉 Tu as complété toutes les étapes de **"${procedure.title}"**.\n\n→ Dis "télécharger PDF" pour le compte-rendu.`,
+              procedureGuidance: { active: false, completed: true, procedureId },
+              actions: [
+                { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` },
+                { label: 'Nouvelle procédure', prompt: 'Liste des procédures' }
+              ],
+              provider: 'system'
+            });
+          }
+
+          // Show next step
+          let responseText = `✓ Étape ${currentStep} terminée !\n\n---\n\n`;
+          responseText += `**Étape ${nextStepNumber}/${totalSteps}: ${step.title}**\n\n`;
+
+          if (step.instructions) {
+            responseText += `📝 **Instructions:**\n${step.instructions}\n\n`;
+          }
+
+          if (step.warning) {
+            responseText += `⚠️ **ATTENTION:** ${step.warning}\n\n`;
+          }
+
+          if (step.duration_minutes) {
+            responseText += `⏱️ Durée estimée: ${step.duration_minutes} min\n\n`;
+          }
+
+          if (nextStepNumber === totalSteps) {
+            responseText += `→ C'est la **dernière étape** ! Dis "suivant" quand tu as fini.`;
+          } else {
+            responseText += `→ Dis **"suivant"** quand tu as terminé.`;
+          }
+
+          return res.json({
+            message: responseText,
+            procedureGuidance: {
+              active: true,
+              procedureId: procedure.id,
+              procedureTitle: procedure.title,
+              currentStep: nextStepNumber,
+              totalSteps,
+              stepData: step
+            },
+            provider: 'system'
+          });
+        }
+
+        // -----------------------------------------------------------------
+        // CREATE: Créer une nouvelle procédure
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.CREATE: {
+          const subject = intent.query;
+
+          return res.json({
+            message: subject
+              ? `📝 OK, je vais t'aider à créer la procédure **"${subject}"**.\n\n→ L'assistant de création s'ouvre...`
+              : `📝 Créons une nouvelle procédure !\n\n→ L'assistant de création s'ouvre...`,
+            openProcedureCreator: true,
+            procedureCreatorContext: { suggestedTitle: subject },
+            provider: 'system'
+          });
+        }
+      }
     }
+
+    // =========================================================================
+    // STANDARD AI CHAT (no procedure intent)
+    // =========================================================================
 
     // Build messages array
     const messages = [
@@ -431,7 +1055,7 @@ app.post("/chat", async (req, res) => {
       message.toLowerCase().includes("recherche") ||
       message.toLowerCase().includes("trouve");
 
-    if (needsWebSearch) {
+    if (needsWebSearch && !message.toLowerCase().includes("procédure")) {
       const searchQuery = message
         .replace(/cherche|recherche|trouve|documentation|sur le web/gi, "")
         .trim();
@@ -454,12 +1078,23 @@ app.post("/chat", async (req, res) => {
       }
     }
 
+    // Add procedure context to help AI
+    const procedureStats = await getProcedureStats(pool, user?.site);
+    const contextWithProcedures = {
+      ...context,
+      procedures: {
+        total: procedureStats.total,
+        approved: procedureStats.approved,
+        critical: procedureStats.critical
+      }
+    };
+
     // Call AI provider
     try {
       if (provider === "gemini" && GEMINI_API_KEY) {
-        aiResponse = await chatWithGemini(messages, context);
+        aiResponse = await chatWithGemini(messages, contextWithProcedures);
       } else {
-        aiResponse = await chatWithOpenAI(messages, context);
+        aiResponse = await chatWithOpenAI(messages, contextWithProcedures);
       }
     } catch (providerError) {
       console.error(`Error with ${provider}:`, providerError);
@@ -467,10 +1102,10 @@ app.post("/chat", async (req, res) => {
       // Fallback to other provider
       if (provider === "gemini" && process.env.OPENAI_API_KEY) {
         console.log("Falling back to OpenAI");
-        aiResponse = await chatWithOpenAI(messages, context);
+        aiResponse = await chatWithOpenAI(messages, contextWithProcedures);
       } else if (provider === "openai" && GEMINI_API_KEY) {
         console.log("Falling back to Gemini");
-        aiResponse = await chatWithGemini(messages, context);
+        aiResponse = await chatWithGemini(messages, contextWithProcedures);
       } else {
         throw providerError;
       }

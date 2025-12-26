@@ -250,12 +250,26 @@ class AIAssistant {
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
         actionResult: data.actionResult || null,
-        // Procedure system (microservice sessions)
+        // ===============================
+        // PROCEDURE INTEGRATION (v2.0)
+        // ===============================
+        // Search results
+        proceduresFound: data.proceduresFound || null,
+        // View procedure - triggers modal
+        procedureToOpen: data.procedureToOpen || null,
+        procedureDetails: data.procedureDetails || null,
+        // Guidance mode
+        procedureGuidance: data.procedureGuidance || null,
+        // Create procedure - triggers modal
+        openProcedureCreator: data.openProcedureCreator || false,
+        procedureCreatorContext: data.procedureCreatorContext || null,
+        // ===============================
+        // Legacy fields (backward compat)
+        // ===============================
         procedureSessionId: data.procedureSessionId || null,
         procedureStep: data.procedureStep || null,
         expectsPhoto: data.expectsPhoto || false,
         procedureReady: data.procedureReady || false,
-        // Legacy procedure fields (fallback)
         procedureId: data.procedureId || null,
         procedureMode: data.procedureMode || null,
         pdfUrl: data.pdfUrl || null,
@@ -332,12 +346,20 @@ class AIAssistant {
         model: data.model,
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
-        // Procedure system (microservice sessions)
+        // ===============================
+        // PROCEDURE INTEGRATION (v2.0)
+        // ===============================
+        proceduresFound: data.proceduresFound || null,
+        procedureToOpen: data.procedureToOpen || null,
+        procedureDetails: data.procedureDetails || null,
+        procedureGuidance: data.procedureGuidance || null,
+        openProcedureCreator: data.openProcedureCreator || false,
+        procedureCreatorContext: data.procedureCreatorContext || null,
+        // Legacy fields
         procedureSessionId: data.procedureSessionId || null,
         procedureStep: data.procedureStep || null,
         expectsPhoto: data.expectsPhoto || false,
         procedureReady: data.procedureReady || false,
-        // Legacy fields
         procedureId: data.procedureId || null,
         procedureMode: data.procedureMode || null,
         stepNumber: data.stepNumber || null
@@ -760,6 +782,72 @@ Comment puis-je vous aider plus précisément ?`,
         { label: 'Non-conformités', prompt: 'Quelles sont les non-conformités actuelles ?' }
       ]
     };
+  }
+
+  // ============================================================
+  // 📋 PROCEDURES - Direct access methods
+  // ============================================================
+
+  /**
+   * Search procedures directly (bypasses chat)
+   */
+  async searchProcedures(query = '', options = {}) {
+    try {
+      const { category, limit = 10 } = options;
+      const site = this.getCurrentUser()?.site;
+      const params = new URLSearchParams();
+      if (query) params.append('q', query);
+      if (category) params.append('category', category);
+      if (site) params.append('site', site);
+      params.append('limit', limit.toString());
+
+      const data = await get(`${this.baseUrl}/procedures/search?${params}`);
+      return data;
+    } catch (error) {
+      console.error('[Procedures Search] Error:', error);
+      return { ok: false, procedures: [] };
+    }
+  }
+
+  /**
+   * Get procedure with all steps
+   */
+  async getProcedure(id) {
+    try {
+      const data = await get(`${this.baseUrl}/procedures/${id}`);
+      return data;
+    } catch (error) {
+      console.error('[Procedures Get] Error:', error);
+      return { ok: false, procedure: null };
+    }
+  }
+
+  /**
+   * Get procedure statistics
+   */
+  async getProcedureStats() {
+    try {
+      const site = this.getCurrentUser()?.site;
+      const params = site ? `?site=${encodeURIComponent(site)}` : '';
+      const data = await get(`${this.baseUrl}/procedures/stats${params}`);
+      return data;
+    } catch (error) {
+      console.error('[Procedures Stats] Error:', error);
+      return { ok: false, stats: null };
+    }
+  }
+
+  /**
+   * Get procedure categories with counts
+   */
+  async getProcedureCategories() {
+    try {
+      const data = await get(`${this.baseUrl}/procedures/categories`);
+      return data;
+    } catch (error) {
+      console.error('[Procedures Categories] Error:', error);
+      return { ok: false, categories: [] };
+    }
   }
 
   /**
