@@ -1,6 +1,6 @@
 // server_ai_assistant.js — ElectroHub AI Assistant Backend
 // Supports OpenAI and Google Gemini for intelligent assistance
-// VERSION 2.0 - Full Procedures Integration
+// VERSION 2.1 - Enhanced Response Formatting + Cross-Module Integration
 
 import express from "express";
 import cors from "cors";
@@ -27,6 +27,18 @@ globalThis.fetch = _fetch;
 import OpenAI from "openai";
 import multer from "multer";
 import fs from "fs";
+
+// Response Templates
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const ResponseTemplates = require('./server_ai_response_templates.js');
+const {
+  EMOJIS, LABELS,
+  formatRiskBadge, formatCategoryBadge, formatEquipmentBadge,
+  formatDuration, formatDate, formatNumber, createProgressBar, createDivider,
+  ProcedureTemplates, DashboardTemplates, EquipmentTemplates,
+  ConversationTemplates, IntegrationTemplates
+} = ResponseTemplates;
 
 dotenv.config();
 
@@ -904,44 +916,21 @@ app.post("/chat", async (req, res) => {
 
           if (procedures.length === 0) {
             return res.json({
-              message: intent.query
-                ? `📋 Aucune procédure trouvée pour **"${intent.query}"**.\n\n→ Tu veux que je t'aide à en créer une ?`
-                : `📋 Aucune procédure n'existe encore.\n\n→ Tu veux en créer une ?`,
+              message: ProcedureTemplates.searchResults([], intent.query),
               actions: [
-                { label: 'Créer une procédure', prompt: `Créer une procédure ${intent.query || ''}` },
-                { label: 'Voir les catégories', prompt: 'Quelles catégories de procédures existent ?' }
+                { label: '➕ Créer une procédure', prompt: `Créer une procédure ${intent.query || ''}` },
+                { label: '📂 Voir les catégories', prompt: 'Quelles catégories de procédures existent ?' }
               ],
               provider: 'system'
             });
           }
 
-          // Format procedure list
-          const riskEmoji = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
-          const categoryLabels = {
-            maintenance: 'Maintenance',
-            securite: 'Sécurité',
-            general: 'Général',
-            mise_en_service: 'Mise en service',
-            mise_hors_service: 'Mise hors service',
-            urgence: 'Urgence',
-            controle: 'Contrôle',
-            formation: 'Formation'
-          };
-
-          let responseText = `📋 **${procedures.length} procédure(s) trouvée(s)${intent.query ? ` pour "${intent.query}"` : ''}:**\n\n`;
-
-          procedures.forEach((p, i) => {
-            const risk = riskEmoji[p.risk_level] || '⚪';
-            const cat = categoryLabels[p.category] || p.category || 'Général';
-            responseText += `**${i + 1}. ${p.title}** - ${cat}\n`;
-            responseText += `   ${risk} Risque: ${p.risk_level || 'non défini'} | ${p.step_count || 0} étapes\n`;
-            if (p.description) {
-              responseText += `   _${p.description.substring(0, 80)}${p.description.length > 80 ? '...' : ''}_\n`;
-            }
-            responseText += '\n';
-          });
-
-          responseText += `→ Dis-moi le numéro pour voir les détails ou "guider [n°]" pour être accompagné.`;
+          // Format procedure list with beautiful templates
+          const formattedProcedures = procedures.map(p => ({
+            ...p,
+            steps: { length: p.step_count || 0 }
+          }));
+          let responseText = ProcedureTemplates.searchResults(formattedProcedures, intent.query);
 
           return res.json({
             message: responseText,
@@ -989,29 +978,24 @@ app.post("/chat", async (req, res) => {
 
           if (!procedure) {
             return res.json({
-              message: `❌ Procédure non trouvée. Dis "liste procédures" pour voir ce qui est disponible.`,
+              message: ConversationTemplates.notFound('cette procédure'),
+              actions: [{ label: '📋 Lister les procédures', prompt: 'Liste des procédures' }],
               provider: 'system'
             });
           }
 
-          // Format procedure details
-          const riskLabels = { critical: 'Critique 🔴', high: 'Élevé 🟠', medium: 'Modéré 🟡', low: 'Faible 🟢' };
-          const ppeList = (procedure.ppe_required || []).map(p => p.name || p).join(', ') || 'Aucun spécifié';
+          // Format procedure details with beautiful template
+          const formattedProcedure = {
+            ...procedure,
+            ppe: (procedure.ppe_required || []).map(p => p.name || p),
+            steps: (procedure.steps || []).map(s => ({
+              title: s.title,
+              duration: s.duration_minutes
+            })),
+            estimated_time: procedure.steps?.reduce((sum, s) => sum + (s.duration_minutes || 0), 0)
+          };
 
-          let responseText = `📋 **${procedure.title}**\n\n`;
-          responseText += `• **Catégorie:** ${procedure.category || 'Général'}\n`;
-          responseText += `• **Risque:** ${riskLabels[procedure.risk_level] || procedure.risk_level || 'Non défini'}\n`;
-          responseText += `• **EPI requis:** ${ppeList}\n`;
-
-          if (procedure.steps && procedure.steps.length > 0) {
-            responseText += `\n**📝 ${procedure.steps.length} étape(s):**\n`;
-            procedure.steps.forEach(step => {
-              const duration = step.duration_minutes ? ` _(${step.duration_minutes}min)_` : '';
-              responseText += `${step.step_number}. ${step.title}${duration}\n`;
-            });
-          }
-
-          responseText += `\n→ Dis **"commencer"** pour que je te guide étape par étape !`;
+          let responseText = ProcedureTemplates.procedureDetail(formattedProcedure);
 
           return res.json({
             message: responseText,
@@ -1059,23 +1043,21 @@ app.post("/chat", async (req, res) => {
           const step = procedure.steps[0];
           const totalSteps = procedure.steps.length;
 
-          let responseText = `⚡ **Démarrage: ${procedure.title}**\n\n`;
-          responseText += `---\n\n`;
-          responseText += `**Étape 1/${totalSteps}: ${step.title}**\n\n`;
+          // Format step with beautiful template
+          const formattedStep = {
+            title: step.title,
+            instructions: step.instructions,
+            duration: step.duration_minutes,
+            warnings: step.warning ? [step.warning] : [],
+            notes: step.notes
+          };
 
-          if (step.instructions) {
-            responseText += `📝 **Instructions:**\n${step.instructions}\n\n`;
-          }
-
-          if (step.warning) {
-            responseText += `⚠️ **ATTENTION:** ${step.warning}\n\n`;
-          }
-
-          if (step.duration_minutes) {
-            responseText += `⏱️ Durée estimée: ${step.duration_minutes} min\n\n`;
-          }
-
-          responseText += `→ Dis **"suivant"** quand tu as terminé cette étape.`;
+          let responseText = ProcedureTemplates.guidanceStep(
+            formattedStep,
+            0,
+            totalSteps,
+            procedure.title
+          );
 
           return res.json({
             message: responseText,
@@ -1112,37 +1094,34 @@ app.post("/chat", async (req, res) => {
           // Procedure completed
           if (!step || nextStepNumber > totalSteps) {
             return res.json({
-              message: `✅ **Procédure terminée !**\n\n🎉 Tu as complété toutes les étapes de **"${procedure.title}"**.\n\n→ Dis "télécharger PDF" pour le compte-rendu.`,
+              message: ProcedureTemplates.procedureComplete(procedure.title),
               procedureGuidance: { active: false, completed: true, procedureId },
               actions: [
                 { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` },
-                { label: 'Nouvelle procédure', prompt: 'Liste des procédures' }
+                { label: '📋 Nouvelle procédure', prompt: 'Liste des procédures' },
+                { label: '📊 Enregistrer contrôle', prompt: 'Créer rapport de contrôle' }
               ],
               provider: 'system'
             });
           }
 
-          // Show next step
-          let responseText = `✓ Étape ${currentStep} terminée !\n\n---\n\n`;
-          responseText += `**Étape ${nextStepNumber}/${totalSteps}: ${step.title}**\n\n`;
+          // Show next step with beautiful template
+          const formattedStep = {
+            title: step.title,
+            instructions: step.instructions,
+            duration: step.duration_minutes,
+            warnings: step.warning ? [step.warning] : [],
+            notes: step.notes
+          };
 
-          if (step.instructions) {
-            responseText += `📝 **Instructions:**\n${step.instructions}\n\n`;
-          }
-
-          if (step.warning) {
-            responseText += `⚠️ **ATTENTION:** ${step.warning}\n\n`;
-          }
-
-          if (step.duration_minutes) {
-            responseText += `⏱️ Durée estimée: ${step.duration_minutes} min\n\n`;
-          }
-
-          if (nextStepNumber === totalSteps) {
-            responseText += `→ C'est la **dernière étape** ! Dis "suivant" quand tu as fini.`;
-          } else {
-            responseText += `→ Dis **"suivant"** quand tu as terminé.`;
-          }
+          let responseText = ProcedureTemplates.stepComplete(currentStep, totalSteps);
+          responseText += '\n\n';
+          responseText += ProcedureTemplates.guidanceStep(
+            formattedStep,
+            nextStepNumber - 1,
+            totalSteps,
+            procedure.title
+          );
 
           return res.json({
             message: responseText,
@@ -1893,6 +1872,384 @@ app.put("/preferences/:userEmail", async (req, res) => {
   }
 });
 
+// =============================================================================
+// 🔗 CROSS-MODULE AI INTEGRATION ENDPOINTS
+// =============================================================================
+
+/**
+ * Get AI recommendations for an equipment type
+ * Links procedures with equipment for intelligent suggestions
+ */
+app.get("/equipment-recommendations/:type/:id", async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const site = req.header('X-Site') || 'Nyon';
+
+    // Get equipment details based on type
+    let equipment = null;
+    let riskLevel = 'low';
+
+    switch (type) {
+      case 'switchboard':
+        const swResult = await pool.query(
+          'SELECT * FROM switchboards WHERE id = $1 AND site = $2',
+          [id, site]
+        );
+        equipment = swResult.rows[0];
+        break;
+      case 'vsd':
+        const vsdResult = await pool.query(
+          'SELECT * FROM vsd_equipments WHERE id = $1 AND site = $2',
+          [id, site]
+        );
+        equipment = vsdResult.rows[0];
+        break;
+      case 'atex':
+        const atexResult = await pool.query(`
+          SELECT e.*, s.name as site_name
+          FROM atex_equipments e
+          JOIN sites s ON e.site_id = s.id
+          WHERE e.id = $1 AND s.name = $2
+        `, [id, site]);
+        equipment = atexResult.rows[0];
+        riskLevel = equipment?.zone?.startsWith('0') ? 'critical' : 'high';
+        break;
+      case 'meca':
+        const mecaResult = await pool.query(`
+          SELECT e.*, s.name as site_name
+          FROM meca_equipments e
+          JOIN sites s ON e.site_id = s.id
+          WHERE e.id = $1 AND s.name = $2
+        `, [id, site]);
+        equipment = mecaResult.rows[0];
+        break;
+    }
+
+    if (!equipment) {
+      return res.json({ ok: false, error: 'Equipment not found' });
+    }
+
+    // Find relevant procedures for this equipment type
+    const keywords = {
+      switchboard: ['tableau', 'électrique', 'armoire', 'TGBT', 'disjoncteur'],
+      vsd: ['variateur', 'VSD', 'onduleur', 'drive', 'fréquence'],
+      atex: ['ATEX', 'explosif', 'zone', 'certification', 'Ex'],
+      meca: ['mécanique', 'roulement', 'vibration', 'pompe', 'moteur']
+    };
+
+    const searchTerms = keywords[type] || [type];
+    const proceduresResult = await pool.query(`
+      SELECT id, title, description, category, risk_level,
+             (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+      FROM procedures p
+      WHERE status IN ('approved', 'review')
+        AND (site = $1 OR site IS NULL)
+        AND (
+          title ILIKE ANY($2)
+          OR description ILIKE ANY($2)
+          OR category ILIKE ANY($2)
+        )
+      ORDER BY
+        CASE WHEN risk_level = 'critical' THEN 1
+             WHEN risk_level = 'high' THEN 2
+             WHEN risk_level = 'medium' THEN 3
+             ELSE 4 END,
+        created_at DESC
+      LIMIT 5
+    `, [site, searchTerms.map(t => `%${t}%`)]);
+
+    // Calculate equipment risk score
+    let riskScore = 0.3; // Base
+    if (type === 'atex') riskScore = 0.7;
+    if (equipment.last_control) {
+      const daysSince = Math.floor((Date.now() - new Date(equipment.last_control)) / (1000 * 60 * 60 * 24));
+      if (daysSince > 365) riskScore += 0.3;
+      else if (daysSince > 180) riskScore += 0.15;
+    }
+
+    res.json({
+      ok: true,
+      equipment: {
+        id: equipment.id,
+        name: equipment.name || equipment.building_code,
+        type,
+        location: equipment.building || equipment.building_code,
+        riskScore: Math.min(riskScore, 1)
+      },
+      recommendations: {
+        procedures: proceduresResult.rows.map(p => ({
+          id: p.id,
+          title: p.title,
+          category: p.category,
+          riskLevel: p.risk_level,
+          stepCount: p.step_count,
+          relevance: 'high'
+        })),
+        actions: [
+          { type: 'control', label: 'Planifier un contrôle', priority: riskScore > 0.5 ? 'high' : 'medium' },
+          { type: 'procedure', label: 'Voir procédures associées', priority: 'medium' },
+          { type: 'history', label: 'Consulter l\'historique', priority: 'low' }
+        ],
+        alerts: riskScore > 0.6 ? ['Équipement à risque élevé - contrôle recommandé'] : []
+      }
+    });
+  } catch (error) {
+    console.error('[AI] Equipment recommendations error:', error);
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * Unified equipment search across all modules
+ */
+app.get("/unified-search", async (req, res) => {
+  try {
+    const { q, types, limit = 20 } = req.query;
+    const site = req.header('X-Site') || 'Nyon';
+
+    if (!q || q.length < 2) {
+      return res.json({ ok: false, error: 'Query too short' });
+    }
+
+    const results = {
+      switchboards: [],
+      vsd: [],
+      atex: [],
+      meca: [],
+      procedures: []
+    };
+
+    const searchTypes = types ? types.split(',') : ['switchboards', 'vsd', 'atex', 'meca', 'procedures'];
+    const searchPattern = `%${q}%`;
+
+    // Search switchboards
+    if (searchTypes.includes('switchboards')) {
+      const swResult = await pool.query(`
+        SELECT id, name, building_code, floor, 'switchboard' as type
+        FROM switchboards
+        WHERE site = $1 AND (name ILIKE $2 OR building_code ILIKE $2)
+        LIMIT $3
+      `, [site, searchPattern, limit]);
+      results.switchboards = swResult.rows;
+    }
+
+    // Search VSD
+    if (searchTypes.includes('vsd')) {
+      const vsdResult = await pool.query(`
+        SELECT id, name, building, 'vsd' as type
+        FROM vsd_equipments
+        WHERE site = $1 AND (name ILIKE $2 OR building ILIKE $2)
+        LIMIT $3
+      `, [site, searchPattern, limit]);
+      results.vsd = vsdResult.rows;
+    }
+
+    // Search ATEX
+    if (searchTypes.includes('atex')) {
+      const atexResult = await pool.query(`
+        SELECT e.id, e.name, e.building, e.zone, 'atex' as type
+        FROM atex_equipments e
+        JOIN sites s ON e.site_id = s.id
+        WHERE s.name = $1 AND (e.name ILIKE $2 OR e.building ILIKE $2)
+        LIMIT $3
+      `, [site, searchPattern, limit]);
+      results.atex = atexResult.rows;
+    }
+
+    // Search MECA
+    if (searchTypes.includes('meca')) {
+      const mecaResult = await pool.query(`
+        SELECT e.id, e.name, e.building, 'meca' as type
+        FROM meca_equipments e
+        JOIN sites s ON e.site_id = s.id
+        WHERE s.name = $1 AND (e.name ILIKE $2 OR e.building ILIKE $2)
+        LIMIT $3
+      `, [site, searchPattern, limit]);
+      results.meca = mecaResult.rows;
+    }
+
+    // Search procedures
+    if (searchTypes.includes('procedures')) {
+      const procResult = await pool.query(`
+        SELECT id, title, category, risk_level, 'procedure' as type
+        FROM procedures
+        WHERE (site = $1 OR site IS NULL)
+          AND status IN ('approved', 'review')
+          AND (title ILIKE $2 OR description ILIKE $2)
+        LIMIT $3
+      `, [site, searchPattern, limit]);
+      results.procedures = procResult.rows;
+    }
+
+    // Combine and sort by relevance
+    const allResults = [
+      ...results.switchboards.map(r => ({ ...r, category: 'Tableaux' })),
+      ...results.vsd.map(r => ({ ...r, category: 'Variateurs' })),
+      ...results.atex.map(r => ({ ...r, category: 'ATEX' })),
+      ...results.meca.map(r => ({ ...r, category: 'Mécanique' })),
+      ...results.procedures.map(r => ({ ...r, category: 'Procédures' }))
+    ];
+
+    res.json({
+      ok: true,
+      query: q,
+      totalResults: allResults.length,
+      results: allResults.slice(0, limit),
+      byCategory: {
+        switchboards: results.switchboards.length,
+        vsd: results.vsd.length,
+        atex: results.atex.length,
+        meca: results.meca.length,
+        procedures: results.procedures.length
+      }
+    });
+  } catch (error) {
+    console.error('[AI] Unified search error:', error);
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * Get module integration status for AI dashboard
+ */
+app.get("/modules-status", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || 'Nyon';
+
+    // Count equipment in each module
+    const counts = {};
+
+    const swCount = await pool.query('SELECT COUNT(*) FROM switchboards WHERE site = $1', [site]);
+    counts.switchboards = parseInt(swCount.rows[0].count);
+
+    const vsdCount = await pool.query('SELECT COUNT(*) FROM vsd_equipments WHERE site = $1', [site]);
+    counts.vsd = parseInt(vsdCount.rows[0].count);
+
+    const atexCount = await pool.query(`
+      SELECT COUNT(*) FROM atex_equipments e
+      JOIN sites s ON e.site_id = s.id WHERE s.name = $1
+    `, [site]);
+    counts.atex = parseInt(atexCount.rows[0].count);
+
+    const mecaCount = await pool.query(`
+      SELECT COUNT(*) FROM meca_equipments e
+      JOIN sites s ON e.site_id = s.id WHERE s.name = $1
+    `, [site]);
+    counts.meca = parseInt(mecaCount.rows[0].count);
+
+    const procCount = await pool.query(`
+      SELECT COUNT(*) FROM procedures WHERE site = $1 OR site IS NULL
+    `, [site]);
+    counts.procedures = parseInt(procCount.rows[0].count);
+
+    // Module status
+    const modules = [
+      { id: 'switchboards', name: 'Tableaux électriques', icon: '⚡', count: counts.switchboards, status: 'full', aiFeatures: ['chat', 'risk', 'procedures'] },
+      { id: 'vsd', name: 'Variateurs', icon: '🔄', count: counts.vsd, status: 'full', aiFeatures: ['chat', 'diagnostics', 'maintenance'] },
+      { id: 'atex', name: 'ATEX', icon: '💥', count: counts.atex, status: 'full', aiFeatures: ['chat', 'zones', 'compliance'] },
+      { id: 'meca', name: 'Mécanique', icon: '⚙️', count: counts.meca, status: 'full', aiFeatures: ['chat', 'vibration', 'maintenance'] },
+      { id: 'procedures', name: 'Procédures', icon: '📋', count: counts.procedures, status: 'full', aiFeatures: ['search', 'guidance', 'creation'] },
+      { id: 'hv', name: 'Haute tension', icon: '⚡', count: 0, status: 'full', aiFeatures: ['chat', 'safety'] },
+      { id: 'mobile', name: 'Équip. mobiles', icon: '📱', count: 0, status: 'full', aiFeatures: ['chat', 'tracking'] },
+      { id: 'doors', name: 'Portes CF', icon: '🚪', count: 0, status: 'full', aiFeatures: ['chat', 'compliance'] },
+      { id: 'dcf', name: 'DCF-SAP', icon: '🔗', count: 0, status: 'partial', aiFeatures: ['readonly'] },
+      { id: 'training', name: 'Formation ATEX', icon: '📚', count: 0, status: 'partial', aiFeatures: ['educational'] },
+      { id: 'contractors', name: 'Prestataires', icon: '👷', count: 0, status: 'pending', aiFeatures: [] }
+    ];
+
+    res.json({
+      ok: true,
+      site,
+      modules,
+      summary: {
+        totalEquipment: counts.switchboards + counts.vsd + counts.atex + counts.meca,
+        totalProcedures: counts.procedures,
+        aiIntegrated: modules.filter(m => m.status === 'full').length,
+        partial: modules.filter(m => m.status === 'partial').length,
+        pending: modules.filter(m => m.status === 'pending').length
+      },
+      message: IntegrationTemplates.moduleStatus()
+    });
+  } catch (error) {
+    console.error('[AI] Modules status error:', error);
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * AI-powered welcome message with context
+ */
+app.get("/welcome", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || 'Nyon';
+    const userName = req.query.name || '';
+
+    // Get quick stats
+    const overdueResult = await pool.query(`
+      SELECT COUNT(*) FROM control_schedules
+      WHERE site = $1 AND next_due_date < CURRENT_DATE AND status != 'done'
+    `, [site]);
+    const overdueCount = parseInt(overdueResult.rows[0].count);
+
+    const todayResult = await pool.query(`
+      SELECT COUNT(*) FROM control_schedules
+      WHERE site = $1 AND next_due_date = CURRENT_DATE
+    `, [site]);
+    const todayCount = parseInt(todayResult.rows[0].count);
+
+    let welcomeMessage = ConversationTemplates.welcome(userName);
+
+    // Add context-aware alerts
+    if (overdueCount > 0) {
+      welcomeMessage += `\n\n${EMOJIS.status.warning} **${overdueCount} contrôle(s) en retard** à traiter.`;
+    }
+    if (todayCount > 0) {
+      welcomeMessage += `\n${EMOJIS.section.plan} **${todayCount} contrôle(s) prévu(s)** aujourd'hui.`;
+    }
+
+    res.json({
+      ok: true,
+      message: welcomeMessage,
+      context: {
+        site,
+        overdueControls: overdueCount,
+        todayControls: todayCount,
+        hasAlerts: overdueCount > 0
+      },
+      quickActions: [
+        { label: '📊 Brief du matin', prompt: 'Brief du matin' },
+        { label: '📋 Procédures', prompt: 'Liste des procédures' },
+        { label: '📅 Planning', prompt: 'Planning de la semaine' },
+        { label: '❓ Aide', prompt: 'Aide' }
+      ]
+    });
+  } catch (error) {
+    console.error('[AI] Welcome error:', error);
+    res.json({
+      ok: true,
+      message: ConversationTemplates.welcome(''),
+      quickActions: []
+    });
+  }
+});
+
+/**
+ * Get help message
+ */
+app.get("/help", (req, res) => {
+  res.json({
+    ok: true,
+    message: ConversationTemplates.help(),
+    categories: [
+      { name: 'Recherche', examples: ['cherche procédure maintenance', 'trouve contrôle ATEX'] },
+      { name: 'Guidage', examples: ['guide-moi', 'suivant', 'précédent'] },
+      { name: 'Création', examples: ['créer une procédure', 'nouvelle procédure'] },
+      { name: 'Analyse', examples: ['statistiques', 'analyse des risques', 'brief du matin'] },
+      { name: 'Planification', examples: ['planning semaine', 'contrôles en retard'] }
+    ]
+  });
+});
+
 // -----------------------------------------------------------------------------
 // Start server
 // -----------------------------------------------------------------------------
@@ -1900,6 +2257,7 @@ initDatabase().then(() => {
   app.listen(PORT, HOST, () => {
     console.log(`\n🤖 AI Assistant server running on http://${HOST}:${PORT}`);
     console.log(`   OpenAI: ${process.env.OPENAI_API_KEY ? "✓" : "✗"}`);
-    console.log(`   Gemini: ${GEMINI_API_KEY ? "✓" : "✗"}\n`);
+    console.log(`   Gemini: ${GEMINI_API_KEY ? "✓" : "✗"}`);
+    console.log(`   Response Templates: ✓\n`);
   });
 });
