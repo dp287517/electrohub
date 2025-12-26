@@ -1673,31 +1673,44 @@ async function getAIContext(site) {
       });
     }
 
-    // ========== PROCEDURES - Récupérer toutes les procédures disponibles ==========
+    // ========== PROCEDURES - Récupérer toutes les procédures AVEC ÉTAPES ==========
     try {
+      // Fetch procedures with their steps included
       const procRes = await pool.query(`
         SELECT p.id, p.title, p.description, p.category, p.status, p.risk_level,
                p.ppe_required, p.created_at, p.site,
-               (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = p.id) as step_count
+               (SELECT json_agg(s ORDER BY s.step_number)
+                FROM procedure_steps s WHERE s.procedure_id = p.id) as steps
         FROM procedures p
         WHERE (p.site = $1 OR p.site IS NULL OR p.site = '')
           AND p.status != 'archived'
         ORDER BY p.updated_at DESC
-        LIMIT 100
+        LIMIT 50
       `, [site]);
 
       context.procedures.count = procRes.rows.length;
-      context.procedures.list = procRes.rows.map(p => ({
-        id: p.id,
-        title: p.title,
-        description: p.description?.substring(0, 150) || '',
-        category: p.category || 'general',
-        status: p.status,
-        riskLevel: p.risk_level,
-        ppeRequired: p.ppe_required || [],
-        stepCount: parseInt(p.step_count) || 0,
-        createdAt: p.created_at
-      }));
+      context.procedures.list = procRes.rows.map(p => {
+        const steps = p.steps || [];
+        return {
+          id: p.id,
+          title: p.title,
+          description: p.description?.substring(0, 150) || '',
+          category: p.category || 'general',
+          status: p.status,
+          riskLevel: p.risk_level,
+          ppeRequired: p.ppe_required || [],
+          stepCount: steps.length,
+          createdAt: p.created_at,
+          // Include actual steps for display
+          steps: steps.map(s => ({
+            number: s.step_number,
+            title: s.title,
+            description: s.description,
+            warning: s.warning,
+            duration: s.duration
+          }))
+        };
+      });
 
       // Group by category for easy lookup
       procRes.rows.forEach(p => {
@@ -1708,11 +1721,11 @@ async function getAIContext(site) {
         context.procedures.byCategory[cat].push({
           id: p.id,
           title: p.title,
-          stepCount: parseInt(p.step_count) || 0
+          stepCount: (p.steps || []).length
         });
       });
 
-      console.log(`[AI] 📋 Loaded ${context.procedures.count} procedures for context`);
+      console.log(`[AI] 📋 Loaded ${context.procedures.count} procedures with steps for context`);
     } catch (e) {
       console.error('[AI] Procedures error:', e.message);
     }
@@ -5009,7 +5022,7 @@ Identifie: équipement, état, contexte.`
     res.json({
       message: "Photo reçue ! Que veux-tu faire avec ?",
       actions: [{ label: "Créer procédure", prompt: "Je veux créer une procédure" }],
-      provider: "fallback"
+      provider: "Electro"
     });
   }
 });
@@ -5154,7 +5167,7 @@ app.post("/api/ai-assistant/upload-file", aiFileUpload.single('file'), async (re
     res.json({
       message: "Erreur lors de l'upload. Réessaie.",
       actions: [],
-      provider: "fallback"
+      provider: "Electro"
     });
   }
 });
@@ -5295,7 +5308,7 @@ function generateIntelligentFallback(message, ctx) {
         { label: "ATEX", prompt: "Situation ATEX" }
       ],
       chart: autoGenerateChart(ctx, 'controls'),
-      provider: "fallback"
+      provider: "Electro"
     };
   }
 
@@ -5316,7 +5329,7 @@ function generateIntelligentFallback(message, ctx) {
         prompt: `Détails du bâtiment ${b}`
       })),
       chart: autoGenerateChart(ctx, 'buildings'),
-      provider: "fallback"
+      provider: "Electro"
     };
   }
 
@@ -5344,7 +5357,7 @@ function generateIntelligentFallback(message, ctx) {
         { label: "Par bâtiment", prompt: "Répartition par bâtiment" }
       ],
       chart: autoGenerateChart(ctx, 'atex'),
-      provider: "fallback"
+      provider: "Electro"
     };
   }
 
@@ -5368,36 +5381,86 @@ function generateIntelligentFallback(message, ctx) {
         { label: "ATEX", prompt: "Situation ATEX" }
       ],
       chart: autoGenerateChart(ctx, 'overview'),
-      provider: "fallback"
+      provider: "Electro"
     };
   }
 
-  // Handle procedure requests
-  if (msg.includes('procédure') || msg.includes('procedure') || msg.includes('contrôle') && (msg.includes('prise') || msg.includes('comment'))) {
+  // Handle procedure requests - FIXED: Show actual content, not just list
+  if (msg.includes('procédure') || msg.includes('procedure') || msg.includes('prise') || msg.includes('contrôle') && msg.includes('comment')) {
     const procedures = ctx.procedures?.list || [];
     const procedureCount = ctx.procedures?.count || 0;
 
+    // Check if user wants to see a specific procedure
+    const wantsDetails = msg.includes('montre') || msg.includes('voir') || msg.includes('affiche') ||
+                         msg.includes('détail') || msg.includes('étape') || msg.includes('oui');
+
     if (procedureCount > 0) {
-      const proceduresList = procedures.slice(0, 5).map(p =>
-        `• **${p.title}**\n  📝 ${p.stepCount} étapes | Catégorie: ${p.category}`
-      ).join('\n\n');
+      // Try to find a matching procedure
+      let matchedProcedure = null;
+
+      // Look for procedure name in message
+      for (const proc of procedures) {
+        const titleLower = proc.title.toLowerCase();
+        const titleWords = titleLower.split(' ').filter(w => w.length > 3);
+
+        // Check if any significant word from title is in message
+        const matchScore = titleWords.filter(word => msg.includes(word)).length;
+        if (matchScore >= 1 || (wantsDetails && procedures.length === 1)) {
+          matchedProcedure = proc;
+          break;
+        }
+      }
+
+      // If found a match or user wants details and only 1 procedure, show full content
+      if (matchedProcedure || (wantsDetails && procedures.length === 1)) {
+        const proc = matchedProcedure || procedures[0];
+        const steps = proc.steps || [];
+
+        let stepsText = '';
+        if (steps.length > 0) {
+          stepsText = steps.map((s, i) =>
+            `**Étape ${i + 1}: ${s.title}**\n${s.description || ''}\n${s.warning ? `⚠️ ${s.warning}` : ''}`
+          ).join('\n\n');
+        } else {
+          stepsText = '*(Étapes non chargées - voir le PDF)*';
+        }
+
+        return {
+          message: `📋 **${proc.title}**\n\n` +
+            `**Catégorie:** ${proc.category || 'N/A'}\n` +
+            `**Risque:** ${proc.riskLevel || 'medium'}\n` +
+            `**EPI requis:** ${Array.isArray(proc.ppeRequired) && proc.ppeRequired.length > 0 ? proc.ppeRequired.join(', ') : 'Non défini'}\n\n` +
+            `### ${proc.stepCount || steps.length} ÉTAPES:\n\n${stepsText}\n\n` +
+            `📥 [Télécharger le PDF](/api/procedures/${proc.id}/pdf)`,
+          actions: [
+            { label: "🚀 Me guider", prompt: `Guide-moi étape par étape pour "${proc.title}"` },
+            { label: "📋 Autres procédures", prompt: "Quelles autres procédures sont disponibles?" }
+          ],
+          procedureDetails: proc,
+          provider: "Electro"
+        };
+      }
+
+      // Otherwise list procedures
+      const proceduresList = procedures.slice(0, 5).map((p, i) =>
+        `${i + 1}. **${p.title}** (${p.stepCount || '?'} étapes) - ${p.category || 'N/A'}`
+      ).join('\n');
 
       return {
-        message: `📋 **Procédures disponibles** (${procedureCount})\n\n${proceduresList}\n\nTu veux voir les détails d'une procédure ?`,
+        message: `📋 **Procédures disponibles:**\n\n${proceduresList}\n\nDis-moi laquelle tu veux voir en détail!`,
         actions: procedures.slice(0, 3).map(p => ({
-          label: `📋 ${p.title.substring(0, 20)}...`,
-          prompt: `Montre-moi la procédure "${p.title}"`
+          label: p.title.substring(0, 25),
+          prompt: `Montre-moi les étapes de la procédure "${p.title}"`
         })),
-        provider: "fallback"
+        provider: "system"
       };
     } else {
       return {
         message: `📋 **Aucune procédure trouvée**\n\nJe n'ai pas trouvé de procédure correspondant à ta demande.\n\nTu veux qu'on en crée une ensemble ?`,
         actions: [
-          { label: "➕ Créer une procédure", prompt: "Je veux créer une nouvelle procédure" },
-          { label: "🔍 Voir toutes", prompt: "Liste-moi toutes les procédures" }
+          { label: "➕ Créer une procédure", prompt: "Je veux créer une nouvelle procédure" }
         ],
-        provider: "fallback"
+        provider: "system"
       };
     }
   }
@@ -5419,7 +5482,7 @@ function generateIntelligentFallback(message, ctx) {
       { label: "ATEX", prompt: "Situation ATEX" }
     ],
     chart: autoGenerateChart(ctx, 'equipment'),
-    provider: "fallback"
+    provider: "Electro"
   };
 }
 
