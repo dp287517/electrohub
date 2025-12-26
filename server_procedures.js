@@ -2789,6 +2789,180 @@ app.get("/api/procedures", async (req, res) => {
   }
 });
 
+// --- DRAFTS (MUST be before /:id route) ---
+
+// Create drafts table if not exists
+const initDraftsTable = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS procedure_drafts (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255),
+        description TEXT,
+        category VARCHAR(100),
+        risk_level VARCHAR(50) DEFAULT 'low',
+        steps JSONB DEFAULT '[]',
+        ppe JSONB DEFAULT '[]',
+        equipment_links JSONB DEFAULT '[]',
+        session_id VARCHAR(255),
+        user_email VARCHAR(255),
+        site VARCHAR(100),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log("✓ Procedure drafts table ready");
+  } catch (error) {
+    console.log("Could not create drafts table:", error.message);
+  }
+};
+initDraftsTable();
+
+// Get all drafts for user
+app.get("/api/procedures/drafts", async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    const { rows } = await pool.query(
+      `SELECT id, title, description, category, risk_level,
+        jsonb_array_length(steps) as step_count,
+        created_at, updated_at
+       FROM procedure_drafts
+       WHERE user_email = $1 OR site = $2
+       ORDER BY updated_at DESC`,
+      [userEmail, site]
+    );
+
+    res.json({ ok: true, drafts: rows });
+  } catch (err) {
+    console.error("Error getting drafts:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Get single draft
+app.get("/api/procedures/drafts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `SELECT * FROM procedure_drafts WHERE id = $1`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Draft not found" });
+    }
+
+    res.json({ ok: true, draft: rows[0] });
+  } catch (err) {
+    console.error("Error getting draft:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Save/update draft
+app.post("/api/procedures/drafts", async (req, res) => {
+  try {
+    const { id, title, description, category, risk_level, steps, ppe, equipment_links, session_id } = req.body;
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    if (id) {
+      // Update existing draft
+      const { rows } = await pool.query(
+        `UPDATE procedure_drafts SET
+          title = COALESCE($1, title),
+          description = COALESCE($2, description),
+          category = COALESCE($3, category),
+          risk_level = COALESCE($4, risk_level),
+          steps = COALESCE($5, steps),
+          ppe = COALESCE($6, ppe),
+          equipment_links = COALESCE($7, equipment_links),
+          updated_at = NOW()
+         WHERE id = $8
+         RETURNING *`,
+        [title, description, category, risk_level, JSON.stringify(steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), id]
+      );
+      res.json({ ok: true, draft: rows[0] });
+    } else {
+      // Create new draft
+      const { rows } = await pool.query(
+        `INSERT INTO procedure_drafts
+          (title, description, category, risk_level, steps, ppe, equipment_links, session_id, user_email, site)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [title || 'Brouillon', description, category, risk_level || 'low', JSON.stringify(steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), session_id, userEmail, site]
+      );
+      res.json({ ok: true, draft: rows[0] });
+    }
+  } catch (err) {
+    console.error("Error saving draft:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Delete draft
+app.delete("/api/procedures/drafts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM procedure_drafts WHERE id = $1`, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Error deleting draft:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Resume AI session from draft
+app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
+  try {
+    const { draftId } = req.params;
+    const userEmail = req.headers["x-user-email"];
+
+    // Get the draft
+    const { rows } = await pool.query(
+      `SELECT * FROM procedure_drafts WHERE id = $1`,
+      [draftId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Draft not found" });
+    }
+
+    const draft = rows[0];
+
+    // Create new AI session with draft data
+    const sessionId = `resume_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    aiSessions.set(sessionId, {
+      phase: draft.steps?.length > 0 ? "steps" : "init",
+      collectedData: {
+        title: draft.title,
+        description: draft.description,
+        category: draft.category,
+        risk_level: draft.risk_level,
+        steps: draft.steps || [],
+        ppe: draft.ppe || [],
+        equipment_links: draft.equipment_links || []
+      },
+      history: [],
+      draftId: draft.id
+    });
+
+    res.json({
+      ok: true,
+      sessionId,
+      resumedFrom: draft.id,
+      phase: aiSessions.get(sessionId).phase,
+      collectedData: aiSessions.get(sessionId).collectedData,
+      message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${draft.steps?.length || 0} étape(s) existante(s). Continuons !`
+    });
+  } catch (err) {
+    console.error("Error resuming draft:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // --- CATEGORIES (MUST be before /:id route) ---
 
 // Get procedure categories

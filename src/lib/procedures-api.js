@@ -137,12 +137,46 @@ export async function searchEquipment(query, type = null) {
   return response.json();
 }
 
+// ==================== DRAFTS (Auto-save for resume) ====================
+
+export async function saveDraft(draftData) {
+  const response = await fetchWithAuth(`${API_BASE}/drafts`, {
+    method: 'POST',
+    body: JSON.stringify(draftData),
+  });
+  return response.json();
+}
+
+export async function getDrafts() {
+  const response = await fetchWithAuth(`${API_BASE}/drafts`);
+  return response.json();
+}
+
+export async function getDraft(draftId) {
+  const response = await fetchWithAuth(`${API_BASE}/drafts/${draftId}`);
+  return response.json();
+}
+
+export async function deleteDraft(draftId) {
+  const response = await fetchWithAuth(`${API_BASE}/drafts/${draftId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+export async function resumeDraft(draftId) {
+  const response = await fetchWithAuth(`${API_BASE}/ai/resume/${draftId}`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
 // ==================== AI GUIDED CREATION ====================
 
-export async function startAISession(initialMessage = null) {
+export async function startAISession(initialMessage = null, draftId = null) {
   const response = await fetchWithAuth(`${API_BASE}/ai/start`, {
     method: 'POST',
-    body: JSON.stringify({ initialMessage }),
+    body: JSON.stringify({ initialMessage, draftId }),
   });
   return response.json();
 }

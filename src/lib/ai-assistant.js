@@ -1298,6 +1298,67 @@ Comment puis-je vous aider plus précisément ?`,
   }
 
   // ============================================================
+  // 📅 AI PLANNING - Day/Week control scheduling
+  // ============================================================
+
+  /**
+   * Get AI-generated planning for controls
+   * @param {string} period - 'day' or 'week'
+   */
+  async getAIPlanning(period = 'day') {
+    try {
+      const data = await get(`${this.baseUrl}/planning?period=${period}`);
+      return data;
+    } catch (error) {
+      console.error('[Planning] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /**
+   * Generate AI planning for controls with procedure recommendations
+   */
+  async generateControlPlanning(options = {}) {
+    try {
+      const data = await post(`${this.baseUrl}/generate-planning`, {
+        period: options.period || 'week',
+        includeRecommendations: true,
+        user: this.getCurrentUser()
+      });
+      return data;
+    } catch (error) {
+      console.error('[GeneratePlanning] Error:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get procedure recommendations based on predictions
+   */
+  async getProcedureRecommendations() {
+    try {
+      const data = await get(`${this.baseUrl}/procedure-recommendations`);
+      return data;
+    } catch (error) {
+      console.error('[ProcedureRecommendations] Error:', error);
+      return { ok: false, recommendations: [] };
+    }
+  }
+
+  /**
+   * Get drafts for procedure creation resumption
+   */
+  async getProcedureDrafts() {
+    try {
+      const data = await get('/api/procedures/drafts');
+      return data;
+    } catch (error) {
+      console.error('[Drafts] Error:', error);
+      return { ok: false, drafts: [] };
+    }
+  }
+
+  // ============================================================
   // 📊 ADVANCED CHARTS DATA
   // ============================================================
 
