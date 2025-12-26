@@ -1359,6 +1359,80 @@ Comment puis-je vous aider plus précisément ?`,
   }
 
   // ============================================================
+  // 🔗 CROSS-MODULE INTEGRATION
+  // ============================================================
+
+  /**
+   * Get AI recommendations for a specific equipment
+   * Links procedures with equipment for intelligent suggestions
+   */
+  async getEquipmentRecommendations(type, id) {
+    try {
+      const data = await get(`${this.baseUrl}/equipment-recommendations/${type}/${id}`);
+      return data;
+    } catch (error) {
+      console.error('[EquipmentRecommendations] Error:', error);
+      return { ok: false, recommendations: { procedures: [], actions: [], alerts: [] } };
+    }
+  }
+
+  /**
+   * Unified search across all modules
+   */
+  async unifiedSearch(query, options = {}) {
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (options.types) params.append('types', options.types.join(','));
+      if (options.limit) params.append('limit', options.limit);
+
+      const data = await get(`${this.baseUrl}/unified-search?${params}`);
+      return data;
+    } catch (error) {
+      console.error('[UnifiedSearch] Error:', error);
+      return { ok: false, results: [], totalResults: 0 };
+    }
+  }
+
+  /**
+   * Get all modules integration status
+   */
+  async getModulesStatus() {
+    try {
+      const data = await get(`${this.baseUrl}/modules-status`);
+      return data;
+    } catch (error) {
+      console.error('[ModulesStatus] Error:', error);
+      return { ok: false, modules: [] };
+    }
+  }
+
+  /**
+   * Get AI-powered welcome message with context
+   */
+  async getWelcomeMessage(userName = '') {
+    try {
+      const data = await get(`${this.baseUrl}/welcome?name=${encodeURIComponent(userName)}`);
+      return data;
+    } catch (error) {
+      console.error('[Welcome] Error:', error);
+      return { ok: false, message: 'Bonjour! Comment puis-je vous aider?' };
+    }
+  }
+
+  /**
+   * Get help message and command examples
+   */
+  async getHelp() {
+    try {
+      const data = await get(`${this.baseUrl}/help`);
+      return data;
+    } catch (error) {
+      console.error('[Help] Error:', error);
+      return { ok: false, message: 'Aide non disponible' };
+    }
+  }
+
+  // ============================================================
   // 📊 ADVANCED CHARTS DATA
   // ============================================================
 
