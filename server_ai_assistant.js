@@ -548,6 +548,46 @@ function detectProcedureIntent(message, conversationHistory = []) {
     }
   }
 
+  // 4a. VIEW by list index - "la 1", "le 2", "la première", "numéro 3"
+  const listIndexPatterns = [
+    /^(?:la|le|l[''])\s*(\d+)$/i,
+    /^(?:la|le)\s+(?:premi[èe]re?|num[ée]ro\s*1|1[èe]re?)$/i,
+    /^(?:la|le)\s+(?:deuxi[èe]me|num[ée]ro\s*2|2[èe]me?)$/i,
+    /^(?:la|le)\s+(?:troisi[èe]me|num[ée]ro\s*3|3[èe]me?)$/i,
+    /^num[ée]ro\s*(\d+)$/i,
+    /^(\d+)[èe]?(?:me|re|er)?$/i
+  ];
+  for (const pattern of listIndexPatterns) {
+    const match = m.match(pattern);
+    if (match) {
+      // Extract the index number
+      let index = 1;
+      if (match[1]) {
+        index = parseInt(match[1]);
+      } else if (/premi|1[èe]|1er/i.test(m)) {
+        index = 1;
+      } else if (/deux|2[èe]/i.test(m)) {
+        index = 2;
+      } else if (/trois|3[èe]/i.test(m)) {
+        index = 3;
+      }
+
+      // Find the procedure from the last search results
+      const lastSearch = conversationHistory
+        .slice().reverse()
+        .find(msg => msg.proceduresFound?.length > 0);
+
+      if (lastSearch?.proceduresFound && lastSearch.proceduresFound[index - 1]) {
+        const proc = lastSearch.proceduresFound[index - 1];
+        console.log(`[INTENT] User selected list item ${index}: ${proc.title} (ID: ${proc.id})`);
+        return { type: INTENT_TYPES.VIEW, query: proc.id.toString() };
+      }
+
+      // Fallback: treat as direct ID
+      return { type: INTENT_TYPES.VIEW, query: index.toString() };
+    }
+  }
+
   // 4b. VIEW without number - wants to see last mentioned procedure
   const viewLastProcedurePatterns = [
     /(?:je\s+)?(?:veux|voudrais|aimerais)\s+(?:la\s+|voir\s+la\s+)?proc[ée]dure/i,
