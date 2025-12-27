@@ -464,6 +464,23 @@ function detectProcedureIntent(message, conversationHistory = []) {
     .pop();
   const isInGuidance = lastAssistant?.procedureGuidance?.active;
 
+  // 0. Check if user message matches a procedure title from recent results
+  const recentProcedures = conversationHistory
+    .slice().reverse()
+    .find(msg => msg.proceduresFound?.length > 0);
+
+  if (recentProcedures?.proceduresFound) {
+    const matchingProc = recentProcedures.proceduresFound.find(p =>
+      p.title.toLowerCase().trim() === m ||
+      p.title.toLowerCase().includes(m) ||
+      m.includes(p.title.toLowerCase())
+    );
+    if (matchingProc) {
+      console.log(`[INTENT] User message matches procedure title: ${matchingProc.title} (ID: ${matchingProc.id})`);
+      return { type: INTENT_TYPES.VIEW, query: matchingProc.id.toString() };
+    }
+  }
+
   // 1. NEXT STEP - En mode guidage
   if (isInGuidance) {
     const nextStepPatterns = ['suivant', 'next', 'étape suivante', 'continue', 'ok', 'fait', 'terminé', 'fini'];
@@ -967,7 +984,37 @@ app.post("/chat", async (req, res) => {
             });
           }
 
-          // Format procedure list with beautiful templates
+          // If exactly ONE procedure found, show full details directly
+          if (procedures.length === 1) {
+            console.log(`[CHAT] Exactly one procedure found, showing details for: ${procedures[0].title}`);
+            const procedure = await getProcedureWithSteps(pool, procedures[0].id);
+
+            if (procedure) {
+              const formattedProcedure = {
+                ...procedure,
+                ppe: (procedure.ppe_required || []).map(p => p.name || p),
+                steps: (procedure.steps || []).map(s => ({
+                  title: s.title,
+                  duration: s.duration_minutes
+                })),
+                estimated_time: procedure.steps?.reduce((sum, s) => sum + (s.duration_minutes || 0), 0)
+              };
+
+              return res.json({
+                message: ProcedureTemplates.procedureDetail(formattedProcedure),
+                procedureToOpen: { id: procedure.id, title: procedure.title },
+                procedureDetails: procedure,
+                proceduresFound: [{ id: procedure.id, title: procedure.title, index: 1 }],
+                actions: [
+                  { label: '▶️ Commencer le guidage', prompt: 'Commencer la procédure' },
+                  { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` }
+                ],
+                provider: 'system'
+              });
+            }
+          }
+
+          // Multiple results: show list with beautiful templates
           const formattedProcedures = procedures.map(p => ({
             ...p,
             steps: { length: p.step_count || 0 }
