@@ -517,6 +517,41 @@ function detectProcedureIntent(message, conversationHistory = []) {
     }
   }
 
+  // 4b. VIEW without number - wants to see last mentioned procedure
+  const viewLastProcedurePatterns = [
+    /(?:je\s+)?(?:veux|voudrais|aimerais)\s+(?:la\s+|voir\s+la\s+)?proc[ée]dure/i,
+    /(?:montre|affiche|ouvre)[\s-]?(?:la|moi)/i,
+    /(?:voir|ouvrir)\s+(?:la\s+)?proc[ée]dure/i,
+    /(?:la\s+)?voir(?:\s+en\s+d[ée]tail)?$/i,
+    /d[ée]tails?\s+(?:de\s+)?(?:la\s+)?proc[ée]dure/i,
+    /(?:acc[ée]der|aller)\s+(?:[àa]\s+)?(?:la\s+)?proc[ée]dure/i,
+    /^(?:oui|ok|yes|go|vas-y|allons-y)[\s,!]*(?:montre|voir|affiche)?/i
+  ];
+  if (viewLastProcedurePatterns.some(p => p.test(m))) {
+    // Try to get the last mentioned procedure from conversation
+    const lastProc = conversationHistory
+      .slice().reverse()
+      .find(msg => msg.procedureToOpen || msg.procedureDetails || msg.proceduresFound?.length === 1);
+
+    if (lastProc) {
+      const procId = lastProc.procedureToOpen?.id ||
+                     lastProc.procedureDetails?.id ||
+                     lastProc.proceduresFound?.[0]?.id;
+      if (procId) {
+        return { type: INTENT_TYPES.VIEW, query: procId.toString() };
+      }
+    }
+    // If we found a single procedure in search results, use that
+    const lastSearch = conversationHistory
+      .slice().reverse()
+      .find(msg => msg.proceduresFound?.length > 0);
+    if (lastSearch?.proceduresFound?.length === 1) {
+      return { type: INTENT_TYPES.VIEW, query: lastSearch.proceduresFound[0].id.toString() };
+    }
+    // Return VIEW anyway, the handler will ask which procedure
+    return { type: INTENT_TYPES.VIEW, query: null };
+  }
+
   // 5. SEARCH - Rechercher une procédure
   const searchPatterns = [
     /(?:cherche|trouve|recherche|où\s+est)\s+(?:une?\s+)?(?:procédure|proc)/i,
@@ -530,6 +565,16 @@ function detectProcedureIntent(message, conversationHistory = []) {
       const subject = extractProcedureSubject(m);
       return { type: INTENT_TYPES.SEARCH, query: subject };
     }
+  }
+
+  // 5b. Direct procedure title detection - user types a procedure-like phrase
+  const procedureTitlePatterns = [
+    /^(?:v[ée]rifier|contr[ôo]ler|tester|inspecter|nettoyer|r[ée]parer|remplacer|installer|d[ée]monter|monter|calibrer|[ée]talonner|mesurer|diagnostiquer)/i,
+    /^(?:maintenance|entretien|mise\s+en\s+service|mise\s+hors\s+service|consignation|d[ée]consignation)/i,
+    /(?:prise|tableau|armoire|variateur|moteur|pompe|disjoncteur|transformateur|c[âa]ble)s?\s*[ée]lectriques?/i
+  ];
+  if (procedureTitlePatterns.some(p => p.test(m)) && m.length >= 10) {
+    return { type: INTENT_TYPES.SEARCH, query: m.trim() };
   }
 
   // 6. LIST - Lister les procédures
@@ -946,7 +991,44 @@ app.post("/chat", async (req, res) => {
         case INTENT_TYPES.VIEW: {
           // Get the procedure - either by index or ID
           let procedure = null;
-          const viewQuery = intent.query;
+          let viewQuery = intent.query;
+
+          // If no query, try to get the last mentioned procedure from context
+          if (!viewQuery) {
+            const lastProc = conversationHistory
+              .slice().reverse()
+              .find(msg => msg.procedureToOpen || msg.procedureDetails);
+            if (lastProc) {
+              viewQuery = (lastProc.procedureToOpen?.id || lastProc.procedureDetails?.id)?.toString();
+            } else {
+              // Try to get from last search results if there was only one
+              const lastSearch = conversationHistory
+                .slice().reverse()
+                .find(msg => msg.proceduresFound?.length > 0);
+              if (lastSearch?.proceduresFound?.length === 1) {
+                viewQuery = lastSearch.proceduresFound[0].id.toString();
+              } else if (lastSearch?.proceduresFound?.length > 1) {
+                // Multiple results - ask user to choose
+                return res.json({
+                  message: `${EMOJIS.status.info} **Quelle procédure veux-tu voir ?**\n\n` +
+                    lastSearch.proceduresFound.map((p, i) => `${i + 1}. ${p.title}`).join('\n') +
+                    `\n\n${EMOJIS.status.arrow} Dis-moi le numéro de la procédure.`,
+                  proceduresFound: lastSearch.proceduresFound,
+                  provider: 'system'
+                });
+              }
+            }
+          }
+
+          // Still no query? Ask the user
+          if (!viewQuery) {
+            return res.json({
+              message: `${EMOJIS.status.info} **Quelle procédure veux-tu voir ?**\n\n` +
+                `${EMOJIS.status.arrow} Dis "liste procédures" pour voir les options disponibles.`,
+              actions: [{ label: '📋 Lister les procédures', prompt: 'Liste des procédures' }],
+              provider: 'system'
+            });
+          }
 
           // Check if it's a number (index from previous search)
           if (/^\d+$/.test(viewQuery)) {
@@ -959,10 +1041,14 @@ app.post("/chat", async (req, res) => {
             if (lastProcedures && lastProcedures[index]) {
               procedure = await getProcedureWithSteps(pool, lastProcedures[index].id);
             } else {
-              // Fallback: search and take the nth result
-              const searchResults = await searchProcedures(pool, null, { site, limit: 20 });
-              if (searchResults[index]) {
-                procedure = await getProcedureWithSteps(pool, searchResults[index].id);
+              // Fallback: try to get by ID directly
+              procedure = await getProcedureWithSteps(pool, parseInt(viewQuery));
+              if (!procedure) {
+                // Last fallback: search and take the nth result
+                const searchResults = await searchProcedures(pool, null, { site, limit: 20 });
+                if (searchResults[index]) {
+                  procedure = await getProcedureWithSteps(pool, searchResults[index].id);
+                }
               }
             }
           } else {
