@@ -1432,6 +1432,19 @@ Comment puis-je vous aider plus précisément ?`,
     }
   }
 
+  /**
+   * Get incomplete procedures (drafts) with AI suggestions
+   */
+  async getIncompleteProcedures() {
+    try {
+      const data = await get(`${this.baseUrl}/incomplete-procedures`);
+      return data;
+    } catch (error) {
+      console.error('[IncompleteProcedures] Error:', error);
+      return { ok: false, drafts: [], message: 'Impossible de charger les brouillons' };
+    }
+  }
+
   // ============================================================
   // 📊 ADVANCED CHARTS DATA
   // ============================================================
