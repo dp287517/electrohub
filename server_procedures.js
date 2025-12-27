@@ -4491,11 +4491,11 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   ]);
 
   // En-têtes du tableau principal
-  mainData.push(["", "MÉTHODOLOGIE et IDENTIFICATION des DANGERS", "", "", "ÉVALUATION des RISQUES"]);
-  mainData.push(["", "", "", "", "Évaluation initiale", "", "", "", "", "", "", "Évaluation finale"]);
+  mainData.push(["", "MÉTHODOLOGIE et IDENTIFICATION des DANGERS", "", "", "ÉVALUATION des RISQUES", "", "", "", "", "", "", "Évaluation finale"]);
+  mainData.push(["", "", "", "", "Évaluation initiale", "", "", "", "", "", "", "", "", "Indice de risque final"]);
   mainData.push([
     "", "", "", "", "Composantes du risque\n(Rf Annexe 4)", "", "Indice de risque\ninitial",
-    "Mesures correctives\n(Rf Annexe 2, 3)", "", "", "", "Composantes du risque\n(Rf Annexe 3)"
+    "Mesures correctives\n(Rf Annexe 2, 3)", "", "", "", "Composantes du risque\n(Rf Annexe 4)", "", "(Rf Annexe 4)"
   ]);
   mainData.push([
     "", "Tâches / détail des activités\nOU\nParties d'équipement",
@@ -4506,7 +4506,7 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
     "Équipement de protection individuel (EPI)\n(Rf Annexe 3)",
     "Actions détaillées des mesures à mettre en place",
     "Responsable",
-    "Gravité (G)"
+    "Gravité (G)", "Probabilité (P)", "NIR\n(G × P)"
   ]);
   mainData.push([]); // Ligne vide
 
@@ -4519,9 +4519,10 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
       hazards.forEach((hazard, hazardIdx) => {
         const gi = hazard.initial_gravity || hazard.gi || 3;
         const pi = hazard.initial_probability || hazard.pi || 2;
-        const nir = gi * pi;
-        const gf = hazard.final_gravity || hazard.gf || gi;
+        const nirInitial = gi * pi;
+        const gf = hazard.final_gravity || hazard.gf || Math.min(gi, 3);
         const pf = hazard.final_probability || hazard.pf || 1;
+        const nirFinal = gf * pf;
 
         const ppeList = (hazard.ppe || hazard.epiRequired || [])
           .map(p => `□ ${p}`).join("\n");
@@ -4533,29 +4534,30 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
           hazardIdx === 0 ? stepTitle : "",
           `□ ${hazard.category || hazard.checkbox || hazard.type || "Danger"}`,
           hazard.scenario || hazard.danger || "",
-          gi, pi, nir,
+          gi, pi, nirInitial,
           measures,
           ppeList,
           actions,
           hazard.responsible || "",
-          gf
+          gf, pf, nirFinal
         ]);
       });
     });
   } else {
     // Fallback: utiliser les étapes directement
     steps.forEach((step, idx) => {
+      const gi = 3, pi = 2, gf = 3, pf = 1;
       mainData.push([
         "",
         `Étape ${idx + 1}\n${step.title || ''}`,
         "□ À identifier",
         step.description || "",
-        3, 2, 6,
+        gi, pi, gi * pi,
         step.instructions || "",
         "",
         step.warning || "",
         "",
-        3
+        gf, pf, gf * pf
       ]);
     });
   }
@@ -4580,20 +4582,22 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   // Créer la feuille principale
   const wsMain = XLSX.utils.aoa_to_sheet(mainData);
 
-  // Définir largeurs de colonnes
+  // Définir largeurs de colonnes (identique au fichier original)
   wsMain['!cols'] = [
-    { wch: 5 },   // A
-    { wch: 35 },  // B - Tâches
+    { wch: 5 },   // A - vide
+    { wch: 35 },  // B - Tâches / détail des activités
     { wch: 25 },  // C - Danger
-    { wch: 40 },  // D - Scénario
-    { wch: 8 },   // E - G
-    { wch: 8 },   // F - P
-    { wch: 8 },   // G - NIR
-    { wch: 35 },  // H - Mesures
+    { wch: 40 },  // D - Scénario d'accident
+    { wch: 10 },  // E - Gravité initiale (G)
+    { wch: 10 },  // F - Probabilité initiale (P)
+    { wch: 10 },  // G - NIR initial
+    { wch: 35 },  // H - Mesures correctives
     { wch: 30 },  // I - EPI
-    { wch: 40 },  // J - Actions
+    { wch: 40 },  // J - Actions détaillées
     { wch: 15 },  // K - Responsable
-    { wch: 8 },   // L - Gf
+    { wch: 10 },  // L - Gravité finale (G)
+    { wch: 10 },  // M - Probabilité finale (P)
+    { wch: 10 },  // N - NIR final
   ];
 
   XLSX.utils.book_append_sheet(wb, wsMain, "MS_RA(FR)");
