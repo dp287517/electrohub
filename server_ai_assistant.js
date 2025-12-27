@@ -447,6 +447,7 @@ const INTENT_TYPES = {
   NEXT_STEP: 'next_step',     // Passer à l'étape suivante
   ANALYZE_REPORT: 'analyze_report', // Analyser un rapport
   EQUIPMENT: 'equipment',     // Question sur un équipement
+  DRAFTS: 'drafts',           // Voir les brouillons/procédures incomplètes
   NONE: 'none'                // Pas d'intention procédure
 };
 
@@ -502,6 +503,19 @@ function detectProcedureIntent(message, conversationHistory = []) {
   if (hasCreate && hasProcedure) {
     const subject = extractProcedureSubject(m);
     return { type: INTENT_TYPES.CREATE, query: subject };
+  }
+
+  // 2b. DRAFTS - Voir les brouillons/procédures incomplètes
+  const draftsPatterns = [
+    /(?:mes\s+)?brouillons?/i,
+    /proc[ée]dures?\s+(?:incompl[èe]tes?|en\s+cours|non\s+termin[ée]es?)/i,
+    /(?:reprendre|continuer|finir)\s+(?:une?\s+)?proc[ée]dure/i,
+    /(?:o[uù]\s+)?(?:en\s+)?(?:[ée]tais|suis)[\s-]?je\s+(?:rest[ée])?/i,
+    /(?:qu'?est[\s-]ce\s+que\s+)?j'?ai\s+commenc[ée]/i,
+    /proc[ée]dures?\s+(?:[àa]\s+)?(?:terminer|finir|compl[ée]ter)/i
+  ];
+  if (draftsPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.DRAFTS };
   }
 
   // 3. GUIDE - Demande de guidage
@@ -1265,6 +1279,55 @@ app.post("/chat", async (req, res) => {
             },
             provider: 'system'
           });
+        }
+
+        // -----------------------------------------------------------------
+        // DRAFTS: Voir les brouillons/procédures incomplètes
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.DRAFTS: {
+          try {
+            // Get drafts from localStorage via stored data or check database
+            const { rows: drafts } = await pool.query(`
+              SELECT id, title, description, category, created_at, updated_at,
+                     (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = procedures.id) as step_count
+              FROM procedures
+              WHERE status = 'draft' OR status = 'incomplete'
+              ORDER BY updated_at DESC
+              LIMIT 10
+            `);
+
+            if (drafts.length === 0) {
+              return res.json({
+                message: `📋 **Aucun brouillon trouvé**\n\nTu n'as pas de procédures en cours de création.\n\n→ Pour créer une nouvelle procédure, dis-moi "créer une procédure" ou utilise l'assistant de création.`,
+                openProcedureCreator: false,
+                showDraftsList: true,
+                provider: 'system'
+              });
+            }
+
+            let responseText = `📋 **Tes brouillons** (${drafts.length})\n\n`;
+            drafts.forEach((draft, i) => {
+              const stepInfo = draft.step_count > 0 ? ` • ${draft.step_count} étapes` : '';
+              const dateInfo = draft.updated_at ? new Date(draft.updated_at).toLocaleDateString('fr-FR') : '';
+              responseText += `${i + 1}. **${draft.title || 'Sans titre'}**${stepInfo}\n   📅 ${dateInfo}\n\n`;
+            });
+            responseText += `→ Dis-moi le numéro pour reprendre, ou "créer" pour une nouvelle procédure.`;
+
+            return res.json({
+              message: responseText,
+              drafts: drafts,
+              showDraftsList: true,
+              provider: 'system'
+            });
+          } catch (error) {
+            console.error('[DRAFTS] Error fetching drafts:', error);
+            return res.json({
+              message: `📋 **Brouillons**\n\nPour voir tes procédures en cours de création, clique sur "Mes brouillons" dans l'assistant de création.\n\n→ L'assistant s'ouvre...`,
+              openProcedureCreator: true,
+              procedureCreatorContext: { mode: 'drafts' },
+              provider: 'system'
+            });
+          }
         }
 
         // -----------------------------------------------------------------
@@ -2378,6 +2441,120 @@ app.get("/help", (req, res) => {
       { name: 'Planification', examples: ['planning semaine', 'contrôles en retard'] }
     ]
   });
+});
+
+/**
+ * Get incomplete procedures (drafts) with AI suggestions
+ */
+app.get("/incomplete-procedures", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || 'Nyon';
+    const userEmail = req.header('X-User-Email');
+
+    // Fetch drafts from procedures service
+    const draftsResponse = await fetch(`http://localhost:3026/api/procedures/drafts`, {
+      headers: {
+        'X-Site': site,
+        'X-User-Email': userEmail || ''
+      }
+    });
+
+    let drafts = [];
+    if (draftsResponse.ok) {
+      const data = await draftsResponse.json();
+      drafts = Array.isArray(data) ? data : (data.drafts || []);
+    }
+
+    // Generate AI suggestions for each draft
+    const draftsWithSuggestions = drafts.map(draft => {
+      const stepsCount = draft.step_count || 0;
+      const hasTitle = !!draft.title && draft.title !== 'Brouillon en cours';
+      const hasDescription = !!draft.description;
+
+      let suggestion = '';
+      let priority = 'low';
+      let nextAction = '';
+
+      if (!hasTitle) {
+        suggestion = 'Cette procédure n\'a pas encore de titre. Commence par définir un titre clair.';
+        nextAction = 'Définir le titre';
+        priority = 'high';
+      } else if (stepsCount === 0) {
+        suggestion = 'Aucune étape définie. Ajoute les étapes principales de cette procédure.';
+        nextAction = 'Ajouter des étapes';
+        priority = 'high';
+      } else if (stepsCount < 3) {
+        suggestion = `Seulement ${stepsCount} étape(s). Une procédure complète a généralement 3-10 étapes.`;
+        nextAction = 'Continuer les étapes';
+        priority = 'medium';
+      } else if (!hasDescription) {
+        suggestion = 'Ajoute une description pour mieux expliquer l\'objectif de cette procédure.';
+        nextAction = 'Ajouter description';
+        priority = 'low';
+      } else {
+        suggestion = 'Cette procédure semble prête à être finalisée!';
+        nextAction = 'Finaliser';
+        priority = 'ready';
+      }
+
+      return {
+        ...draft,
+        aiSuggestion: suggestion,
+        nextAction,
+        priority,
+        completionPercent: Math.min(100, (
+          (hasTitle ? 20 : 0) +
+          (hasDescription ? 10 : 0) +
+          (stepsCount > 0 ? 30 : 0) +
+          (stepsCount >= 3 ? 20 : 0) +
+          (draft.ppe?.length > 0 ? 10 : 0) +
+          (draft.risk_level && draft.risk_level !== 'low' ? 10 : 0)
+        ))
+      };
+    });
+
+    // Sort by priority
+    const priorityOrder = { high: 0, medium: 1, low: 2, ready: 3 };
+    draftsWithSuggestions.sort((a, b) =>
+      priorityOrder[a.priority] - priorityOrder[b.priority]
+    );
+
+    // Format response message
+    let message = '';
+    if (draftsWithSuggestions.length === 0) {
+      message = `${EMOJIS.status.success} **Aucun brouillon en cours**\n\nToutes tes procédures sont finalisées!`;
+    } else {
+      message = `${EMOJIS.section.notes} **${draftsWithSuggestions.length} procédure(s) à terminer**\n\n`;
+
+      draftsWithSuggestions.forEach((draft, i) => {
+        const priorityEmoji = draft.priority === 'high' ? EMOJIS.risk.high :
+                              draft.priority === 'medium' ? EMOJIS.risk.medium :
+                              draft.priority === 'ready' ? EMOJIS.status.success : EMOJIS.risk.low;
+
+        message += `**${i + 1}. ${draft.title || 'Sans titre'}** ${priorityEmoji}\n`;
+        message += `   ${createProgressBar(draft.completionPercent, 100, 10)} ${draft.completionPercent}%\n`;
+        message += `   ${EMOJIS.section.recommendations} ${draft.aiSuggestion}\n`;
+        message += `   ${EMOJIS.status.arrow} Action: **${draft.nextAction}**\n\n`;
+      });
+
+      message += `${createDivider()}\n`;
+      message += `${EMOJIS.status.arrow} Dis "reprendre [numéro]" pour continuer un brouillon`;
+    }
+
+    res.json({
+      ok: true,
+      drafts: draftsWithSuggestions,
+      totalDrafts: draftsWithSuggestions.length,
+      message,
+      quickActions: draftsWithSuggestions.slice(0, 3).map((d, i) => ({
+        label: `Reprendre "${(d.title || 'Sans titre').substring(0, 15)}..."`,
+        prompt: `Reprendre brouillon ${i + 1}`
+      }))
+    });
+  } catch (error) {
+    console.error('[AI] Incomplete procedures error:', error);
+    res.json({ ok: false, error: error.message, drafts: [] });
+  }
 });
 
 // -----------------------------------------------------------------------------
