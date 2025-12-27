@@ -23,6 +23,7 @@ import {
   downloadWorkMethodPdf,
   downloadProcedureDocPdf,
   downloadAllDocuments,
+  downloadRAMSExcel,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
@@ -368,6 +369,9 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
         case 'rams':
           await downloadMethodStatementPdf(procedureId);
           break;
+        case 'rams-excel':
+          await downloadRAMSExcel(procedureId);
+          break;
         case 'method':
           await downloadWorkMethodPdf(procedureId);
           break;
@@ -486,7 +490,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
                     <span className="text-xs font-medium text-gray-500">DOCUMENTS À TÉLÉCHARGER</span>
                   </div>
 
-                  {/* RAMS A3 */}
+                  {/* RAMS A3 PDF */}
                   <button
                     onClick={() => handleDownload('rams')}
                     disabled={!!downloading}
@@ -496,10 +500,26 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
                       <Shield className="w-5 h-5 text-white" />
                     </div>
                     <div className="flex-1">
-                      <p className="font-medium text-gray-900">RAMS (A3)</p>
+                      <p className="font-medium text-gray-900">RAMS PDF (A3)</p>
                       <p className="text-xs text-gray-500">Risk Assessment Method Statement</p>
                     </div>
                     {downloading === 'rams' && <Loader2 className="w-4 h-4 animate-spin text-violet-600" />}
+                  </button>
+
+                  {/* RAMS Excel */}
+                  <button
+                    onClick={() => handleDownload('rams-excel')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-emerald-50 transition-colors text-left border-t"
+                  >
+                    <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                      <FileSpreadsheet className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">RAMS Excel</p>
+                      <p className="text-xs text-gray-500">Format tableur modifiable (.xlsx)</p>
+                    </div>
+                    {downloading === 'rams-excel' && <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />}
                   </button>
 
                   {/* Méthodologie A4 */}
@@ -545,7 +565,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
                     </div>
                     <div className="flex-1">
                       <p className="font-medium text-gray-900">Télécharger tout (ZIP)</p>
-                      <p className="text-xs text-gray-500">Les 3 documents en un clic</p>
+                      <p className="text-xs text-gray-500">4 documents (3 PDF + 1 Excel)</p>
                     </div>
                     {downloading === 'all' && <Loader2 className="w-4 h-4 animate-spin text-purple-600" />}
                   </button>
