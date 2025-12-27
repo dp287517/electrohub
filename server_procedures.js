@@ -26,6 +26,7 @@ import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import archiver from "archiver";
 import XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 // Safety Equipment Library for PDF generation with images
 import {
@@ -4462,59 +4463,197 @@ const ANNEXE3_EPI = [
   "Masque FFP3", "Masque visière", "Masque cartouche ABEK"
 ];
 
-// Fonction de génération Excel RAMS
+// Fonction de génération Excel RAMS avec ExcelJS (couleurs, bordures, fusions)
 async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}) {
-  const wb = XLSX.utils.book_new();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'ElectroHub';
+  workbook.created = new Date();
 
   const companyName = siteSettings.company_name || "ElectroHub";
   const workDate = new Date().toLocaleDateString("fr-FR");
   const approver = siteSettings.approver_name || "";
 
+  // Couleurs du thème RAMS
+  const colors = {
+    headerBg: '1F4E79',      // Bleu foncé pour en-têtes
+    headerText: 'FFFFFF',    // Blanc
+    evalInitialBg: 'FFC000', // Orange pour évaluation initiale
+    evalFinalBg: '92D050',   // Vert pour évaluation finale
+    dangerBg: 'FCE4D6',      // Orange clair pour dangers
+    measuresBg: 'E2EFDA',    // Vert clair pour mesures
+    ppeBg: 'DDEBF7',         // Bleu clair pour EPI
+    nirHighBg: 'FF0000',     // Rouge pour NIR élevé (>9)
+    nirMediumBg: 'FFC000',   // Orange pour NIR moyen (5-9)
+    nirLowBg: '92D050',      // Vert pour NIR faible (<5)
+    borderColor: '000000',   // Noir pour bordures
+  };
+
+  // Style de bordure standard
+  const thinBorder = {
+    top: { style: 'thin', color: { argb: colors.borderColor } },
+    left: { style: 'thin', color: { argb: colors.borderColor } },
+    bottom: { style: 'thin', color: { argb: colors.borderColor } },
+    right: { style: 'thin', color: { argb: colors.borderColor } }
+  };
+
+  // Fonction pour obtenir la couleur du NIR
+  const getNirColor = (nir) => {
+    if (nir >= 10) return colors.nirHighBg;
+    if (nir >= 5) return colors.nirMediumBg;
+    return colors.nirLowBg;
+  };
+
   // === ONGLET PRINCIPAL MS_RA(FR) ===
-  const mainData = [];
+  const wsMain = workbook.addWorksheet('MS_RA(FR)');
 
-  // En-tête du document
-  mainData.push(["", "Document à remplir par l'ENTREPRISE avant démarrage des travaux"]);
-  mainData.push([
-    "", "ACTIVITÉ PRINCIPALE:", procedure.title || "", "",
-    `Approuvé par ${companyName} (Nom / prénom): ${approver}`, "", "", "", "",
-    "Date:", "", "Visa"
-  ]);
-  mainData.push([
-    "", "Complété par ENTREPRISE:", procedure.category || "Maintenance électrique",
-    "Date:", workDate, "", "", "", "", `Date: ${workDate}`, "", "Visa"
-  ]);
-  mainData.push([
-    "", "Règlementation:\nLes jeunes de 13/18 ans doivent recevoir une formation spécifique...", "", "",
-    `Date de travaux: ${workDate}\nHeure de travail: 07h00 - 16h30`, "", "", "", "",
-    "Revue obligatoire Construction Safety\nsi NIR > 9 ou si G > 3", "", ""
-  ]);
+  // Définir largeurs de colonnes
+  wsMain.columns = [
+    { key: 'A', width: 5 },
+    { key: 'B', width: 40 },
+    { key: 'C', width: 28 },
+    { key: 'D', width: 45 },
+    { key: 'E', width: 12 },
+    { key: 'F', width: 12 },
+    { key: 'G', width: 12 },
+    { key: 'H', width: 40 },
+    { key: 'I', width: 35 },
+    { key: 'J', width: 45 },
+    { key: 'K', width: 18 },
+    { key: 'L', width: 12 },
+    { key: 'M', width: 12 },
+    { key: 'N', width: 12 },
+  ];
 
-  // En-têtes du tableau principal
-  mainData.push(["", "MÉTHODOLOGIE et IDENTIFICATION des DANGERS", "", "", "ÉVALUATION des RISQUES", "", "", "", "", "", "", "Évaluation finale"]);
-  mainData.push(["", "", "", "", "Évaluation initiale", "", "", "", "", "", "", "", "", "Indice de risque final"]);
-  mainData.push([
-    "", "", "", "", "Composantes du risque\n(Rf Annexe 4)", "", "Indice de risque\ninitial",
-    "Mesures correctives\n(Rf Annexe 2, 3)", "", "", "", "Composantes du risque\n(Rf Annexe 4)", "", "(Rf Annexe 4)"
-  ]);
-  mainData.push([
-    "", "Tâches / détail des activités\nOU\nParties d'équipement",
-    "Danger (ex.: outil coupant, travail en hauteur, etc.)",
-    "Scénario d'accident\n\"Lors de l'activité..\"",
-    "Gravité (G)", "Probabilité (P)", "NIR\n(G × P)",
-    "Mesures à mettre en place\n(Rf Annexe 2)",
-    "Équipement de protection individuel (EPI)\n(Rf Annexe 3)",
-    "Actions détaillées des mesures à mettre en place",
-    "Responsable",
-    "Gravité (G)", "Probabilité (P)", "NIR\n(G × P)"
-  ]);
-  mainData.push([]); // Ligne vide
+  // Ligne 1 - Titre document
+  wsMain.mergeCells('B1:N1');
+  const titleCell = wsMain.getCell('B1');
+  titleCell.value = 'Document à remplir par l\'ENTREPRISE avant démarrage des travaux';
+  titleCell.font = { bold: true, size: 14, color: { argb: colors.headerBg } };
+  titleCell.alignment = { horizontal: 'center' };
 
-  // Générer les lignes pour chaque étape
+  // Ligne 2 - Activité principale
+  wsMain.mergeCells('C2:D2');
+  wsMain.getCell('B2').value = 'ACTIVITÉ PRINCIPALE:';
+  wsMain.getCell('B2').font = { bold: true };
+  wsMain.getCell('C2').value = procedure.title || '';
+  wsMain.getCell('C2').font = { bold: true, size: 12 };
+  wsMain.mergeCells('E2:I2');
+  wsMain.getCell('E2').value = `Approuvé par ${companyName} (Nom / prénom): ${approver}`;
+  wsMain.getCell('J2').value = 'Date:';
+  wsMain.getCell('L2').value = 'Visa';
+
+  // Ligne 3 - Entreprise
+  wsMain.getCell('B3').value = 'Complété par ENTREPRISE:';
+  wsMain.getCell('C3').value = procedure.category || 'Maintenance électrique';
+  wsMain.getCell('D3').value = 'Date:';
+  wsMain.getCell('E3').value = workDate;
+  wsMain.mergeCells('J3:K3');
+  wsMain.getCell('J3').value = `Date: ${workDate}`;
+  wsMain.getCell('L3').value = 'Visa';
+
+  // Ligne 4 - Règlementation
+  wsMain.mergeCells('B4:D4');
+  wsMain.getCell('B4').value = 'Règlementation:\nLes jeunes de 13/18 ans doivent recevoir une formation spécifique...';
+  wsMain.getCell('B4').alignment = { wrapText: true };
+  wsMain.mergeCells('E4:I4');
+  wsMain.getCell('E4').value = `Date de travaux: ${workDate}\nHeure de travail: 07h00 - 16h30`;
+  wsMain.getCell('E4').alignment = { wrapText: true };
+  wsMain.mergeCells('J4:N4');
+  wsMain.getCell('J4').value = 'Revue obligatoire Construction Safety\nsi NIR > 9 ou si G > 3';
+  wsMain.getCell('J4').alignment = { wrapText: true };
+  wsMain.getRow(4).height = 40;
+
+  // Ligne 5 - En-têtes principaux
+  wsMain.mergeCells('B5:D7');
+  const methCell = wsMain.getCell('B5');
+  methCell.value = 'MÉTHODOLOGIE et IDENTIFICATION des DANGERS';
+  methCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  methCell.font = { bold: true, color: { argb: colors.headerText }, size: 11 };
+  methCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  methCell.border = thinBorder;
+
+  wsMain.mergeCells('E5:N5');
+  const evalCell = wsMain.getCell('E5');
+  evalCell.value = 'ÉVALUATION des RISQUES';
+  evalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  evalCell.font = { bold: true, color: { argb: colors.headerText }, size: 11 };
+  evalCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  evalCell.border = thinBorder;
+
+  // Ligne 6 - Sous-en-têtes évaluation
+  wsMain.mergeCells('E6:G6');
+  const evalInitCell = wsMain.getCell('E6');
+  evalInitCell.value = 'Évaluation initiale';
+  evalInitCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalInitialBg } };
+  evalInitCell.font = { bold: true };
+  evalInitCell.alignment = { horizontal: 'center' };
+  evalInitCell.border = thinBorder;
+
+  wsMain.mergeCells('L6:N6');
+  const evalFinCell = wsMain.getCell('L6');
+  evalFinCell.value = 'Évaluation finale';
+  evalFinCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalFinalBg } };
+  evalFinCell.font = { bold: true };
+  evalFinCell.alignment = { horizontal: 'center' };
+  evalFinCell.border = thinBorder;
+
+  // Ligne 7 - Sous-sous-en-têtes
+  wsMain.mergeCells('E7:F7');
+  wsMain.getCell('E7').value = 'Composantes du risque\n(Rf Annexe 4)';
+  wsMain.getCell('E7').alignment = { wrapText: true, horizontal: 'center' };
+  wsMain.getCell('E7').border = thinBorder;
+  wsMain.getCell('G7').value = 'Indice de risque\ninitial';
+  wsMain.getCell('G7').alignment = { wrapText: true, horizontal: 'center' };
+  wsMain.getCell('G7').border = thinBorder;
+  wsMain.mergeCells('H7:K7');
+  wsMain.getCell('H7').value = 'Mesures correctives (Rf Annexe 2, 3)';
+  wsMain.getCell('H7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+  wsMain.getCell('H7').alignment = { horizontal: 'center' };
+  wsMain.getCell('H7').border = thinBorder;
+  wsMain.mergeCells('L7:M7');
+  wsMain.getCell('L7').value = 'Composantes du risque\n(Rf Annexe 4)';
+  wsMain.getCell('L7').alignment = { wrapText: true, horizontal: 'center' };
+  wsMain.getCell('L7').border = thinBorder;
+  wsMain.getCell('N7').value = 'NIR\nfinal';
+  wsMain.getCell('N7').alignment = { wrapText: true, horizontal: 'center' };
+  wsMain.getCell('N7').border = thinBorder;
+  wsMain.getRow(7).height = 35;
+
+  // Ligne 8 - En-têtes de colonnes détaillés
+  const headers = [
+    '', 'Tâches / détail des activités\nOU\nParties d\'équipement',
+    'Danger (ex.: outil coupant, travail en hauteur, etc.)',
+    'Scénario d\'accident\n"Lors de l\'activité.."',
+    'Gravité\n(G)', 'Probabilité\n(P)', 'NIR\n(G × P)',
+    'Mesures à mettre en place\n(Rf Annexe 2)',
+    'Équipement de protection individuel (EPI)\n(Rf Annexe 3)',
+    'Actions détaillées des mesures à mettre en place',
+    'Responsable',
+    'Gravité\n(G)', 'Probabilité\n(P)', 'NIR\n(G × P)'
+  ];
+  const headerRow = wsMain.getRow(8);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, size: 9 };
+    cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
+    cell.border = thinBorder;
+    if (i >= 4 && i <= 6) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalInitialBg } };
+    if (i >= 11 && i <= 13) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalFinalBg } };
+    if (i === 7) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+    if (i === 8) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+  });
+  headerRow.height = 50;
+
+  // Générer les lignes de données
+  let currentRow = 9;
+  const dataStartRow = currentRow;
+
   if (aiAnalysis && aiAnalysis.steps) {
     aiAnalysis.steps.forEach((step, stepIdx) => {
       const stepTitle = `Étape ${stepIdx + 1}\n${step.title || steps[stepIdx]?.title || ''}`;
       const hazards = step.hazards || [];
+      const stepStartRow = currentRow;
 
       hazards.forEach((hazard, hazardIdx) => {
         const gi = hazard.initial_gravity || hazard.gi || 3;
@@ -4524,172 +4663,237 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
         const pf = hazard.final_probability || hazard.pf || 1;
         const nirFinal = gf * pf;
 
-        const ppeList = (hazard.ppe || hazard.epiRequired || [])
-          .map(p => `□ ${p}`).join("\n");
+        const ppeList = (hazard.ppe || hazard.epiRequired || []).map(p => `□ ${p}`).join("\n");
         const measures = hazard.corrective_measures || hazard.measures || "";
         const actions = hazard.detailed_actions || hazard.actions || "";
 
-        mainData.push([
-          "",
-          hazardIdx === 0 ? stepTitle : "",
-          `□ ${hazard.category || hazard.checkbox || hazard.type || "Danger"}`,
-          hazard.scenario || hazard.danger || "",
-          gi, pi, nirInitial,
-          measures,
-          ppeList,
-          actions,
-          hazard.responsible || "",
-          gf, pf, nirFinal
-        ]);
+        const row = wsMain.getRow(currentRow);
+        row.getCell(1).value = '';
+        row.getCell(2).value = hazardIdx === 0 ? stepTitle : '';
+        row.getCell(3).value = `□ ${hazard.category || hazard.checkbox || hazard.type || "Danger"}`;
+        row.getCell(4).value = hazard.scenario || hazard.danger || '';
+        row.getCell(5).value = gi;
+        row.getCell(6).value = pi;
+        row.getCell(7).value = nirInitial;
+        row.getCell(8).value = measures;
+        row.getCell(9).value = ppeList;
+        row.getCell(10).value = actions;
+        row.getCell(11).value = hazard.responsible || '';
+        row.getCell(12).value = gf;
+        row.getCell(13).value = pf;
+        row.getCell(14).value = nirFinal;
+
+        // Appliquer les styles
+        for (let c = 1; c <= 14; c++) {
+          const cell = row.getCell(c);
+          cell.border = thinBorder;
+          cell.alignment = { wrapText: true, vertical: 'top' };
+          if (c === 2) cell.font = { bold: true };
+          if (c === 3) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.dangerBg } };
+          if (c === 8) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+          if (c === 9) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+          if (c === 5 || c === 6) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (c === 7) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: getNirColor(nirInitial) } };
+            cell.font = { bold: true, color: { argb: nirInitial >= 10 ? 'FFFFFF' : '000000' } };
+          }
+          if (c === 12 || c === 13) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (c === 14) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: getNirColor(nirFinal) } };
+            cell.font = { bold: true, color: { argb: nirFinal >= 10 ? 'FFFFFF' : '000000' } };
+          }
+        }
+        row.height = 45;
+        currentRow++;
       });
+
+      // Fusionner les cellules de l'étape si plusieurs dangers
+      if (hazards.length > 1) {
+        wsMain.mergeCells(stepStartRow, 2, currentRow - 1, 2);
+      }
     });
   } else {
-    // Fallback: utiliser les étapes directement
+    // Fallback
     steps.forEach((step, idx) => {
       const gi = 3, pi = 2, gf = 3, pf = 1;
-      mainData.push([
-        "",
-        `Étape ${idx + 1}\n${step.title || ''}`,
-        "□ À identifier",
-        step.description || "",
-        gi, pi, gi * pi,
-        step.instructions || "",
-        "",
-        step.warning || "",
-        "",
-        gf, pf, gf * pf
-      ]);
+      const row = wsMain.getRow(currentRow);
+      row.getCell(2).value = `Étape ${idx + 1}\n${step.title || ''}`;
+      row.getCell(3).value = '□ À identifier';
+      row.getCell(4).value = step.description || '';
+      row.getCell(5).value = gi;
+      row.getCell(6).value = pi;
+      row.getCell(7).value = gi * pi;
+      row.getCell(8).value = step.instructions || '';
+      row.getCell(10).value = step.warning || '';
+      row.getCell(12).value = gf;
+      row.getCell(13).value = pf;
+      row.getCell(14).value = gf * pf;
+      for (let c = 1; c <= 14; c++) {
+        row.getCell(c).border = thinBorder;
+        row.getCell(c).alignment = { wrapText: true };
+      }
+      currentRow++;
     });
   }
 
-  // Ajouter lignes vides puis section signatures
-  mainData.push([]);
-  mainData.push([]);
-  mainData.push(["", "NOTE:", "", "", "", "", "", "En signant vous vous engagez à respecter les consignes..."]);
-  mainData.push([]);
+  // Section signatures
+  currentRow += 2;
+  wsMain.getCell(`B${currentRow}`).value = 'NOTE:';
+  wsMain.getCell(`B${currentRow}`).font = { bold: true };
+  wsMain.mergeCells(`H${currentRow}:N${currentRow}`);
+  wsMain.getCell(`H${currentRow}`).value = 'En signant vous vous engagez à respecter les consignes de sécurité et les mesures correctives ci-dessus.';
 
+  currentRow += 2;
   // Section Plan de secours
-  mainData.push([
-    "POS", "Plan de secours     N° URGENCE SITE    +41 22 567 40 00", "",
-    "Obligatoire si travaux en espace confiné, travail en hauteur...",
-    "Contrôle", "", "", "Prise de connaissance intervenants"
-  ]);
-  mainData.push([
-    "", "Détail de l'organisation", "Sélection", "Commentaire",
-    "Conforme", "Non\nConforme", "Visa", "Nom", "Prénom", "Fonction", "Date", "Signature"
-  ]);
-
-  // Créer la feuille principale
-  const wsMain = XLSX.utils.aoa_to_sheet(mainData);
-
-  // Définir largeurs de colonnes (identique au fichier original)
-  wsMain['!cols'] = [
-    { wch: 5 },   // A - vide
-    { wch: 35 },  // B - Tâches / détail des activités
-    { wch: 25 },  // C - Danger
-    { wch: 40 },  // D - Scénario d'accident
-    { wch: 10 },  // E - Gravité initiale (G)
-    { wch: 10 },  // F - Probabilité initiale (P)
-    { wch: 10 },  // G - NIR initial
-    { wch: 35 },  // H - Mesures correctives
-    { wch: 30 },  // I - EPI
-    { wch: 40 },  // J - Actions détaillées
-    { wch: 15 },  // K - Responsable
-    { wch: 10 },  // L - Gravité finale (G)
-    { wch: 10 },  // M - Probabilité finale (P)
-    { wch: 10 },  // N - NIR final
-  ];
-
-  XLSX.utils.book_append_sheet(wb, wsMain, "MS_RA(FR)");
+  wsMain.getCell(`A${currentRow}`).value = 'POS';
+  wsMain.getCell(`A${currentRow}`).font = { bold: true };
+  wsMain.mergeCells(`B${currentRow}:C${currentRow}`);
+  wsMain.getCell(`B${currentRow}`).value = 'Plan de secours     N° URGENCE SITE    +41 22 567 40 00';
+  wsMain.getCell(`B${currentRow}`).font = { bold: true, color: { argb: 'FF0000' } };
 
   // === ONGLET ANNEXE 1-2-3 ===
-  const annexe123Data = [
-    ["FR", "EN", "AL", "FR", "EN", "AL", "FR", "EN", "AL"],
-    ["ANNEXE 1. Aide à l'identification des dangers", "", "", "ANNEXE 2. Aide à l'identification des Mesures", "", "", "ANNEXE 3. Aide à l'identification des EPI"],
-    ["Dangers « physiques »", "", "", "Mesures", "", "", "Protection « physiques »"],
+  const wsAnnexe123 = workbook.addWorksheet('Annexe 1-2-3 (E)');
+  wsAnnexe123.columns = [
+    { width: 45 }, { width: 45 }, { width: 45 },
+    { width: 50 }, { width: 50 }, { width: 50 },
+    { width: 50 }, { width: 50 }, { width: 50 }
   ];
 
-  // Remplir avec les données des annexes
+  // En-têtes
+  wsAnnexe123.getRow(1).values = ['FR', 'EN', 'AL', 'FR', 'EN', 'AL', 'FR', 'EN', 'AL'];
+  wsAnnexe123.mergeCells('A2:C2');
+  wsAnnexe123.getCell('A2').value = 'ANNEXE 1. Aide à l\'identification des dangers';
+  wsAnnexe123.getCell('A2').font = { bold: true };
+  wsAnnexe123.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.dangerBg } };
+  wsAnnexe123.mergeCells('D2:F2');
+  wsAnnexe123.getCell('D2').value = 'ANNEXE 2. Aide à l\'identification des Mesures';
+  wsAnnexe123.getCell('D2').font = { bold: true };
+  wsAnnexe123.getCell('D2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+  wsAnnexe123.mergeCells('G2:I2');
+  wsAnnexe123.getCell('G2').value = 'ANNEXE 3. Aide à l\'identification des EPI';
+  wsAnnexe123.getCell('G2').font = { bold: true };
+  wsAnnexe123.getCell('G2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+
+  // Remplir avec les données
   const allDangers = [
-    ...ANNEXE1_DANGERS.physiques,
-    "Dangers « chute »", ...ANNEXE1_DANGERS.chute,
-    "Dangers « levage »", ...ANNEXE1_DANGERS.levage,
-    "Dangers « environnement »", ...ANNEXE1_DANGERS.environnement,
-    "Dangers « mécaniques »", ...ANNEXE1_DANGERS.mecaniques,
-    "Dangers « électriques »", ...ANNEXE1_DANGERS.electriques,
-    "Dangers « biologiques »", ...ANNEXE1_DANGERS.biologiques,
-    "Dangers « chimiques »", ...ANNEXE1_DANGERS.chimiques
+    'Dangers « physiques »', ...ANNEXE1_DANGERS.physiques,
+    'Dangers « chute »', ...ANNEXE1_DANGERS.chute,
+    'Dangers « levage »', ...ANNEXE1_DANGERS.levage,
+    'Dangers « environnement »', ...ANNEXE1_DANGERS.environnement,
+    'Dangers « mécaniques »', ...ANNEXE1_DANGERS.mecaniques,
+    'Dangers « électriques »', ...ANNEXE1_DANGERS.electriques,
+    'Dangers « biologiques »', ...ANNEXE1_DANGERS.biologiques,
+    'Dangers « chimiques »', ...ANNEXE1_DANGERS.chimiques
   ];
 
   for (let i = 0; i < Math.max(allDangers.length, ANNEXE2_MESURES.length, ANNEXE3_EPI.length); i++) {
-    annexe123Data.push([
-      allDangers[i] ? `□ ${allDangers[i]}` : "",
-      "", "",
-      ANNEXE2_MESURES[i] ? `□ ${ANNEXE2_MESURES[i]}` : "",
-      "", "",
-      ANNEXE3_EPI[i] ? `□ ${ANNEXE3_EPI[i]}` : "",
-      "", ""
-    ]);
+    const row = wsAnnexe123.getRow(i + 3);
+    const danger = allDangers[i] || '';
+    const isCategory = danger.startsWith('Dangers «');
+    row.getCell(1).value = isCategory ? danger : (danger ? `□ ${danger}` : '');
+    if (isCategory) row.getCell(1).font = { bold: true };
+    row.getCell(4).value = ANNEXE2_MESURES[i] ? `□ ${ANNEXE2_MESURES[i]}` : '';
+    row.getCell(7).value = ANNEXE3_EPI[i] ? `□ ${ANNEXE3_EPI[i]}` : '';
   }
 
-  const wsAnnexe123 = XLSX.utils.aoa_to_sheet(annexe123Data);
-  wsAnnexe123['!cols'] = [
-    { wch: 40 }, { wch: 40 }, { wch: 40 },
-    { wch: 45 }, { wch: 45 }, { wch: 45 },
-    { wch: 45 }, { wch: 45 }, { wch: 45 }
-  ];
-  XLSX.utils.book_append_sheet(wb, wsAnnexe123, "Annexe 1-2-3 (E)");
-
   // === ONGLET ANNEXE 4 - Échelles de cotation ===
-  const annexe4Data = [
-    ["FR", "", "", "", "", "EN"],
-    ["ANNEXE 4. Les 3 critères d'évaluation du risque"],
-    ["GRAVITÉ : le plus haut niveau de conséquences vraisemblables"],
-    ["Niveau", "Description", "Facteur", "Mots-clés"],
-    ["Catastrophique", "Mortalité, invalide à vie", "5", "décès, mort"],
-    ["Critique", "Perte de temps avec incapacité permanente", "4", "Amputation, fractures multiples, surdité, brûlure 3e degré"],
-    ["Grave", "Perte de temps avec incapacité temporaire", "3", "Entorse, fracture simple, tendinite, commotion"],
-    ["Important", "Perte de temps, retour au poste", "2", "Foulure, coupure profonde, brûlure modérée"],
-    ["Mineure", "Premiers soins sans perte de temps", "1", "Ecchymose, inconfort, égratignure"],
-    [],
-    ["PROBABILITÉ : quelle est la probabilité que la gravité identifiée se produise?"],
-    ["Niveau", "Description", "Facteur"],
-    ["Très probable", "Aucune mesure de sécurité, va certainement survenir", "5"],
-    ["Probable", "Mesures de sécurité faibles (EPI seulement)", "4"],
-    ["Possible", "Mesures de prévention en place (formation, procédures)", "3"],
-    ["Peu probable", "Contrôles techniques en place (protecteurs, barrières)", "2"],
-    ["Improbable", "Pratiquement impossible, élimination à la source", "1"],
+  const wsAnnexe4 = workbook.addWorksheet('Annexe 4');
+  wsAnnexe4.columns = [{ width: 20 }, { width: 60 }, { width: 12 }, { width: 55 }];
+
+  wsAnnexe4.getRow(1).values = ['FR', '', '', '', '', 'EN'];
+  wsAnnexe4.mergeCells('A2:D2');
+  wsAnnexe4.getCell('A2').value = 'ANNEXE 4. Les 3 critères d\'évaluation du risque';
+  wsAnnexe4.getCell('A2').font = { bold: true, size: 14 };
+
+  wsAnnexe4.mergeCells('A3:D3');
+  wsAnnexe4.getCell('A3').value = 'GRAVITÉ : le plus haut niveau de conséquences vraisemblables';
+  wsAnnexe4.getCell('A3').font = { bold: true };
+  wsAnnexe4.getCell('A3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  wsAnnexe4.getCell('A3').font = { bold: true, color: { argb: 'FFFFFF' } };
+
+  wsAnnexe4.getRow(4).values = ['Niveau', 'Description', 'Facteur', 'Mots-clés'];
+  wsAnnexe4.getRow(4).font = { bold: true };
+
+  const gravityData = [
+    ['Catastrophique', 'Mortalité, invalide à vie', 5, 'décès, mort', 'FF0000'],
+    ['Critique', 'Perte de temps avec incapacité permanente', 4, 'Amputation, fractures multiples, surdité, brûlure 3e degré', 'FF6600'],
+    ['Grave', 'Perte de temps avec incapacité temporaire', 3, 'Entorse, fracture simple, tendinite, commotion', 'FFC000'],
+    ['Important', 'Perte de temps, retour au poste', 2, 'Foulure, coupure profonde, brûlure modérée', 'FFFF00'],
+    ['Mineure', 'Premiers soins sans perte de temps', 1, 'Ecchymose, inconfort, égratignure', '92D050'],
   ];
 
-  const wsAnnexe4 = XLSX.utils.aoa_to_sheet(annexe4Data);
-  wsAnnexe4['!cols'] = [{ wch: 20 }, { wch: 55 }, { wch: 10 }, { wch: 50 }];
-  XLSX.utils.book_append_sheet(wb, wsAnnexe4, "Annexe 4");
+  gravityData.forEach((data, i) => {
+    const row = wsAnnexe4.getRow(5 + i);
+    row.values = [data[0], data[1], data[2], data[3]];
+    row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: data[4] } };
+    row.getCell(3).alignment = { horizontal: 'center' };
+    for (let c = 1; c <= 4; c++) row.getCell(c).border = thinBorder;
+  });
+
+  wsAnnexe4.mergeCells('A11:D11');
+  wsAnnexe4.getCell('A11').value = 'PROBABILITÉ : quelle est la probabilité que la gravité identifiée se produise?';
+  wsAnnexe4.getCell('A11').font = { bold: true };
+  wsAnnexe4.getCell('A11').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  wsAnnexe4.getCell('A11').font = { bold: true, color: { argb: 'FFFFFF' } };
+
+  wsAnnexe4.getRow(12).values = ['Niveau', 'Description', 'Facteur'];
+  wsAnnexe4.getRow(12).font = { bold: true };
+
+  const probData = [
+    ['Très probable', 'Aucune mesure de sécurité, va certainement survenir', 5],
+    ['Probable', 'Mesures de sécurité faibles (EPI seulement)', 4],
+    ['Possible', 'Mesures de prévention en place (formation, procédures)', 3],
+    ['Peu probable', 'Contrôles techniques en place (protecteurs, barrières)', 2],
+    ['Improbable', 'Pratiquement impossible, élimination à la source', 1],
+  ];
+
+  probData.forEach((data, i) => {
+    const row = wsAnnexe4.getRow(13 + i);
+    row.values = [data[0], data[1], data[2]];
+    row.getCell(3).alignment = { horizontal: 'center' };
+    for (let c = 1; c <= 3; c++) row.getCell(c).border = thinBorder;
+  });
 
   // === ONGLET ANNEXE 5 - Plan d'urgence ===
-  const annexe5Data = [
-    ["FR", "", "EN", "", "AL"],
-    ["Plan d'urgence"],
-    ["Événement", "Plan de secours"],
-    ["Travail en hauteur", "□ Présence seconde personne"],
-    ["", "□ Équipement de sauvetage"],
-    ["", "□ Personne formée secours"],
-    ["", "□ Seconde nacelle"],
-    ["Travailleur isolé", "□ Utilisation DATI"],
-    ["", "□ Utilisation détecteur oxygène"],
-    ["Activités par point chaud", "□ Formée permis utilisation extincteur"],
-    ["Travail en espace confiné", "□ Formée à l'extraction d'une personne"],
-    ["", "□ Contact loge de sécurité +41 22 567 40 00"],
-    ["", "□ Évacuation, place de rassemblement"],
-    ["", "□ Utilisation d'extincteur"],
+  const wsAnnexe5 = workbook.addWorksheet('Annexe 5');
+  wsAnnexe5.columns = [{ width: 30 }, { width: 50 }];
+
+  wsAnnexe5.getRow(1).values = ['FR', '', 'EN', '', 'AL'];
+  wsAnnexe5.mergeCells('A2:B2');
+  wsAnnexe5.getCell('A2').value = 'Plan d\'urgence';
+  wsAnnexe5.getCell('A2').font = { bold: true, size: 14 };
+  wsAnnexe5.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0000' } };
+  wsAnnexe5.getCell('A2').font = { bold: true, size: 14, color: { argb: 'FFFFFF' } };
+
+  wsAnnexe5.getRow(3).values = ['Événement', 'Plan de secours'];
+  wsAnnexe5.getRow(3).font = { bold: true };
+
+  const emergencyData = [
+    ['Travail en hauteur', '□ Présence seconde personne'],
+    ['', '□ Équipement de sauvetage'],
+    ['', '□ Personne formée secours'],
+    ['', '□ Seconde nacelle'],
+    ['Travailleur isolé', '□ Utilisation DATI'],
+    ['', '□ Utilisation détecteur oxygène'],
+    ['Activités par point chaud', '□ Formée permis utilisation extincteur'],
+    ['Travail en espace confiné', '□ Formée à l\'extraction d\'une personne'],
+    ['', '□ Contact loge de sécurité +41 22 567 40 00'],
+    ['', '□ Évacuation, place de rassemblement'],
+    ['', '□ Utilisation d\'extincteur'],
   ];
 
-  const wsAnnexe5 = XLSX.utils.aoa_to_sheet(annexe5Data);
-  wsAnnexe5['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 50 }, { wch: 50 }, { wch: 50 }];
-  XLSX.utils.book_append_sheet(wb, wsAnnexe5, "Annexe 5");
+  emergencyData.forEach((data, i) => {
+    const row = wsAnnexe5.getRow(4 + i);
+    row.values = [data[0], data[1]];
+    if (data[0]) row.getCell(1).font = { bold: true };
+    for (let c = 1; c <= 2; c++) row.getCell(c).border = thinBorder;
+  });
 
-  // Générer le buffer Excel
-  const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  return excelBuffer;
+  // Générer le buffer
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 // API Endpoint: Download RAMS Excel
