@@ -809,6 +809,64 @@ async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS idx_control_records_hv ON control_records(hv_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_records_glo ON control_records(glo_equipment_id);
       CREATE INDEX IF NOT EXISTS idx_control_records_type ON control_records(equipment_type);
+
+      -- =====================================================
+      -- OBSOLESCENCE & LIFECYCLE TRACKING
+      -- =====================================================
+      -- Switchboards obsolescence
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'installation_date') THEN
+        ALTER TABLE switchboards ADD COLUMN installation_date DATE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'expected_lifespan_years') THEN
+        ALTER TABLE switchboards ADD COLUMN expected_lifespan_years INTEGER DEFAULT 25;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'end_of_life_date') THEN
+        ALTER TABLE switchboards ADD COLUMN end_of_life_date DATE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'replacement_planned_date') THEN
+        ALTER TABLE switchboards ADD COLUMN replacement_planned_date DATE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'obsolescence_status') THEN
+        ALTER TABLE switchboards ADD COLUMN obsolescence_status TEXT DEFAULT 'active';
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'lifecycle_notes') THEN
+        ALTER TABLE switchboards ADD COLUMN lifecycle_notes TEXT;
+      END IF;
+
+      -- Devices obsolescence
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'installation_date') THEN
+        ALTER TABLE devices ADD COLUMN installation_date DATE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'expected_lifespan_years') THEN
+        ALTER TABLE devices ADD COLUMN expected_lifespan_years INTEGER DEFAULT 20;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'end_of_life_date') THEN
+        ALTER TABLE devices ADD COLUMN end_of_life_date DATE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'obsolescence_status') THEN
+        ALTER TABLE devices ADD COLUMN obsolescence_status TEXT DEFAULT 'active';
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'spare_parts_available') THEN
+        ALTER TABLE devices ADD COLUMN spare_parts_available BOOLEAN DEFAULT true;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'manufacturer_support_until') THEN
+        ALTER TABLE devices ADD COLUMN manufacturer_support_until DATE;
+      END IF;
+
+      -- Equipment live status for animation
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'live_status') THEN
+        ALTER TABLE switchboards ADD COLUMN live_status TEXT DEFAULT 'normal';
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'last_status_update') THEN
+        ALTER TABLE switchboards ADD COLUMN last_status_update TIMESTAMPTZ;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'live_status') THEN
+        ALTER TABLE devices ADD COLUMN live_status TEXT DEFAULT 'normal';
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'last_status_update') THEN
+        ALTER TABLE devices ADD COLUMN last_status_update TIMESTAMPTZ;
+      END IF;
+
     END $$;
 
     -- =======================================================
