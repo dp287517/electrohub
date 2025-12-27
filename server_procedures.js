@@ -25,6 +25,7 @@ import OpenAI from "openai";
 // Gemini fallback
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import archiver from "archiver";
+import XLSX from "xlsx";
 
 // Safety Equipment Library for PDF generation with images
 import {
@@ -4331,11 +4332,35 @@ app.get("/api/procedures/:id/all-documents", async (req, res) => {
     const title = procedure.title || "procedure";
     const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 30);
 
-    // Generate all 3 PDFs in parallel
-    const [ramsPdf, workMethodPdf, procedurePdf] = await Promise.all([
+    // Get AI analysis for Excel generation
+    let aiAnalysis = null;
+    if (procedure.ai_rams_analysis) {
+      try {
+        aiAnalysis = typeof procedure.ai_rams_analysis === 'string'
+          ? JSON.parse(procedure.ai_rams_analysis)
+          : procedure.ai_rams_analysis;
+      } catch (e) {}
+    }
+    if (!aiAnalysis || !aiAnalysis.steps) {
+      aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
+    }
+
+    // Get site settings for Excel
+    let siteSettings = {};
+    try {
+      const site = req.headers["x-site"] || "default";
+      const { rows: settings } = await pool.query(
+        `SELECT * FROM site_settings WHERE site = $1`, [site]
+      );
+      if (settings.length > 0) siteSettings = settings[0];
+    } catch (e) {}
+
+    // Generate all 4 documents in parallel (3 PDFs + 1 Excel)
+    const [ramsPdf, workMethodPdf, procedurePdf, ramsExcel] = await Promise.all([
       generateMethodStatementA3PDF(id, baseUrl),
       generateWorkMethodPDF(procedure, steps, baseUrl),
-      generateProcedureDocPDF(procedure, steps, baseUrl)
+      generateProcedureDocPDF(procedure, steps, baseUrl),
+      generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings)
     ]);
 
     // Create ZIP archive
@@ -4351,12 +4376,433 @@ app.get("/api/procedures/:id/all-documents", async (req, res) => {
 
     const dateStr = new Date().toISOString().split("T")[0];
     archive.append(ramsPdf, { name: `RAMS_${safeTitle}_${dateStr}.pdf` });
+    archive.append(ramsExcel, { name: `RAMS_${safeTitle}_${dateStr}.xlsx` });
     archive.append(workMethodPdf, { name: `Methode_Travail_${safeTitle}_${dateStr}.pdf` });
     archive.append(procedurePdf, { name: `Procedure_${safeTitle}_${dateStr}.pdf` });
 
     await archive.finalize();
   } catch (err) {
     console.error("Error generating all documents:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// RAMS EXCEL GENERATION - Format identique à RAMS_B20_ATEX_Box117_Box110.xlsx
+// ------------------------------
+
+// Annexe 1 - Liste des dangers (checkboxes)
+const ANNEXE1_DANGERS = {
+  physiques: [
+    "Présence de bruit", "Éclairage insuffisant", "Manque d'aération",
+    "Rayonnement laser / soudure", "Vibration", "Outils coupants / tranchants",
+    "Travail en hauteur", "Écrasement / choc", "Coupure / Cisaillement",
+    "Projection", "Gaz sous pression", "Coincement"
+  ],
+  chute: [
+    "Chute de plain pied", "Chute de hauteur < 1m", "Chute de hauteur 1m > 1,8m",
+    "Chute de hauteur 1,8m > 3m", "Chute de hauteur > 3m",
+    "Pièce / véhicule en mouvement", "Circulation (frappé par)"
+  ],
+  levage: ["Chute de charge", "Rupture d'élingue", "Présence de personnes dans la zone"],
+  environnement: [
+    "Zone dangereuse ATEX", "Vent fort", "Intempéries", "Température basse",
+    "Température élevée", "Déchets", "Incendie", "Accès exigu",
+    "Travailleur isolé", "Sûreté", "Coactivité", "Présence d'amiante"
+  ],
+  mecaniques: [
+    "Zone dangereuse accessible", "Zone de coincement", "Circulation (frappé par)",
+    "Outillage électroportatif", "Conduite d'engin", "Objet en mouvement"
+  ],
+  electriques: [
+    "Fil dénudé / endommagé", "Proximité d'eau", "Équipement conducteur", "Électrisation"
+  ],
+  biologiques: [
+    "Présence de moisissures", "Contact avec sang contaminé",
+    "Contact avec eaux usées", "Maladie infectieuse"
+  ],
+  chimiques: [
+    "Présence de produits chimiques", "Stockage de produits chimiques",
+    "Utilisation produits chimiques", "Vapeurs / gaz"
+  ]
+};
+
+// Annexe 2 - Mesures correctives
+const ANNEXE2_MESURES = [
+  "Protection auditive adaptée au bruit", "Éclairage complémentaire",
+  "Ventilation complémentaire", "Protection spécifique (tenue soudeur)",
+  "Protection des mains", "Protection contre les chutes", "Protection des yeux, vêtements couvrants",
+  "Bouteilles de gaz attachées en 2 points", "Signalisation et marquage",
+  "Marche pied", "PIRL / nacelle / Échafaudage mobile / échafaudage fixe",
+  "Filet de protection anti-chute / garde-corps / échafaudage", "Chariot de transport",
+  "Balisage", "Contrôle de charge ABAC", "Contrôle des équipements de levage",
+  "Consignation", "Protection des équipements, matériaux", "Vêtements de protection",
+  "Gestion et tri des déchets", "Protection incendie (permis feu)", "Permis espace confiné",
+  "DATI", "Annonce contracteur / visiteur / Formations / Port de badge",
+  "Coordination / Gestion des flux", "Méthodologie spécifique / déclaration cantonale",
+  "Contrôle équipement s'assurer du bon état", "Personne formée et balisage",
+  "Distance de sécurité / Consignation", "Tableau de chantier / Consignation",
+  "Protection individuelle"
+];
+
+// Annexe 3 - EPI
+const ANNEXE3_EPI = [
+  "Casque à jugulaire EN 12492", "Casque de chantier EN397", "Casquette de sécurité EN812:2012",
+  "Casque de chantier EN14052", "Casque électriquement isolants EN50365", "Casque de soudage EN379 / EN175",
+  "Visière de sécurité EN16321", "Lunettes de sécurité EN ISO 16321", "Lunettes de sécurité EN ISO 16321 étanche",
+  "Gants de protection mécanique EN388", "Gants anti coupure EN388 - 4 4 3 3 D P",
+  "Gants de protection chimique EN374", "Gants de protection chaleur EN407 - 4 4 4 4 4 4",
+  "Gants de protection froid EN511 - 4 4 1", "Gants de protection antistatique ESD EN16350",
+  "Chaussures de sécurité EN345 S3", "Chaussures de sécurité ESD certifiées ATEX",
+  "Botte de sécurité S3 EN ISO 20345", "Gilet haute visibilité EN ISO 20471",
+  "Gilet haute visibilité EN 1149-5 Anti-statique", "Harnais antichute EN 361",
+  "Harnais de suspension EN 813", "Harnais anti chute EN 363", "Longe EN 354",
+  "Stop chute à rappel automatique EN 360", "Dispositifs de sauvetage par levage EN1496",
+  "Bouchons d'oreilles EN 352-2", "Serre-têtes EN352-1", "Masque FFP1", "Masque FFP2",
+  "Masque FFP3", "Masque visière", "Masque cartouche ABEK"
+];
+
+// Fonction de génération Excel RAMS
+async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}) {
+  const wb = XLSX.utils.book_new();
+
+  const companyName = siteSettings.company_name || "ElectroHub";
+  const workDate = new Date().toLocaleDateString("fr-FR");
+  const approver = siteSettings.approver_name || "";
+
+  // === ONGLET PRINCIPAL MS_RA(FR) ===
+  const mainData = [];
+
+  // En-tête du document
+  mainData.push(["", "Document à remplir par l'ENTREPRISE avant démarrage des travaux"]);
+  mainData.push([
+    "", "ACTIVITÉ PRINCIPALE:", procedure.title || "", "",
+    `Approuvé par ${companyName} (Nom / prénom): ${approver}`, "", "", "", "",
+    "Date:", "", "Visa"
+  ]);
+  mainData.push([
+    "", "Complété par ENTREPRISE:", procedure.category || "Maintenance électrique",
+    "Date:", workDate, "", "", "", "", `Date: ${workDate}`, "", "Visa"
+  ]);
+  mainData.push([
+    "", "Règlementation:\nLes jeunes de 13/18 ans doivent recevoir une formation spécifique...", "", "",
+    `Date de travaux: ${workDate}\nHeure de travail: 07h00 - 16h30`, "", "", "", "",
+    "Revue obligatoire Construction Safety\nsi NIR > 9 ou si G > 3", "", ""
+  ]);
+
+  // En-têtes du tableau principal
+  mainData.push(["", "MÉTHODOLOGIE et IDENTIFICATION des DANGERS", "", "", "ÉVALUATION des RISQUES"]);
+  mainData.push(["", "", "", "", "Évaluation initiale", "", "", "", "", "", "", "Évaluation finale"]);
+  mainData.push([
+    "", "", "", "", "Composantes du risque\n(Rf Annexe 4)", "", "Indice de risque\ninitial",
+    "Mesures correctives\n(Rf Annexe 2, 3)", "", "", "", "Composantes du risque\n(Rf Annexe 3)"
+  ]);
+  mainData.push([
+    "", "Tâches / détail des activités\nOU\nParties d'équipement",
+    "Danger (ex.: outil coupant, travail en hauteur, etc.)",
+    "Scénario d'accident\n\"Lors de l'activité..\"",
+    "Gravité (G)", "Probabilité (P)", "NIR\n(G × P)",
+    "Mesures à mettre en place\n(Rf Annexe 2)",
+    "Équipement de protection individuel (EPI)\n(Rf Annexe 3)",
+    "Actions détaillées des mesures à mettre en place",
+    "Responsable",
+    "Gravité (G)"
+  ]);
+  mainData.push([]); // Ligne vide
+
+  // Générer les lignes pour chaque étape
+  if (aiAnalysis && aiAnalysis.steps) {
+    aiAnalysis.steps.forEach((step, stepIdx) => {
+      const stepTitle = `Étape ${stepIdx + 1}\n${step.title || steps[stepIdx]?.title || ''}`;
+      const hazards = step.hazards || [];
+
+      hazards.forEach((hazard, hazardIdx) => {
+        const gi = hazard.initial_gravity || hazard.gi || 3;
+        const pi = hazard.initial_probability || hazard.pi || 2;
+        const nir = gi * pi;
+        const gf = hazard.final_gravity || hazard.gf || gi;
+        const pf = hazard.final_probability || hazard.pf || 1;
+
+        const ppeList = (hazard.ppe || hazard.epiRequired || [])
+          .map(p => `□ ${p}`).join("\n");
+        const measures = hazard.corrective_measures || hazard.measures || "";
+        const actions = hazard.detailed_actions || hazard.actions || "";
+
+        mainData.push([
+          "",
+          hazardIdx === 0 ? stepTitle : "",
+          `□ ${hazard.category || hazard.checkbox || hazard.type || "Danger"}`,
+          hazard.scenario || hazard.danger || "",
+          gi, pi, nir,
+          measures,
+          ppeList,
+          actions,
+          hazard.responsible || "",
+          gf
+        ]);
+      });
+    });
+  } else {
+    // Fallback: utiliser les étapes directement
+    steps.forEach((step, idx) => {
+      mainData.push([
+        "",
+        `Étape ${idx + 1}\n${step.title || ''}`,
+        "□ À identifier",
+        step.description || "",
+        3, 2, 6,
+        step.instructions || "",
+        "",
+        step.warning || "",
+        "",
+        3
+      ]);
+    });
+  }
+
+  // Ajouter lignes vides puis section signatures
+  mainData.push([]);
+  mainData.push([]);
+  mainData.push(["", "NOTE:", "", "", "", "", "", "En signant vous vous engagez à respecter les consignes..."]);
+  mainData.push([]);
+
+  // Section Plan de secours
+  mainData.push([
+    "POS", "Plan de secours     N° URGENCE SITE    +41 22 567 40 00", "",
+    "Obligatoire si travaux en espace confiné, travail en hauteur...",
+    "Contrôle", "", "", "Prise de connaissance intervenants"
+  ]);
+  mainData.push([
+    "", "Détail de l'organisation", "Sélection", "Commentaire",
+    "Conforme", "Non\nConforme", "Visa", "Nom", "Prénom", "Fonction", "Date", "Signature"
+  ]);
+
+  // Créer la feuille principale
+  const wsMain = XLSX.utils.aoa_to_sheet(mainData);
+
+  // Définir largeurs de colonnes
+  wsMain['!cols'] = [
+    { wch: 5 },   // A
+    { wch: 35 },  // B - Tâches
+    { wch: 25 },  // C - Danger
+    { wch: 40 },  // D - Scénario
+    { wch: 8 },   // E - G
+    { wch: 8 },   // F - P
+    { wch: 8 },   // G - NIR
+    { wch: 35 },  // H - Mesures
+    { wch: 30 },  // I - EPI
+    { wch: 40 },  // J - Actions
+    { wch: 15 },  // K - Responsable
+    { wch: 8 },   // L - Gf
+  ];
+
+  XLSX.utils.book_append_sheet(wb, wsMain, "MS_RA(FR)");
+
+  // === ONGLET ANNEXE 1-2-3 ===
+  const annexe123Data = [
+    ["FR", "EN", "AL", "FR", "EN", "AL", "FR", "EN", "AL"],
+    ["ANNEXE 1. Aide à l'identification des dangers", "", "", "ANNEXE 2. Aide à l'identification des Mesures", "", "", "ANNEXE 3. Aide à l'identification des EPI"],
+    ["Dangers « physiques »", "", "", "Mesures", "", "", "Protection « physiques »"],
+  ];
+
+  // Remplir avec les données des annexes
+  const allDangers = [
+    ...ANNEXE1_DANGERS.physiques,
+    "Dangers « chute »", ...ANNEXE1_DANGERS.chute,
+    "Dangers « levage »", ...ANNEXE1_DANGERS.levage,
+    "Dangers « environnement »", ...ANNEXE1_DANGERS.environnement,
+    "Dangers « mécaniques »", ...ANNEXE1_DANGERS.mecaniques,
+    "Dangers « électriques »", ...ANNEXE1_DANGERS.electriques,
+    "Dangers « biologiques »", ...ANNEXE1_DANGERS.biologiques,
+    "Dangers « chimiques »", ...ANNEXE1_DANGERS.chimiques
+  ];
+
+  for (let i = 0; i < Math.max(allDangers.length, ANNEXE2_MESURES.length, ANNEXE3_EPI.length); i++) {
+    annexe123Data.push([
+      allDangers[i] ? `□ ${allDangers[i]}` : "",
+      "", "",
+      ANNEXE2_MESURES[i] ? `□ ${ANNEXE2_MESURES[i]}` : "",
+      "", "",
+      ANNEXE3_EPI[i] ? `□ ${ANNEXE3_EPI[i]}` : "",
+      "", ""
+    ]);
+  }
+
+  const wsAnnexe123 = XLSX.utils.aoa_to_sheet(annexe123Data);
+  wsAnnexe123['!cols'] = [
+    { wch: 40 }, { wch: 40 }, { wch: 40 },
+    { wch: 45 }, { wch: 45 }, { wch: 45 },
+    { wch: 45 }, { wch: 45 }, { wch: 45 }
+  ];
+  XLSX.utils.book_append_sheet(wb, wsAnnexe123, "Annexe 1-2-3 (E)");
+
+  // === ONGLET ANNEXE 4 - Échelles de cotation ===
+  const annexe4Data = [
+    ["FR", "", "", "", "", "EN"],
+    ["ANNEXE 4. Les 3 critères d'évaluation du risque"],
+    ["GRAVITÉ : le plus haut niveau de conséquences vraisemblables"],
+    ["Niveau", "Description", "Facteur", "Mots-clés"],
+    ["Catastrophique", "Mortalité, invalide à vie", "5", "décès, mort"],
+    ["Critique", "Perte de temps avec incapacité permanente", "4", "Amputation, fractures multiples, surdité, brûlure 3e degré"],
+    ["Grave", "Perte de temps avec incapacité temporaire", "3", "Entorse, fracture simple, tendinite, commotion"],
+    ["Important", "Perte de temps, retour au poste", "2", "Foulure, coupure profonde, brûlure modérée"],
+    ["Mineure", "Premiers soins sans perte de temps", "1", "Ecchymose, inconfort, égratignure"],
+    [],
+    ["PROBABILITÉ : quelle est la probabilité que la gravité identifiée se produise?"],
+    ["Niveau", "Description", "Facteur"],
+    ["Très probable", "Aucune mesure de sécurité, va certainement survenir", "5"],
+    ["Probable", "Mesures de sécurité faibles (EPI seulement)", "4"],
+    ["Possible", "Mesures de prévention en place (formation, procédures)", "3"],
+    ["Peu probable", "Contrôles techniques en place (protecteurs, barrières)", "2"],
+    ["Improbable", "Pratiquement impossible, élimination à la source", "1"],
+  ];
+
+  const wsAnnexe4 = XLSX.utils.aoa_to_sheet(annexe4Data);
+  wsAnnexe4['!cols'] = [{ wch: 20 }, { wch: 55 }, { wch: 10 }, { wch: 50 }];
+  XLSX.utils.book_append_sheet(wb, wsAnnexe4, "Annexe 4");
+
+  // === ONGLET ANNEXE 5 - Plan d'urgence ===
+  const annexe5Data = [
+    ["FR", "", "EN", "", "AL"],
+    ["Plan d'urgence"],
+    ["Événement", "Plan de secours"],
+    ["Travail en hauteur", "□ Présence seconde personne"],
+    ["", "□ Équipement de sauvetage"],
+    ["", "□ Personne formée secours"],
+    ["", "□ Seconde nacelle"],
+    ["Travailleur isolé", "□ Utilisation DATI"],
+    ["", "□ Utilisation détecteur oxygène"],
+    ["Activités par point chaud", "□ Formée permis utilisation extincteur"],
+    ["Travail en espace confiné", "□ Formée à l'extraction d'une personne"],
+    ["", "□ Contact loge de sécurité +41 22 567 40 00"],
+    ["", "□ Évacuation, place de rassemblement"],
+    ["", "□ Utilisation d'extincteur"],
+  ];
+
+  const wsAnnexe5 = XLSX.utils.aoa_to_sheet(annexe5Data);
+  wsAnnexe5['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 50 }, { wch: 50 }, { wch: 50 }];
+  XLSX.utils.book_append_sheet(wb, wsAnnexe5, "Annexe 5");
+
+  // Générer le buffer Excel
+  const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  return excelBuffer;
+}
+
+// API Endpoint: Download RAMS Excel
+app.get("/api/procedures/:id/rams-excel", async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("[RAMS Excel] Generating for procedure:", id);
+
+    // Get procedure and steps
+    const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
+    );
+
+    const procedure = procedures[0];
+
+    // Get AI analysis if available
+    let aiAnalysis = null;
+    if (procedure.ai_rams_analysis) {
+      try {
+        aiAnalysis = typeof procedure.ai_rams_analysis === 'string'
+          ? JSON.parse(procedure.ai_rams_analysis)
+          : procedure.ai_rams_analysis;
+      } catch (e) {
+        console.log("[RAMS Excel] Error parsing stored analysis:", e.message);
+      }
+    }
+
+    if (!aiAnalysis || !aiAnalysis.steps) {
+      aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
+    }
+
+    // Get site settings
+    let siteSettings = {};
+    try {
+      const site = req.headers["x-site"] || "default";
+      const { rows: settings } = await pool.query(
+        `SELECT * FROM site_settings WHERE site = $1`, [site]
+      );
+      if (settings.length > 0) siteSettings = settings[0];
+    } catch (e) {}
+
+    // Generate Excel
+    const excelBuffer = await generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings);
+
+    const title = procedure.title || "procedure";
+    const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 30);
+    const dateStr = new Date().toISOString().split("T")[0];
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="RAMS_${safeTitle}_${dateStr}.xlsx"`
+    );
+
+    console.log("[RAMS Excel] Generated successfully");
+    res.end(excelBuffer);
+  } catch (err) {
+    console.error("[RAMS Excel] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API Endpoint: Download Example RAMS Excel
+app.get("/api/procedures/example-rams-excel", async (req, res) => {
+  try {
+    console.log("[RAMS Excel] Generating example...");
+
+    const exampleProcedure = {
+      title: EXAMPLE_RAMS_DATA.activity,
+      category: EXAMPLE_RAMS_DATA.category,
+    };
+
+    const exampleSteps = EXAMPLE_RAMS_DATA.steps.map((s, i) => ({
+      title: s.title,
+      step_number: i + 1,
+    }));
+
+    const exampleAnalysis = {
+      steps: EXAMPLE_RAMS_DATA.steps.map(s => ({
+        title: s.title,
+        hazards: s.hazards.map(h => ({
+          category: h.checkbox,
+          scenario: h.danger,
+          initial_gravity: h.gi,
+          initial_probability: h.pi,
+          corrective_measures: h.measures,
+          ppe: h.ppe,
+          detailed_actions: h.actions,
+          responsible: h.responsible,
+          final_gravity: h.gf,
+          final_probability: h.pf
+        }))
+      }))
+    };
+
+    const excelBuffer = await generateRAMSExcel(exampleProcedure, exampleSteps, exampleAnalysis, {
+      company_name: EXAMPLE_RAMS_DATA.company,
+      approver_name: EXAMPLE_RAMS_DATA.approver
+    });
+
+    const dateStr = new Date().toISOString().split("T")[0];
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="RAMS_Exemple_ATEX_${dateStr}.xlsx"`
+    );
+
+    console.log("[RAMS Excel] Example generated successfully");
+    res.end(excelBuffer);
+  } catch (err) {
+    console.error("[RAMS Excel] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });

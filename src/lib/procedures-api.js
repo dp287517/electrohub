@@ -449,7 +449,7 @@ export async function downloadProcedureDocPdf(procedureId) {
   document.body.removeChild(a);
 }
 
-// Download all 3 documents as ZIP
+// Download all 4 documents as ZIP (3 PDFs + 1 Excel RAMS)
 export async function downloadAllDocuments(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/all-documents`, {
     headers: {
@@ -467,6 +467,54 @@ export async function downloadAllDocuments(procedureId) {
   const a = document.createElement('a');
   a.href = url;
   a.download = `Documents_${procedureId}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download RAMS Excel (format RAMS_B20_ATEX)
+export async function downloadRAMSExcel(procedureId) {
+  const response = await fetch(`${API_BASE}/${procedureId}/rams-excel`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement du RAMS Excel');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `RAMS_${procedureId}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download Example RAMS Excel
+export async function downloadExampleRAMSExcel() {
+  const response = await fetch(`${API_BASE}/example-rams-excel`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement du RAMS Excel Exemple');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `RAMS_Exemple_ATEX_${new Date().toISOString().split('T')[0]}.xlsx`;
   document.body.appendChild(a);
   a.click();
   window.URL.revokeObjectURL(url);
