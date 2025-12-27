@@ -6077,22 +6077,71 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         FROM switchboards
         WHERE building_code IS NOT NULL
       `),
-      // Procedure statistics
-      pool.query(`
-        SELECT
-          (SELECT COUNT(*) FROM procedures) as total,
-          (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
-          (SELECT COUNT(DISTINCT procedure_id) FROM procedure_executions WHERE started_at > CURRENT_DATE - INTERVAL '7 days') as recently_used
-      `),
-      // Most used procedure (last 30 days)
-      pool.query(`
-        SELECT p.id, p.title, COUNT(pe.id) as usage_count
-        FROM procedures p
-        LEFT JOIN procedure_executions pe ON pe.procedure_id = p.id AND pe.started_at > CURRENT_DATE - INTERVAL '30 days'
-        GROUP BY p.id, p.title
-        ORDER BY usage_count DESC
-        LIMIT 1
-      `)
+      // Procedure statistics (resilient to missing tables)
+      (async () => {
+        try {
+          // Check if procedure_executions table exists
+          const tableCheck = await pool.query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables
+              WHERE table_name = 'procedure_executions'
+            ) as exists
+          `);
+
+          if (tableCheck.rows[0]?.exists) {
+            return await pool.query(`
+              SELECT
+                (SELECT COUNT(*) FROM procedures) as total,
+                (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
+                (SELECT COUNT(DISTINCT procedure_id) FROM procedure_executions WHERE started_at > CURRENT_DATE - INTERVAL '7 days') as recently_used
+            `);
+          } else {
+            // Table doesn't exist, just count procedures
+            return await pool.query(`
+              SELECT
+                (SELECT COUNT(*) FROM procedures) as total,
+                (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
+                0 as recently_used
+            `);
+          }
+        } catch (e) {
+          console.log('[MorningBrief] Procedure stats fallback:', e.message);
+          return { rows: [{ total: 0, drafts: 0, recently_used: 0 }] };
+        }
+      })(),
+      // Most used procedure (resilient to missing tables)
+      (async () => {
+        try {
+          const tableCheck = await pool.query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables
+              WHERE table_name = 'procedure_executions'
+            ) as exists
+          `);
+
+          if (tableCheck.rows[0]?.exists) {
+            return await pool.query(`
+              SELECT p.id, p.title, COUNT(pe.id) as usage_count
+              FROM procedures p
+              LEFT JOIN procedure_executions pe ON pe.procedure_id = p.id AND pe.started_at > CURRENT_DATE - INTERVAL '30 days'
+              GROUP BY p.id, p.title
+              ORDER BY usage_count DESC
+              LIMIT 1
+            `);
+          } else {
+            // Just get any procedure as fallback
+            return await pool.query(`
+              SELECT id, title, 0 as usage_count
+              FROM procedures
+              ORDER BY updated_at DESC
+              LIMIT 1
+            `);
+          }
+        } catch (e) {
+          console.log('[MorningBrief] Most used proc fallback:', e.message);
+          return { rows: [] };
+        }
+      })()
     ]);
 
     const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes, procedureStatsRes, mostUsedProcRes] = stats;
