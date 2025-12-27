@@ -4208,8 +4208,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // AUTO-DETECT PROCEDURE REQUESTS - CRITICAL FIX
     // ============================================================
 
-    // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", etc.)
-    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
+    // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", "la 1", etc.)
+    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|la \d+|le \d+|num[ée]ro \d+|\d+|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
 
     // If user confirms, check conversation history for recent procedure list
     if (isConfirmation && conversationHistory?.length > 0) {
@@ -4220,17 +4220,27 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         // Look for procedure in context
         const procedures = dbContext.procedures?.list || [];
         if (procedures.length > 0) {
-          const firstProc = procedures[0];
-          console.log(`[AI] 📖 CONFIRMATION DETECTED - Opening first procedure: ${firstProc.id} - "${firstProc.title}"`);
+          // Extract the index from user message (e.g., "la 1", "la 2", "2", "numéro 3")
+          let selectedIndex = 0; // Default to first
+          const indexMatch = msgLower.match(/(?:la|le|num[ée]ro)?\s*(\d+)/i);
+          if (indexMatch) {
+            selectedIndex = parseInt(indexMatch[1]) - 1;
+            if (selectedIndex < 0 || selectedIndex >= procedures.length) {
+              selectedIndex = 0; // Fallback to first if out of bounds
+            }
+          }
+
+          const selectedProc = procedures[selectedIndex];
+          console.log(`[AI] 📖 CONFIRMATION DETECTED - Opening procedure #${selectedIndex + 1}: ${selectedProc.id} - "${selectedProc.title}"`);
 
           return res.json({
-            message: `📋 **${firstProc.title}**\n\nJ'ouvre la procédure pour toi...`,
+            message: `📋 **${selectedProc.title}**\n\nJ'ouvre la procédure pour toi...`,
             procedureToOpen: {
-              id: firstProc.id,
-              title: firstProc.title
+              id: selectedProc.id,
+              title: selectedProc.title
             },
             actions: [
-              { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${firstProc.title}"` }
+              { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${selectedProc.title}"` }
             ],
             provider: "Electro"
           });
@@ -6066,10 +6076,26 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         SELECT COUNT(DISTINCT building_code) as count
         FROM switchboards
         WHERE building_code IS NOT NULL
+      `),
+      // Procedure statistics
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM procedures) as total,
+          (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
+          (SELECT COUNT(DISTINCT procedure_id) FROM procedure_executions WHERE started_at > CURRENT_DATE - INTERVAL '7 days') as recently_used
+      `),
+      // Most used procedure (last 30 days)
+      pool.query(`
+        SELECT p.id, p.title, COUNT(pe.id) as usage_count
+        FROM procedures p
+        LEFT JOIN procedure_executions pe ON pe.procedure_id = p.id AND pe.started_at > CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY p.id, p.title
+        ORDER BY usage_count DESC
+        LIMIT 1
       `)
     ]);
 
-    const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes] = stats;
+    const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes, procedureStatsRes, mostUsedProcRes] = stats;
     const equipment = equipmentRes.rows[0];
     const totalEquipment =
       parseInt(equipment.switchboards || 0) +
@@ -6195,7 +6221,17 @@ Réponds en 1-2 phrases max, style direct et encourageant. Commence par une acti
           neverControlled
         },
         atexNc,
-        buildings: parseInt(buildingsRes.rows[0]?.count || 0)
+        buildings: parseInt(buildingsRes.rows[0]?.count || 0),
+        procedures: {
+          total: parseInt(procedureStatsRes.rows[0]?.total || 0),
+          drafts: parseInt(procedureStatsRes.rows[0]?.drafts || 0),
+          recentlyUsed: parseInt(procedureStatsRes.rows[0]?.recently_used || 0),
+          mostUsed: mostUsedProcRes.rows[0]?.title ? {
+            id: mostUsedProcRes.rows[0].id,
+            title: mostUsedProcRes.rows[0].title,
+            usageCount: parseInt(mostUsedProcRes.rows[0].usage_count || 0)
+          } : null
+        }
       },
       priorityActions,
       aiInsight,

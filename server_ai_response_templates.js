@@ -371,6 +371,23 @@ const DashboardTemplates = {
     response += `• À contrôler: **${data.toControl || 0}**\n`;
     response += `• Conformes: **${data.conformRate || 0}%**\n\n`;
 
+    // Procedure status
+    if (data.procedures) {
+      response += `📋 **Statut Procédures**\n`;
+      response += `${'─'.repeat(30)}\n`;
+      response += `• Total: **${data.procedures.total || 0}**\n`;
+      if (data.procedures.drafts > 0) {
+        response += `• Brouillons: **${data.procedures.drafts}** ✏️\n`;
+      }
+      if (data.procedures.recentlyUsed > 0) {
+        response += `• Utilisées (7j): **${data.procedures.recentlyUsed}**\n`;
+      }
+      if (data.procedures.mostUsed?.title) {
+        response += `• Plus utilisée: **${data.procedures.mostUsed.title}**\n`;
+      }
+      response += '\n';
+    }
+
     // Recommendations
     if (data.recommendations?.length) {
       response += `${EMOJIS.section.recommendations} **Recommandations IA**\n`;
