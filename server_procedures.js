@@ -4474,14 +4474,17 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   const approver = siteSettings.approver_name || "";
 
   // Couleurs du thème RAMS
+  // Couleurs extraites du fichier original RAMS_B20_ATEX_Box117_Box110.xlsx
   const colors = {
-    headerBg: '1F4E79',      // Bleu foncé pour en-têtes
+    methodoBg: '92D050',     // Vert pour METHODOLOGIE (B5)
+    evalHeaderBg: 'FF0000',  // Rouge pour ÉVALUATION DES RISQUES (E5)
     headerText: 'FFFFFF',    // Blanc
-    evalInitialBg: 'FFC000', // Orange pour évaluation initiale
-    evalFinalBg: '92D050',   // Vert pour évaluation finale
-    dangerBg: 'FCE4D6',      // Orange clair pour dangers
-    measuresBg: 'E2EFDA',    // Vert clair pour mesures
-    ppeBg: 'DDEBF7',         // Bleu clair pour EPI
+    evalInitialBg: 'CCFFCC', // Vert très clair pour évaluation initiale (E6)
+    evalFinalBg: '00FF00',   // Vert vif pour évaluation finale (L6)
+    subHeaderBg: 'A5A5A5',   // Gris pour sous-en-têtes (row 7)
+    colHeaderBg: 'C0C0C0',   // Argent pour en-têtes colonnes (row 8)
+    measuresBg: 'DDDDDD',    // Gris clair pour mesures (H10)
+    ppeBg: 'DDDDDD',         // Gris clair pour EPI
     nirHighBg: 'FF0000',     // Rouge pour NIR élevé (>9)
     nirMediumBg: 'FFC000',   // Orange pour NIR moyen (5-9)
     nirLowBg: '92D050',      // Vert pour NIR faible (<5)
@@ -4524,12 +4527,10 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
     { key: 'N', width: 12 },
   ];
 
-  // Ligne 1 - Titre document
+  // Ligne 1 - Ligne vide (comme dans l'original B1:N1 est vide)
   wsMain.mergeCells('B1:N1');
-  const titleCell = wsMain.getCell('B1');
-  titleCell.value = 'Document à remplir par l\'ENTREPRISE avant démarrage des travaux';
-  titleCell.font = { bold: true, size: 14, color: { argb: colors.headerBg } };
-  titleCell.alignment = { horizontal: 'center' };
+  wsMain.getCell('B1').value = '';
+  wsMain.getRow(1).height = 20;
 
   // Ligne 2 - Activité principale
   wsMain.mergeCells('C2:D2');
@@ -4563,25 +4564,25 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   wsMain.getCell('J4').alignment = { wrapText: true };
   wsMain.getRow(4).height = 40;
 
-  // Ligne 5 - En-têtes principaux
+  // Ligne 5 - En-têtes principaux (couleurs exactes de l'original)
   wsMain.mergeCells('B5:D7');
   const methCell = wsMain.getCell('B5');
   methCell.value = 'MÉTHODOLOGIE et IDENTIFICATION des DANGERS';
-  methCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
-  methCell.font = { bold: true, color: { argb: colors.headerText }, size: 11 };
+  methCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.methodoBg } };
+  methCell.font = { bold: true, size: 11 };
   methCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   methCell.border = thinBorder;
 
   wsMain.mergeCells('E5:N5');
   const evalCell = wsMain.getCell('E5');
   evalCell.value = 'ÉVALUATION des RISQUES';
-  evalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  evalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalHeaderBg } };
   evalCell.font = { bold: true, color: { argb: colors.headerText }, size: 11 };
   evalCell.alignment = { horizontal: 'center', vertical: 'middle' };
   evalCell.border = thinBorder;
 
-  // Ligne 6 - Sous-en-têtes évaluation
-  wsMain.mergeCells('E6:G6');
+  // Ligne 6 - Sous-en-têtes évaluation (E6:K6 pour initial, L6:N6 pour final)
+  wsMain.mergeCells('E6:K6');
   const evalInitCell = wsMain.getCell('E6');
   evalInitCell.value = 'Évaluation initiale';
   evalInitCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalInitialBg } };
@@ -4597,29 +4598,33 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   evalFinCell.alignment = { horizontal: 'center' };
   evalFinCell.border = thinBorder;
 
-  // Ligne 7 - Sous-sous-en-têtes
+  // Ligne 7 - Sous-sous-en-têtes (couleur grise A5A5A5 de l'original)
   wsMain.mergeCells('E7:F7');
   wsMain.getCell('E7').value = 'Composantes du risque\n(Rf Annexe 4)';
+  wsMain.getCell('E7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.subHeaderBg } };
   wsMain.getCell('E7').alignment = { wrapText: true, horizontal: 'center' };
   wsMain.getCell('E7').border = thinBorder;
   wsMain.getCell('G7').value = 'Indice de risque\ninitial';
+  wsMain.getCell('G7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.subHeaderBg } };
   wsMain.getCell('G7').alignment = { wrapText: true, horizontal: 'center' };
   wsMain.getCell('G7').border = thinBorder;
   wsMain.mergeCells('H7:K7');
   wsMain.getCell('H7').value = 'Mesures correctives (Rf Annexe 2, 3)';
-  wsMain.getCell('H7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+  wsMain.getCell('H7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.subHeaderBg } };
   wsMain.getCell('H7').alignment = { horizontal: 'center' };
   wsMain.getCell('H7').border = thinBorder;
   wsMain.mergeCells('L7:M7');
   wsMain.getCell('L7').value = 'Composantes du risque\n(Rf Annexe 4)';
+  wsMain.getCell('L7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.subHeaderBg } };
   wsMain.getCell('L7').alignment = { wrapText: true, horizontal: 'center' };
   wsMain.getCell('L7').border = thinBorder;
   wsMain.getCell('N7').value = 'NIR\nfinal';
+  wsMain.getCell('N7').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.subHeaderBg } };
   wsMain.getCell('N7').alignment = { wrapText: true, horizontal: 'center' };
   wsMain.getCell('N7').border = thinBorder;
   wsMain.getRow(7).height = 35;
 
-  // Ligne 8 - En-têtes de colonnes détaillés
+  // Lignes 8-9 - En-têtes de colonnes détaillés (fusionnées verticalement comme l'original)
   const headers = [
     '', 'Tâches / détail des activités\nOU\nParties d\'équipement',
     'Danger (ex.: outil coupant, travail en hauteur, etc.)',
@@ -4631,6 +4636,12 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
     'Responsable',
     'Gravité\n(G)', 'Probabilité\n(P)', 'NIR\n(G × P)'
   ];
+
+  // Fusionner les cellules d'en-tête sur 2 lignes (8-9) comme l'original
+  for (let col = 2; col <= 14; col++) {
+    wsMain.mergeCells(8, col, 9, col);
+  }
+
   const headerRow = wsMain.getRow(8);
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1);
@@ -4638,15 +4649,14 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
     cell.font = { bold: true, size: 9 };
     cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
     cell.border = thinBorder;
-    if (i >= 4 && i <= 6) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalInitialBg } };
-    if (i >= 11 && i <= 13) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.evalFinalBg } };
-    if (i === 7) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
-    if (i === 8) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+    // Toutes les colonnes d'en-tête (B-N) ont la couleur argent C0C0C0 dans l'original
+    if (i >= 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.colHeaderBg } };
   });
-  headerRow.height = 50;
+  headerRow.height = 25;
+  wsMain.getRow(9).height = 25;
 
-  // Générer les lignes de données
-  let currentRow = 9;
+  // Générer les lignes de données (commencent à la ligne 10 comme l'original)
+  let currentRow = 10;
   const dataStartRow = currentRow;
 
   if (aiAnalysis && aiAnalysis.steps) {
@@ -4683,15 +4693,14 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
         row.getCell(13).value = pf;
         row.getCell(14).value = nirFinal;
 
-        // Appliquer les styles
+        // Appliquer les styles (basés sur l'original)
         for (let c = 1; c <= 14; c++) {
           const cell = row.getCell(c);
           cell.border = thinBorder;
           cell.alignment = { wrapText: true, vertical: 'top' };
           if (c === 2) cell.font = { bold: true };
-          if (c === 3) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.dangerBg } };
-          if (c === 8) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
-          if (c === 9) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+          // Colonnes Mesures (8) et EPI (9) avec fond gris clair DDDDDD comme l'original
+          if (c === 8 || c === 9) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
           if (c === 5 || c === 6) cell.alignment = { horizontal: 'center', vertical: 'middle' };
           if (c === 7) {
             cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -4761,20 +4770,20 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
     { width: 50 }, { width: 50 }, { width: 50 }
   ];
 
-  // En-têtes
+  // En-têtes (couleurs exactes de l'original: 00B050 vert pour Annexe 1)
   wsAnnexe123.getRow(1).values = ['FR', 'EN', 'AL', 'FR', 'EN', 'AL', 'FR', 'EN', 'AL'];
   wsAnnexe123.mergeCells('A2:C2');
   wsAnnexe123.getCell('A2').value = 'ANNEXE 1. Aide à l\'identification des dangers';
   wsAnnexe123.getCell('A2').font = { bold: true };
-  wsAnnexe123.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.dangerBg } };
+  wsAnnexe123.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '00B050' } };
   wsAnnexe123.mergeCells('D2:F2');
   wsAnnexe123.getCell('D2').value = 'ANNEXE 2. Aide à l\'identification des Mesures';
   wsAnnexe123.getCell('D2').font = { bold: true };
-  wsAnnexe123.getCell('D2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.measuresBg } };
+  wsAnnexe123.getCell('D2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '00B050' } };
   wsAnnexe123.mergeCells('G2:I2');
   wsAnnexe123.getCell('G2').value = 'ANNEXE 3. Aide à l\'identification des EPI';
   wsAnnexe123.getCell('G2').font = { bold: true };
-  wsAnnexe123.getCell('G2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.ppeBg } };
+  wsAnnexe123.getCell('G2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '00B050' } };
 
   // Remplir avec les données
   const allDangers = [
@@ -4809,8 +4818,7 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
 
   wsAnnexe4.mergeCells('A3:D3');
   wsAnnexe4.getCell('A3').value = 'GRAVITÉ : le plus haut niveau de conséquences vraisemblables';
-  wsAnnexe4.getCell('A3').font = { bold: true };
-  wsAnnexe4.getCell('A3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  wsAnnexe4.getCell('A3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '70AD47' } };
   wsAnnexe4.getCell('A3').font = { bold: true, color: { argb: 'FFFFFF' } };
 
   wsAnnexe4.getRow(4).values = ['Niveau', 'Description', 'Facteur', 'Mots-clés'];
@@ -4834,8 +4842,7 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
 
   wsAnnexe4.mergeCells('A11:D11');
   wsAnnexe4.getCell('A11').value = 'PROBABILITÉ : quelle est la probabilité que la gravité identifiée se produise?';
-  wsAnnexe4.getCell('A11').font = { bold: true };
-  wsAnnexe4.getCell('A11').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.headerBg } };
+  wsAnnexe4.getCell('A11').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '70AD47' } };
   wsAnnexe4.getCell('A11').font = { bold: true, color: { argb: 'FFFFFF' } };
 
   wsAnnexe4.getRow(12).values = ['Niveau', 'Description', 'Facteur'];
