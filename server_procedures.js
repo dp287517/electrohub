@@ -1312,6 +1312,48 @@ async function ensureSchema() {
     );
   `);
 
+  // Procedure executions - track when procedures are executed/used
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procedure_executions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      procedure_id UUID REFERENCES procedures(id) ON DELETE CASCADE,
+      user_email TEXT,
+      user_name TEXT,
+      site TEXT,
+
+      -- Execution status
+      status TEXT DEFAULT 'in_progress',
+      current_step INTEGER DEFAULT 1,
+      total_steps INTEGER,
+
+      -- Timing
+      started_at TIMESTAMPTZ DEFAULT now(),
+      completed_at TIMESTAMPTZ,
+      duration_minutes INTEGER,
+
+      -- Step progress tracking
+      step_completions JSONB DEFAULT '[]'::jsonb,
+
+      -- Notes and issues
+      notes TEXT,
+      issues_encountered JSONB DEFAULT '[]'::jsonb,
+
+      -- Validation
+      validated_by TEXT,
+      validated_at TIMESTAMPTZ,
+
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // Index for faster queries on executions
+  try {
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_procedure_executions_procedure ON procedure_executions(procedure_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_procedure_executions_user ON procedure_executions(user_email);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_procedure_executions_started ON procedure_executions(started_at);`);
+  } catch {}
+
   console.log("[Procedures] Schema ensured");
 }
 
@@ -3878,6 +3920,199 @@ app.delete("/api/procedures/:id/equipment/:linkId", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("Error removing equipment link:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- PROCEDURE EXECUTIONS ---
+
+// Start a new procedure execution (when user begins following a procedure)
+app.post("/api/procedures/:id/executions", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_email, user_name, site } = req.body;
+
+    // Get procedure to know total steps
+    const procResult = await pool.query(
+      `SELECT p.*, COUNT(ps.id) as step_count
+       FROM procedures p
+       LEFT JOIN procedure_steps ps ON ps.procedure_id = p.id
+       WHERE p.id = $1
+       GROUP BY p.id`,
+      [id]
+    );
+
+    if (procResult.rows.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const totalSteps = parseInt(procResult.rows[0].step_count) || 0;
+
+    const { rows } = await pool.query(
+      `INSERT INTO procedure_executions (procedure_id, user_email, user_name, site, total_steps, status)
+       VALUES ($1, $2, $3, $4, $5, 'in_progress')
+       RETURNING *`,
+      [id, user_email, user_name, site, totalSteps]
+    );
+
+    console.log(`[Procedures] Execution started: ${rows[0].id} for procedure ${id} by ${user_email}`);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("Error starting execution:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update execution progress (mark step as complete, add notes, etc.)
+app.put("/api/procedures/:id/executions/:executionId", async (req, res) => {
+  try {
+    const { executionId } = req.params;
+    const { current_step, status, notes, step_completion, issues_encountered } = req.body;
+
+    let updateFields = [];
+    let values = [];
+    let valueIndex = 1;
+
+    if (current_step !== undefined) {
+      updateFields.push(`current_step = $${valueIndex++}`);
+      values.push(current_step);
+    }
+
+    if (status !== undefined) {
+      updateFields.push(`status = $${valueIndex++}`);
+      values.push(status);
+
+      // If completed, set completed_at and calculate duration
+      if (status === 'completed') {
+        updateFields.push(`completed_at = now()`);
+        updateFields.push(`duration_minutes = EXTRACT(EPOCH FROM (now() - started_at)) / 60`);
+      }
+    }
+
+    if (notes !== undefined) {
+      updateFields.push(`notes = $${valueIndex++}`);
+      values.push(notes);
+    }
+
+    if (step_completion !== undefined) {
+      updateFields.push(`step_completions = step_completions || $${valueIndex++}::jsonb`);
+      values.push(JSON.stringify([step_completion]));
+    }
+
+    if (issues_encountered !== undefined) {
+      updateFields.push(`issues_encountered = $${valueIndex++}`);
+      values.push(JSON.stringify(issues_encountered));
+    }
+
+    updateFields.push(`updated_at = now()`);
+
+    values.push(executionId);
+
+    const { rows } = await pool.query(
+      `UPDATE procedure_executions
+       SET ${updateFields.join(', ')}
+       WHERE id = $${valueIndex}
+       RETURNING *`,
+      values
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Exécution non trouvée" });
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("Error updating execution:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get execution history for a procedure
+app.get("/api/procedures/:id/executions", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { limit = 20 } = req.query;
+
+    const { rows } = await pool.query(
+      `SELECT * FROM procedure_executions
+       WHERE procedure_id = $1
+       ORDER BY started_at DESC
+       LIMIT $2`,
+      [id, parseInt(limit)]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Error getting executions:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get user's execution history
+app.get("/api/procedures/executions/user/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { status, limit = 20 } = req.query;
+
+    let query = `
+      SELECT pe.*, p.title as procedure_title, p.category as procedure_category
+      FROM procedure_executions pe
+      JOIN procedures p ON p.id = pe.procedure_id
+      WHERE pe.user_email = $1
+    `;
+    const values = [email];
+
+    if (status) {
+      query += ` AND pe.status = $2`;
+      values.push(status);
+    }
+
+    query += ` ORDER BY pe.started_at DESC LIMIT $${values.length + 1}`;
+    values.push(parseInt(limit));
+
+    const { rows } = await pool.query(query, values);
+    res.json(rows);
+  } catch (err) {
+    console.error("Error getting user executions:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get execution statistics
+app.get("/api/procedures/executions/stats", async (req, res) => {
+  try {
+    const { period = 30 } = req.query;
+
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) as total_executions,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
+        COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress,
+        COUNT(CASE WHEN status = 'abandoned' THEN 1 END) as abandoned,
+        AVG(duration_minutes)::integer as avg_duration_minutes,
+        COUNT(DISTINCT user_email) as unique_users,
+        COUNT(DISTINCT procedure_id) as procedures_used
+      FROM procedure_executions
+      WHERE started_at > CURRENT_DATE - INTERVAL '1 day' * $1
+    `, [parseInt(period)]);
+
+    // Most executed procedures
+    const { rows: topProcedures } = await pool.query(`
+      SELECT p.id, p.title, COUNT(pe.id) as execution_count
+      FROM procedures p
+      JOIN procedure_executions pe ON pe.procedure_id = p.id
+      WHERE pe.started_at > CURRENT_DATE - INTERVAL '1 day' * $1
+      GROUP BY p.id, p.title
+      ORDER BY execution_count DESC
+      LIMIT 5
+    `, [parseInt(period)]);
+
+    res.json({
+      ...rows[0],
+      top_procedures: topProcedures
+    });
+  } catch (err) {
+    console.error("Error getting execution stats:", err);
     res.status(500).json({ error: err.message });
   }
 });
