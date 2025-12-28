@@ -146,7 +146,7 @@ export default function AvatarChat({
     }
   }, [isOpen]);
 
-  // Message de bienvenue (v2.0 - Procedure focused)
+  // Message de bienvenue (v3.0 - Full assistant)
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       const welcomeMessage = {
@@ -155,13 +155,13 @@ export default function AvatarChat({
         content: `Salut ! Je suis ${avatar.name}. 👋
 
 **Je peux t'aider à :**
-• 📋 **Trouver** une procédure existante
-• ⚡ **Te guider** étape par étape
-• 📝 **Créer** une nouvelle procédure
-• ⚠️ Voir les non-conformités
-• 🔍 Rechercher un équipement
+• 🗺️ **Naviguer** dans les bâtiments et plans
+• 🔌 **Trouver** un équipement (tableau, VSD, ATEX...)
+• 📋 **Procédures** : chercher, créer, guider
+• ⚠️ **Analyser** non-conformités et risques
+• 📊 **Stats** et brief du matin
 
-Dis-moi ce que tu cherches !`,
+Demande-moi n'importe quoi !`,
         timestamp: new Date()
       };
       setMessages([welcomeMessage]);
