@@ -1605,11 +1605,42 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     data: aiResponse
   });
 
-  // Update session
+  // Update session - CRITICAL FIX: Properly merge arrays instead of replacing them
+  // Without this fix, step 1 is lost when step 2 is added (spread replaces arrays)
+  const existingData = session.collected_data || {};
+  const newData = aiResponse.collectedData || {};
+
+  // Smart merge: for 'steps' array, merge by step_number to accumulate steps
+  let mergedSteps = existingData.steps || [];
+  if (newData.steps && Array.isArray(newData.steps)) {
+    for (const newStep of newData.steps) {
+      const existingIndex = mergedSteps.findIndex(s => s.step_number === newStep.step_number);
+      if (existingIndex >= 0) {
+        // Update existing step
+        mergedSteps[existingIndex] = { ...mergedSteps[existingIndex], ...newStep };
+      } else {
+        // Add new step
+        mergedSteps.push(newStep);
+      }
+    }
+    // Sort by step_number to ensure order
+    mergedSteps.sort((a, b) => (a.step_number || 0) - (b.step_number || 0));
+  }
+
+  // Merge PPE arrays (union of existing + new)
+  let mergedPpe = existingData.ppe_required || existingData.ppe || [];
+  if (newData.ppe_required && Array.isArray(newData.ppe_required)) {
+    mergedPpe = [...new Set([...mergedPpe, ...newData.ppe_required])];
+  }
+
   const newCollectedData = {
-    ...session.collected_data,
-    ...(aiResponse.collectedData || {})
+    ...existingData,
+    ...newData,
+    steps: mergedSteps,
+    ppe_required: mergedPpe
   };
+
+  console.log(`[PROC] Merged data: ${mergedSteps.length} steps, phase: ${aiResponse.currentStep}`);
 
   await pool.query(
     `UPDATE procedure_ai_sessions
@@ -3053,27 +3084,56 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
 
     // Create new AI session with draft data
     const sessionId = `resume_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const resumePhase = draft.steps?.length > 0 ? "steps" : "init";
+    const resumeCollectedData = {
+      title: draft.title,
+      description: draft.description,
+      category: draft.category,
+      risk_level: draft.risk_level,
+      steps: draft.steps || [],
+      ppe: draft.ppe || [],
+      ppe_required: draft.ppe || [],
+      equipment_links: draft.equipment_links || []
+    };
+
+    // CRITICAL FIX: Also create session in database so aiGuidedChat() can find it
+    // Without this, aiGuidedChat() creates a new empty session and all draft data is lost
+    await pool.query(
+      `INSERT INTO procedure_ai_sessions (id, conversation, current_step, collected_data)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET
+         conversation = EXCLUDED.conversation,
+         current_step = EXCLUDED.current_step,
+         collected_data = EXCLUDED.collected_data,
+         updated_at = now()`,
+      [
+        sessionId,
+        JSON.stringify([{
+          role: "assistant",
+          content: `Brouillon restauré avec ${draft.steps?.length || 0} étape(s). Continuons !`,
+          data: { currentStep: resumePhase, collectedData: resumeCollectedData }
+        }]),
+        resumePhase,
+        JSON.stringify(resumeCollectedData)
+      ]
+    );
+
+    // Also keep in-memory for backwards compatibility
     aiSessions.set(sessionId, {
-      phase: draft.steps?.length > 0 ? "steps" : "init",
-      collectedData: {
-        title: draft.title,
-        description: draft.description,
-        category: draft.category,
-        risk_level: draft.risk_level,
-        steps: draft.steps || [],
-        ppe: draft.ppe || [],
-        equipment_links: draft.equipment_links || []
-      },
+      phase: resumePhase,
+      collectedData: resumeCollectedData,
       history: [],
       draftId: draft.id
     });
+
+    console.log(`[PROC] Resumed draft ${draftId} → session ${sessionId}, phase: ${resumePhase}, steps: ${draft.steps?.length || 0}`);
 
     res.json({
       ok: true,
       sessionId,
       resumedFrom: draft.id,
-      phase: aiSessions.get(sessionId).phase,
-      collectedData: aiSessions.get(sessionId).collectedData,
+      phase: resumePhase,
+      collectedData: resumeCollectedData,
       message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${draft.steps?.length || 0} étape(s) existante(s). Continuons !`
     });
   } catch (err) {
