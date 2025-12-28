@@ -4541,17 +4541,27 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       }
     }
 
-    const procedureKeywords = ['procédure', 'procedure', 'contrôle', 'controle', 'vérification', 'verification',
-                               'maintenance', 'intervention', 'comment faire', 'étapes', 'etapes', 'méthode',
-                               'prise', 'prises', 'tableau', 'armoire', 'disjoncteur', 'variateur'];
-    const wantsProcedure = procedureKeywords.some(kw => msgLower.includes(kw)) &&
+    // Procedure keywords - removed tableau/armoire to avoid conflicts with navigation
+    const procedureKeywords = ['procédure', 'procedure', 'contrôle qualité', 'vérification',
+                               'maintenance préventive', 'intervention', 'comment faire', 'méthode',
+                               'prise électrique', 'prises électrique'];
+
+    // Check if this is clearly a building/equipment navigation request (should NOT trigger procedure search)
+    const isBuildingNavigation = (msgLower.includes('bâtiment') || msgLower.includes('batiment') ||
+                                   msgLower.includes('étage') || msgLower.includes('building')) &&
+                                  (msgLower.includes('tableau') || msgLower.includes('armoire') ||
+                                   msgLower.includes('équipement') || msgLower.includes('electrique'));
+
+    const wantsProcedure = !isBuildingNavigation &&
+                           procedureKeywords.some(kw => msgLower.includes(kw)) &&
                            (msgLower.includes('?') || msgLower.includes('on a') || msgLower.includes('existe') ||
                             msgLower.includes('cherche') || msgLower.includes('trouve') || msgLower.includes('comment') ||
                             msgLower.includes('voir') || msgLower.includes('montre') || msgLower.includes('guide') ||
                             msgLower.includes('pour') || msgLower.includes('dois') || msgLower.includes('oui'));
 
     // Detect if user wants to SEE a specific procedure (not just search)
-    const wantsToSeeProcedure = (msgLower.includes('montre') || msgLower.includes('voir') ||
+    const wantsToSeeProcedure = !isBuildingNavigation &&
+                                (msgLower.includes('montre') || msgLower.includes('voir') ||
                                   msgLower.includes('affiche') || msgLower.includes('oui') ||
                                   msgLower.includes('guide-moi') || msgLower.includes('guide moi')) &&
                                  (msgLower.includes('procédure') || msgLower.includes('procedure') ||
