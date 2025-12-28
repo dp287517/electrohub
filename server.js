@@ -3265,19 +3265,42 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // =========================================================================
     const msgLower = message.toLowerCase();
 
+    // ==========================================================================
+    // SMART NAVIGATION DETECTION - Understand natural French requests
+    // ==========================================================================
+
+    // ACTION KEYWORDS: Words that indicate user wants to see/find/access something
+    const hasActionKeyword = (
+      msgLower.includes('voir') || msgLower.includes('montre') || msgLower.includes('ouvre') ||
+      msgLower.includes('affiche') || msgLower.includes('cherche') || msgLower.includes('trouve') ||
+      msgLower.includes('où') || msgLower.includes('localise') || msgLower.includes('besoin') ||
+      msgLower.includes('accéder') || msgLower.includes('aller') || msgLower.includes('naviguer') ||
+      msgLower.includes('plan') || msgLower.includes('carte') || msgLower.includes('liste') ||
+      msgLower.includes('quels') || msgLower.includes('combien') || msgLower.includes('donne')
+    );
+
+    // LOCATION KEYWORDS: Words that indicate a place/building/floor
+    const hasLocationKeyword = (
+      msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.includes('building') ||
+      msgLower.includes('étage') || msgLower.includes('etage') || msgLower.includes('floor') ||
+      msgLower.includes('niveau') || msgLower.includes('local') || msgLower.includes('salle') ||
+      msgLower.includes('zone') || msgLower.match(/\bbat\.?\s*\d/i) ||
+      msgLower.match(/\b[a-z]?\d{2}[a-z]?\b/)  // Building codes like "02", "B02", etc.
+    );
+
+    // EQUIPMENT KEYWORDS: Words that indicate electrical equipment
+    const hasEquipmentKeyword = (
+      msgLower.includes('tableau') || msgLower.includes('armoire') || msgLower.includes('tgbt') ||
+      msgLower.includes('équipement') || msgLower.includes('électrique') || msgLower.includes('vsd') ||
+      msgLower.includes('variateur') || msgLower.includes('atex') || msgLower.includes('td ') ||
+      msgLower.includes('distribution') || msgLower.includes('coffret') || msgLower.includes('datahub')
+    );
+
     // Detect plan/building/navigation requests (BEFORE procedure logic)
+    // Now uses smarter detection: needs action + (location OR equipment)
     const wantsPlanOrNavigation = (
-      (msgLower.includes('plan') || msgLower.includes('carte') || msgLower.includes('localisation') ||
-       msgLower.includes('où se trouve') || msgLower.includes('montre') || msgLower.includes('ouvre') ||
-       msgLower.includes('voir') || msgLower.includes('besoin') || msgLower.includes('cherche') ||
-       msgLower.includes('affiche') || msgLower.includes('liste')) &&
-      (msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.includes('building') ||
-       msgLower.includes('étage') || msgLower.includes('etage') || msgLower.includes('floor') ||
-       msgLower.includes('tableaux') || msgLower.includes('armoires') || msgLower.includes('local') ||
-       (msgLower.includes('tableau') && msgLower.includes('électrique')) ||
-       msgLower.match(/bâtiment\s*\d+/i) || msgLower.match(/bat\.?\s*\d+/i) ||
-       msgLower.includes('datahub'))
-    ) && !msgLower.includes('procédure') && !msgLower.includes('procedure');
+      hasActionKeyword && (hasLocationKeyword || hasEquipmentKeyword)
+    ) && !msgLower.includes('procédure') && !msgLower.includes('procedure') && !msgLower.includes('étape');
 
     if (wantsPlanOrNavigation) {
       console.log('[AI] 🗺️ Navigation/Plan request detected');
@@ -3323,14 +3346,22 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             byFloor[f].push(eq);
           });
 
-          let response = `## 🗺️ ${buildingCode ? `Bâtiment ${buildingCode}` : 'Navigation'}\n\n`;
+          const totalEquipment = equipResult.rows.length;
+          const floors = [...new Set(equipResult.rows.map(e => e.floor).filter(Boolean))];
+
+          let response = `## 🗺️ ${buildingCode ? `Bâtiment ${buildingCode}` : 'Équipements électriques'}\n\n`;
+          response += `📊 **${totalEquipment} équipement${totalEquipment > 1 ? 's' : ''}** trouvé${totalEquipment > 1 ? 's' : ''}`;
+          if (floors.length > 0) {
+            response += ` sur ${floors.length} étage${floors.length > 1 ? 's' : ''} (${floors.join(', ')})`;
+          }
+          response += '\n\n';
 
           if (floor) {
             response += `**Étage ${floor}**\n\n`;
           }
 
           Object.keys(byFloor).sort().forEach(f => {
-            if (!floor) response += `### Étage ${f}\n`;
+            if (!floor) response += `### 📍 Étage ${f}\n`;
             byFloor[f].forEach(eq => {
               response += `• **${eq.name}** (${eq.code || 'N/A'})`;
               if (eq.room) response += ` - ${eq.room}`;
@@ -3339,31 +3370,49 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             response += '\n';
           });
 
-          response += `\n💡 Clique sur un équipement pour voir ses détails.`;
-
-          // Create actions for navigation
+          // Create equipment actions with navigation data
           const actions = equipResult.rows.slice(0, 5).map(eq => ({
-            label: `📍 ${eq.name.substring(0, 20)}`,
-            prompt: `Montre-moi le tableau ${eq.name}`
+            label: `🔌 ${eq.name.substring(0, 25)}`,
+            prompt: `Montre-moi le tableau ${eq.name}`,
+            type: 'equipment',
+            equipment: {
+              id: eq.id,
+              name: eq.name,
+              code: eq.code,
+              buildingCode: eq.building_code,
+              floor: eq.floor
+            }
           }));
 
           // Add floor filter if building has multiple floors
-          const floors = [...new Set(equipResult.rows.map(e => e.floor).filter(Boolean))];
           if (floors.length > 1 && !floor) {
             floors.slice(0, 3).forEach(f => {
               actions.push({
-                label: `Étage ${f}`,
-                prompt: `Montre-moi l'étage ${f} du bâtiment ${buildingCode}`
+                label: `📍 Étage ${f}`,
+                prompt: `Montre-moi l'étage ${f} du bâtiment ${buildingCode}`,
+                type: 'floor',
+                floor: f,
+                buildingCode
               });
             });
           }
+
+          // Add main navigation action
+          actions.unshift({
+            label: `🗺️ Ouvrir le plan`,
+            type: 'navigate',
+            navigateTo: `/app/switchboards${buildingCode ? `?building=${buildingCode}` : ''}${floor ? `&floor=${floor}` : ''}`,
+            prompt: null // No chat prompt, just navigate
+          });
 
           return res.json({
             message: response,
             equipmentList: equipResult.rows,
             buildingCode,
             floor,
+            floors,
             navigationMode: true,
+            navigateTo: `/app/switchboards${buildingCode ? `?building=${buildingCode}` : ''}${floor ? `&floor=${floor}` : ''}`,
             actions,
             provider: 'system'
           });
@@ -3380,6 +3429,69 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         }
       } catch (e) {
         console.error('[AI] Navigation query error:', e.message);
+      }
+    }
+
+    // ==========================================================================
+    // BUILDING LIST - Show all buildings with equipment counts
+    // ==========================================================================
+    const wantsBuildingList = (
+      (msgLower.includes('liste') || msgLower.includes('tous') || msgLower.includes('quels')) &&
+      (msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.includes('building'))
+    ) && !msgLower.includes('procédure');
+
+    if (wantsBuildingList) {
+      console.log('[AI] 🏢 Building list request detected');
+      try {
+        const buildingsResult = await pool.query(`
+          SELECT
+            building_code,
+            COUNT(*) as equipment_count,
+            array_agg(DISTINCT floor) as floors
+          FROM switchboards
+          WHERE site = $1 AND building_code IS NOT NULL AND building_code != ''
+          GROUP BY building_code
+          ORDER BY building_code
+          LIMIT 20
+        `, [site]);
+
+        if (buildingsResult.rows.length > 0) {
+          let response = `## 🏢 Bâtiments sur le site ${site}\n\n`;
+          response += `📊 **${buildingsResult.rows.length} bâtiment(s)** avec équipements électriques\n\n`;
+
+          buildingsResult.rows.forEach(b => {
+            const floorList = b.floors?.filter(Boolean).sort().join(', ') || 'N/A';
+            response += `### 🏗️ Bâtiment ${b.building_code}\n`;
+            response += `• ${b.equipment_count} équipement(s)\n`;
+            response += `• Étages: ${floorList}\n\n`;
+          });
+
+          response += `💡 Dis-moi quel bâtiment tu veux explorer !`;
+
+          const actions = buildingsResult.rows.slice(0, 6).map(b => ({
+            label: `🏗️ Bâtiment ${b.building_code}`,
+            type: 'navigate',
+            navigateTo: `/app/switchboards?building=${b.building_code}`,
+            prompt: null
+          }));
+
+          return res.json({
+            message: response,
+            buildings: buildingsResult.rows,
+            actions,
+            provider: 'system'
+          });
+        } else {
+          return res.json({
+            message: `🏢 Aucun bâtiment trouvé sur le site ${site}. Vérifie que les équipements ont un code bâtiment.`,
+            actions: [
+              { label: '📋 Tous les équipements', type: 'navigate', navigateTo: '/app/switchboards' }
+            ],
+            provider: 'system'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Building list query error:', e.message);
       }
     }
 
@@ -3419,12 +3531,34 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             response += `🏷️ **Code:** ${eq.code || 'N/A'}\n`;
             response += `📋 **Contrôles planifiés:** ${eq.control_count}\n`;
 
+            // If multiple results found, show them
+            if (eqResult.rows.length > 1) {
+              response += `\n📋 **${eqResult.rows.length} résultats trouvés:**\n`;
+              eqResult.rows.forEach((e, i) => {
+                response += `${i + 1}. ${e.name} (${e.code || 'N/A'}) - ${e.building_code || ''}\n`;
+              });
+            }
+
             return res.json({
               message: response,
               equipment: eq,
+              equipmentList: eqResult.rows,
+              navigationMode: true,
+              navigateTo: `/app/switchboards?switchboard=${eq.id}`,
+              buildingCode: eq.building_code,
+              floor: eq.floor,
               actions: [
-                { label: '📋 Voir contrôles', prompt: `Contrôles pour ${eq.name}` },
-                { label: '🗺️ Voir le bâtiment', prompt: `Plan du bâtiment ${eq.building_code}` }
+                {
+                  label: '🔌 Voir l\'équipement',
+                  type: 'navigate',
+                  navigateTo: `/app/switchboards?switchboard=${eq.id}`
+                },
+                {
+                  label: '🗺️ Voir le bâtiment',
+                  type: 'navigate',
+                  navigateTo: `/app/switchboards?building=${eq.building_code}`
+                },
+                { label: '📋 Voir contrôles', prompt: `Contrôles pour ${eq.name}` }
               ],
               provider: 'system'
             });

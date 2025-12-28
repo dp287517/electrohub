@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 import {
   X, Send, Mic, MicOff, Settings,
@@ -95,6 +96,7 @@ export default function AvatarChat({
   avatarStyle = 'ai',
   onChangeAvatar
 }) {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -489,6 +491,14 @@ Demande-moi n'importe quoi !`,
         provider: response.provider,
         model: response.model,
         // ===============================
+        // NAVIGATION INTEGRATION
+        // ===============================
+        navigationMode: response.navigationMode,
+        navigateTo: response.navigateTo,
+        buildingCode: response.buildingCode,
+        floor: response.floor,
+        equipmentList: response.equipmentList,
+        // ===============================
         // PROCEDURE INTEGRATION (v2.0)
         // ===============================
         proceduresFound: response.proceduresFound,
@@ -743,6 +753,37 @@ Demande-moi n'importe quoi !`,
                   </div>
                 )}
 
+                {/* Navigation Mode - Quick access button */}
+                {message.navigationMode && message.navigateTo && (
+                  <div className="mt-3 p-3 bg-gradient-to-r from-brand-50 to-blue-50 rounded-lg border border-brand-200">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-brand-100 rounded-lg">
+                        <Building className="w-5 h-5 text-brand-600" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-brand-700">
+                          {message.buildingCode ? `Bâtiment ${message.buildingCode}` : 'Équipements trouvés'}
+                        </p>
+                        <p className="text-xs text-brand-600">
+                          {message.equipmentList?.length || 0} équipement(s)
+                          {message.floor ? ` • Étage ${message.floor}` : ''}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          console.log('[AI Chat] Quick navigation to:', message.navigateTo);
+                          onClose?.();
+                          navigate(message.navigateTo);
+                        }}
+                        className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors flex items-center gap-2"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        Voir
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Actions suggérées */}
                 {message.actions && message.actions.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
@@ -750,12 +791,42 @@ Demande-moi n'importe quoi !`,
                     {message.actions.map((action, i) => (
                       <button
                         key={i}
-                        onClick={() => handleSend(action.prompt || action.label)}
-                        className="flex items-center gap-2 w-full px-3 py-2 bg-white rounded-lg text-left text-sm hover:bg-gray-50 transition-colors border"
+                        onClick={() => {
+                          // Handle different action types
+                          if (action.type === 'navigate' && action.navigateTo) {
+                            // Navigate to the specified path and close the chat
+                            console.log('[AI Chat] Navigating to:', action.navigateTo);
+                            onClose?.();
+                            navigate(action.navigateTo);
+                          } else if (action.type === 'equipment' && action.equipment?.id) {
+                            // Navigate to equipment details
+                            console.log('[AI Chat] Navigating to equipment:', action.equipment);
+                            onClose?.();
+                            navigate(`/app/switchboards?switchboard=${action.equipment.id}`);
+                          } else if (action.prompt) {
+                            // Regular chat action - send the prompt
+                            handleSend(action.prompt);
+                          } else {
+                            handleSend(action.label);
+                          }
+                        }}
+                        className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left text-sm transition-colors border ${
+                          action.type === 'navigate'
+                            ? 'bg-brand-50 border-brand-200 hover:bg-brand-100 text-brand-700'
+                            : 'bg-white hover:bg-gray-50'
+                        }`}
                       >
-                        <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
+                        {action.type === 'navigate' ? (
+                          <ExternalLink className="w-4 h-4 text-brand-500 shrink-0" />
+                        ) : action.type === 'equipment' ? (
+                          <Zap className="w-4 h-4 text-amber-500 shrink-0" />
+                        ) : (
+                          <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
+                        )}
                         <span>{action.label}</span>
-                        {action.url && <ExternalLink className="w-3 h-3 text-gray-400 ml-auto" />}
+                        {(action.type === 'navigate' || action.url) && (
+                          <ExternalLink className="w-3 h-3 text-gray-400 ml-auto" />
+                        )}
                       </button>
                     ))}
                   </div>
