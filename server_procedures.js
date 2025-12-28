@@ -5197,12 +5197,136 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
 
 async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = {}) {
   const companyName = siteSettings.company_name || "Haleon";
-  const contractorName = siteSettings.contractor_name || "";
+  const contractorName = siteSettings.contractor_name || "Haleon";
   const contractorAddress = siteSettings.contractor_address || "";
   const contractorPhone = siteSettings.contractor_phone || "";
   const preparedBy = siteSettings.prepared_by || "";
   const workDate = new Date().toLocaleDateString("fr-FR");
   const emergencyPhone = siteSettings.emergency_phone || "+41 (0) 22 567 40 00";
+
+  // ============================================
+  // INTELLIGENCE DOCUMENTAIRE - Détection automatique
+  // ============================================
+
+  // Détection intelligente des outils basée sur la catégorie et les équipements liés
+  const category = (procedure.category || "").toLowerCase();
+  const title = (procedure.title || "").toLowerCase();
+  const description = (procedure.description || "").toLowerCase();
+  const equipmentLinks = procedure.equipment_links || [];
+
+  // Base d'outils par catégorie
+  const toolsByCategory = {
+    electrical: [
+      "Multimètre digital (calibré)",
+      "Pince ampèremétrique",
+      "Testeur de tension (VAT)",
+      "Tournevis isolés 1000V",
+      "Pinces coupantes isolées",
+      "Jeu de clés Allen isolées",
+      "Lampe frontale ATEX (si zone)",
+      "Étiquettes de consignation",
+      "Cadenas de consignation personnels"
+    ],
+    mechanical: [
+      "Clés à molette (diverses tailles)",
+      "Jeu de clés plates/mixtes",
+      "Clé dynamométrique",
+      "Marteau",
+      "Extracteur de roulements",
+      "Comparateur",
+      "Cales d'épaisseur",
+      "Graisse industrielle",
+      "Chiffons propres"
+    ],
+    atex: [
+      "Outillage anti-étincelles (bronze/cuivre béryllium)",
+      "Lampe torche ATEX certifiée",
+      "Détecteur de gaz portable",
+      "Appareil photo ATEX (si nécessaire)",
+      "Radio ATEX (communication)",
+      "Aspirateur ATEX",
+      "Outils isolés certifiés ATEX"
+    ],
+    conveyor: [
+      "Clés Allen (jeu complet)",
+      "Clé à griffe pour courroies",
+      "Tendeur de bande",
+      "Niveau à bulle",
+      "Mètre ruban",
+      "Cutter de sécurité",
+      "Lubrifiant pour chaînes",
+      "Rouleaux de remplacement"
+    ],
+    hydraulic: [
+      "Manomètre de pression",
+      "Clés pour raccords hydrauliques",
+      "Récipients de récupération d'huile",
+      "Huile hydraulique de remplacement",
+      "Joints et raccords de rechange",
+      "Pompe de remplissage",
+      "Chiffons absorbants"
+    ],
+    pneumatic: [
+      "Manomètre pneumatique",
+      "Clés pour raccords rapides",
+      "Téflon pour filetages",
+      "Joints toriques de rechange",
+      "Détecteur de fuites (savon ou électronique)",
+      "Soufflette"
+    ]
+  };
+
+  // Détection automatique du type de travail
+  let detectedCategories = [];
+
+  if (category.includes("electr") || title.includes("electr") || title.includes("armoire") ||
+      title.includes("vsd") || title.includes("variateur") || title.includes("câbl")) {
+    detectedCategories.push("electrical");
+  }
+  if (category.includes("meca") || title.includes("meca") || title.includes("roulement") ||
+      title.includes("courroie") || title.includes("moteur")) {
+    detectedCategories.push("mechanical");
+  }
+  if (category.includes("atex") || title.includes("atex") || title.includes("zone 1") ||
+      title.includes("zone 2") || title.includes("explosif")) {
+    detectedCategories.push("atex");
+  }
+  if (title.includes("convoyeur") || title.includes("rouleau") || title.includes("bande") ||
+      title.includes("tapis")) {
+    detectedCategories.push("conveyor");
+  }
+  if (title.includes("hydraul") || description.includes("hydraul")) {
+    detectedCategories.push("hydraulic");
+  }
+  if (title.includes("pneumat") || description.includes("pneumat")) {
+    detectedCategories.push("pneumatic");
+  }
+
+  // Si aucune catégorie détectée, utiliser electrical par défaut
+  if (detectedCategories.length === 0) {
+    detectedCategories.push("electrical");
+    detectedCategories.push("mechanical");
+  }
+
+  // Construire la liste d'outils intelligente
+  let toolsList = [];
+  detectedCategories.forEach(cat => {
+    if (toolsByCategory[cat]) {
+      toolsList = [...toolsList, ...toolsByCategory[cat]];
+    }
+  });
+
+  // Ajouter les équipements liés
+  if (equipmentLinks.length > 0) {
+    equipmentLinks.forEach(link => {
+      if (link.equipment_name) {
+        toolsList.push(`Équipement: ${link.equipment_name} (${link.equipment_type || 'lié'})`);
+      }
+    });
+  }
+
+  // Dédupliquer
+  toolsList = [...new Set(toolsList)];
 
   // Bordures standard pour les tableaux
   const tableBorders = {
@@ -5466,29 +5590,106 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
     ],
   });
 
-  // ========== SECTION 5: ÉQUIPEMENTS ==========
+  // ========== SECTION 5: ÉQUIPEMENTS (INTELLIGENT) ==========
+  const toolsParagraphs = [
+    new Paragraph({
+      children: [new TextRun({ text: "5.0 Équipements et outils", bold: true, size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Cette section inclut la liste des équipements nécessaires pour accomplir la tâche en toute sécurité.",
+        size: 20, color: "8DB3E2", italics: true,
+      })],
+      spacing: { after: 100 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "Outillage requis :", bold: true, size: 20 })],
+      spacing: { after: 80 },
+    }),
+  ];
+
+  // Ajouter chaque outil comme un élément de liste
+  toolsList.forEach((tool, idx) => {
+    toolsParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: `• ${tool}`, size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  });
+
+  // Ajouter les pièces de rechange si disponibles
+  toolsParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "Pièces de rechange / Consommables :", bold: true, size: 20 })],
+      spacing: { after: 80 },
+    })
+  );
+
+  // Détection intelligente des pièces de rechange
+  const spareParts = [];
+  if (title.includes("rouleau") || title.includes("convoyeur")) {
+    spareParts.push("Rouleaux de remplacement (vérifier références)");
+    spareParts.push("Courroie ou bande de remplacement si nécessaire");
+    spareParts.push("Roulements de rechange");
+  }
+  if (detectedCategories.includes("electrical")) {
+    spareParts.push("Fusibles de rechange (calibres appropriés)");
+    spareParts.push("Bornes et connecteurs");
+    spareParts.push("Câbles et fils de différentes sections");
+  }
+  if (detectedCategories.includes("atex")) {
+    spareParts.push("Joints d'étanchéité ATEX");
+    spareParts.push("Presse-étoupes certifiés ATEX");
+  }
+  if (spareParts.length === 0) {
+    spareParts.push("Pièces de rechange selon liste de préparation");
+    spareParts.push("Consommables divers (visserie, joints, etc.)");
+  }
+
+  spareParts.forEach(part => {
+    toolsParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: `• ${part}`, size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  });
+
+  // Ajouter les EPI
+  toolsParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "Équipements de Protection Individuelle (EPI) :", bold: true, size: 20 })],
+      spacing: { after: 80 },
+    })
+  );
+
+  const ppeItems = procedure.ppe_required || aiAnalysis?.ppe || ["Casque", "Lunettes de protection", "Chaussures de sécurité", "Gants"];
+  ppeItems.forEach(ppe => {
+    toolsParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: `• ${ppe}`, size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  });
+
   const section5 = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
       new TableRow({
         children: [
           new TableCell({
-            children: [
-              new Paragraph({
-                children: [new TextRun({ text: "5.0 Équipements et outils", bold: true, size: 20 })],
-                spacing: { after: 60 },
-              }),
-              new Paragraph({
-                children: [new TextRun({
-                  text: "Cette section doit inclure une liste de base de l'équipement qui sera utilisé pour accomplir la tâche.",
-                  size: 20, color: "8DB3E2", italics: true,
-                })],
-                spacing: { after: 100 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: equipmentList, size: 20 })],
-              }),
-            ],
+            children: toolsParagraphs,
             borders: tableBorders,
             margins: { top: 170, bottom: 170, left: 170, right: 170 },
           }),
@@ -5497,25 +5698,148 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
     ],
   });
 
-  // ========== SECTION 6: SÉQUENCE DES TRAVAUX ==========
-  const sequenceSteps = (aiAnalysis?.steps || steps).map((step, idx) =>
+  // ========== SECTION 6: SÉQUENCE DES TRAVAUX (DÉTAILLÉE) ==========
+  const workSteps = aiAnalysis?.steps || steps;
+  const sequenceParagraphs = [
+    new Paragraph({
+      children: [new TextRun({ text: "6.0 Séquence des travaux (instructions étape par étape)", bold: true, size: 20 })],
+      spacing: { after: 60 },
+    }),
     new Paragraph({
       children: [new TextRun({
-        text: `${idx + 1}. ${step.title || step.name || `Étape ${idx + 1}`}`,
-        size: 20, bold: true,
+        text: "Cette section fournit le processus détaillé, étape par étape, des travaux à effectuer. Chaque étape doit être lue et comprise avant exécution.",
+        size: 20, color: "8DB3E2", italics: true,
       })],
+      spacing: { after: 120 },
+    }),
+  ];
+
+  // Phase de préparation (toujours présente)
+  sequenceParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "PHASE DE PRÉPARATION", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 80 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Vérifier que tous les outils et pièces de rechange sont disponibles", size: 20 })],
       spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• S'assurer que les EPI sont en bon état et conformes", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Prendre connaissance de l'analyse de risque et signer le document", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Informer le responsable de zone du démarrage des travaux", size: 20 })],
+      spacing: { after: 100 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "PHASE D'EXÉCUTION", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 80 },
     })
-  ).concat(
-    (aiAnalysis?.steps || steps).map((step) =>
+  );
+
+  // Ajouter chaque étape avec détails
+  workSteps.forEach((step, idx) => {
+    const stepTitle = step.title || step.name || `Étape ${idx + 1}`;
+    const stepInstructions = step.instructions || step.description || "";
+    const stepWarning = step.warning || "";
+    const stepDuration = step.duration_minutes ? ` (Durée estimée: ${step.duration_minutes} min)` : "";
+
+    // Titre de l'étape
+    sequenceParagraphs.push(
       new Paragraph({
-        children: [new TextRun({
-          text: `   ${step.description || step.instructions || ""}`,
-          size: 20,
-        })],
+        children: [
+          new TextRun({ text: `Étape ${idx + 1}: `, bold: true, size: 20 }),
+          new TextRun({ text: stepTitle, bold: true, size: 20 }),
+          new TextRun({ text: stepDuration, size: 18, italics: true, color: "666666" }),
+        ],
+        spacing: { after: 60 },
+      })
+    );
+
+    // Instructions détaillées
+    if (stepInstructions) {
+      // Diviser les instructions en points si elles contiennent des retours à la ligne ou des points
+      const instructionLines = stepInstructions.split(/[\n\r]+|(?<=\.)\s+/).filter(line => line.trim());
+      if (instructionLines.length > 1) {
+        instructionLines.forEach((line, lineIdx) => {
+          sequenceParagraphs.push(
+            new Paragraph({
+              children: [new TextRun({ text: `   ${lineIdx + 1}. ${line.trim()}`, size: 20 })],
+              spacing: { after: 30 },
+            })
+          );
+        });
+      } else {
+        sequenceParagraphs.push(
+          new Paragraph({
+            children: [new TextRun({ text: `   ${stepInstructions}`, size: 20 })],
+            spacing: { after: 40 },
+          })
+        );
+      }
+    }
+
+    // Avertissement si présent
+    if (stepWarning) {
+      sequenceParagraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({ text: "   ⚠ ATTENTION: ", bold: true, size: 20, color: "FF0000" }),
+            new TextRun({ text: stepWarning, size: 20, color: "FF0000" }),
+          ],
+          spacing: { after: 60 },
+        })
+      );
+    }
+
+    // Point de contrôle après chaque étape
+    sequenceParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: `   ☐ Étape ${idx + 1} validée`, size: 18, italics: true, color: "666666" })],
         spacing: { after: 80 },
       })
-    )
+    );
+  });
+
+  // Phase de clôture
+  sequenceParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "PHASE DE CLÔTURE", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 80 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Ranger tous les outils et nettoyer la zone de travail", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Vérifier qu'aucun outil ou pièce n'a été oublié dans l'équipement", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Effectuer un test de fonctionnement si applicable", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Retirer les consignations selon la procédure établie", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Informer le responsable de zone de la fin des travaux", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Renseigner le rapport d'intervention", size: 20 })],
+      spacing: { after: 40 },
+    })
   );
 
   const section6 = new Table({
@@ -5524,30 +5848,7 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
       new TableRow({
         children: [
           new TableCell({
-            children: [
-              new Paragraph({
-                children: [new TextRun({ text: "6.0 Séquence des travaux (instructions étape par étape)", bold: true, size: 20 })],
-                spacing: { after: 60 },
-              }),
-              new Paragraph({
-                children: [new TextRun({
-                  text: "Cette section doit fournir un processus étape par étape des travaux à effectuer.",
-                  size: 20, color: "8DB3E2", italics: true,
-                })],
-                spacing: { after: 100 },
-              }),
-              ...sequenceSteps.slice(0, (aiAnalysis?.steps || steps).length),
-              ...(aiAnalysis?.steps || steps).map((step, idx) =>
-                new Paragraph({
-                  children: [
-                    new TextRun({ text: `${idx + 1}. `, bold: true, size: 20 }),
-                    new TextRun({ text: `${step.title || `Étape ${idx + 1}`}: `, bold: true, size: 20 }),
-                    new TextRun({ text: step.description || step.instructions || "", size: 20 }),
-                  ],
-                  spacing: { after: 80 },
-                })
-              ),
-            ],
+            children: sequenceParagraphs,
             borders: tableBorders,
             margins: { top: 170, bottom: 170, left: 170, right: 170 },
           }),
@@ -5591,52 +5892,244 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
     ],
   });
 
-  // ========== SECTION 8: MESURES DE CONTRÔLE ==========
+  // ========== SECTION 8: MESURES DE CONTRÔLE (DÉTAILLÉES) ==========
+  const controlParagraphs = [
+    new Paragraph({
+      children: [new TextRun({ text: "8.0 Mesures de contrôle", bold: true, size: 20 })],
+      spacing: { after: 100 },
+    }),
+
+    // 8.1 Formation et compétence
+    new Paragraph({
+      children: [new TextRun({ text: "8.1 Formation et compétence", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Les intervenants doivent disposer des qualifications et habilitations suivantes :",
+        size: 20,
+      })],
+      spacing: { after: 60 },
+    }),
+  ];
+
+  // Ajouter les formations requises selon la catégorie
+  const requiredTrainings = [];
+  if (detectedCategories.includes("electrical")) {
+    requiredTrainings.push("• Habilitation électrique (B1V, B2V, BR, BC selon niveau d'intervention)");
+    requiredTrainings.push("• Formation aux risques électriques");
+    requiredTrainings.push("• Formation consignation/déconsignation");
+  }
+  if (detectedCategories.includes("atex")) {
+    requiredTrainings.push("• Formation ATEX niveau 1 ou 2 selon zone");
+    requiredTrainings.push("• Connaissance des procédures spécifiques zones explosives");
+    requiredTrainings.push("• Certification outillage ATEX");
+  }
+  if (detectedCategories.includes("mechanical")) {
+    requiredTrainings.push("• Formation mécanique industrielle");
+    requiredTrainings.push("• Habilitation pour intervention sur machines");
+  }
+  if (detectedCategories.includes("hydraulic") || detectedCategories.includes("pneumatic")) {
+    requiredTrainings.push("• Formation systèmes hydrauliques/pneumatiques");
+    requiredTrainings.push("• Connaissance des risques liés à la pression");
+  }
+  requiredTrainings.push("• Formation sécurité site (accueil sécurité Haleon)");
+  requiredTrainings.push("• Attestation de visite médicale à jour");
+
+  requiredTrainings.forEach(training => {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: training, size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  });
+
+  // 8.2 EPI
+  controlParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "8.2 Équipements de Protection Individuelle (EPI)", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Les EPI suivants sont OBLIGATOIRES pour cette intervention :",
+        size: 20, bold: true,
+      })],
+      spacing: { after: 60 },
+    })
+  );
+
+  const ppeRequired = procedure.ppe_required || aiAnalysis?.ppe || [];
+  const allPPE = [...new Set([...ppeRequired, "Casque de protection", "Lunettes de sécurité", "Chaussures de sécurité S3", "Gants de travail"])];
+
+  allPPE.forEach(ppe => {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: `☑ ${ppe}`, size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  });
+
+  // EPI spécifiques selon catégorie
+  if (detectedCategories.includes("electrical")) {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: "☑ Gants isolants (selon tension)", size: 20 })],
+        spacing: { after: 40 },
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: "☑ Écran facial anti-arc électrique", size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  }
+  if (detectedCategories.includes("atex")) {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: "☑ Vêtements antistatiques", size: 20 })],
+        spacing: { after: 40 },
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: "☑ Chaussures antistatiques", size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  }
+
+  // 8.3 Consignation
+  controlParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "8.3 Consignation / Mise en sécurité", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Avant toute intervention, les équipements doivent être consignés selon la procédure :",
+        size: 20,
+      })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "1. Séparation de l'équipement des sources d'énergie", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "2. Condamnation des dispositifs de séparation (cadenas personnel)", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "3. Dissipation/rétention des énergies résiduelles", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "4. Vérification d'absence de tension/énergie (VAT)", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "5. Pose de la signalisation (pancarte, étiquette)", size: 20 })],
+      spacing: { after: 60 },
+    })
+  );
+
+  // 8.4 Évaluation des risques
+  controlParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "8.4 Évaluation des risques (RAMS)", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "L'analyse des risques (RAMS) doit être effectuée et signée par tous les intervenants avant le début des travaux.",
+        size: 20,
+      })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Référence document : QD-REF-014758 Analyse de risque",
+        size: 20, italics: true,
+      })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: "Points de vigilance identifiés :",
+        size: 20, bold: true,
+      })],
+      spacing: { after: 60 },
+    })
+  );
+
+  // Ajouter les risques identifiés depuis l'analyse IA
+  const identifiedRisks = aiAnalysis?.steps?.flatMap(s => s.hazards || []) || [];
+  const uniqueRisks = [...new Set(identifiedRisks)];
+  if (uniqueRisks.length > 0) {
+    uniqueRisks.slice(0, 5).forEach(risk => {
+      controlParagraphs.push(
+        new Paragraph({
+          children: [new TextRun({ text: `• ${risk}`, size: 20 })],
+          spacing: { after: 40 },
+        })
+      );
+    });
+  } else {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: "• Risques identifiés dans le document RAMS associé", size: 20 })],
+        spacing: { after: 40 },
+      })
+    );
+  }
+
+  // 8.5 Communication
+  controlParagraphs.push(
+    new Paragraph({
+      children: [new TextRun({ text: "", size: 20 })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "8.5 Communication", bold: true, size: 20, color: "2E75B6" })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Briefing sécurité obligatoire avant démarrage des travaux", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Moyens de communication : radio/téléphone disponibles", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Signalement immédiat de toute situation dangereuse", size: 20 })],
+      spacing: { after: 40 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: "• Debriefing en fin de travaux si anomalies constatées", size: 20 })],
+      spacing: { after: 40 },
+    })
+  );
+
   const section8 = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
       new TableRow({
         children: [
           new TableCell({
-            children: [
-              new Paragraph({
-                children: [new TextRun({ text: "8.0 Mesures de contrôle.", bold: true, size: 20 })],
-                spacing: { after: 100 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: "Formation et compétence :", bold: true, size: 20 })],
-                spacing: { after: 60 },
-              }),
-              new Paragraph({
-                children: [new TextRun({
-                  text: "Les entrepreneurs sont-ils formés à l'utilisation des équipements de travail et d'accès ?",
-                  size: 20, color: "8DB3E2", italics: true,
-                })],
-                spacing: { after: 80 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: "Oui - Attestations et permis spécifiques fournis", size: 20 })],
-                spacing: { after: 100 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: "Equipements de protection individuel (EPI) :", bold: true, size: 20 })],
-                spacing: { after: 60 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: ppeList, size: 20 })],
-                spacing: { after: 100 },
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: "Evaluation des risques (RA) :", bold: true, size: 20 })],
-                spacing: { after: 60 },
-              }),
-              new Paragraph({
-                children: [new TextRun({
-                  text: "L'analyse des risques doit être effectuée selon le « QD-REF-014758 Analyse de risque » et tout personnel impliqué dans les travaux doivent lire, comprendre et signer l'analyse de risque.",
-                  size: 20,
-                })],
-              }),
-            ],
+            children: controlParagraphs,
             borders: tableBorders,
             margins: { top: 170, bottom: 170, left: 170, right: 170 },
           }),
@@ -6107,7 +6600,9 @@ app.get("/api/procedures/example-rams-excel", async (req, res) => {
 app.get("/api/procedures/:id/methode-word", async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("[Méthode Word] Generating for procedure:", id);
+    const userEmail = req.headers["x-user-email"] || "";
+    const site = req.headers["x-site"] || "default";
+    console.log("[Méthode Word] Generating for procedure:", id, "by user:", userEmail);
 
     // Get procedure and steps
     const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
@@ -6119,7 +6614,13 @@ app.get("/api/procedures/:id/methode-word", async (req, res) => {
       `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
     );
 
+    // Get equipment links for intelligent tool detection
+    const { rows: equipmentLinks } = await pool.query(
+      `SELECT * FROM procedure_equipment_links WHERE procedure_id = $1`, [id]
+    );
+
     const procedure = procedures[0];
+    procedure.equipment_links = equipmentLinks;
 
     // Get AI analysis if available
     let aiAnalysis = null;
@@ -6140,7 +6641,6 @@ app.get("/api/procedures/:id/methode-word", async (req, res) => {
     // Get site settings
     let siteSettings = {};
     try {
-      const site = req.headers["x-site"] || "default";
       const { rows: settings } = await pool.query(
         `SELECT * FROM site_settings WHERE site_id = $1`, [site]
       );
@@ -6151,7 +6651,11 @@ app.get("/api/procedures/:id/methode-word", async (req, res) => {
       console.log("[Méthode Word] No site settings found");
     }
 
-    // Generate Word document
+    // Add user email and ensure contractor defaults to Haleon
+    siteSettings.prepared_by = userEmail || siteSettings.prepared_by || "";
+    siteSettings.contractor_name = siteSettings.contractor_name || "Haleon";
+
+    // Generate Word document with full context
     const wordBuffer = await generateMethodeWord(procedure, steps, aiAnalysis, siteSettings);
 
     const dateStr = new Date().toISOString().split("T")[0];
