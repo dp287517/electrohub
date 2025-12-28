@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
-  FileText, Settings, Upload, Image, Bot
+  FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
@@ -129,6 +129,146 @@ function ErrorMessage({ error, onRetry }) {
       <h3 className="text-lg font-medium text-gray-900">Error loading data</h3>
       <p className="text-gray-500 mt-1">{error}</p>
       {onRetry && <button onClick={onRetry} className="mt-4 px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700">Retry</button>}
+    </div>
+  );
+}
+
+// ============== PENDING USERS TAB ==============
+function PendingUsersTab({ sites, departments, onRefresh }) {
+  const [pendingUsers, setPendingUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [validating, setValidating] = useState(null);
+
+  const fetchPending = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/users/pending`, getAuthOptions());
+      const data = await response.json();
+      setPendingUsers(data.users || []);
+    } catch (err) {
+      console.error('Error fetching pending users:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPending();
+  }, [fetchPending]);
+
+  const handleValidate = async (userId, allowed_apps = null) => {
+    setValidating(userId);
+    try {
+      const response = await fetch(`${API_BASE}/users/validate/${userId}`, {
+        method: 'POST',
+        ...getAuthOptions(),
+        body: JSON.stringify({ allowed_apps })
+      });
+      if (!response.ok) throw new Error('Failed to validate user');
+      fetchPending();
+      onRefresh();
+    } catch (err) {
+      alert('Error validating user: ' + err.message);
+    } finally {
+      setValidating(null);
+    }
+  };
+
+  const handleReject = async (userId) => {
+    if (!confirm('Rejeter cet utilisateur ? Son compte sera supprimé.')) return;
+    setValidating(userId);
+    try {
+      const response = await fetch(`${API_BASE}/users/reject/${userId}`, {
+        method: 'POST',
+        ...getAuthOptions()
+      });
+      if (!response.ok) throw new Error('Failed to reject user');
+      fetchPending();
+    } catch (err) {
+      alert('Error rejecting user: ' + err.message);
+    } finally {
+      setValidating(null);
+    }
+  };
+
+  if (loading) return <LoadingSpinner text="Loading pending users..." />;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-200">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 bg-amber-500 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Clock size={20} className="text-white" />
+          </div>
+          <div>
+            <p className="text-sm text-amber-800 font-medium">Utilisateurs en attente de validation</p>
+            <p className="text-sm text-amber-600 mt-1">
+              Ces utilisateurs se sont connectés via haleon-tool.io mais n'ont pas encore été validés.
+              Ils ne peuvent accéder à aucune application tant qu'ils ne sont pas validés.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Pending users list */}
+      {pendingUsers.length === 0 ? (
+        <div className="text-center py-16">
+          <UserCheck size={48} className="mx-auto text-green-400 mb-4" />
+          <h3 className="text-lg font-medium text-gray-900">Aucun utilisateur en attente</h3>
+          <p className="text-gray-500 mt-1">Tous les utilisateurs ont été validés</p>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {pendingUsers.map(user => (
+            <div key={user.id} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+              <div className="p-4 flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
+                    <span className="text-lg font-bold text-amber-600">
+                      {user.name?.charAt(0)?.toUpperCase() || user.email?.charAt(0)?.toUpperCase() || '?'}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900 flex items-center gap-2">
+                      {user.name || user.email?.split('@')[0]}
+                      <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full flex items-center gap-1">
+                        <Clock size={12} /> En attente
+                      </span>
+                    </p>
+                    <p className="text-sm text-gray-500">{user.email}</p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Première connexion: {new Date(user.created_at).toLocaleString('fr-FR')}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleValidate(user.id)}
+                    disabled={validating === user.id}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {validating === user.id ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <UserCheck size={16} />
+                    )}
+                    Valider
+                  </button>
+                  <button
+                    onClick={() => handleReject(user.id)}
+                    disabled={validating === user.id}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <UserX size={16} />
+                    Rejeter
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1546,6 +1686,7 @@ export default function Admin() {
 
   const [haleonUsers, setHaleonUsers] = useState([]);
   const [externalUsers, setExternalUsers] = useState([]);
+  const [pendingCount, setPendingCount] = useState(0);
   const [companies, setCompanies] = useState([]);
   const [sites, setSites] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -1558,9 +1699,10 @@ export default function Admin() {
       const opts = getAuthOptions();
 
       // Fetch all data in parallel
-      const [haleonRes, externalRes, companiesRes, sitesRes, deptsRes] = await Promise.all([
+      const [haleonRes, externalRes, pendingRes, companiesRes, sitesRes, deptsRes] = await Promise.all([
         fetch(`${API_BASE}/users/haleon`, opts).then(r => r.json()).catch(() => ({ users: [] })),
         fetch(`${API_BASE}/users/external`, opts).then(r => r.json()).catch(() => ({ users: [] })),
+        fetch(`${API_BASE}/users/pending`, opts).then(r => r.json()).catch(() => ({ users: [], count: 0 })),
         fetch(`${API_BASE}/companies`, opts).then(r => r.json()).catch(() => ({ companies: [] })),
         fetch(`${API_BASE}/sites`, opts).then(r => r.json()).catch(() => ({ sites: [] })),
         fetch(`${API_BASE}/departments`, opts).then(r => r.json()).catch(() => ({ departments: [] }))
@@ -1568,6 +1710,7 @@ export default function Admin() {
 
       setHaleonUsers(haleonRes.users || []);
       setExternalUsers(externalRes.users || []);
+      setPendingCount(pendingRes.count || (pendingRes.users || []).length);
       setCompanies(companiesRes.companies || []);
       setSites(sitesRes.sites || []);
       setDepartments(deptsRes.departments || []);
@@ -1633,6 +1776,9 @@ export default function Admin() {
       <div className="bg-white border-b border-gray-100 sticky top-16 z-30">
         <div className="max-w-[95vw] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex gap-1 overflow-x-auto">
+            <TabButton active={activeTab === 'pending'} onClick={() => setActiveTab('pending')} icon={Clock} count={pendingCount}>
+              <span className={pendingCount > 0 ? 'text-amber-600 font-semibold' : ''}>Pending</span>
+            </TabButton>
             <TabButton active={activeTab === 'haleon'} onClick={() => setActiveTab('haleon')} icon={Sparkles} count={haleonUsers.length}>Haleon Users</TabButton>
             <TabButton active={activeTab === 'external'} onClick={() => setActiveTab('external')} icon={Users} count={externalUsers.length}>External Users</TabButton>
             <TabButton active={activeTab === 'companies'} onClick={() => setActiveTab('companies')} icon={Building2} count={companies.length}>Companies</TabButton>
@@ -1650,6 +1796,7 @@ export default function Admin() {
           <ErrorMessage error={error} onRetry={fetchData} />
         ) : (
           <>
+            {activeTab === 'pending' && <PendingUsersTab sites={sites} departments={departments} onRefresh={fetchData} />}
             {activeTab === 'haleon' && <HaleonUsersTab haleonUsers={haleonUsers} sites={sites} departments={departments} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'external' && <ExternalUsersTab users={externalUsers} sites={sites} companies={companies} departments={departments} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'companies' && <CompaniesTab companies={companies} onRefresh={fetchData} loading={loading} />}

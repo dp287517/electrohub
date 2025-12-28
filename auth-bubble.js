@@ -79,6 +79,9 @@ export function signLocalJWT(user) {
     site_id: user.site_id || null,
     role: user.role || "site",
     allowed_apps: user.allowed_apps || null,
+    // SECURITY: Validation status - users must be validated by admin to access apps
+    is_validated: user.is_validated === true,
+    isPending: user.isPending === true || user.is_validated === false,
   };
 
   const secret = process.env.JWT_SECRET || "devsecret";

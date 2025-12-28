@@ -776,7 +776,8 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
     try {
       const haleonResult = await pool.query(`
         SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
-               h.created_at, h.updated_at, s.name as site_name, d.name as department_name,
+               h.is_validated, h.is_active, h.created_at, h.updated_at,
+               s.name as site_name, d.name as department_name,
                'haleon_users' as source
         FROM haleon_users h
         LEFT JOIN sites s ON h.site_id = s.id
@@ -1008,23 +1009,26 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
 });
 
 // POST /api/admin/users/haleon - Ajouter un utilisateur Haleon
+// Les utilisateurs créés manuellement par l'admin sont automatiquement validés
 router.post("/users/haleon", adminOnly, express.json(), async (req, res) => {
   try {
     const { email, name, site_id, department_id, allowed_apps } = req.body;
     if (!email) return res.status(400).json({ error: "Email required" });
 
     const result = await pool.query(`
-      INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps, is_validated)
+      VALUES ($1, $2, $3, $4, $5, TRUE)
       ON CONFLICT (email) DO UPDATE SET
         name = COALESCE(EXCLUDED.name, haleon_users.name),
         site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
         department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
         allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
+        is_validated = TRUE,
         updated_at = NOW()
       RETURNING *
     `, [email, name, site_id || 1, department_id, allowed_apps]);
 
+    console.log(`[ADMIN] ✅ Haleon user created/updated and validated: ${email}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1035,7 +1039,7 @@ router.post("/users/haleon", adminOnly, express.json(), async (req, res) => {
 router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, site_id, department_id, allowed_apps, is_active } = req.body;
+    const { name, site_id, department_id, allowed_apps, is_active, is_validated } = req.body;
 
     const result = await pool.query(`
       UPDATE haleon_users
@@ -1044,15 +1048,85 @@ router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
           department_id = COALESCE($3, department_id),
           allowed_apps = COALESCE($4, allowed_apps),
           is_active = COALESCE($5, is_active),
+          is_validated = COALESCE($6, is_validated),
           updated_at = NOW()
-      WHERE id = $6
+      WHERE id = $7
       RETURNING *
-    `, [name, site_id, department_id, allowed_apps, is_active, id]);
+    `, [name, site_id, department_id, allowed_apps, is_active, is_validated, id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// PENDING USERS MANAGEMENT - Users awaiting validation
+// ============================================================
+
+// GET /api/admin/users/pending - Liste les utilisateurs en attente de validation
+router.get("/users/pending", adminOnly, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
+             h.is_validated, h.created_at, h.updated_at,
+             s.name as site_name, d.name as department_name
+      FROM haleon_users h
+      LEFT JOIN sites s ON h.site_id = s.id
+      LEFT JOIN departments d ON h.department_id = d.id
+      WHERE h.is_validated = FALSE OR h.is_validated IS NULL
+      ORDER BY h.created_at DESC
+    `);
+    res.json({ users: result.rows, count: result.rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/validate/:id - Valider un utilisateur
+router.post("/users/validate/:id", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { allowed_apps, site_id, department_id } = req.body;
+
+    const result = await pool.query(`
+      UPDATE haleon_users
+      SET is_validated = TRUE,
+          allowed_apps = COALESCE($1, allowed_apps),
+          site_id = COALESCE($2, site_id),
+          department_id = COALESCE($3, department_id),
+          updated_at = NOW()
+      WHERE id = $4
+      RETURNING *
+    `, [allowed_apps, site_id, department_id, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log(`[ADMIN] ✅ User validated: ${result.rows[0].email} by admin`);
+    res.json({ ok: true, user: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/reject/:id - Rejeter un utilisateur (supprimer)
+router.post("/users/reject/:id", adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get user info before deletion for logging
+    const userResult = await pool.query(`SELECT email FROM haleon_users WHERE id = $1`, [id]);
+    const email = userResult.rows[0]?.email;
+
+    await pool.query(`DELETE FROM haleon_users WHERE id = $1`, [id]);
+
+    console.log(`[ADMIN] ❌ User rejected and deleted: ${email}`);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1300,12 +1374,15 @@ router.post("/migrate", adminOnly, async (req, res) => {
         department_id INTEGER,
         allowed_apps TEXT[] DEFAULT NULL,
         is_active BOOLEAN DEFAULT TRUE,
+        is_validated BOOLEAN DEFAULT FALSE,
         last_login TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    logs.push('Table haleon_users créée/vérifiée');
+    // SECURITY: Ajouter colonne is_validated si elle n'existe pas
+    await addColumnIfNotExists('haleon_users', 'is_validated', 'BOOLEAN DEFAULT FALSE');
+    logs.push('Table haleon_users créée/vérifiée (avec is_validated)');
 
     // 6b. Créer la table departments
     await pool.query(`
@@ -1359,14 +1436,24 @@ router.post("/migrate", adminOnly, async (req, res) => {
       `);
       for (const user of askvUsers.rows) {
         await pool.query(`
-          INSERT INTO haleon_users (email, site_id)
-          VALUES ($1, $2)
+          INSERT INTO haleon_users (email, site_id, is_validated)
+          VALUES ($1, $2, TRUE)
           ON CONFLICT (email) DO NOTHING
         `, [user.email, nyonId]);
         migratedCount++;
       }
       logs.push(`${migratedCount} utilisateurs migrés depuis askv_users`);
     }
+
+    // 9. SECURITY: Valider tous les utilisateurs existants qui ont été créés avant le système de validation
+    // Ceci garantit que les utilisateurs qui utilisaient déjà l'app ne sont pas bloqués
+    await pool.query(`
+      UPDATE haleon_users
+      SET is_validated = TRUE
+      WHERE is_validated IS NULL OR is_validated = FALSE
+        AND created_at < NOW() - INTERVAL '1 hour'
+    `).catch(() => {});
+    logs.push('Utilisateurs existants validés automatiquement');
 
     res.json({
       ok: true,
