@@ -3368,42 +3368,27 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       });
     }
 
-    // --- Détecter si on veut CRÉER une procédure (pas de session active) ---
+    // --- Détecter si on veut CRÉER une procédure → Ouvre le modal ProcedureCreator ---
     const wantsCreateProcedure = (
       (msgLower.includes('procédure') || msgLower.includes('procedure') || msgLower.includes('excellence')) &&
       (msgLower.includes('créer') || msgLower.includes('creer') || msgLower.includes('faire') ||
-       msgLower.includes('nouvelle') || msgLower.includes('ajouter') || msgLower.includes('commencer'))
+       msgLower.includes('nouvelle') || msgLower.includes('ajouter'))
     );
 
     if (wantsCreateProcedure) {
-      console.log('[AI] 📋 Starting new procedure session via microservice');
+      console.log('[AI] 📋 Opening ProcedureCreator modal');
 
-      // Start a new AI session via the microservice
-      const result = await callProceduresMicroservice('/api/procedures/ai/start', {
-        method: 'POST',
-        userEmail,
-        site,
-        body: { initialMessage: message }
-      });
+      // Extraire un sujet potentiel du message
+      const subjectMatch = message.match(/(?:sur|pour|de|:)\s+["']?([^"']+)["']?$/i);
+      const suggestedTitle = subjectMatch ? subjectMatch[1].trim() : null;
 
-      if (result?.sessionId) {
-        return res.json({
-          message: result.message || "C'est quoi le titre de ta procédure ?",
-          actions: result.options?.map(o => ({ label: o, prompt: o })) || [],
-          provider: 'procedures-ai',
-          procedureSessionId: result.sessionId,
-          procedureStep: result.currentStep || 'title',
-          expectsPhoto: result.expectsPhoto
-        });
-      }
-
-      // Fallback if microservice unavailable
       return res.json({
-        message: `**C'est quoi le titre de ta procédure ?**`,
-        actions: [],
-        provider: 'system',
-        procedureMode: 'create',
-        procedureStep: 'title'
+        message: suggestedTitle
+          ? `📝 Super ! Je vais t'aider à créer la procédure **"${suggestedTitle}"**.\n\n→ L'assistant de création s'ouvre...`
+          : `📝 Créons une nouvelle procédure !\n\n→ L'assistant de création s'ouvre...`,
+        openProcedureCreator: true,
+        procedureCreatorContext: { suggestedTitle },
+        provider: 'system'
       });
     }
 
