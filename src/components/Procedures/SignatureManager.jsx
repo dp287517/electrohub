@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   X, UserPlus, Check, Clock, AlertTriangle, Pen,
-  Mail, Trash2, Shield, Loader2, CheckCircle, User
+  Mail, Trash2, Shield, Loader2, CheckCircle, User, UserCheck
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import {
@@ -9,10 +9,11 @@ import {
   addSignatureRequest,
   removeSignatureRequest,
   submitSignature,
-  setupCreatorSignature
+  setupCreatorSignature,
+  claimProcedureOwnership
 } from '../../lib/procedures-api';
 
-export default function SignatureManager({ procedureId, procedureTitle, onClose, onValidated }) {
+export default function SignatureManager({ procedureId, procedureTitle, createdBy, onClose, onValidated }) {
   const [loading, setLoading] = useState(true);
   const [signatures, setSignatures] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -22,8 +23,16 @@ export default function SignatureManager({ procedureId, procedureTitle, onClose,
   const [newSigner, setNewSigner] = useState({ email: '', name: '', role: 'reviewer' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [procedureOwner, setProcedureOwner] = useState(createdBy);
 
-  const currentUserEmail = localStorage.getItem('userEmail') || '';
+  // Try multiple localStorage keys for email (consistent with procedures-api.js)
+  const currentUserEmail = localStorage.getItem('userEmail')
+    || localStorage.getItem('email')
+    || localStorage.getItem('user.email')
+    || '';
+
+  // Check if procedure has no real owner
+  const hasNoOwner = !procedureOwner || procedureOwner === 'system' || procedureOwner === 'anonymous';
 
   const loadSignatures = async () => {
     try {
@@ -33,10 +42,14 @@ export default function SignatureManager({ procedureId, procedureTitle, onClose,
       setRequests(data.requests || []);
       setSummary(data.summary || {});
 
-      // If no creator signature setup, add current user as creator
-      if (data.signatures.length === 0 && data.summary?.creator === currentUserEmail) {
+      // Update owner from summary if available
+      if (data.summary?.creator && data.summary.creator !== 'system') {
+        setProcedureOwner(data.summary.creator);
+      }
+
+      // If no creator signature setup and current user is creator, add them
+      if (data.signatures.length === 0 && currentUserEmail && data.summary?.creator === currentUserEmail) {
         await setupCreatorSignature(procedureId);
-        // Reload
         const updated = await getSignatures(procedureId);
         setSignatures(updated.signatures || []);
         setRequests(updated.requests || []);
@@ -52,6 +65,25 @@ export default function SignatureManager({ procedureId, procedureTitle, onClose,
   useEffect(() => {
     loadSignatures();
   }, [procedureId]);
+
+  const handleClaimOwnership = async () => {
+    if (!currentUserEmail) {
+      setError("Email utilisateur non disponible");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await claimProcedureOwnership(procedureId);
+      setProcedureOwner(currentUserEmail);
+      await loadSignatures();
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleAddSigner = async () => {
     if (!newSigner.email) return;
@@ -98,11 +130,21 @@ export default function SignatureManager({ procedureId, procedureTitle, onClose,
   };
 
   const canSign = () => {
+    if (!currentUserEmail) return false;
+
     // Check if current user can sign
     const userSignature = signatures.find(s => s.signer_email === currentUserEmail);
     const userRequest = requests.find(r => r.requested_email === currentUserEmail && r.status === 'pending');
 
-    return (userSignature && !userSignature.signed_at) || userRequest || summary.creator === currentUserEmail;
+    // Can sign if:
+    // 1. Has a signature entry that's not yet signed
+    // 2. Has a pending request
+    // 3. Is the creator
+    // 4. Procedure has no owner (system/anonymous) - can claim and sign
+    return (userSignature && !userSignature.signed_at)
+      || userRequest
+      || procedureOwner === currentUserEmail
+      || hasNoOwner;
   };
 
   const hasSigned = () => {
@@ -183,6 +225,38 @@ export default function SignatureManager({ procedureId, procedureTitle, onClose,
                 <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 flex items-center gap-2">
                   <AlertTriangle className="w-5 h-5" />
                   {error}
+                </div>
+              )}
+
+              {/* Warning when procedure has no owner */}
+              {hasNoOwner && currentUserEmail && (
+                <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-medium text-amber-800">
+                        Cette procédure n'a pas de propriétaire assigné
+                      </p>
+                      <p className="text-sm text-amber-700 mt-1">
+                        Créateur actuel: <span className="font-mono bg-amber-100 px-1 rounded">{procedureOwner || 'non défini'}</span>
+                      </p>
+                      <p className="text-sm text-amber-600 mt-2">
+                        Récupérez la propriété pour pouvoir signer en tant que créateur.
+                      </p>
+                      <button
+                        onClick={handleClaimOwnership}
+                        disabled={submitting}
+                        className="mt-3 flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
+                      >
+                        {submitting ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <UserCheck className="w-4 h-4" />
+                        )}
+                        Récupérer la propriété
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
