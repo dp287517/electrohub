@@ -963,6 +963,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
         <SignatureManager
           procedureId={procedureId}
           procedureTitle={procedure.title}
+          createdBy={procedure.created_by}
           onClose={() => { setShowSignatures(false); loadProcedure(); }}
           onValidated={() => { setShowSignatures(false); loadProcedure(); }}
         />
