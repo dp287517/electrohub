@@ -3083,7 +3083,6 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
     const draft = rows[0];
 
     // Create new AI session with draft data
-    const sessionId = `resume_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const resumePhase = draft.steps?.length > 0 ? "steps" : "init";
     const resumeCollectedData = {
       title: draft.title,
@@ -3096,18 +3095,13 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
       equipment_links: draft.equipment_links || []
     };
 
-    // CRITICAL FIX: Also create session in database so aiGuidedChat() can find it
+    // CRITICAL FIX: Create session in database with proper UUID (let PostgreSQL generate it)
     // Without this, aiGuidedChat() creates a new empty session and all draft data is lost
-    await pool.query(
-      `INSERT INTO procedure_ai_sessions (id, conversation, current_step, collected_data)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET
-         conversation = EXCLUDED.conversation,
-         current_step = EXCLUDED.current_step,
-         collected_data = EXCLUDED.collected_data,
-         updated_at = now()`,
+    const { rows: sessionRows } = await pool.query(
+      `INSERT INTO procedure_ai_sessions (conversation, current_step, collected_data)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
       [
-        sessionId,
         JSON.stringify([{
           role: "assistant",
           content: `Brouillon restauré avec ${draft.steps?.length || 0} étape(s). Continuons !`,
@@ -3117,6 +3111,8 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
         JSON.stringify(resumeCollectedData)
       ]
     );
+
+    const sessionId = sessionRows[0].id;
 
     // Also keep in-memory for backwards compatibility
     aiSessions.set(sessionId, {
