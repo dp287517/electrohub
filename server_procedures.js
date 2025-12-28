@@ -1334,6 +1334,61 @@ async function ensureSchema() {
     );
   `);
 
+  // ========== SYSTÈME DE SIGNATURES ÉLECTRONIQUES ==========
+
+  // Signatures électroniques des procédures
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procedure_signatures (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      procedure_id UUID REFERENCES procedures(id) ON DELETE CASCADE,
+      signer_email TEXT NOT NULL,
+      signer_name TEXT NOT NULL,
+      signer_role TEXT DEFAULT 'reviewer',
+      signature_data TEXT,
+      signature_type TEXT DEFAULT 'draw',
+      signed_at TIMESTAMPTZ,
+      is_creator BOOLEAN DEFAULT false,
+      required BOOLEAN DEFAULT true,
+      sign_order INTEGER DEFAULT 1,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(procedure_id, signer_email)
+    );
+  `);
+
+  // Demandes de signature en attente
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procedure_signature_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      procedure_id UUID REFERENCES procedures(id) ON DELETE CASCADE,
+      requested_email TEXT NOT NULL,
+      requested_name TEXT,
+      requested_role TEXT DEFAULT 'reviewer',
+      requested_by TEXT NOT NULL,
+      message TEXT,
+      status TEXT DEFAULT 'pending',
+      reminder_sent_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      expires_at TIMESTAMPTZ DEFAULT (now() + interval '30 days'),
+      UNIQUE(procedure_id, requested_email)
+    );
+  `);
+
+  // Historique des versions signées (pour audit)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procedure_signature_history (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      procedure_id UUID REFERENCES procedures(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      signatures JSONB DEFAULT '[]'::jsonb,
+      validated_at TIMESTAMPTZ,
+      invalidated_at TIMESTAMPTZ,
+      invalidation_reason TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
   // Procedure executions - track when procedures are executed/used
   await pool.query(`
     CREATE TABLE IF NOT EXISTS procedure_executions (
@@ -8385,14 +8440,486 @@ async function generateExampleProcedurePDF(baseUrl = 'https://electrohub.app') {
   return generateProcedureDocPDF(procedure, steps, baseUrl);
 }
 
+// ============================================
+// SYSTÈME DE SIGNATURES ÉLECTRONIQUES - API
+// ============================================
+
+// Get all signatures and signature requests for a procedure
+app.get("/api/procedures/:id/signatures", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get existing signatures
+    const { rows: signatures } = await pool.query(
+      `SELECT * FROM procedure_signatures WHERE procedure_id = $1 ORDER BY sign_order, created_at`,
+      [id]
+    );
+
+    // Get pending requests
+    const { rows: requests } = await pool.query(
+      `SELECT * FROM procedure_signature_requests WHERE procedure_id = $1 ORDER BY created_at`,
+      [id]
+    );
+
+    // Get procedure info for validation status
+    const { rows: procedures } = await pool.query(
+      `SELECT status, version, created_by FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    const procedure = procedures[0];
+    const allRequired = [...signatures.filter(s => s.required), ...requests.filter(r => r.status === 'pending')];
+    const allSigned = signatures.filter(s => s.signed_at).length;
+    const isFullySigned = allRequired.every(s => s.signed_at || signatures.find(sig => sig.signer_email === s.requested_email && sig.signed_at));
+
+    res.json({
+      signatures,
+      requests,
+      summary: {
+        total_required: allRequired.length,
+        signed_count: allSigned,
+        pending_count: requests.filter(r => r.status === 'pending').length,
+        is_fully_signed: isFullySigned,
+        procedure_status: procedure?.status,
+        procedure_version: procedure?.version,
+        creator: procedure?.created_by
+      }
+    });
+  } catch (err) {
+    console.error("Error getting signatures:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add signature request (invite someone to sign)
+app.post("/api/procedures/:id/signature-requests", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name, role, message } = req.body;
+    const requestedBy = req.headers["x-user-email"] || "system";
+
+    if (!email) {
+      return res.status(400).json({ error: "Email requis" });
+    }
+
+    // Check if already exists
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM procedure_signature_requests WHERE procedure_id = $1 AND requested_email = $2`,
+      [id, email]
+    );
+
+    if (existing.length > 0) {
+      // Update existing
+      await pool.query(
+        `UPDATE procedure_signature_requests SET
+          requested_name = COALESCE($3, requested_name),
+          requested_role = COALESCE($4, requested_role),
+          message = COALESCE($5, message),
+          status = 'pending',
+          created_at = now()
+        WHERE procedure_id = $1 AND requested_email = $2`,
+        [id, email, name, role, message]
+      );
+    } else {
+      // Create new
+      await pool.query(
+        `INSERT INTO procedure_signature_requests
+          (procedure_id, requested_email, requested_name, requested_role, requested_by, message)
+        VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, email, name || email.split('@')[0], role || 'reviewer', requestedBy, message]
+      );
+    }
+
+    // Also create an empty signature entry
+    await pool.query(
+      `INSERT INTO procedure_signatures
+        (procedure_id, signer_email, signer_name, signer_role, required)
+      VALUES ($1, $2, $3, $4, true)
+      ON CONFLICT (procedure_id, signer_email) DO NOTHING`,
+      [id, email, name || email.split('@')[0], role || 'reviewer']
+    );
+
+    res.json({ success: true, message: "Demande de signature envoyée" });
+  } catch (err) {
+    console.error("Error creating signature request:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove signature request
+app.delete("/api/procedures/:id/signature-requests/:email", async (req, res) => {
+  try {
+    const { id, email } = req.params;
+
+    await pool.query(
+      `DELETE FROM procedure_signature_requests WHERE procedure_id = $1 AND requested_email = $2`,
+      [id, decodeURIComponent(email)]
+    );
+
+    await pool.query(
+      `DELETE FROM procedure_signatures WHERE procedure_id = $1 AND signer_email = $2 AND signed_at IS NULL`,
+      [id, decodeURIComponent(email)]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error removing signature request:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Submit a signature
+app.post("/api/procedures/:id/sign", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { signature_data, signature_type } = req.body;
+    const signerEmail = req.headers["x-user-email"];
+    const userAgent = req.headers["user-agent"] || "";
+    const ipAddress = req.headers["x-forwarded-for"] || req.connection.remoteAddress || "";
+
+    if (!signerEmail) {
+      return res.status(400).json({ error: "Email utilisateur requis" });
+    }
+
+    if (!signature_data) {
+      return res.status(400).json({ error: "Signature requise" });
+    }
+
+    // Get procedure info
+    const { rows: procedures } = await pool.query(
+      `SELECT * FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const procedure = procedures[0];
+    const isCreator = procedure.created_by === signerEmail;
+
+    // Update or create signature
+    const { rows } = await pool.query(
+      `INSERT INTO procedure_signatures
+        (procedure_id, signer_email, signer_name, signature_data, signature_type, signed_at, is_creator, ip_address, user_agent)
+      VALUES ($1, $2, $2, $3, $4, now(), $5, $6, $7)
+      ON CONFLICT (procedure_id, signer_email)
+      DO UPDATE SET
+        signature_data = $3,
+        signature_type = $4,
+        signed_at = now(),
+        ip_address = $6,
+        user_agent = $7
+      RETURNING *`,
+      [id, signerEmail, signature_data, signature_type || 'draw', isCreator, ipAddress, userAgent]
+    );
+
+    // Update request status
+    await pool.query(
+      `UPDATE procedure_signature_requests SET status = 'signed' WHERE procedure_id = $1 AND requested_email = $2`,
+      [id, signerEmail]
+    );
+
+    // Check if all required signatures are complete
+    const { rows: allSigs } = await pool.query(
+      `SELECT * FROM procedure_signatures WHERE procedure_id = $1 AND required = true`,
+      [id]
+    );
+
+    const { rows: pendingReqs } = await pool.query(
+      `SELECT * FROM procedure_signature_requests WHERE procedure_id = $1 AND status = 'pending'`,
+      [id]
+    );
+
+    const allSignaturesComplete = allSigs.every(s => s.signed_at) && pendingReqs.length === 0;
+
+    // If all signatures complete and has creator signature, validate procedure
+    if (allSignaturesComplete && allSigs.some(s => s.is_creator && s.signed_at)) {
+      await pool.query(
+        `UPDATE procedures SET status = 'approved', updated_at = now() WHERE id = $1`,
+        [id]
+      );
+
+      // Save to signature history
+      await pool.query(
+        `INSERT INTO procedure_signature_history (procedure_id, version, signatures, validated_at)
+        VALUES ($1, $2, $3, now())`,
+        [id, procedure.version, JSON.stringify(allSigs)]
+      );
+    }
+
+    res.json({
+      success: true,
+      signature: rows[0],
+      all_signatures_complete: allSignaturesComplete,
+      procedure_validated: allSignaturesComplete && allSigs.some(s => s.is_creator && s.signed_at)
+    });
+  } catch (err) {
+    console.error("Error submitting signature:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get pending signatures for current user
+app.get("/api/procedures/pending-signatures", async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    if (!userEmail) {
+      return res.status(400).json({ error: "Email utilisateur requis" });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT
+        pr.id as request_id,
+        pr.procedure_id,
+        pr.requested_role,
+        pr.message,
+        pr.created_at as requested_at,
+        p.title as procedure_title,
+        p.category,
+        p.status,
+        p.created_by
+      FROM procedure_signature_requests pr
+      JOIN procedures p ON pr.procedure_id = p.id
+      WHERE pr.requested_email = $1
+        AND pr.status = 'pending'
+        AND ($2::text IS NULL OR p.site = $2)
+      ORDER BY pr.created_at DESC`,
+      [userEmail, site === 'all' ? null : site]
+    );
+
+    res.json({ pending: rows, count: rows.length });
+  } catch (err) {
+    console.error("Error getting pending signatures:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Invalidate all signatures when procedure is modified
+app.post("/api/procedures/:id/invalidate-signatures", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const userEmail = req.headers["x-user-email"] || "system";
+
+    // Get current signatures for history
+    const { rows: currentSigs } = await pool.query(
+      `SELECT * FROM procedure_signatures WHERE procedure_id = $1 AND signed_at IS NOT NULL`,
+      [id]
+    );
+
+    const { rows: procedures } = await pool.query(
+      `SELECT version FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    if (currentSigs.length > 0 && procedures.length > 0) {
+      // Save to history before invalidating
+      await pool.query(
+        `INSERT INTO procedure_signature_history (procedure_id, version, signatures, invalidated_at, invalidation_reason)
+        VALUES ($1, $2, $3, now(), $4)`,
+        [id, procedures[0].version, JSON.stringify(currentSigs), reason || `Modifié par ${userEmail}`]
+      );
+
+      // Clear signature data but keep signers
+      await pool.query(
+        `UPDATE procedure_signatures SET signature_data = NULL, signed_at = NULL WHERE procedure_id = $1`,
+        [id]
+      );
+
+      // Reset request statuses
+      await pool.query(
+        `UPDATE procedure_signature_requests SET status = 'pending' WHERE procedure_id = $1`,
+        [id]
+      );
+
+      // Set procedure back to draft
+      await pool.query(
+        `UPDATE procedures SET status = 'draft', updated_at = now() WHERE id = $1`,
+        [id]
+      );
+    }
+
+    res.json({ success: true, invalidated_count: currentSigs.length });
+  } catch (err) {
+    console.error("Error invalidating signatures:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send reminder emails for pending signatures (called by cron or manual)
+app.post("/api/procedures/send-signature-reminders", async (req, res) => {
+  try {
+    // Get all pending requests that haven't had a reminder in 24h
+    const { rows: pendingRequests } = await pool.query(
+      `SELECT
+        pr.*,
+        p.title as procedure_title,
+        p.category
+      FROM procedure_signature_requests pr
+      JOIN procedures p ON pr.procedure_id = p.id
+      WHERE pr.status = 'pending'
+        AND (pr.reminder_sent_at IS NULL OR pr.reminder_sent_at < now() - interval '24 hours')
+        AND pr.expires_at > now()
+      ORDER BY pr.created_at`
+    );
+
+    // Group by email
+    const byEmail = {};
+    pendingRequests.forEach(req => {
+      if (!byEmail[req.requested_email]) {
+        byEmail[req.requested_email] = [];
+      }
+      byEmail[req.requested_email].push(req);
+    });
+
+    // For now, just return the list - email sending would be integrated with your email service
+    const remindersSent = Object.keys(byEmail).length;
+
+    // Update reminder_sent_at
+    if (pendingRequests.length > 0) {
+      const ids = pendingRequests.map(r => r.id);
+      await pool.query(
+        `UPDATE procedure_signature_requests SET reminder_sent_at = now() WHERE id = ANY($1)`,
+        [ids]
+      );
+    }
+
+    res.json({
+      success: true,
+      reminders_sent: remindersSent,
+      pending_by_email: Object.keys(byEmail).map(email => ({
+        email,
+        procedures: byEmail[email].map(r => ({
+          id: r.procedure_id,
+          title: r.procedure_title,
+          requested_at: r.created_at
+        }))
+      }))
+    });
+  } catch (err) {
+    console.error("Error sending reminders:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Setup creator as first signer when creating procedure
+app.post("/api/procedures/:id/setup-creator-signature", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const creatorEmail = req.headers["x-user-email"];
+
+    if (!creatorEmail) {
+      return res.status(400).json({ error: "Email créateur requis" });
+    }
+
+    // Get procedure
+    const { rows: procedures } = await pool.query(
+      `SELECT * FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    // Add creator as required signer
+    await pool.query(
+      `INSERT INTO procedure_signatures
+        (procedure_id, signer_email, signer_name, signer_role, is_creator, required, sign_order)
+      VALUES ($1, $2, $2, 'creator', true, true, 0)
+      ON CONFLICT (procedure_id, signer_email)
+      DO UPDATE SET is_creator = true, signer_role = 'creator', sign_order = 0`,
+      [id, creatorEmail]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error setting up creator signature:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// Notification Scheduler (Daily 8am reminders)
+// ------------------------------
+let lastReminderDate = null;
+
+async function checkAndSendDailyReminders() {
+  const now = new Date();
+  const hour = now.getHours();
+  const dateStr = now.toISOString().split('T')[0];
+
+  // Send reminders at 8am, only once per day
+  if (hour === 8 && lastReminderDate !== dateStr) {
+    console.log('[Signatures] Checking for pending signature reminders...');
+    try {
+      // Get all pending requests
+      const { rows: pendingRequests } = await pool.query(
+        `SELECT
+          pr.*,
+          p.title as procedure_title,
+          p.category
+        FROM procedure_signature_requests pr
+        JOIN procedures p ON pr.procedure_id = p.id
+        WHERE pr.status = 'pending'
+          AND pr.expires_at > now()
+        ORDER BY pr.created_at`
+      );
+
+      if (pendingRequests.length > 0) {
+        // Group by email
+        const byEmail = {};
+        pendingRequests.forEach(req => {
+          if (!byEmail[req.requested_email]) {
+            byEmail[req.requested_email] = [];
+          }
+          byEmail[req.requested_email].push(req);
+        });
+
+        console.log(`[Signatures] Found ${pendingRequests.length} pending signatures for ${Object.keys(byEmail).length} users`);
+
+        // Log reminders (email integration would go here)
+        for (const [email, requests] of Object.entries(byEmail)) {
+          console.log(`[Signatures] Reminder for ${email}: ${requests.length} procedure(s) pending`);
+          requests.forEach(r => {
+            console.log(`  - ${r.procedure_title} (requested ${new Date(r.created_at).toLocaleDateString('fr-FR')})`);
+          });
+        }
+
+        // Update reminder_sent_at
+        const ids = pendingRequests.map(r => r.id);
+        await pool.query(
+          `UPDATE procedure_signature_requests SET reminder_sent_at = now() WHERE id = ANY($1)`,
+          [ids]
+        );
+      } else {
+        console.log('[Signatures] No pending signatures to remind');
+      }
+
+      lastReminderDate = dateStr;
+    } catch (err) {
+      console.error('[Signatures] Error sending reminders:', err);
+    }
+  }
+}
+
 // ------------------------------
 // Start Server
 // ------------------------------
 async function startServer() {
   try {
     await ensureSchema();
+
+    // Start hourly check for daily reminders
+    setInterval(checkAndSendDailyReminders, 60 * 60 * 1000); // Check every hour
+    checkAndSendDailyReminders(); // Check immediately on startup
+
     app.listen(PORT, HOST, () => {
       console.log(`[Procedures] Server running on http://${HOST}:${PORT}`);
+      console.log(`[Signatures] Daily reminder scheduler active (8am)`);
     });
   } catch (err) {
     console.error("[Procedures] Failed to start:", err);

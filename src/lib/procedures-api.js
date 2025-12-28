@@ -576,6 +576,71 @@ export async function getCategories() {
   return response.json();
 }
 
+// ==================== SIGNATURES ÉLECTRONIQUES ====================
+
+// Get all signatures for a procedure
+export async function getSignatures(procedureId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/signatures`);
+  return response.json();
+}
+
+// Add a signature request (invite someone to sign)
+export async function addSignatureRequest(procedureId, { email, name, role, message }) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/signature-requests`, {
+    method: 'POST',
+    body: JSON.stringify({ email, name, role, message }),
+  });
+  return response.json();
+}
+
+// Remove a signature request
+export async function removeSignatureRequest(procedureId, email) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/signature-requests/${encodeURIComponent(email)}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+// Submit a signature
+export async function submitSignature(procedureId, signatureData, signatureType = 'draw') {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/sign`, {
+    method: 'POST',
+    body: JSON.stringify({ signature_data: signatureData, signature_type: signatureType }),
+  });
+  return response.json();
+}
+
+// Get pending signatures for current user
+export async function getPendingSignatures() {
+  const response = await fetchWithAuth(`${API_BASE}/pending-signatures`);
+  return response.json();
+}
+
+// Invalidate signatures (when procedure is modified)
+export async function invalidateSignatures(procedureId, reason) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/invalidate-signatures`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+  return response.json();
+}
+
+// Setup creator as first signer
+export async function setupCreatorSignature(procedureId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/setup-creator-signature`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
+// Send reminder notifications
+export async function sendSignatureReminders() {
+  const response = await fetchWithAuth(`${API_BASE}/send-signature-reminders`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
 // ==================== CONSTANTS ====================
 
 export const RISK_LEVELS = {

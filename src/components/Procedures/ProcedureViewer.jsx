@@ -4,7 +4,7 @@ import {
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
   FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
-  BadgeCheck, FileEdit
+  BadgeCheck, FileEdit, Pen, Users
 } from 'lucide-react';
 import {
   getProcedure,
@@ -25,11 +25,14 @@ import {
   downloadAllDocuments,
   downloadRAMSExcel,
   downloadMethodeWord,
+  getSignatures,
+  invalidateSignatures,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
 } from '../../lib/procedures-api';
 import RealtimeAssistant from './RealtimeAssistant';
+import SignatureManager from './SignatureManager';
 
 // Step Component
 function StepCard({ step, procedureId, isEditing, onUpdate, onDelete }) {
@@ -239,11 +242,23 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [downloading, setDownloading] = useState(null); // null, 'rams', 'method', 'procedure', 'all'
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
+  const [showSignatures, setShowSignatures] = useState(false);
+  const [signatureSummary, setSignatureSummary] = useState(null);
+
+  const loadSignatures = async () => {
+    try {
+      const data = await getSignatures(procedureId);
+      setSignatureSummary(data.summary);
+    } catch (error) {
+      console.error('Error loading signatures:', error);
+    }
+  };
 
   const loadProcedure = async () => {
     try {
       const data = await getProcedure(procedureId);
       setProcedure(data);
+      loadSignatures();
       setEditForm({
         title: data.title,
         description: data.description,
@@ -278,6 +293,10 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
 
   const handleSave = async () => {
     try {
+      // Invalidate signatures if procedure was already validated
+      if (procedure.status === 'approved') {
+        await invalidateSignatures(procedureId, 'Procédure modifiée');
+      }
       await updateProcedure(procedureId, editForm);
       setIsEditing(false);
       loadProcedure();
@@ -467,6 +486,21 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
                   </>
                 )}
               </button>
+
+              {/* Signature button */}
+              <button
+                onClick={() => setShowSignatures(true)}
+                className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 ${
+                  signatureSummary?.is_fully_signed
+                    ? 'bg-violet-100 text-violet-700 hover:bg-violet-200'
+                    : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                }`}
+                title="Gérer les signatures"
+              >
+                <Pen className="w-3 h-3" />
+                {signatureSummary?.signed_count || 0}/{signatureSummary?.total_required || 0} signatures
+              </button>
+
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${riskInfo.bgColor} ${riskInfo.textColor}`}>
                 Risque: {riskInfo.label}
               </span>
@@ -921,6 +955,16 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
           procedureId={procedureId}
           procedureTitle={procedure.title}
           onClose={() => setShowAssistant(false)}
+        />
+      )}
+
+      {/* Signature Manager Modal */}
+      {showSignatures && procedure && (
+        <SignatureManager
+          procedureId={procedureId}
+          procedureTitle={procedure.title}
+          onClose={() => { setShowSignatures(false); loadProcedure(); }}
+          onValidated={() => { setShowSignatures(false); loadProcedure(); }}
         />
       )}
     </div>
