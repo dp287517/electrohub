@@ -1335,6 +1335,41 @@ async function ensureSchema() {
     );
   `);
 
+  // Custom safety equipment (user-created, not from library)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_safety_equipment (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      full_name TEXT,
+      category TEXT DEFAULT 'custom',
+      description TEXT,
+      usage_info TEXT,
+      certification TEXT,
+      image_data BYTEA,
+      mime_type TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // Custom work permits (user-created, not from library)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS custom_work_permits (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      full_name TEXT,
+      color TEXT DEFAULT '#6b7280',
+      icon TEXT DEFAULT '📋',
+      description TEXT,
+      requirements JSONB DEFAULT '[]'::jsonb,
+      validity TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
   // ========== SYSTÈME DE SIGNATURES ÉLECTRONIQUES ==========
 
   // Signatures électroniques des procédures
@@ -3585,17 +3620,34 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
   try {
     const { getAllEquipment, getAllPermits } = await import("./server/safety-equipment-library.js");
 
-    const equipment = getAllEquipment();
+    const libraryEquipment = getAllEquipment();
     const basePermits = getAllPermits();
 
     // Load permit customizations from database
     const customizations = await loadPermitCustomizations();
 
     // Apply customizations to permits
-    const permits = basePermits.map(permit => ({
+    const libraryPermits = basePermits.map(permit => ({
       ...permit,
       name: customizations[permit.id]?.name || permit.name,
       description: customizations[permit.id]?.description || permit.description,
+      isCustom: false,
+    }));
+
+    // Load custom permits from database
+    const { rows: customPermitsRows } = await pool.query(
+      "SELECT * FROM custom_work_permits ORDER BY created_at DESC"
+    );
+    const customPermits = customPermitsRows.map(p => ({
+      id: p.id,
+      name: p.name,
+      fullName: p.full_name || p.name,
+      color: p.color || '#6b7280',
+      icon: p.icon || '📋',
+      description: p.description || '',
+      requirements: p.requirements || [],
+      validity: p.validity || '',
+      isCustom: true,
     }));
 
     // Check which equipment has custom images in database
@@ -3604,12 +3656,13 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
     );
     const customImageIds = new Set(customImages.map(r => r.equipment_id));
 
-    const equipmentWithStatus = equipment.map(eq => {
+    const equipmentWithStatus = libraryEquipment.map(eq => {
       const hasCustomImage = customImageIds.has(eq.id);
 
       return {
         ...eq,
         hasCustomImage,
+        isCustom: false,
         // Use database endpoint for custom images, otherwise default SVG
         imageUrl: hasCustomImage
           ? `/api/procedures/safety-equipment/${eq.id}/image`
@@ -3617,9 +3670,28 @@ app.get("/api/procedures/safety-equipment", async (req, res) => {
       };
     });
 
+    // Load custom equipment from database
+    const { rows: customEquipmentRows } = await pool.query(
+      "SELECT * FROM custom_safety_equipment ORDER BY created_at DESC"
+    );
+    const customEquipment = customEquipmentRows.map(eq => ({
+      id: eq.id,
+      name: eq.name,
+      fullName: eq.full_name || eq.name,
+      category: eq.category || 'custom',
+      description: eq.description || '',
+      usage: eq.usage_info || '',
+      certification: eq.certification || '',
+      isCustom: true,
+      hasCustomImage: !!eq.image_data,
+      imageUrl: eq.image_data
+        ? `/api/procedures/safety-equipment/${eq.id}/image`
+        : '/safety-equipment/default.svg',
+    }));
+
     res.json({
-      equipment: equipmentWithStatus,
-      permits,
+      equipment: [...equipmentWithStatus, ...customEquipment],
+      permits: [...libraryPermits, ...customPermits],
       uploadPath: "/api/procedures/safety-equipment/upload",
     });
   } catch (err) {
@@ -3633,10 +3705,20 @@ app.get("/api/procedures/safety-equipment/:equipmentId/image", async (req, res) 
   try {
     const { equipmentId } = req.params;
 
-    const { rows } = await pool.query(
+    // First check custom images table (for library equipment with custom images)
+    let { rows } = await pool.query(
       "SELECT image_data, mime_type FROM equipment_custom_images WHERE equipment_id = $1",
       [equipmentId]
     );
+
+    // If not found, check custom equipment table
+    if (rows.length === 0) {
+      const customResult = await pool.query(
+        "SELECT image_data, mime_type FROM custom_safety_equipment WHERE id = $1 AND image_data IS NOT NULL",
+        [equipmentId]
+      );
+      rows = customResult.rows;
+    }
 
     if (rows.length === 0) {
       return res.status(404).json({ error: "Image not found" });
@@ -3737,6 +3819,263 @@ app.put("/api/procedures/permits/:permitId", async (req, res) => {
     });
   } catch (err) {
     console.error("Error updating permit:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== CUSTOM EQUIPMENT & PERMITS CRUD ==========
+
+// Create custom equipment
+app.post("/api/procedures/safety-equipment",
+  uploadEquipmentImageToDb.single("image"),
+  async (req, res) => {
+    try {
+      const { name, fullName, category, description, usage, certification } = req.body;
+      const createdBy = req.headers["x-user-email"] || "system";
+
+      if (!name) {
+        return res.status(400).json({ error: "Le nom est requis" });
+      }
+
+      // Generate unique ID from name
+      const id = `custom_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
+
+      // Handle optional image
+      let imageData = null;
+      let mimeType = null;
+      if (req.file) {
+        imageData = req.file.buffer;
+        mimeType = req.file.mimetype;
+      }
+
+      await pool.query(`
+        INSERT INTO custom_safety_equipment
+          (id, name, full_name, category, description, usage_info, certification, image_data, mime_type, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `, [id, name, fullName || name, category || 'custom', description || '', usage || '', certification || '', imageData, mimeType, createdBy]);
+
+      console.log(`[Safety Equipment] Created custom equipment: ${name} (${id})`);
+
+      res.json({
+        success: true,
+        equipment: {
+          id,
+          name,
+          fullName: fullName || name,
+          category: category || 'custom',
+          description: description || '',
+          usage: usage || '',
+          certification: certification || '',
+          isCustom: true,
+          hasCustomImage: !!imageData,
+          imageUrl: imageData ? `/api/procedures/safety-equipment/${id}/image` : '/safety-equipment/default.svg',
+        }
+      });
+    } catch (err) {
+      console.error("Error creating custom equipment:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Update custom equipment
+app.put("/api/procedures/safety-equipment/:equipmentId",
+  uploadEquipmentImageToDb.single("image"),
+  async (req, res) => {
+    try {
+      const { equipmentId } = req.params;
+      const { name, fullName, category, description, usage, certification } = req.body;
+
+      // Check if it's a custom equipment
+      const { rows } = await pool.query(
+        "SELECT id FROM custom_safety_equipment WHERE id = $1",
+        [equipmentId]
+      );
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Équipement personnalisé non trouvé" });
+      }
+
+      // Build update query
+      let updateQuery = `
+        UPDATE custom_safety_equipment SET
+          name = COALESCE($2, name),
+          full_name = COALESCE($3, full_name),
+          category = COALESCE($4, category),
+          description = COALESCE($5, description),
+          usage_info = COALESCE($6, usage_info),
+          certification = COALESCE($7, certification),
+          updated_at = now()
+      `;
+      const params = [equipmentId, name, fullName, category, description, usage, certification];
+
+      // Handle image update if provided
+      if (req.file) {
+        updateQuery += `, image_data = $8, mime_type = $9`;
+        params.push(req.file.buffer, req.file.mimetype);
+      }
+
+      updateQuery += ` WHERE id = $1 RETURNING *`;
+
+      const { rows: updated } = await pool.query(updateQuery, params);
+
+      console.log(`[Safety Equipment] Updated custom equipment: ${equipmentId}`);
+
+      res.json({
+        success: true,
+        equipment: {
+          id: updated[0].id,
+          name: updated[0].name,
+          fullName: updated[0].full_name,
+          category: updated[0].category,
+          description: updated[0].description,
+          usage: updated[0].usage_info,
+          certification: updated[0].certification,
+          isCustom: true,
+          hasCustomImage: !!updated[0].image_data,
+          imageUrl: updated[0].image_data
+            ? `/api/procedures/safety-equipment/${equipmentId}/image`
+            : '/safety-equipment/default.svg',
+        }
+      });
+    } catch (err) {
+      console.error("Error updating custom equipment:", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// Delete custom equipment
+app.delete("/api/procedures/safety-equipment/:equipmentId", async (req, res) => {
+  try {
+    const { equipmentId } = req.params;
+
+    // Only allow deletion of custom equipment
+    const { rowCount } = await pool.query(
+      "DELETE FROM custom_safety_equipment WHERE id = $1",
+      [equipmentId]
+    );
+
+    if (rowCount === 0) {
+      return res.status(404).json({ error: "Équipement personnalisé non trouvé" });
+    }
+
+    console.log(`[Safety Equipment] Deleted custom equipment: ${equipmentId}`);
+
+    res.json({ success: true, deleted: true, equipmentId });
+  } catch (err) {
+    console.error("Error deleting custom equipment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create custom permit
+app.post("/api/procedures/permits", async (req, res) => {
+  try {
+    const { name, fullName, color, icon, description, requirements, validity } = req.body;
+    const createdBy = req.headers["x-user-email"] || "system";
+
+    if (!name) {
+      return res.status(400).json({ error: "Le nom est requis" });
+    }
+
+    // Generate unique ID from name
+    const id = `custom_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now()}`;
+
+    await pool.query(`
+      INSERT INTO custom_work_permits
+        (id, name, full_name, color, icon, description, requirements, validity, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [id, name, fullName || name, color || '#6b7280', icon || '📋', description || '', JSON.stringify(requirements || []), validity || '', createdBy]);
+
+    console.log(`[Permits] Created custom permit: ${name} (${id})`);
+
+    res.json({
+      success: true,
+      permit: {
+        id,
+        name,
+        fullName: fullName || name,
+        color: color || '#6b7280',
+        icon: icon || '📋',
+        description: description || '',
+        requirements: requirements || [],
+        validity: validity || '',
+        isCustom: true,
+      }
+    });
+  } catch (err) {
+    console.error("Error creating custom permit:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update custom permit
+app.put("/api/procedures/permits/custom/:permitId", async (req, res) => {
+  try {
+    const { permitId } = req.params;
+    const { name, fullName, color, icon, description, requirements, validity } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE custom_work_permits SET
+        name = COALESCE($2, name),
+        full_name = COALESCE($3, full_name),
+        color = COALESCE($4, color),
+        icon = COALESCE($5, icon),
+        description = COALESCE($6, description),
+        requirements = COALESCE($7, requirements),
+        validity = COALESCE($8, validity),
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *
+    `, [permitId, name, fullName, color, icon, description, requirements ? JSON.stringify(requirements) : null, validity]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Permis personnalisé non trouvé" });
+    }
+
+    console.log(`[Permits] Updated custom permit: ${permitId}`);
+
+    res.json({
+      success: true,
+      permit: {
+        id: rows[0].id,
+        name: rows[0].name,
+        fullName: rows[0].full_name,
+        color: rows[0].color,
+        icon: rows[0].icon,
+        description: rows[0].description,
+        requirements: rows[0].requirements,
+        validity: rows[0].validity,
+        isCustom: true,
+      }
+    });
+  } catch (err) {
+    console.error("Error updating custom permit:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete custom permit
+app.delete("/api/procedures/permits/:permitId", async (req, res) => {
+  try {
+    const { permitId } = req.params;
+
+    // Only allow deletion of custom permits
+    const { rowCount } = await pool.query(
+      "DELETE FROM custom_work_permits WHERE id = $1",
+      [permitId]
+    );
+
+    if (rowCount === 0) {
+      return res.status(404).json({ error: "Permis personnalisé non trouvé ou non supprimable" });
+    }
+
+    console.log(`[Permits] Deleted custom permit: ${permitId}`);
+
+    res.json({ success: true, deleted: true, permitId });
+  } catch (err) {
+    console.error("Error deleting custom permit:", err);
     res.status(500).json({ error: err.message });
   }
 });
