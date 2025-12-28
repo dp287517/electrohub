@@ -27,6 +27,26 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import archiver from "archiver";
 import XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import {
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableRow,
+  TableCell,
+  TextRun,
+  WidthType,
+  AlignmentType,
+  BorderStyle,
+  HeadingLevel,
+  PageBreak,
+  Header,
+  Footer,
+  ImageRun,
+  TableLayoutType,
+  VerticalAlign,
+  ShadingType,
+} from "docx";
 
 // Safety Equipment Library for PDF generation with images
 import {
@@ -3234,17 +3254,45 @@ app.get("/api/procedures/example-procedure-pdf", async (req, res) => {
 // API Endpoint: Download all 3 documents as ZIP
 app.get("/api/procedures/example-all-documents", async (req, res) => {
   try {
-    console.log("[Documents] Generating all example documents...");
+    console.log("[Documents] Generating all example documents (5 files)...");
 
     const protocol = req.headers["x-forwarded-proto"] || "https";
     const host = req.headers.host || "electrohub.app";
     const baseUrl = `${protocol}://${host}`;
 
-    // Generate all 3 PDFs
-    const [ramsPdf, workMethodPdf, procedurePdf] = await Promise.all([
+    // Example procedure data
+    const exampleProcedure = {
+      id: "EXEMPLE-2025",
+      title: "Remplacement de matériel ATEX Box 117 et Box 110",
+      description: "Procédure de remplacement de matériel électrique en zone ATEX",
+      category: "Maintenance électrique",
+    };
+
+    const exampleSteps = EXAMPLE_RAMS_DATA.steps.map((s, i) => ({
+      step_number: i + 1,
+      title: s.title,
+      description: s.hazards?.[0]?.scenario || "",
+      instructions: s.hazards?.[0]?.corrective_measures || "",
+      required_ppe: s.hazards?.[0]?.ppe || [],
+    }));
+
+    const exampleSettings = {
+      company_name: EXAMPLE_RAMS_DATA.company,
+      approver_name: EXAMPLE_RAMS_DATA.approver,
+      contractor_name: "Entreprise Exemple SA",
+      contractor_address: "Rue de l'Exemple 1, 1260 Nyon",
+      contractor_phone: "+41 22 123 45 67",
+      prepared_by: "Chef d'équipe",
+      emergency_phone: "+41 (0) 22 567 40 00",
+    };
+
+    // Generate all 5 documents in parallel (3 PDFs + 1 Excel + 1 Word)
+    const [ramsPdf, workMethodPdf, procedurePdf, ramsExcel, methodeWord] = await Promise.all([
       generateExampleMethodStatementPDF(baseUrl),
       generateExampleWorkMethodPDF(baseUrl),
-      generateExampleProcedurePDF(baseUrl)
+      generateExampleProcedurePDF(baseUrl),
+      generateRAMSExcel(exampleProcedure, exampleSteps, EXAMPLE_RAMS_DATA, exampleSettings),
+      generateMethodeWord(exampleProcedure, exampleSteps, EXAMPLE_RAMS_DATA, exampleSettings)
     ]);
 
     // Create ZIP archive (archiver imported at top)
@@ -3260,12 +3308,14 @@ app.get("/api/procedures/example-all-documents", async (req, res) => {
 
     const dateStr = new Date().toISOString().split("T")[0];
     archive.append(ramsPdf, { name: `RAMS_${dateStr}.pdf` });
+    archive.append(ramsExcel, { name: `RAMS_${dateStr}.xlsx` });
+    archive.append(methodeWord, { name: `Methode_Travail_${dateStr}.docx` });
     archive.append(workMethodPdf, { name: `Methode_Travail_${dateStr}.pdf` });
     archive.append(procedurePdf, { name: `Procedure_${dateStr}.pdf` });
 
     await archive.finalize();
 
-    console.log("[Documents] All documents generated successfully");
+    console.log("[Documents] All 5 documents generated successfully");
   } catch (err) {
     console.error("[Documents] Error generating documents:", err);
     res.status(500).json({ error: err.message });
@@ -4591,12 +4641,13 @@ app.get("/api/procedures/:id/all-documents", async (req, res) => {
       if (settings.length > 0) siteSettings = settings[0];
     } catch (e) {}
 
-    // Generate all 4 documents in parallel (3 PDFs + 1 Excel)
-    const [ramsPdf, workMethodPdf, procedurePdf, ramsExcel] = await Promise.all([
+    // Generate all 5 documents in parallel (3 PDFs + 1 Excel + 1 Word)
+    const [ramsPdf, workMethodPdf, procedurePdf, ramsExcel, methodeWord] = await Promise.all([
       generateMethodStatementA3PDF(id, baseUrl),
       generateWorkMethodPDF(procedure, steps, baseUrl),
       generateProcedureDocPDF(procedure, steps, baseUrl),
-      generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings)
+      generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings),
+      generateMethodeWord(procedure, steps, aiAnalysis, siteSettings)
     ]);
 
     // Create ZIP archive
@@ -4613,6 +4664,7 @@ app.get("/api/procedures/:id/all-documents", async (req, res) => {
     const dateStr = new Date().toISOString().split("T")[0];
     archive.append(ramsPdf, { name: `RAMS_${safeTitle}_${dateStr}.pdf` });
     archive.append(ramsExcel, { name: `RAMS_${safeTitle}_${dateStr}.xlsx` });
+    archive.append(methodeWord, { name: `Methode_Travail_${safeTitle}_${dateStr}.docx` });
     archive.append(workMethodPdf, { name: `Methode_Travail_${safeTitle}_${dateStr}.pdf` });
     archive.append(procedurePdf, { name: `Procedure_${safeTitle}_${dateStr}.pdf` });
 
@@ -5138,6 +5190,796 @@ async function generateRAMSExcel(procedure, steps, aiAnalysis, siteSettings = {}
   return Buffer.from(buffer);
 }
 
+// ============================================
+// GÉNÉRATION DOCUMENT WORD - MÉTHODE DE TRAVAIL SÛRE
+// Structure identique au template original
+// ============================================
+
+async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = {}) {
+  const companyName = siteSettings.company_name || "Haleon";
+  const contractorName = siteSettings.contractor_name || "";
+  const contractorAddress = siteSettings.contractor_address || "";
+  const contractorPhone = siteSettings.contractor_phone || "";
+  const preparedBy = siteSettings.prepared_by || "";
+  const workDate = new Date().toLocaleDateString("fr-FR");
+  const emergencyPhone = siteSettings.emergency_phone || "+41 (0) 22 567 40 00";
+
+  // Bordures standard pour les tableaux
+  const tableBorders = {
+    top: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
+    bottom: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
+    left: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
+    right: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
+  };
+
+  // Fonction helper pour créer une cellule de tableau
+  const createCell = (text, options = {}) => {
+    return new TableCell({
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: text || "",
+              bold: options.bold || false,
+              size: options.size || 20,
+              color: options.color || "000000",
+              italics: options.italics || false,
+            }),
+          ],
+          alignment: options.alignment || AlignmentType.LEFT,
+        }),
+      ],
+      borders: tableBorders,
+      width: options.width ? { size: options.width, type: WidthType.PERCENTAGE } : undefined,
+      verticalAlign: VerticalAlign.CENTER,
+      shading: options.shading ? { fill: options.shading, type: ShadingType.CLEAR } : undefined,
+      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+    });
+  };
+
+  // Fonction helper pour créer une cellule avec plusieurs paragraphes
+  const createMultiLineCell = (lines, options = {}) => {
+    return new TableCell({
+      children: lines.map(line =>
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: line.text || line,
+              bold: line.bold || options.bold || false,
+              size: line.size || options.size || 20,
+              color: line.color || options.color || "000000",
+              italics: line.italics || options.italics || false,
+            }),
+          ],
+          spacing: { after: 60 },
+        })
+      ),
+      borders: tableBorders,
+      width: options.width ? { size: options.width, type: WidthType.PERCENTAGE } : undefined,
+      verticalAlign: VerticalAlign.TOP,
+      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+    });
+  };
+
+  // Extraire les informations de l'analyse IA
+  const workDescription = aiAnalysis?.description || procedure.description || "";
+  const workSequence = aiAnalysis?.steps?.map((s, i) => `${i + 1}. ${s.title}: ${s.description || ""}`).join("\n") ||
+    steps.map((s, i) => `${i + 1}. ${s.title}: ${s.description || ""}`).join("\n");
+  const equipmentList = aiAnalysis?.equipment?.join(", ") ||
+    [...new Set(steps.flatMap(s => s.equipment_ids || []))].join(", ") || "À définir";
+  const ppeList = aiAnalysis?.ppe?.join(", ") ||
+    [...new Set(steps.flatMap(s => s.required_ppe || []))].join(", ") || "EPI standard";
+  const controlMeasures = aiAnalysis?.control_measures || "Formation et compétence requises. EPI obligatoire.";
+  const rescuePlan = aiAnalysis?.rescue_plan || "Contact équipe d'urgence du site.";
+
+  // ========== SECTION 1: DÉTAILS DU DOCUMENT ==========
+  const detailsTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      // Ligne 1: Description (colspan 2)
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "1. ", bold: true, size: 20 }),
+                  new TextRun({ text: "Détails du document", bold: true, size: 20 }),
+                ],
+                spacing: { after: 120 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "L'objectif de ces méthodes de travail sûres est de fournir une illustration de la séquence des travaux, des niveaux d'effectifs et des procédures de sécurité afin que les travaux puissent être effectués de manière sûre et efficace.",
+                  size: 20,
+                })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: `Ces méthodes de travail sûres ont été produites conformément aux Standard ${companyName} et doivent être conformes à la réglementation Suisse.`,
+                  size: 20,
+                })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "L'objectif est de fournir une description complète, étape par étape, de la manière dont les entrepreneurs vont exécuter les travaux.",
+                  size: 20,
+                })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Tous les employés de l'entrepreneur doivent être compétents et conscients de leurs responsabilités individuelles.",
+                  size: 20,
+                })],
+              }),
+            ],
+            borders: tableBorders,
+            columnSpan: 2,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+      // Ligne 2: Entrepreneur | Méthode N°
+      new TableRow({
+        children: [
+          createMultiLineCell([
+            { text: "Entrepreneur ;", bold: true },
+            { text: `Nom : ${contractorName}`, bold: true },
+            { text: `Adresse : ${contractorAddress}`, bold: true },
+            { text: `Tel : ${contractorPhone}`, bold: true },
+          ], { width: 35 }),
+          createMultiLineCell([
+            { text: `Méthode de travail sûre N° : ${procedure.id || ""}`, bold: true },
+            { text: `Préparé par : ${preparedBy}` },
+            { text: `Date: ${workDate}` },
+          ], { width: 65 }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 2: DESCRIPTION DES TRAVAUX ==========
+  const section2 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "2.0 Description des travaux.", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette section ne nécessite qu'une brève description des travaux à effectuer.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: procedure.title || "", size: 20, bold: true })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: workDescription, size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 3: DATES ET HEURES ==========
+  const section3 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "3.0 Dates et heures de travail.", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette section nécessite des informations sur la date de début, la durée de la tâche et les heures de début et de fin.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: `Date de début : ${workDate}`, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Période des activités / Heure(s) où les travaux doivent être effectués :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "07h00 - 16h30 (horaires standards)", size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Restriction de travail", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Les travaux bruyants qui peuvent perturber le voisinage se font entre 7h30 et 18h30", size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 4: RESSOURCES ==========
+  const section4 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "4.0 Ressources", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Personnel qui interviendra dans les travaux :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "La section énumère les noms des personnes impliquées dans la tâche, leur poste et leurs coordonnées.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: contractorName || "À compléter", size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Sous-traitants qui interviendront dans les travaux :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Aucun / À définir", size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 5: ÉQUIPEMENTS ==========
+  const section5 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "5.0 Équipements et outils", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette section doit inclure une liste de base de l'équipement qui sera utilisé pour accomplir la tâche.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: equipmentList, size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 6: SÉQUENCE DES TRAVAUX ==========
+  const sequenceSteps = (aiAnalysis?.steps || steps).map((step, idx) =>
+    new Paragraph({
+      children: [new TextRun({
+        text: `${idx + 1}. ${step.title || step.name || `Étape ${idx + 1}`}`,
+        size: 20, bold: true,
+      })],
+      spacing: { after: 40 },
+    })
+  ).concat(
+    (aiAnalysis?.steps || steps).map((step) =>
+      new Paragraph({
+        children: [new TextRun({
+          text: `   ${step.description || step.instructions || ""}`,
+          size: 20,
+        })],
+        spacing: { after: 80 },
+      })
+    )
+  );
+
+  const section6 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "6.0 Séquence des travaux (instructions étape par étape)", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette section doit fournir un processus étape par étape des travaux à effectuer.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              ...sequenceSteps.slice(0, (aiAnalysis?.steps || steps).length),
+              ...(aiAnalysis?.steps || steps).map((step, idx) =>
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: `${idx + 1}. `, bold: true, size: 20 }),
+                    new TextRun({ text: `${step.title || `Étape ${idx + 1}`}: `, bold: true, size: 20 }),
+                    new TextRun({ text: step.description || step.instructions || "", size: 20 }),
+                  ],
+                  spacing: { after: 80 },
+                })
+              ),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 7: PERMIS COMPLÉMENTAIRES ==========
+  const section7 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "7.0 Permis complémentaires :", bold: true, size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Sélectionnez un permis :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Permis par point chaud", size: 20 })] }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Permis d'accès en Espace clos", size: 20 })] }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Permis d'Excavation", size: 20 })] }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Permis Haute tension électrique", size: 20 })], spacing: { after: 100 } }),
+              new Paragraph({
+                children: [new TextRun({ text: "Documentation complémentaire :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Opération de levage", size: 20 })] }),
+              new Paragraph({ children: [new TextRun({ text: "☐ Amiante", size: 20 })] }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 8: MESURES DE CONTRÔLE ==========
+  const section8 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "8.0 Mesures de contrôle.", bold: true, size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Formation et compétence :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Les entrepreneurs sont-ils formés à l'utilisation des équipements de travail et d'accès ?",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Oui - Attestations et permis spécifiques fournis", size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Equipements de protection individuel (EPI) :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: ppeList, size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Evaluation des risques (RA) :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "L'analyse des risques doit être effectuée selon le « QD-REF-014758 Analyse de risque » et tout personnel impliqué dans les travaux doivent lire, comprendre et signer l'analyse de risque.",
+                  size: 20,
+                })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 9: DISPOSITIONS D'URGENCE ==========
+  const section9 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "9.0 Dispositions d'urgence", bold: true, size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: `Le site de Nyon possède son propre système de gestion des urgences de secours constitué de Samaritains et de pompiers, pour cela contacter le numéro d'urgence inscrit au dos du badge.`,
+                  size: 20,
+                })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Coordonnées d'urgence : ", bold: true, size: 20 }),
+                  new TextRun({ text: emergencyPhone, size: 20, bold: true, color: "FF0000" }),
+                ],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Premiers secours :", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Les équipes d'urgence du site, s'occuperont des démarches pour les transferts à l'hôpital le plus proche disposant d'un service d'urgence.",
+                  size: 20,
+                })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 10: PLANS DE SAUVETAGE ==========
+  const section10 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "10.0 Plans et dispositions de sauvetage spécifiques", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette section nécessite des informations sur des plans de sauvetage spécifiques.",
+                  size: 20, color: "8DB3E2", italics: true,
+                })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: rescuePlan, size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 11: SURVEILLANCE ==========
+  const section11 = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "11.0 Surveillance et conformité", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Des contrôles seront effectués afin de s'assurer que la méthode de travail sûre et les mesures de contrôle sont respectées par les intervenants.",
+                  size: 20,
+                })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== SECTION 12: ACCEPTATION ==========
+  const section12Header = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "12.0 Acceptation et reconnaissance", bold: true, size: 20 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Accepté par l'entrepreneur : ", bold: true, size: 20 }),
+                  new TextRun({ text: "________________________", size: 20 }),
+                ],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Date : ", bold: true, size: 20 }),
+                  new TextRun({ text: "________________________", size: 20 }),
+                ],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `Accepté par ${companyName} : `, bold: true, size: 20 }),
+                  new TextRun({ text: "________________________", size: 20 }),
+                ],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Date : ", bold: true, size: 20 }),
+                  new TextRun({ text: "________________________", size: 20 }),
+                ],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({
+                  text: "Cette méthode de travail sûre doit être communiquée à TOUS les opérateurs impliqués dans les travaux, y compris les sous-traitants. Toutes les personnes doivent avoir lu et compris et signé par l'ensemble des intervenants.",
+                  size: 20, bold: true,
+                })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== TABLEAU DES SIGNATURES ==========
+  const signatureRows = [];
+  // Header row
+  signatureRows.push(new TableRow({
+    children: [
+      createCell("Name", { bold: true, width: 40 }),
+      createCell("Signature", { bold: true, width: 30 }),
+      createCell("Date", { bold: true, width: 30 }),
+    ],
+  }));
+  // 12 empty signature rows
+  for (let i = 0; i < 12; i++) {
+    signatureRows.push(new TableRow({
+      children: [
+        createCell("", { width: 40 }),
+        createCell("", { width: 30 }),
+        createCell("", { width: 30 }),
+      ],
+      height: { value: 500, rule: "atLeast" },
+    }));
+  }
+
+  const signatureTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: signatureRows,
+  });
+
+  // ========== HISTORIQUE DE RÉVISION ==========
+  const revisionTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: "Historique de révision du document", bold: true, size: 22 })],
+                spacing: { after: 100 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "REVISION", bold: true, size: 20 })],
+                spacing: { after: 60 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "(Changements principaux par rapport à la version précédente)", size: 18, italics: true })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Type de changement: ", size: 20 }),
+                  new TextRun({ text: "☑ Nouveau  ☐ Révision", size: 20 }),
+                ],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Raison du changement :", bold: true, size: 20 })],
+                spacing: { after: 40 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Création du document via ElectroHub", size: 20 })],
+                spacing: { after: 80 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: "Description du Changement :", bold: true, size: 20 })],
+                spacing: { after: 40 },
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: `Création automatique pour: ${procedure.title || "Procédure"}`, size: 20 })],
+              }),
+            ],
+            borders: tableBorders,
+            margins: { top: 170, bottom: 170, left: 170, right: 170 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // ========== CRÉATION DU DOCUMENT ==========
+  const doc = new Document({
+    sections: [{
+      properties: {
+        page: {
+          margin: { top: 1000, right: 1000, bottom: 1000, left: 1000 },
+        },
+      },
+      headers: {
+        default: new Header({
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "", size: 20 })],
+            }),
+          ],
+        }),
+      },
+      footers: {
+        default: new Footer({
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: "GSK Consumer Healthcare", bold: true, italics: true, size: 20 })],
+              border: { top: { style: BorderStyle.SINGLE, size: 12, color: "000000" } },
+            }),
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({
+                text: "Property of GSK – May not be used, divulged, published or otherwise disclosed without the consent of GSK",
+                italics: true, size: 15,
+              })],
+            }),
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({
+                text: "Only the controlled (electronic versions) are valid. Document electronically signed.",
+                italics: true, size: 15,
+              })],
+            }),
+          ],
+        }),
+      },
+      children: [
+        // Titre principal
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: "MÉTHODE DE TRAVAIL SÛRE", bold: true, size: 28, color: "595959" })],
+          spacing: { after: 300 },
+        }),
+        // Section 1
+        detailsTable,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 2
+        section2,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 3
+        section3,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 4
+        section4,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 5
+        section5,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 6
+        section6,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 7
+        section7,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 8
+        section8,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 9
+        section9,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 10
+        section10,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 11
+        section11,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Section 12
+        section12Header,
+        new Paragraph({ spacing: { after: 200 } }),
+        // Tableau signatures
+        signatureTable,
+        new Paragraph({ spacing: { after: 300 } }),
+        // Historique révision
+        revisionTable,
+      ],
+    }],
+  });
+
+  // Générer le buffer
+  const buffer = await Packer.toBuffer(doc);
+  return buffer;
+}
+
 // API Endpoint: Download RAMS Excel
 app.get("/api/procedures/:id/rams-excel", async (req, res) => {
   try {
@@ -5253,6 +6095,124 @@ app.get("/api/procedures/example-rams-excel", async (req, res) => {
     res.end(excelBuffer);
   } catch (err) {
     console.error("[RAMS Excel] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// API Endpoints: Méthode de Travail Word
+// ============================================
+
+// Download Méthode de Travail Word for a procedure
+app.get("/api/procedures/:id/methode-word", async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("[Méthode Word] Generating for procedure:", id);
+
+    // Get procedure and steps
+    const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [id]
+    );
+
+    const procedure = procedures[0];
+
+    // Get AI analysis if available
+    let aiAnalysis = null;
+    if (procedure.ai_rams_analysis) {
+      try {
+        aiAnalysis = typeof procedure.ai_rams_analysis === 'string'
+          ? JSON.parse(procedure.ai_rams_analysis)
+          : procedure.ai_rams_analysis;
+      } catch (e) {
+        console.log("[Méthode Word] Error parsing stored analysis:", e.message);
+      }
+    }
+
+    if (!aiAnalysis || !aiAnalysis.steps) {
+      aiAnalysis = generateFallbackRiskAnalysis(procedure, steps);
+    }
+
+    // Get site settings
+    let siteSettings = {};
+    try {
+      const site = req.headers["x-site"] || "default";
+      const { rows: settings } = await pool.query(
+        `SELECT * FROM site_settings WHERE site_id = $1`, [site]
+      );
+      if (settings.length > 0) {
+        siteSettings = settings[0];
+      }
+    } catch (e) {
+      console.log("[Méthode Word] No site settings found");
+    }
+
+    // Generate Word document
+    const wordBuffer = await generateMethodeWord(procedure, steps, aiAnalysis, siteSettings);
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    const safeTitle = (procedure.title || "Procedure").replace(/[^a-zA-Z0-9]/g, "_").substring(0, 30);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Methode_Travail_${safeTitle}_${dateStr}.docx"`
+    );
+
+    console.log("[Méthode Word] Generated successfully for procedure:", id);
+    res.end(wordBuffer);
+  } catch (err) {
+    console.error("[Méthode Word] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download example Méthode de Travail Word
+app.get("/api/procedures/example-methode-word", async (req, res) => {
+  try {
+    console.log("[Méthode Word] Generating example document");
+
+    // Use the same example data as RAMS
+    const exampleProcedure = {
+      id: "EXEMPLE-2025",
+      title: "Remplacement de matériel ATEX Box 117 et Box 110",
+      description: "Procédure de remplacement de matériel électrique en zone ATEX",
+      category: "Maintenance électrique",
+    };
+
+    const exampleSteps = EXAMPLE_RAMS_DATA.steps.map((s, i) => ({
+      step_number: i + 1,
+      title: s.title,
+      description: s.hazards?.[0]?.scenario || "",
+      instructions: s.hazards?.[0]?.corrective_measures || "",
+      required_ppe: s.hazards?.[0]?.ppe || [],
+    }));
+
+    const wordBuffer = await generateMethodeWord(exampleProcedure, exampleSteps, EXAMPLE_RAMS_DATA, {
+      company_name: EXAMPLE_RAMS_DATA.company,
+      contractor_name: "Entreprise Exemple SA",
+      contractor_address: "Rue de l'Exemple 1, 1260 Nyon",
+      contractor_phone: "+41 22 123 45 67",
+      prepared_by: "Chef d'équipe",
+      emergency_phone: "+41 (0) 22 567 40 00",
+    });
+
+    const dateStr = new Date().toISOString().split("T")[0];
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Methode_Travail_Exemple_${dateStr}.docx"`
+    );
+
+    console.log("[Méthode Word] Example generated successfully");
+    res.end(wordBuffer);
+  } catch (err) {
+    console.error("[Méthode Word] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });

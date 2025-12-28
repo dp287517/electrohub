@@ -24,6 +24,7 @@ import {
   downloadProcedureDocPdf,
   downloadAllDocuments,
   downloadRAMSExcel,
+  downloadMethodeWord,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
@@ -372,6 +373,9 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
         case 'rams-excel':
           await downloadRAMSExcel(procedureId);
           break;
+        case 'methode-word':
+          await downloadMethodeWord(procedureId);
+          break;
         case 'method':
           await downloadWorkMethodPdf(procedureId);
           break;
@@ -522,6 +526,22 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
                     {downloading === 'rams-excel' && <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />}
                   </button>
 
+                  {/* Méthode de travail Word */}
+                  <button
+                    onClick={() => handleDownload('methode-word')}
+                    disabled={!!downloading}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-indigo-50 transition-colors text-left border-t"
+                  >
+                    <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-lg flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Méthode de travail (Word)</p>
+                      <p className="text-xs text-gray-500">Document officiel modifiable (.docx)</p>
+                    </div>
+                    {downloading === 'methode-word' && <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />}
+                  </button>
+
                   {/* Méthodologie A4 */}
                   <button
                     onClick={() => handleDownload('method')}
@@ -565,7 +585,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
                     </div>
                     <div className="flex-1">
                       <p className="font-medium text-gray-900">Télécharger tout (ZIP)</p>
-                      <p className="text-xs text-gray-500">4 documents (3 PDF + 1 Excel)</p>
+                      <p className="text-xs text-gray-500">5 documents (3 PDF + 1 Excel + 1 Word)</p>
                     </div>
                     {downloading === 'all' && <Loader2 className="w-4 h-4 animate-spin text-purple-600" />}
                   </button>
