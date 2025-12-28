@@ -34,8 +34,9 @@ export const ALL_APPS = [
 export function getUserPermissions(email) {
   if (!email) return null;
 
-  // Admins have all permissions
-  if (ADMIN_EMAILS.includes(email)) {
+  // Admins have all permissions (case-insensitive check)
+  const emailLower = email.toLowerCase();
+  if (ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === emailLower)) {
     return {
       isAdmin: true,
       isPending: false,

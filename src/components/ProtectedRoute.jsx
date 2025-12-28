@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from 'react-router-dom';
-import { hasRouteAccess, getUserPermissions } from '../lib/permissions';
+import { hasRouteAccess, getUserPermissions, ADMIN_EMAILS } from '../lib/permissions';
 import PendingValidation from './PendingValidation';
 
 export default function ProtectedRoute({ children }) {
@@ -20,14 +20,11 @@ export default function ProtectedRoute({ children }) {
   const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
   const permissions = getUserPermissions(user?.email);
 
-  // Check if user is pending validation
-  if (permissions?.isPending || user?.isPending || user?.is_validated === false) {
-    // Allow access to dashboard only (to show pending status)
-    // But show PendingValidation component for all other routes
-    if (location.pathname === '/dashboard') {
-      return <PendingValidation user={user} />;
-    }
-    // For app routes, also show pending
+  // ADMINS are NEVER blocked - skip all pending checks for admins
+  const isAdmin = ADMIN_EMAILS.includes(user?.email?.toLowerCase()) || permissions?.isAdmin;
+
+  // Check if user is pending validation (but NOT if admin)
+  if (!isAdmin && (permissions?.isPending || user?.isPending || user?.is_validated === false)) {
     return <PendingValidation user={user} />;
   }
 
