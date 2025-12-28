@@ -200,3 +200,80 @@ body { @apply bg-gray-50 text-gray-900; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================
+   MOBILE KEYBOARD & INPUT OPTIMIZATION
+   ============================================ */
+
+/* Prevent zoom on input focus (iOS) - minimum 16px font */
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Dynamic viewport height support */
+.h-dvh {
+  height: 100dvh;
+}
+
+.min-h-dvh {
+  min-height: 100dvh;
+}
+
+.max-h-dvh {
+  max-height: 100dvh;
+}
+
+/* Safe area padding for bottom-fixed elements */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-bottom-extra {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* Mobile modal optimizations */
+@media screen and (max-width: 640px) {
+  .mobile-modal {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  .mobile-modal-full {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+}
+
+/* Smooth scrolling for modals */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent body scroll when modal is open */
+body.modal-open {
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+}
+
+/* Touch-friendly buttons */
+@media (hover: none) and (pointer: coarse) {
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Keyboard-aware container - shrinks when keyboard opens */
+@supports (height: 100dvh) {
+  .keyboard-aware {
+    height: 100dvh;
+    transition: height 0.3s ease;
+  }
+}
