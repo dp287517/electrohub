@@ -448,6 +448,8 @@ const INTENT_TYPES = {
   ANALYZE_REPORT: 'analyze_report', // Analyser un rapport
   EQUIPMENT: 'equipment',     // Question sur un équipement
   DRAFTS: 'drafts',           // Voir les brouillons/procédures incomplètes
+  PENDING_SIGNATURES: 'pending_signatures', // Signatures en attente
+  STATS: 'stats',             // Statistiques/comptage de procédures
   NONE: 'none'                // Pas d'intention procédure
 };
 
@@ -516,6 +518,33 @@ function detectProcedureIntent(message, conversationHistory = []) {
   ];
   if (draftsPatterns.some(p => p.test(m))) {
     return { type: INTENT_TYPES.DRAFTS };
+  }
+
+  // 2c. PENDING_SIGNATURES - Signatures en attente
+  const pendingSignaturesPatterns = [
+    /signatures?\s+(?:en\s+)?attente/i,
+    /attente\s+(?:de\s+)?signatures?/i,
+    /proc[ée]dures?\s+[àa]\s+signer/i,
+    /(?:doit|dois|devons|faut)\s+signer/i,
+    /(?:en\s+)?attente\s+(?:chez|pour)\s+moi/i,
+    /(?:mes\s+)?validations?\s+(?:en\s+)?attente/i,
+    /approbations?\s+(?:en\s+)?attente/i,
+    /(?:qui|quoi|que)\s+(?:dois-je|faut-il)\s+(?:signer|valider|approuver)/i
+  ];
+  if (pendingSignaturesPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.PENDING_SIGNATURES };
+  }
+
+  // 2d. STATS - Statistiques/comptage de procédures
+  const statsPatterns = [
+    /(?:combien|nombre)\s+(?:de\s+)?proc[ée]dures?/i,
+    /(?:j'?ai|on\s+a|avons|avez)\s+combien\s+(?:de\s+)?proc[ée]dures?/i,
+    /(?:stats?|statistiques?)\s+(?:des?\s+)?proc[ée]dures?/i,
+    /proc[ée]dures?\s+(?:au\s+)?total/i,
+    /(?:total|compte)\s+(?:des?\s+)?proc[ée]dures?/i
+  ];
+  if (statsPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.STATS };
   }
 
   // 3. GUIDE - Demande de guidage
@@ -636,7 +665,9 @@ function detectProcedureIntent(message, conversationHistory = []) {
     /procédure\s+(?:de|pour|sur)\s+(.+)/i,
     /(?:y\s+a|existe|as-tu|avez-vous)\s+(?:une?\s+)?procédure/i,
     /(?:liste|montre|affiche)\s+(?:les\s+)?procédures/i,
-    /quelles?\s+procédures?/i
+    /quelles?\s+procédures?/i,
+    // "normalement j'ai la procédure X" or "j'ai pas la procédure X?"
+    /(?:normalement|j'?ai(?:\s+pas)?)\s+(?:la\s+)?proc[ée]dure\s+["']?([^"'?]+)["']?/i
   ];
   for (const pattern of searchPatterns) {
     if (pattern.test(m)) {
@@ -692,9 +723,14 @@ function detectProcedureIntent(message, conversationHistory = []) {
   }
 
   // 9. Fallback - Check for procedure keywords without clear action
-  if (hasProcedure && !hasCreate) {
+  // BUT exclude questions that are asking ABOUT procedures (not searching FOR them)
+  const isQuestionAboutProcedures = /(?:combien|j'ai|ai-je|avons|avez|y\s+a|existe|normalement)/i.test(m);
+  const isAskingForSignatures = /(?:signature|signer|valider|approuver|attente)/i.test(m);
+
+  if (hasProcedure && !hasCreate && !isQuestionAboutProcedures && !isAskingForSignatures) {
     const subject = extractProcedureSubject(m);
-    if (subject) {
+    // Only treat as search if we extracted a meaningful subject (not just "procédure" itself)
+    if (subject && subject.length > 3 && !/^proc[ée]dures?$/i.test(subject)) {
       return { type: INTENT_TYPES.SEARCH, query: subject };
     }
   }
@@ -707,15 +743,24 @@ function detectProcedureIntent(message, conversationHistory = []) {
  */
 function extractProcedureSubject(message) {
   const patterns = [
-    /procédure\s+(?:de\s+|pour\s+|d[''])?(.+?)(?:\?|$|\.)/i,
-    /cherche.*procédure.*(?:de\s+|pour\s+|sur\s+)(.+?)(?:\?|$|\.)/i,
+    // "normalement j'ai la procédure vérifier les prises électriques non?"
+    /(?:normalement|j'?ai(?:\s+pas)?)\s+(?:la\s+)?proc[ée]dure\s+["']?([^"'?]+)["']?\s*(?:\?|non|$)/i,
+    // "procédure de/pour/sur X"
+    /proc[ée]dure\s+(?:de\s+|pour\s+|sur\s+|d[''])?["']?([^"'?]+)["']?(?:\?|$|\.)/i,
+    // "cherche procédure de/pour/sur X"
+    /cherche.*proc[ée]dure.*(?:de\s+|pour\s+|sur\s+)(.+?)(?:\?|$|\.)/i,
+    // "maintenance/intervention/contrôle de X"
     /(?:maintenance|intervention|contrôle)\s+(?:de\s+|du\s+|des?\s+)?(.+?)(?:\?|$|\.)/i
   ];
 
   for (const pattern of patterns) {
     const match = message.match(pattern);
     if (match && match[1] && match[1].length > 2) {
-      return match[1].trim();
+      // Clean up the extracted subject
+      let subject = match[1].trim();
+      // Remove trailing "non" if present
+      subject = subject.replace(/\s+non\s*$/i, '').trim();
+      return subject;
     }
   }
 
@@ -1403,6 +1448,106 @@ app.post("/chat", async (req, res) => {
             procedureCreatorContext: { mode: 'report' },
             provider: 'system'
           });
+        }
+
+        // -----------------------------------------------------------------
+        // PENDING_SIGNATURES: Signatures en attente
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.PENDING_SIGNATURES: {
+          try {
+            const pendingResult = await pool.query(`
+              SELECT p.id, p.title, p.created_at, p.risk_level,
+                     ps.signer_email, ps.status, ps.requested_at
+              FROM procedures p
+              JOIN procedure_signatures ps ON ps.procedure_id = p.id
+              WHERE ps.signer_email = $1 AND ps.status = 'pending'
+              ORDER BY ps.requested_at DESC
+              LIMIT 10
+            `, [userEmail]);
+
+            if (pendingResult.rows.length === 0) {
+              return res.json({
+                message: `✅ **Aucune signature en attente**\n\nTu n'as pas de procédures à signer pour le moment.\n\nC'est tout bon ! 👍`,
+                actions: [
+                  { label: '📋 Mes procédures', prompt: 'Liste des procédures' },
+                  { label: '➕ Créer', prompt: 'Créer une procédure' }
+                ],
+                provider: 'system'
+              });
+            }
+
+            let response = `📝 **${pendingResult.rows.length} signature(s) en attente**\n\n`;
+            pendingResult.rows.forEach((sig, i) => {
+              const date = new Date(sig.requested_at).toLocaleDateString('fr-FR');
+              const risk = sig.risk_level === 'high' ? '⚠️ ' : sig.risk_level === 'critical' ? '🔴 ' : '';
+              response += `${i + 1}. ${risk}**${sig.title}** - demandée le ${date}\n`;
+            });
+            response += `\n💡 Dis "voir procédure 1" pour afficher les détails.`;
+
+            return res.json({
+              message: response,
+              proceduresFound: pendingResult.rows.map((p, i) => ({ id: p.id, title: p.title, index: i + 1 })),
+              actions: pendingResult.rows.slice(0, 3).map((p, i) => ({
+                label: `📋 ${p.title.substring(0, 25)}...`,
+                prompt: `Voir procédure ${i + 1}`
+              })),
+              provider: 'system'
+            });
+          } catch (e) {
+            console.error('[SIGNATURES] Error:', e);
+            return res.json({
+              message: `❌ Erreur lors de la récupération des signatures en attente.`,
+              provider: 'system'
+            });
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // STATS: Statistiques des procédures
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.STATS: {
+          try {
+            const statsResult = await pool.query(`
+              SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'draft') as drafts,
+                COUNT(*) FILTER (WHERE status = 'published') as published,
+                COUNT(*) FILTER (WHERE risk_level = 'high' OR risk_level = 'critical') as high_risk,
+                COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '30 days') as recent
+              FROM procedures
+              WHERE site = $1 OR site IS NULL OR site = ''
+            `, [site]);
+
+            const stats = statsResult.rows[0];
+
+            let response = `📊 **Statistiques des procédures**\n\n`;
+            response += `📋 **${stats.total}** procédure(s) au total\n`;
+            response += `✅ **${stats.published}** publiée(s)\n`;
+            response += `📝 **${stats.drafts}** brouillon(s)\n`;
+            if (parseInt(stats.high_risk) > 0) {
+              response += `⚠️ **${stats.high_risk}** à haut risque\n`;
+            }
+            if (parseInt(stats.recent) > 0) {
+              response += `🆕 **${stats.recent}** créée(s) ce mois-ci\n`;
+            }
+
+            response += `\n💡 Dis "liste procédures" pour les voir.`;
+
+            return res.json({
+              message: response,
+              actions: [
+                { label: '📋 Voir la liste', prompt: 'Liste des procédures' },
+                { label: '➕ Créer', prompt: 'Créer une procédure' }
+              ],
+              provider: 'system'
+            });
+          } catch (e) {
+            console.error('[STATS] Error:', e);
+            return res.json({
+              message: `❌ Erreur lors du calcul des statistiques.`,
+              provider: 'system'
+            });
+          }
         }
 
         // -----------------------------------------------------------------
