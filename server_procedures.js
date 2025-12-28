@@ -1469,23 +1469,49 @@ const PROCEDURE_QUALITY_PROMPT = `Tu es LIA. Génère les détails complets pour
 À partir des étapes brutes fournies, génère pour CHAQUE étape:
 - title: Titre court de l'action (max 60 caractères)
 - instructions: Instructions détaillées (2-3 phrases claires)
-- warning: Avertissement de sécurité si nécessaire (ou null)
-- duration_minutes: Durée estimée (1-15 min)
+- warning: Avertissement de sécurité/technique si nécessaire (ou null)
+- duration_minutes: Durée estimée (1-60 min)
 
 Génère aussi les métadonnées de la procédure:
 - description: 2-3 phrases décrivant l'intervention, ses objectifs et le contexte
-- category: Catégorie parmi: general, maintenance, securite, mise_en_service, mise_hors_service, urgence, controle, formation
-- ppe_required: Array des EPI requis. Déduis du contexte:
+- category: Catégorie parmi: general, maintenance, securite, mise_en_service, mise_hors_service, urgence, controle, formation, developpement
+- ppe_required: Array des protections/bonnes pratiques requises. Déduis du contexte:
+
+  DOMAINE INDUSTRIEL/TERRAIN:
   - Électricité/tableau/disjoncteur → ["Gants isolants", "Lunettes de protection", "Chaussures de sécurité"]
   - Hauteur/échelle → ["Harnais de sécurité", "Casque", "Chaussures de sécurité"]
   - Manutention/charges lourdes → ["Gants de manutention", "Chaussures de sécurité", "Ceinture lombaire"]
-  - Standard → ["Chaussures de sécurité"]
+  - Produits chimiques → ["Gants chimiques", "Lunettes", "Masque respiratoire", "Tablier"]
+  - Soudure → ["Masque de soudeur", "Gants soudeur", "Tablier ignifugé"]
+  - Bruit → ["Bouchons d'oreilles", "Casque antibruit"]
+  - Standard terrain → ["Chaussures de sécurité"]
+
+  DOMAINE DÉVELOPPEMENT/IT:
+  - Déploiement production → ["Backup base de données", "Plan de rollback", "Monitoring actif", "Fenêtre de maintenance communiquée"]
+  - Migration données → ["Backup complet", "Script de rollback testé", "Environnement staging validé"]
+  - Modification code critique → ["Branche Git dédiée", "Code review obligatoire", "Tests unitaires passants"]
+  - Hotfix urgent → ["Communication équipe", "Tests de non-régression", "Rollback préparé"]
+  - Infrastructure/serveurs → ["Snapshot serveur", "Accès console de secours", "Documentation à jour"]
+  - Sécurité/authentification → ["Audit de sécurité", "Tests de pénétration", "Logs activés"]
+  - Standard dev → ["Branche Git dédiée", "Code review"]
+
 - risk_level: low/medium/high/critical
+  INDUSTRIEL:
   - Contrôle visuel simple → low
   - Manutention, machines → medium
   - Électricité basse tension → high
   - Haute tension, ATEX, espaces confinés → critical
-- safety_codes: Array des codes de sécurité applicables (ex: ["Consignation électrique", "Permis de travail"])
+
+  DÉVELOPPEMENT:
+  - Documentation, refactoring mineur → low
+  - Nouvelle fonctionnalité, bug fix → medium
+  - Modification base de données, API critique → high
+  - Déploiement production, migration données, sécurité → critical
+
+- safety_codes: Array des prérequis de sécurité applicables
+  INDUSTRIEL: ["Consignation électrique", "Permis de travail", "Permis feu", "Autorisation espace confiné"]
+  DÉVELOPPEMENT: ["Tests passants", "Code review approuvé", "Backup effectué", "Rollback testé", "Staging validé", "Communication équipe"]
+
 - emergency_contacts: Array vide [] (sera rempli par le site)
 
 Format JSON attendu:
@@ -3234,6 +3260,7 @@ app.get("/api/procedures/categories", async (req, res) => {
       { id: "urgence", name: "Urgence", icon: "alert-triangle" },
       { id: "controle", name: "Contrôle", icon: "check-circle" },
       { id: "formation", name: "Formation", icon: "book" },
+      { id: "developpement", name: "Développement", icon: "code" },
     ];
 
     // Merge with counts
