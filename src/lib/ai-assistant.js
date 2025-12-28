@@ -996,14 +996,28 @@ Comment puis-je vous aider plus précisément ?`,
   /**
    * ElevenLabs TTS - Ultra-natural voice
    * Falls back to OpenAI if ElevenLabs unavailable
+   * Includes timeout to handle network issues gracefully
    */
   async textToSpeechPremium(text, voice = 'Rachel') {
+    // Limit text length to avoid large audio files that may fail
+    const maxLength = 500;
+    const truncatedText = text.length > maxLength
+      ? text.substring(0, maxLength).replace(/\s+\S*$/, '...')
+      : text;
+
+    // Create abort controller with 10s timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
     try {
       const response = await fetch(`${this.baseUrl}/tts-elevenlabs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice })
+        body: JSON.stringify({ text: truncatedText, voice }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
@@ -1013,7 +1027,13 @@ Comment puis-je vous aider plus précisément ?`,
 
       return await response.blob();
     } catch (error) {
-      console.error('[TTS-Premium] Error:', error);
+      clearTimeout(timeoutId);
+      // Silently fail for network/timeout errors - fallback to browser TTS
+      if (error.name === 'AbortError') {
+        console.log('[TTS-Premium] Timeout - using browser fallback');
+      } else {
+        console.log('[TTS-Premium] Network error - using browser fallback');
+      }
       return null;
     }
   }
