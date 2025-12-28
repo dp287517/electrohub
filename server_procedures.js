@@ -5208,125 +5208,115 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
   // INTELLIGENCE DOCUMENTAIRE - Détection automatique
   // ============================================
 
-  // Détection intelligente des outils basée sur la catégorie et les équipements liés
   const category = (procedure.category || "").toLowerCase();
   const title = (procedure.title || "").toLowerCase();
   const description = (procedure.description || "").toLowerCase();
   const equipmentLinks = procedure.equipment_links || [];
 
-  // Base d'outils par catégorie
-  const toolsByCategory = {
-    electrical: [
-      "Multimètre digital (calibré)",
-      "Pince ampèremétrique",
-      "Testeur de tension (VAT)",
-      "Tournevis isolés 1000V",
-      "Pinces coupantes isolées",
-      "Jeu de clés Allen isolées",
-      "Lampe frontale ATEX (si zone)",
-      "Étiquettes de consignation",
-      "Cadenas de consignation personnels"
-    ],
-    mechanical: [
-      "Clés à molette (diverses tailles)",
-      "Jeu de clés plates/mixtes",
-      "Clé dynamométrique",
-      "Marteau",
-      "Extracteur de roulements",
-      "Comparateur",
-      "Cales d'épaisseur",
-      "Graisse industrielle",
-      "Chiffons propres"
-    ],
-    atex: [
-      "Outillage anti-étincelles (bronze/cuivre béryllium)",
-      "Lampe torche ATEX certifiée",
-      "Détecteur de gaz portable",
-      "Appareil photo ATEX (si nécessaire)",
-      "Radio ATEX (communication)",
-      "Aspirateur ATEX",
-      "Outils isolés certifiés ATEX"
-    ],
-    conveyor: [
-      "Clés Allen (jeu complet)",
-      "Clé à griffe pour courroies",
-      "Tendeur de bande",
-      "Niveau à bulle",
-      "Mètre ruban",
-      "Cutter de sécurité",
-      "Lubrifiant pour chaînes",
-      "Rouleaux de remplacement"
-    ],
-    hydraulic: [
-      "Manomètre de pression",
-      "Clés pour raccords hydrauliques",
-      "Récipients de récupération d'huile",
-      "Huile hydraulique de remplacement",
-      "Joints et raccords de rechange",
-      "Pompe de remplissage",
-      "Chiffons absorbants"
-    ],
-    pneumatic: [
-      "Manomètre pneumatique",
-      "Clés pour raccords rapides",
-      "Téflon pour filetages",
-      "Joints toriques de rechange",
-      "Détecteur de fuites (savon ou électronique)",
-      "Soufflette"
-    ]
-  };
-
-  // Détection automatique du type de travail
-  let detectedCategories = [];
-
-  if (category.includes("electr") || title.includes("electr") || title.includes("armoire") ||
-      title.includes("vsd") || title.includes("variateur") || title.includes("câbl")) {
-    detectedCategories.push("electrical");
-  }
-  if (category.includes("meca") || title.includes("meca") || title.includes("roulement") ||
-      title.includes("courroie") || title.includes("moteur")) {
-    detectedCategories.push("mechanical");
-  }
-  if (category.includes("atex") || title.includes("atex") || title.includes("zone 1") ||
-      title.includes("zone 2") || title.includes("explosif")) {
-    detectedCategories.push("atex");
-  }
-  if (title.includes("convoyeur") || title.includes("rouleau") || title.includes("bande") ||
-      title.includes("tapis")) {
-    detectedCategories.push("conveyor");
-  }
-  if (title.includes("hydraul") || description.includes("hydraul")) {
-    detectedCategories.push("hydraulic");
-  }
-  if (title.includes("pneumat") || description.includes("pneumat")) {
-    detectedCategories.push("pneumatic");
-  }
-
-  // Si aucune catégorie détectée, utiliser electrical par défaut
-  if (detectedCategories.length === 0) {
-    detectedCategories.push("electrical");
-    detectedCategories.push("mechanical");
-  }
-
-  // Construire la liste d'outils intelligente
+  // PRIORITÉ 1: Utiliser les outils de l'analyse IA s'ils existent
   let toolsList = [];
-  detectedCategories.forEach(cat => {
-    if (toolsByCategory[cat]) {
-      toolsList = [...toolsList, ...toolsByCategory[cat]];
-    }
-  });
 
-  // Ajouter les équipements liés
+  if (aiAnalysis?.equipment && Array.isArray(aiAnalysis.equipment) && aiAnalysis.equipment.length > 0) {
+    // L'IA a déjà analysé les outils nécessaires - les utiliser directement
+    toolsList = aiAnalysis.equipment.map(e => typeof e === 'string' ? e : (e.name || e.toString()));
+  } else if (aiAnalysis?.tools && Array.isArray(aiAnalysis.tools) && aiAnalysis.tools.length > 0) {
+    toolsList = aiAnalysis.tools.map(t => typeof t === 'string' ? t : (t.name || t.toString()));
+  }
+
+  // PRIORITÉ 2: Si pas d'outils IA, détecter la catégorie PRINCIPALE (une seule)
+  let primaryCategory = null;
+
+  if (toolsList.length === 0) {
+    // Détecter la catégorie principale basée sur le titre/description
+    if (title.includes("convoyeur") || title.includes("rouleau") || title.includes("bande") || title.includes("tapis")) {
+      primaryCategory = "conveyor";
+    } else if (title.includes("hydraul") || description.includes("hydraul")) {
+      primaryCategory = "hydraulic";
+    } else if (title.includes("pneumat") || description.includes("pneumat")) {
+      primaryCategory = "pneumatic";
+    } else if (category.includes("atex") || title.includes("atex") || title.includes("zone 1") || title.includes("zone 2")) {
+      primaryCategory = "atex";
+    } else if (category.includes("meca") || title.includes("meca") || title.includes("roulement") ||
+               title.includes("courroie") || title.includes("moteur") || title.includes("pompe")) {
+      primaryCategory = "mechanical";
+    } else if (category.includes("electr") || title.includes("electr") || title.includes("armoire") ||
+               title.includes("vsd") || title.includes("variateur") || title.includes("câbl")) {
+      primaryCategory = "electrical";
+    } else {
+      // Par défaut: mécanique (le plus courant en maintenance)
+      primaryCategory = "mechanical";
+    }
+
+    // Outils de base ESSENTIELS par catégorie (liste réduite et pertinente)
+    const essentialTools = {
+      electrical: [
+        "Multimètre digital (calibré)",
+        "Testeur de tension (VAT)",
+        "Tournevis isolés 1000V",
+        "Pinces isolées",
+        "Étiquettes de consignation",
+        "Cadenas de consignation personnel"
+      ],
+      mechanical: [
+        "Jeu de clés plates/mixtes",
+        "Jeu de clés Allen",
+        "Clé dynamométrique",
+        "Extracteur si nécessaire",
+        "Graisse industrielle",
+        "Chiffons propres"
+      ],
+      atex: [
+        "Outillage anti-étincelles (bronze/cuivre béryllium)",
+        "Lampe torche ATEX certifiée",
+        "Détecteur de gaz portable"
+      ],
+      conveyor: [
+        "Jeu de clés Allen",
+        "Clé à griffe pour tendeur",
+        "Niveau à bulle",
+        "Mètre ruban",
+        "Lubrifiant chaînes/rouleaux"
+      ],
+      hydraulic: [
+        "Manomètre de pression",
+        "Clés pour raccords hydrauliques",
+        "Récipient de récupération",
+        "Chiffons absorbants"
+      ],
+      pneumatic: [
+        "Manomètre pneumatique",
+        "Téflon pour filetages",
+        "Détecteur de fuites"
+      ]
+    };
+
+    toolsList = essentialTools[primaryCategory] || essentialTools.mechanical;
+
+    // Ajouter outils ATEX si zone ATEX détectée (en plus de la catégorie principale)
+    if ((title.includes("atex") || category.includes("atex")) && primaryCategory !== "atex") {
+      toolsList.push("Lampe ATEX si intervention en zone");
+    }
+  }
+
+  // Ajouter les équipements liés (référence seulement)
   if (equipmentLinks.length > 0) {
+    toolsList.push(""); // Séparateur
+    toolsList.push("Équipements concernés:");
     equipmentLinks.forEach(link => {
       if (link.equipment_name) {
-        toolsList.push(`Équipement: ${link.equipment_name} (${link.equipment_type || 'lié'})`);
+        toolsList.push(`  - ${link.equipment_name}`);
       }
     });
   }
 
-  // Dédupliquer
-  toolsList = [...new Set(toolsList)];
+  // Variable pour stocker la catégorie détectée (pour Section 8)
+  const detectedCategories = [primaryCategory || "mechanical"];
+  if ((title.includes("atex") || category.includes("atex")) && primaryCategory !== "atex") {
+    detectedCategories.push("atex");
+  }
+  if ((title.includes("electr") || category.includes("electr")) && primaryCategory !== "electrical") {
+    detectedCategories.push("electrical");
+  }
 
   // Bordures standard pour les tableaux
   const tableBorders = {
@@ -5611,12 +5601,39 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
 
   // Ajouter chaque outil comme un élément de liste
   toolsList.forEach((tool, idx) => {
-    toolsParagraphs.push(
-      new Paragraph({
-        children: [new TextRun({ text: `• ${tool}`, size: 20 })],
-        spacing: { after: 40 },
-      })
-    );
+    if (!tool || tool.trim() === "") {
+      // Ligne vide = espacement
+      toolsParagraphs.push(
+        new Paragraph({
+          children: [new TextRun({ text: "", size: 20 })],
+          spacing: { after: 60 },
+        })
+      );
+    } else if (tool.endsWith(":")) {
+      // C'est un titre de section
+      toolsParagraphs.push(
+        new Paragraph({
+          children: [new TextRun({ text: tool, size: 20, bold: true })],
+          spacing: { after: 40 },
+        })
+      );
+    } else if (tool.startsWith("  -")) {
+      // C'est un sous-élément
+      toolsParagraphs.push(
+        new Paragraph({
+          children: [new TextRun({ text: tool, size: 20 })],
+          spacing: { after: 30 },
+        })
+      );
+    } else {
+      // Outil standard avec bullet
+      toolsParagraphs.push(
+        new Paragraph({
+          children: [new TextRun({ text: `• ${tool}`, size: 20 })],
+          spacing: { after: 40 },
+        })
+      );
+    }
   });
 
   // Ajouter les pièces de rechange si disponibles
@@ -6075,7 +6092,16 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
   );
 
   // Ajouter les risques identifiés depuis l'analyse IA
-  const identifiedRisks = aiAnalysis?.steps?.flatMap(s => s.hazards || []) || [];
+  const rawRisks = aiAnalysis?.steps?.flatMap(s => s.hazards || []) || [];
+  // Extraire le texte des risques (peuvent être des objets ou des strings)
+  const identifiedRisks = rawRisks.map(risk => {
+    if (typeof risk === 'string') return risk;
+    if (risk && typeof risk === 'object') {
+      return risk.description || risk.hazard || risk.name || risk.text || risk.title || JSON.stringify(risk);
+    }
+    return String(risk);
+  }).filter(r => r && !r.includes('[object') && r.length > 2);
+
   const uniqueRisks = [...new Set(identifiedRisks)];
   if (uniqueRisks.length > 0) {
     uniqueRisks.slice(0, 5).forEach(risk => {
