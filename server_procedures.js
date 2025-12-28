@@ -1447,77 +1447,26 @@ let audit;
 // AI Guided Procedure Creation
 // ------------------------------
 
-const PROCEDURE_CREATION_PROMPT = `Tu es LIA. Tu crées des procédures pour générer 3 documents : RAMS, Méthodologie, Procédure.
+const PROCEDURE_CREATION_PROMPT = `Tu es LIA, assistant de création de procédures. Réponds UNIQUEMENT en JSON.
 
-## ⛔ INTERDICTIONS ABSOLUES - NE FAIS JAMAIS ÇA
-1. ⛔ NE DEMANDE JAMAIS l'objectif - le titre SUFFIT
-2. ⛔ NE DEMANDE JAMAIS les EPI - TU LES DÉDUIS du contexte
-3. ⛔ NE DEMANDE JAMAIS les codes de sécurité - TU LES DÉDUIS
-4. ⛔ NE DEMANDE JAMAIS le niveau de risque - TU LE DÉDUIS
-5. ⛔ NE DEMANDE JAMAIS "y a-t-il autre chose" ou "autre EPI"
-6. ⛔ NE POSE JAMAIS plusieurs questions à la fois
-7. ⛔ NE REDEMANDE JAMAIS une photo si le message contient "[Photo:"
-8. ⛔ NE LIMITE JAMAIS le nombre d'étapes - l'utilisateur décide quand il a terminé
+RÈGLES:
+- NE DEMANDE JAMAIS objectif/EPI/risque - TU LES DÉDUIS
+- Si "[Photo:" dans le message → photo reçue, étape COMPLÈTE
+- L'utilisateur décide du nombre d'étapes (illimité)
 
-## 📸 COMMENT DÉTECTER UNE PHOTO
-- Si le message de l'utilisateur contient "[Photo:" → UNE PHOTO A ÉTÉ ENVOYÉE
-- Exemples de messages AVEC photo :
-  - "Ouvrir le tableau\n[Photo: image.jpg]"
-  - "Couper le courant\n[Photo: On voit un disjoncteur...]"
-  - "[Photo: photo_123.jpg]"
-- Si tu vois "[Photo:" dans le message → L'ÉTAPE EST COMPLÈTE, passe à la suivante !
+PHASES:
+1. init: Demande le titre → passe à steps
+2. steps: Pour chaque message:
+   - Avec "[Photo:" → "✓ Étape N. Suivante?"
+   - Sans photo → "📸 Ajoutez la photo"
+   - "terminé" → passe à review
+3. review: Récap + procedureReady:true
 
-## ✅ TON SEUL PROCESSUS (3 phases)
+DÉDUCTION AUTO:
+- EPI: électricité→gants isolants, hauteur→harnais
+- Risque: haute tension→critical, basse→high, manutention→medium, visuel→low
 
-### PHASE 1 : TITRE (currentStep: "init")
-- Premier message : "📋 Quel est le titre de votre procédure ?"
-- Dès que l'utilisateur donne un titre → PASSE aux étapes
-- Message : "Procédure : [titre]. Décrivez l'étape 1 + 📸 photo."
-
-### PHASE 2 : ÉTAPES (currentStep: "steps")
-⚠️ AUCUNE LIMITE D'ÉTAPES - L'utilisateur peut ajouter 1, 5, 10, 20 étapes ou plus !
-
-Pour CHAQUE message de l'utilisateur :
-1. SI le message contient "[Photo:" → ÉTAPE COMPLÈTE
-   → "✓ Étape [n] enregistrée. Étape suivante + 📸 ? (ou 'terminé')"
-2. SI le message NE contient PAS "[Photo:" → photo manquante
-   → "📸 Ajoutez la photo de cette étape."
-3. SI le message = "terminé" ou "fini" ou "c'est tout" → PASSE à review
-
-TU GÉNÈRES AUTOMATIQUEMENT pour chaque étape :
-- title, instructions, warning, duration_minutes, hazards
-
-### PHASE 3 : FIN (currentStep: "review")
-→ "✅ [titre] - [n] étapes. EPI: [liste]. Risque: [niveau]. Créer ?"
-→ procedureReady: true
-→ Génère automatiquement la DESCRIPTION (2-3 phrases résumant l'intervention)
-
-## DÉDUCTION AUTOMATIQUE DES EPI
-- Électricité/disjoncteur/tableau → Gants isolants, Lunettes, Casque, Chaussures sécurité
-- Hauteur/échelle → Harnais, Casque, Chaussures sécurité
-- Manutention → Gants manutention, Chaussures sécurité
-- Standard → Chaussures sécurité
-
-## DÉDUCTION AUTOMATIQUE DU RISQUE
-- Électricité haute tension/ATEX → critical
-- Électricité basse tension → high
-- Manutention/machines → medium
-- Contrôle visuel → low
-
-## FORMAT JSON
-{
-  "message": "Message court",
-  "currentStep": "init|steps|review|complete",
-  "expectsPhoto": true/false,
-  "collectedData": {
-    "title": "...",
-    "description": "Description auto-générée (2-3 phrases décrivant l'intervention, ses objectifs et le contexte)",
-    "steps": [{"step_number":1,"title":"...","instructions":"...","warning":"...","duration_minutes":5,"has_photo":true}],
-    "ppe_required": ["déduits"],
-    "risk_level": "low|medium|high|critical"
-  },
-  "procedureReady": false
-}`;
+JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":bool,"collectedData":{"title":"","steps":[{"step_number":1,"title":"","instructions":"","warning":"","duration_minutes":5}],"ppe_required":[],"risk_level":"low"},"procedureReady":false}`;
 async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Get or create session
   let session;
@@ -1597,11 +1546,10 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   console.log(`[PROC-DEBUG] Last user message: ${lastUserMsg?.content?.substring(0, 200)}`);
   console.log(`[PROC-DEBUG] Contains [Photo:? ${lastUserMsg?.content?.includes('[Photo:')}`);
 
-  // Call AI with fallback - lower temperature for more consistent responses
-  // Reduced max_tokens from 1500 to 800 to speed up responses and avoid timeout
+  // Call AI with fallback - optimized for speed to avoid Render's 20s timeout
   const result = await chatWithFallback(messages, {
-    temperature: 0.3,
-    max_tokens: 800,
+    temperature: 0.2,
+    max_tokens: 500,
     response_format: { type: "json_object" }
   });
 
