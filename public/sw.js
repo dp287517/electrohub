@@ -98,6 +98,13 @@ self.addEventListener('push', (event) => {
     options.actions = [
       { action: 'view', title: 'Consulter', icon: '/icons/view.png' }
     ];
+  } else if (data.type === 'pending_user') {
+    // Notification for admins when new user needs validation
+    options.actions = [
+      { action: 'view', title: 'Valider', icon: '/icons/view.png' },
+      { action: 'dismiss', title: 'Plus tard', icon: '/icons/dismiss.png' }
+    ];
+    options.requireInteraction = true;
   }
 
   event.waitUntil(
