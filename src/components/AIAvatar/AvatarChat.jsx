@@ -548,6 +548,14 @@ Dis-moi ce que tu cherches !`,
 
   if (!isOpen) return null;
 
+  // Mobile keyboard handling - scroll input into view
+  const handleInputFocus = useCallback(() => {
+    // Small delay to wait for keyboard animation
+    setTimeout(() => {
+      inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       {/* Backdrop */}
@@ -556,8 +564,8 @@ Dis-moi ce que tu cherches !`,
         onClick={onClose}
       />
 
-      {/* Chat Panel */}
-      <div className="relative w-full sm:max-w-xl h-[85vh] sm:h-[600px] bg-white sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+      {/* Chat Panel - Uses dvh for mobile keyboard support */}
+      <div className="relative w-full sm:max-w-xl h-[100dvh] sm:h-[600px] bg-white sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom))' }}>
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-600 to-brand-700 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
@@ -906,8 +914,8 @@ Dis-moi ce que tu cherches !`,
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
-        <div className="p-4 border-t bg-gray-50 shrink-0">
+        {/* Input Area - with safe-area padding for iOS */}
+        <div className="p-4 border-t bg-gray-50 shrink-0" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
           {/* Procedure Guidance Indicator */}
           {messages.some(m => m.procedureGuidance?.active) && (
             <div className="mb-3 p-2 bg-gradient-to-r from-violet-50 to-blue-50 border border-violet-200 rounded-lg flex items-center justify-between">
@@ -1021,16 +1029,21 @@ Dis-moi ce que tu cherches !`,
               <Upload className="w-5 h-5" />
             </button>
 
-            {/* Text Input */}
+            {/* Text Input - 16px min to prevent iOS zoom */}
             <input
               ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+              onFocus={handleInputFocus}
               placeholder={isListening ? 'Je vous écoute...' : selectedPhoto ? 'Décris cette photo...' : `Parlez à ${avatar.name}...`}
-              className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-base"
+              style={{ fontSize: '16px' }}
               disabled={isLoading || isListening}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="sentences"
             />
 
             {/* Send Button */}
@@ -1099,10 +1112,11 @@ Dis-moi ce que tu cherches !`,
 
       {/* ProcedureViewer Modal - Ouvre quand l'IA trouve une procédure */}
       {viewProcedureId && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-[60] p-0 sm:p-4">
           <ProcedureViewer
             procedureId={viewProcedureId}
             onClose={() => setViewProcedureId(null)}
+            isMobile={true}
           />
         </div>
       )}

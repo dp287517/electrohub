@@ -226,7 +226,7 @@ function EquipmentLink({ link, isEditing, onRemove }) {
   );
 }
 
-export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
+export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMobile = false }) {
   const [procedure, setProcedure] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -425,7 +425,11 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted }) {
   const statusInfo = STATUS_LABELS[procedure.status] || STATUS_LABELS.draft;
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl overflow-hidden max-w-4xl w-full mx-auto max-h-[90vh] flex flex-col">
+    <div className={`bg-white shadow-xl overflow-hidden flex flex-col ${
+      isMobile
+        ? 'w-full h-[100dvh] rounded-t-2xl sm:rounded-2xl sm:max-w-4xl sm:max-h-[90vh] sm:mx-auto'
+        : 'rounded-2xl max-w-4xl w-full mx-auto max-h-[90vh]'
+    }`} style={isMobile ? { maxHeight: 'calc(100dvh - env(safe-area-inset-bottom))' } : undefined}>
       {/* Header */}
       <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-5 flex-shrink-0">
         <div className="flex items-start justify-between">
