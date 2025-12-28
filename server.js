@@ -4669,12 +4669,17 @@ app.get("/api/ai-assistant/historical-stats", async (req, res) => {
     // Get building distribution
     const buildingStats = await pool.query(`
       SELECT
-        building_code,
-        COUNT(*) as equipment_count,
-        SUM(CASE WHEN last_control < CURRENT_DATE - INTERVAL '1 year' THEN 1 ELSE 0 END) as overdue
-      FROM switchboards
-      WHERE site = $1
-      GROUP BY building_code
+        s.building_code,
+        COUNT(DISTINCT s.id) as equipment_count,
+        COUNT(DISTINCT CASE
+          WHEN cs.last_control_date IS NULL
+            OR cs.last_control_date < CURRENT_DATE - INTERVAL '1 year'
+          THEN s.id
+        END) as overdue
+      FROM switchboards s
+      LEFT JOIN control_schedules cs ON cs.switchboard_id = s.id
+      WHERE s.site = $1
+      GROUP BY s.building_code
       ORDER BY equipment_count DESC
     `, [site]);
 

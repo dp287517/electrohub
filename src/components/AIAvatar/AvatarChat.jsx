@@ -365,6 +365,15 @@ Dis-moi ce que tu cherches !`,
     }
   };
 
+  // Mobile keyboard handling - scroll input into view
+  // MUST be defined before any early return to follow React hooks rules
+  const handleInputFocus = useCallback(() => {
+    // Small delay to wait for keyboard animation
+    setTimeout(() => {
+      inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }, []);
+
   // Envoyer un fichier
   const handleSendFile = async () => {
     if (!selectedFile || isLoading) return;
@@ -547,14 +556,6 @@ Dis-moi ce que tu cherches !`,
 
 
   if (!isOpen) return null;
-
-  // Mobile keyboard handling - scroll input into view
-  const handleInputFocus = useCallback(() => {
-    // Small delay to wait for keyboard animation
-    setTimeout(() => {
-      inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 300);
-  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
