@@ -521,6 +521,54 @@ export async function downloadExampleRAMSExcel() {
   document.body.removeChild(a);
 }
 
+// Download Méthode de Travail Word (format identique au template officiel)
+export async function downloadMethodeWord(procedureId) {
+  const response = await fetch(`${API_BASE}/${procedureId}/methode-word`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Méthode de Travail Word');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Methode_Travail_${procedureId}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
+// Download Example Méthode de Travail Word
+export async function downloadExampleMethodeWord() {
+  const response = await fetch(`${API_BASE}/example-methode-word`, {
+    headers: {
+      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-Site': localStorage.getItem('selectedSite') || '',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Erreur lors du téléchargement de la Méthode de Travail Word Exemple');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Methode_Travail_Exemple_${new Date().toISOString().split('T')[0]}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
 // ==================== CATEGORIES ====================
 
 export async function getCategories() {
