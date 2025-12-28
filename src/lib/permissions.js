@@ -38,31 +38,62 @@ export function getUserPermissions(email) {
   if (ADMIN_EMAILS.includes(email)) {
     return {
       isAdmin: true,
+      isPending: false,
+      isValidated: true,
       apps: ALL_APPS.map(a => a.id),
     };
   }
 
-  // 🔥 FIRST: Check logged-in user data (from JWT/login)
-  // This is the most reliable source for external users
+  // Check logged-in user data (from JWT/login)
+  // This is the most reliable source
   try {
     const loggedInUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
     if (loggedInUser?.email?.toLowerCase() === email?.toLowerCase()) {
+
+      // Check if user is pending validation
+      if (loggedInUser.is_validated === false || loggedInUser.isPending === true) {
+        return {
+          isAdmin: false,
+          isPending: true,
+          isValidated: false,
+          apps: [], // No access until validated
+          ...loggedInUser,
+        };
+      }
+
       // External user logged in - use their allowed_apps from JWT
       if (loggedInUser.allowed_apps && Array.isArray(loggedInUser.allowed_apps)) {
         return {
           isAdmin: loggedInUser.role === 'admin' || loggedInUser.role === 'superadmin',
           isExternal: loggedInUser.source === 'local' || loggedInUser.origin === 'external',
+          isPending: false,
+          isValidated: true,
           apps: loggedInUser.allowed_apps,
           role: loggedInUser.role,
           ...loggedInUser,
         };
       }
-      // Haleon/Bubble user without specific restrictions
+
+      // Haleon/Bubble user - must be validated to have access
       if (loggedInUser.source === 'bubble') {
+        // Only give full access if explicitly validated
+        if (loggedInUser.is_validated === true) {
+          return {
+            isAdmin: false,
+            isHaleon: true,
+            isPending: false,
+            isValidated: true,
+            apps: loggedInUser.allowed_apps || ALL_APPS.map(a => a.id),
+            ...loggedInUser,
+          };
+        }
+        // Not validated = pending
         return {
           isAdmin: false,
           isHaleon: true,
-          apps: ALL_APPS.map(a => a.id),
+          isPending: true,
+          isValidated: false,
+          apps: [],
           ...loggedInUser,
         };
       }
@@ -75,10 +106,23 @@ export function getUserPermissions(email) {
   const haleonUsers = JSON.parse(localStorage.getItem('eh_admin_haleon_users') || '[]');
   const haleonUser = haleonUsers.find(u => u.email?.toLowerCase() === email?.toLowerCase());
   if (haleonUser) {
+    // Only validated users get access
+    if (haleonUser.is_validated === true) {
+      return {
+        isAdmin: false,
+        isHaleon: true,
+        isPending: false,
+        isValidated: true,
+        apps: haleonUser.apps || haleonUser.allowed_apps || ALL_APPS.map(a => a.id),
+        ...haleonUser,
+      };
+    }
     return {
       isAdmin: false,
       isHaleon: true,
-      apps: haleonUser.apps || ALL_APPS.map(a => a.id),
+      isPending: true,
+      isValidated: false,
+      apps: [],
       ...haleonUser,
     };
   }
@@ -90,15 +134,19 @@ export function getUserPermissions(email) {
     return {
       isAdmin: false,
       isExternal: true,
+      isPending: false,
+      isValidated: true,
       apps: externalUser.apps || externalUser.allowed_apps || [],
       ...externalUser,
     };
   }
 
-  // Default: all apps for unknown users (Haleon users not yet configured)
+  // SECURITY: Unknown users get NO access - must be validated by admin
   return {
     isAdmin: false,
-    apps: ALL_APPS.map(a => a.id),
+    isPending: true,
+    isValidated: false,
+    apps: [],
   };
 }
 

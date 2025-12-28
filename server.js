@@ -7211,17 +7211,20 @@ app.get("/api/auth/me", async (req, res) => {
   res.json(user);
 });
 
-// Parser local au niveau route (optionnel car express.json global est déjà monté)
+// SECURITY: Route /api/auth/login désactivée - utiliser /api/auth/bubble ou /api/auth/signin
+// Cette route était une faille de sécurité permettant de créer des tokens sans vérification
 app.post("/api/auth/login", express.json(), async (req, res) => {
-  const { email, site = process.env.DEFAULT_SITE || "Nyon" } = req.body || {};
-  const token = jwt.sign(
-    { id: email || "user", name: email || "user", site },
-    process.env.JWT_SECRET || "devsecret",
-    { expiresIn: "7d" }  // Extended from 2h to 7 days
-  );
-  const isProduction = process.env.NODE_ENV === 'production';
-  res.cookie("token", token, { httpOnly: true, sameSite: isProduction ? "none" : "lax", secure: isProduction });
-  res.json({ ok: true });
+  console.log(`[SECURITY] ⚠️ Blocked attempt to use deprecated /api/auth/login route`);
+  await logAuthEvent(req, 'LOGIN_BLOCKED', {
+    source: 'deprecated_route',
+    success: false,
+    error: 'Route disabled for security',
+    details: { email: req.body?.email }
+  }).catch(() => {});
+  res.status(403).json({
+    error: "Cette route est désactivée. Utilisez haleon-tool.io pour vous connecter.",
+    redirect: "https://haleon-tool.io"
+  });
 });
 
 app.post("/api/auth/logout", async (req, res) => {
@@ -7370,10 +7373,20 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
   }
 });
 
-// /api/auth/signup : placeholder pour inscription (à brancher sur DB plus tard)
-app.post("/api/auth/signup", express.json(), async (_req, res) => {
-  // TODO: insérer l'utilisateur en base (pool.query(...))
-  res.status(201).json({ ok: true });
+// SECURITY: /api/auth/signup désactivé - les utilisateurs externes sont créés par l'admin uniquement
+// Les utilisateurs Haleon passent par haleon-tool.io et sont en "pending" jusqu'à validation
+app.post("/api/auth/signup", express.json(), async (req, res) => {
+  console.log(`[SECURITY] ⚠️ Blocked signup attempt for: ${req.body?.email}`);
+  await logAuthEvent(req, 'SIGNUP_BLOCKED', {
+    email: req.body?.email,
+    source: 'disabled_route',
+    success: false,
+    error: 'Self-registration disabled'
+  }).catch(() => {});
+  res.status(403).json({
+    error: "L'inscription directe est désactivée. Contactez votre administrateur ou connectez-vous via haleon-tool.io",
+    redirect: "https://haleon-tool.io"
+  });
 });
 
 // /api/auth/me : Rafraîchit les permissions utilisateur depuis la DB
@@ -7498,24 +7511,24 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     const { token } = req.body || {};
     if (!token) return res.status(400).json({ error: "Missing token" });
 
-    // 1️⃣ Vérifie le token Bubble
+    // 1️⃣ Vérifie le token Bubble via haleon-tool.io
     const user = await verifyBubbleToken(token);
     console.log(`[auth/bubble] 📧 User: ${user.email}`);
 
     // 2️⃣ Cherche l'utilisateur en base pour récupérer department_id, company_id, site_id
-    // On cherche dans TOUTES les tables et on fusionne les données
     let haleonUser = null;
     let mainUser = null;
+    let isNewUser = false;
 
     // Chercher dans haleon_users
     try {
       const haleonResult = await pool.query(
-        `SELECT id, email, name, department_id, site_id, allowed_apps
+        `SELECT id, email, name, department_id, site_id, allowed_apps, is_validated
          FROM haleon_users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
         [user.email]
       );
       haleonUser = haleonResult.rows[0] || null;
-      console.log(`[auth/bubble] haleon_users: ${haleonUser ? JSON.stringify({ id: haleonUser.id, dept: haleonUser.department_id, site: haleonUser.site_id }) : 'NOT FOUND'}`);
+      console.log(`[auth/bubble] haleon_users: ${haleonUser ? JSON.stringify({ id: haleonUser.id, dept: haleonUser.department_id, site: haleonUser.site_id, is_validated: haleonUser.is_validated }) : 'NOT FOUND'}`);
     } catch (e) {
       console.log(`[auth/bubble] haleon_users ERROR: ${e.message}`);
     }
@@ -7523,7 +7536,7 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
     // Chercher dans users
     try {
       const result = await pool.query(
-        `SELECT id, email, name, department_id, company_id, site_id, role, allowed_apps
+        `SELECT id, email, name, department_id, company_id, site_id, role, allowed_apps, is_active
          FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
         [user.email]
       );
@@ -7533,20 +7546,56 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
       console.log(`[auth/bubble] users ERROR: ${e.message}`);
     }
 
-    // 3️⃣ Fusionner les données - priorité à haleon_users pour le department_id
-    // car c'est là que le département est mis à jour depuis le dashboard
+    // 3️⃣ SÉCURITÉ: Si l'utilisateur n'existe nulle part, créer un enregistrement "pending"
     const isHaleon = user.email && user.email.toLowerCase().endsWith('@haleon.com');
 
-    // Utiliser les données de haleon_users en priorité si disponibles, sinon fallback sur users
+    if (!haleonUser && !mainUser) {
+      isNewUser = true;
+      console.log(`[auth/bubble] 🆕 NEW USER detected: ${user.email} - creating pending entry`);
+
+      try {
+        // Créer un utilisateur en attente de validation dans haleon_users
+        const insertResult = await pool.query(`
+          INSERT INTO haleon_users (email, name, site_id, is_validated, created_at)
+          VALUES ($1, $2, $3, FALSE, NOW())
+          ON CONFLICT (email) DO UPDATE SET updated_at = NOW()
+          RETURNING id, email, name, is_validated
+        `, [user.email.toLowerCase(), user.name, isHaleon ? 1 : null]);
+
+        haleonUser = insertResult.rows[0];
+        haleonUser.is_validated = false;
+        console.log(`[auth/bubble] ✅ Created pending user: ${user.email}`);
+
+        // 🔔 Logger l'événement pour notification admin
+        await logAuthEvent(req, 'NEW_USER_PENDING', {
+          email: user.email,
+          name: user.name,
+          source: 'bubble',
+          success: true,
+          details: { isHaleon, requiresValidation: true }
+        });
+
+      } catch (insertErr) {
+        console.log(`[auth/bubble] Insert pending user error: ${insertErr.message}`);
+      }
+    }
+
+    // 4️⃣ Déterminer si l'utilisateur est validé
+    // Un utilisateur est validé si:
+    // - Il existe dans haleon_users avec is_validated = true
+    // - OU il existe dans users avec is_active = true (utilisateur externe créé par admin)
+    const is_validated = haleonUser?.is_validated === true || mainUser?.is_active === true;
+
+    // Fusionner les données
     const department_id = haleonUser?.department_id || mainUser?.department_id || null;
     const site_id = haleonUser?.site_id || mainUser?.site_id || (isHaleon ? 1 : null);
     const company_id = mainUser?.company_id || (isHaleon ? 1 : null);
     const role = mainUser?.role || 'site';
     const allowed_apps = haleonUser?.allowed_apps || mainUser?.allowed_apps || null;
 
-    console.log(`[auth/bubble] ✅ Merged: department_id=${department_id}, company_id=${company_id}, site_id=${site_id}`);
+    console.log(`[auth/bubble] ✅ Merged: is_validated=${is_validated}, department_id=${department_id}, site_id=${site_id}`);
 
-    // 4️⃣ Crée un JWT local enrichi avec les infos de la base
+    // 5️⃣ Crée un JWT local enrichi avec l'état de validation
     const enrichedUser = {
       ...user,
       department_id,
@@ -7554,11 +7603,13 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
       site_id,
       role,
       allowed_apps,
+      is_validated,  // ⚠️ CRITICAL: Indique si l'utilisateur peut accéder aux apps
+      isPending: !is_validated,
     };
     const jwtToken = signLocalJWT(enrichedUser);
 
-    // 5️⃣ Logger la connexion dans l'audit trail
-    await logAuthEvent(req, 'LOGIN', {
+    // 6️⃣ Logger la connexion dans l'audit trail
+    await logAuthEvent(req, is_validated ? 'LOGIN' : 'LOGIN_PENDING', {
       email: enrichedUser.email,
       name: enrichedUser.name,
       user_id: mainUser?.id || haleonUser?.id,
@@ -7566,10 +7617,11 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
       site_id,
       role,
       source: 'bubble',
-      details: { isHaleon, site: enrichedUser.site }
+      success: true,
+      details: { isHaleon, site: enrichedUser.site, is_validated, isNewUser }
     });
 
-    // 6️⃣ Stocke en cookie + renvoie au front
+    // 7️⃣ Stocke en cookie + renvoie au front
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie("token", jwtToken, {
       httpOnly: true,
