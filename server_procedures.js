@@ -5213,14 +5213,46 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
   const description = (procedure.description || "").toLowerCase();
   const equipmentLinks = procedure.equipment_links || [];
 
-  // PRIORITÉ 1: Utiliser les outils de l'analyse IA s'ils existent
+  // PRIORITÉ 1: Extraire les outils et mesures de l'analyse IA (structure RAMS)
   let toolsList = [];
+  let ppeFromAnalysis = [];
 
-  if (aiAnalysis?.equipment && Array.isArray(aiAnalysis.equipment) && aiAnalysis.equipment.length > 0) {
-    // L'IA a déjà analysé les outils nécessaires - les utiliser directement
-    toolsList = aiAnalysis.equipment.map(e => typeof e === 'string' ? e : (e.name || e.toString()));
-  } else if (aiAnalysis?.tools && Array.isArray(aiAnalysis.tools) && aiAnalysis.tools.length > 0) {
-    toolsList = aiAnalysis.tools.map(t => typeof t === 'string' ? t : (t.name || t.toString()));
+  // Extraire depuis la structure RAMS (hazards contient measures, ppe, actions)
+  if (aiAnalysis?.steps && Array.isArray(aiAnalysis.steps)) {
+    const allHazards = aiAnalysis.steps.flatMap(s => s.hazards || []);
+
+    // Extraire les mesures (outils mentionnés)
+    const measuresTools = [];
+    allHazards.forEach(h => {
+      if (h.measures && typeof h.measures === 'string') {
+        // Extraire les outils des mesures (format: "[ ] Outil xxx")
+        const lines = h.measures.split('\n').filter(l => l.trim());
+        lines.forEach(line => {
+          // Nettoyer le format checkbox et extraire l'outil
+          const cleaned = line.replace(/^\[\s*[xX]?\s*\]\s*/, '').trim();
+          if (cleaned.length > 3) {
+            measuresTools.push(cleaned);
+          }
+        });
+      }
+      // Extraire les PPE
+      if (h.ppe && Array.isArray(h.ppe)) {
+        ppeFromAnalysis.push(...h.ppe);
+      }
+    });
+
+    if (measuresTools.length > 0) {
+      toolsList = [...new Set(measuresTools)];
+    }
+  }
+
+  // Fallback: anciennes structures (equipment, tools)
+  if (toolsList.length === 0) {
+    if (aiAnalysis?.equipment && Array.isArray(aiAnalysis.equipment) && aiAnalysis.equipment.length > 0) {
+      toolsList = aiAnalysis.equipment.map(e => typeof e === 'string' ? e : (e.name || e.toString()));
+    } else if (aiAnalysis?.tools && Array.isArray(aiAnalysis.tools) && aiAnalysis.tools.length > 0) {
+      toolsList = aiAnalysis.tools.map(t => typeof t === 'string' ? t : (t.name || t.toString()));
+    }
   }
 
   // PRIORITÉ 2: Si pas d'outils IA, détecter la catégorie PRINCIPALE (une seule)
@@ -5690,7 +5722,10 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
     })
   );
 
-  const ppeItems = procedure.ppe_required || aiAnalysis?.ppe || ["Casque", "Lunettes de protection", "Chaussures de sécurité", "Gants"];
+  // Utiliser les EPI extraits de l'analyse RAMS en priorité
+  const ppeItems = ppeFromAnalysis.length > 0
+    ? [...new Set(ppeFromAnalysis)]
+    : (procedure.ppe_required || aiAnalysis?.ppe || ["Casque", "Lunettes de protection", "Chaussures de sécurité", "Gants"]);
   ppeItems.forEach(ppe => {
     toolsParagraphs.push(
       new Paragraph({
@@ -6093,14 +6128,15 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
 
   // Ajouter les risques identifiés depuis l'analyse IA
   const rawRisks = aiAnalysis?.steps?.flatMap(s => s.hazards || []) || [];
-  // Extraire le texte des risques (peuvent être des objets ou des strings)
+  // Extraire le champ "danger" des objets hazard (structure RAMS)
   const identifiedRisks = rawRisks.map(risk => {
     if (typeof risk === 'string') return risk;
     if (risk && typeof risk === 'object') {
-      return risk.description || risk.hazard || risk.name || risk.text || risk.title || JSON.stringify(risk);
+      // Structure RAMS: le champ principal est "danger"
+      return risk.danger || risk.description || risk.hazard || risk.name || risk.text || null;
     }
-    return String(risk);
-  }).filter(r => r && !r.includes('[object') && r.length > 2);
+    return null;
+  }).filter(r => r && typeof r === 'string' && r.length > 5);
 
   const uniqueRisks = [...new Set(identifiedRisks)];
   if (uniqueRisks.length > 0) {
