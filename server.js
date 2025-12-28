@@ -3882,6 +3882,72 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         });
       }
 
+      // Check if user wants to VIEW the procedure (open modal) while in guidance
+      const wantsViewProcedure = (
+        (msgLower.includes('voir') || msgLower.includes('montre') || msgLower.includes('ouvre') ||
+         msgLower.includes('affiche') || msgLower.includes('lire')) &&
+        (msgLower.includes('procédure') || msgLower.includes('procedure'))
+      );
+
+      if (wantsViewProcedure) {
+        console.log('[AI] 📋 User wants to view procedure during guidance - fetching procedure details');
+
+        // Get the procedure ID from the last message context
+        const lastProcMsg = [...conversationHistory].reverse().find(m => m.procedureId);
+        const procedureId = lastProcMsg?.procedureId;
+
+        if (procedureId) {
+          try {
+            const procResult = await pool.query(`
+              SELECT p.*,
+                     (SELECT json_agg(s ORDER BY s.order_number) FROM procedure_steps s WHERE s.procedure_id = p.id) as steps
+              FROM procedures p
+              WHERE p.id = $1
+            `, [procedureId]);
+
+            if (procResult.rows.length > 0) {
+              const proc = procResult.rows[0];
+              const steps = proc.steps || [];
+
+              let response = `## 📋 ${proc.title}\n\n`;
+              response += `📊 **${steps.length} étape(s)**\n`;
+              if (proc.risk_level) response += `⚠️ **Risque:** ${proc.risk_level}\n`;
+              if (proc.ppe_required?.length) response += `🛡️ **EPI:** ${proc.ppe_required.join(', ')}\n`;
+              response += `\n---\n`;
+
+              steps.forEach((step, i) => {
+                response += `\n**Étape ${i + 1}:** ${step.title || step.description?.substring(0, 50) || 'Étape'}\n`;
+              });
+
+              return res.json({
+                message: response,
+                procedureToOpen: { id: proc.id, title: proc.title },
+                procedureDetails: proc,
+                procedureAssistSessionId: activeAssistSessionId, // Keep guidance session active
+                actions: [
+                  { label: "▶️ Continuer le guidage", prompt: "Continue le guidage" },
+                  { label: "📥 Télécharger PDF", url: `/api/procedures/${proc.id}/pdf` }
+                ],
+                provider: 'system'
+              });
+            }
+          } catch (e) {
+            console.error('[AI] Error fetching procedure for view:', e);
+          }
+        }
+
+        // Fallback - let user know we couldn't find the procedure
+        return res.json({
+          message: "📋 Je n'ai pas trouvé la procédure en cours. Voici les options :",
+          actions: [
+            { label: "📋 Mes procédures", prompt: "Liste des procédures" },
+            { label: "▶️ Continuer", prompt: "Continue" }
+          ],
+          procedureAssistSessionId: activeAssistSessionId,
+          provider: 'system'
+        });
+      }
+
       // Continue assistance
       try {
         const result = await callProceduresMicroservice(`/api/procedures/ai/assist/${activeAssistSessionId}`, {
