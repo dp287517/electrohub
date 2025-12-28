@@ -8776,6 +8776,45 @@ app.post("/api/procedures/:id/signature-requests", async (req, res) => {
       [id, email, name || email.split('@')[0], role || 'reviewer']
     );
 
+    // Get procedure title for notification
+    const { rows: procedures } = await pool.query(
+      `SELECT title, created_by FROM procedures WHERE id = $1`,
+      [id]
+    );
+    const procedureTitle = procedures[0]?.title || 'Procédure';
+    const creatorEmail = procedures[0]?.created_by;
+
+    // Send notification to the signer
+    notifyUser(email,
+      '✍️ Signature requise',
+      `Vous êtes invité à signer: "${procedureTitle}"`,
+      {
+        type: 'signature_request',
+        tag: `signature-request-${id}-${email}`,
+        requireInteraction: true,
+        data: {
+          procedureId: id,
+          url: `/app/procedures/${id}?sign=true`
+        }
+      }
+    ).catch(err => console.error('[Signature] Notification error:', err));
+
+    // Also notify creator that the request was sent
+    if (creatorEmail && creatorEmail !== requestedBy) {
+      notifyUser(creatorEmail,
+        '📧 Demande de signature envoyée',
+        `${name || email} a été invité à signer "${procedureTitle}"`,
+        {
+          type: 'signature_request_sent',
+          tag: `signature-sent-${id}`,
+          data: {
+            procedureId: id,
+            url: `/app/procedures/${id}`
+          }
+        }
+      ).catch(err => console.error('[Signature] Creator notification error:', err));
+    }
+
     res.json({ success: true, message: "Demande de signature envoyée" });
   } catch (err) {
     console.error("Error creating signature request:", err);
@@ -8870,6 +8909,23 @@ app.post("/api/procedures/:id/sign", async (req, res) => {
 
     const allSignaturesComplete = allSigs.every(s => s.signed_at) && pendingReqs.length === 0;
 
+    // Notify creator when someone else signs
+    if (!isCreator && procedure.created_by) {
+      notifyUser(procedure.created_by,
+        '✅ Nouvelle signature',
+        `${signerEmail} a signé "${procedure.title}"`,
+        {
+          type: 'signature_received',
+          tag: `signature-received-${id}-${signerEmail}`,
+          data: {
+            procedureId: id,
+            signerEmail,
+            url: `/app/procedures/${id}`
+          }
+        }
+      ).catch(err => console.error('[Signature] Creator notification error:', err));
+    }
+
     // If all signatures complete and has creator signature, validate procedure
     if (allSignaturesComplete && allSigs.some(s => s.is_creator && s.signed_at)) {
       await pool.query(
@@ -8883,6 +8939,41 @@ app.post("/api/procedures/:id/sign", async (req, res) => {
         VALUES ($1, $2, $3, now())`,
         [id, procedure.version, JSON.stringify(allSigs)]
       );
+
+      // Notify creator that procedure is fully validated
+      if (procedure.created_by) {
+        notifyUser(procedure.created_by,
+          '🎉 Procédure validée',
+          `"${procedure.title}" a reçu toutes les signatures requises`,
+          {
+            type: 'procedure_validated',
+            tag: `procedure-validated-${id}`,
+            requireInteraction: true,
+            data: {
+              procedureId: id,
+              url: `/app/procedures/${id}`
+            }
+          }
+        ).catch(err => console.error('[Signature] Validation notification error:', err));
+      }
+
+      // Also notify all signers that the procedure is complete
+      for (const sig of allSigs) {
+        if (sig.signer_email !== procedure.created_by) {
+          notifyUser(sig.signer_email,
+            '🎉 Procédure validée',
+            `"${procedure.title}" est maintenant approuvée`,
+            {
+              type: 'procedure_validated',
+              tag: `procedure-validated-${id}`,
+              data: {
+                procedureId: id,
+                url: `/app/procedures/${id}`
+              }
+            }
+          ).catch(err => console.error('[Signature] Signer notification error:', err));
+        }
+      }
     }
 
     res.json({
