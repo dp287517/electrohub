@@ -3133,14 +3133,6 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
 
     const sessionId = sessionRows[0].id;
 
-    // Also keep in-memory for backwards compatibility
-    aiSessions.set(sessionId, {
-      phase: resumePhase,
-      collectedData: resumeCollectedData,
-      history: [],
-      draftId: draft.id
-    });
-
     console.log(`[PROC] Resumed draft ${draftId} → session ${sessionId}, phase: ${resumePhase}, steps: ${draft.steps?.length || 0}`);
 
     res.json({
