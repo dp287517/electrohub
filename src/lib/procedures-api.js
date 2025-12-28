@@ -209,8 +209,13 @@ export async function finalizeAISession(sessionId) {
 }
 
 // Process raw steps into quality procedure details (called when user says "terminé")
-export async function processAISession(sessionId) {
-  const response = await fetchWithAuth(`${API_BASE}/ai/process/${sessionId}`, {
+// Set background=true to process async and receive notification when done
+export async function processAISession(sessionId, { background = false } = {}) {
+  const url = background
+    ? `${API_BASE}/ai/process/${sessionId}?background=true`
+    : `${API_BASE}/ai/process/${sessionId}`;
+
+  const response = await fetchWithAuth(url, {
     method: 'POST',
   });
   return response.json();

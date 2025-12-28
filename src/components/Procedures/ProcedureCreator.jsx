@@ -75,6 +75,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const [uploadedFile, setUploadedFile] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [pendingPhoto, setPendingPhoto] = useState(null); // Photo en attente d'envoi
+  const [isProcessing, setIsProcessing] = useState(false); // Quality processing in progress
 
   // Draft management
   const [draftId, setDraftId] = useState(null);
@@ -274,14 +275,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
       // If needs processing (user said "terminé"), show waiting message and process
       if (response.needsProcessing) {
+        setIsProcessing(true);
         setMessages(prev => [
           ...prev,
-          { role: 'assistant', content: "⏳ Traitement des étapes en cours, veuillez patienter..." }
+          { role: 'assistant', content: "⏳ Traitement des étapes en cours...\n\nGénération des instructions détaillées, EPI et niveau de risque.\n\n💡 Vous pouvez fermer cette fenêtre et vous recevrez une notification quand ce sera prêt." }
         ]);
 
         // Call processing endpoint for quality generation
         const processedResponse = await processAISession(sessionId);
 
+        setIsProcessing(false);
         setMessages(prev => [
           ...prev.slice(0, -1), // Remove "please wait" message
           { role: 'assistant', content: processedResponse.message }
@@ -302,12 +305,30 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
       }
     } catch (error) {
       console.error('Error sending message:', error);
+      setIsProcessing(false);
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: "Désolé, une erreur s'est produite. Veuillez réessayer." }
       ]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Continue processing in background and close modal
+  const handleBackgroundProcessing = async () => {
+    if (!sessionId) return;
+
+    try {
+      // Start background processing
+      await processAISession(sessionId, { background: true });
+
+      // Close the modal - user will receive notification when done
+      if (onClose) {
+        onClose();
+      }
+    } catch (error) {
+      console.error('Error starting background processing:', error);
     }
   };
 
@@ -848,10 +869,38 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           <ChatMessage key={i} message={msg} isUser={msg.role === 'user'} />
         ))}
 
-        {isLoading && (
+        {isLoading && !isProcessing && (
           <div className="flex justify-start mb-3">
             <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
               <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
+            </div>
+          </div>
+        )}
+
+        {/* Processing indicator with background option */}
+        {isProcessing && (
+          <div className="flex justify-start mb-3">
+            <div className="bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200 rounded-2xl rounded-bl-md px-4 py-4 max-w-[90%]">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="relative">
+                  <Loader2 className="w-8 h-8 text-violet-600 animate-spin" />
+                  <Sparkles className="w-4 h-4 text-yellow-500 absolute -top-1 -right-1" />
+                </div>
+                <div>
+                  <p className="font-medium text-violet-900">Traitement en cours...</p>
+                  <p className="text-xs text-violet-600">Génération des détails de la procédure</p>
+                </div>
+              </div>
+              <button
+                onClick={handleBackgroundProcessing}
+                className="w-full mt-2 bg-white border border-violet-300 text-violet-700 rounded-xl py-2.5 text-sm font-medium hover:bg-violet-50 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Fermer et continuer en arrière-plan
+              </button>
+              <p className="text-xs text-center text-violet-500 mt-2">
+                Vous recevrez une notification quand ce sera prêt
+              </p>
             </div>
           </div>
         )}
