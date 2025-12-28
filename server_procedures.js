@@ -1447,26 +1447,37 @@ let audit;
 // AI Guided Procedure Creation
 // ------------------------------
 
-const PROCEDURE_CREATION_PROMPT = `Tu es LIA, assistant de création de procédures. Réponds UNIQUEMENT en JSON.
+// FAST prompt for step-by-step creation (minimal tokens, instant responses)
+const PROCEDURE_FAST_PROMPT = `Tu es LIA. Réponds en JSON COURT.
 
-RÈGLES:
-- NE DEMANDE JAMAIS objectif/EPI/risque - TU LES DÉDUIS
-- Si "[Photo:" dans le message → photo reçue, étape COMPLÈTE
-- L'utilisateur décide du nombre d'étapes (illimité)
+RÈGLES SIMPLES:
+- "[Photo:" dans message = photo reçue
+- Pas de photo = demander la photo
+- "terminé"/"fini" = passer à review
 
 PHASES:
-1. init: Demande le titre → passe à steps
-2. steps: Pour chaque message:
-   - Avec "[Photo:" → "✓ Étape N. Suivante?"
-   - Sans photo → "📸 Ajoutez la photo"
-   - "terminé" → passe à review
-3. review: Récap + procedureReady:true
+- init: "📋 Titre de la procédure?" → passe à steps dès qu'on a le titre
+- steps: Avec photo → "✓ Étape N enregistrée. Suivante? (ou 'terminé')" | Sans photo → "📸 Photo SVP"
+- review: procedureReady:true, message récap
 
-DÉDUCTION AUTO:
-- EPI: électricité→gants isolants, hauteur→harnais
-- Risque: haute tension→critical, basse→high, manutention→medium, visuel→low
+JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":true,"procedureReady":false}`;
 
-JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":bool,"collectedData":{"title":"","steps":[{"step_number":1,"title":"","instructions":"","warning":"","duration_minutes":5}],"ppe_required":[],"risk_level":"low"},"procedureReady":false}`;
+// QUALITY prompt for final processing (full details, EPI, risks)
+const PROCEDURE_QUALITY_PROMPT = `Tu es LIA. Génère les détails complets pour cette procédure.
+
+À partir des étapes brutes fournies, génère pour CHAQUE étape:
+- title: Titre court de l'action
+- instructions: Instructions détaillées (2-3 phrases)
+- warning: Avertissement de sécurité si nécessaire
+- duration_minutes: Durée estimée (1-15 min)
+- hazards: Dangers potentiels
+
+Génère aussi:
+- description: 2-3 phrases décrivant l'intervention
+- ppe_required: EPI déduits du contexte (électricité→gants isolants/lunettes, hauteur→harnais, manutention→gants)
+- risk_level: low/medium/high/critical (visuel→low, manutention→medium, électricité→high, haute tension→critical)
+
+Réponds en JSON.`;
 async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Get or create session
   let session;
@@ -1491,11 +1502,6 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Build conversation history
   const conversation = session.conversation || [];
 
-  // NOTE: Photo analysis is SKIPPED during chat to prevent timeout
-  // With 2 API calls (vision + LIA), step 2+ exceeds the 20s Render timeout
-  // The photo filename is passed to LIA via [Photo: filename] pattern
-  // Photos will be analyzed later when generating RAMS/documents
-
   // Add user message
   const userEntry = { role: "user", content: userMessage };
   if (uploadedPhoto) {
@@ -1504,52 +1510,72 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   }
   conversation.push(userEntry);
 
-  // Build messages for OpenAI
-  // OPTIMIZATION: Limit context size to avoid timeout on long procedures
-  // Only send summary of existing steps (not full details) and last few messages
-  const stepsSummary = (session.collected_data?.steps || [])
-    .map(s => `${s.step_number}. ${s.title || 'Sans titre'}`)
-    .join(', ');
+  // Get existing raw steps
+  const rawSteps = session.collected_data?.raw_steps || [];
+  const existingTitle = session.collected_data?.title;
 
-  const collectedDataSummary = {
-    title: session.collected_data?.title,
-    description: session.collected_data?.description,
-    category: session.collected_data?.category,
-    risk_level: session.collected_data?.risk_level,
-    steps_count: session.collected_data?.steps?.length || 0,
-    steps_summary: stepsSummary || 'Aucune étape',
-    ppe_required: session.collected_data?.ppe_required
-  };
+  // FAST MODE: During step creation, store raw data and use minimal AI
+  // Check if this is a step with photo - store it directly
+  const hasPhoto = uploadedPhoto || userMessage.includes('[Photo:');
+  const isFinished = /^(termin|fini|c'est tout|stop|fin)/i.test(userMessage.trim());
 
-  // Only keep last 6 messages to avoid context explosion
-  const recentConversation = conversation.slice(-6);
+  // If in steps phase and has photo, store the raw step immediately
+  if (session.current_step === 'steps' && hasPhoto && !isFinished) {
+    const stepNumber = rawSteps.length + 1;
+    rawSteps.push({
+      step_number: stepNumber,
+      raw_text: userMessage.replace(/\[Photo:[^\]]+\]\n?/g, '').trim(),
+      photo: uploadedPhoto || userMessage.match(/\[Photo:\s*([^\]]+)\]/)?.[1],
+      has_photo: true
+    });
 
+    // Update session with new raw step
+    const newCollectedData = {
+      ...session.collected_data,
+      raw_steps: rawSteps
+    };
+
+    await pool.query(
+      `UPDATE procedure_ai_sessions
+       SET conversation = $1, collected_data = $2, updated_at = now()
+       WHERE id = $3`,
+      [JSON.stringify(conversation), JSON.stringify(newCollectedData), sessionId]
+    );
+
+    console.log(`[PROC] Fast mode: stored raw step ${stepNumber}`);
+
+    return {
+      message: `✓ Étape ${stepNumber} enregistrée. Décrivez l'étape suivante + 📸 photo, ou dites "terminé".`,
+      currentStep: 'steps',
+      expectsPhoto: true,
+      procedureReady: false,
+      collectedData: newCollectedData
+    };
+  }
+
+  // Build minimal context for AI (only for init, no-photo cases, or finish)
+  const stepsCount = rawSteps.length;
   const messages = [
-    { role: "system", content: PROCEDURE_CREATION_PROMPT },
+    { role: "system", content: PROCEDURE_FAST_PROMPT },
     {
       role: "system",
-      content: `État actuel de la session:
-- Étape du flow: ${session.current_step}
-- Données collectées: ${JSON.stringify(collectedDataSummary)}`
+      content: `État: phase=${session.current_step}, titre="${existingTitle || ''}", ${stepsCount} étapes enregistrées`
     },
-    ...recentConversation.map(c => ({
+    // Only last 2 messages for speed
+    ...conversation.slice(-2).map(c => ({
       role: c.role,
-      // Put [Photo:] at START so AI knows a photo was sent
-      content: c.photo
-        ? `[Photo: ${c.photo}]\n${c.content}`
-        : c.content
+      content: c.photo ? `[Photo: ${c.photo}]\n${c.content}` : c.content
     }))
   ];
 
   // DEBUG: Log the last user message to verify photo is included
   const lastUserMsg = messages.filter(m => m.role === 'user').pop();
   console.log(`[PROC-DEBUG] Last user message: ${lastUserMsg?.content?.substring(0, 200)}`);
-  console.log(`[PROC-DEBUG] Contains [Photo:? ${lastUserMsg?.content?.includes('[Photo:')}`);
 
-  // Call AI with fallback - optimized for speed to avoid Render's 20s timeout
+  // Call AI with fallback - minimal tokens for speed
   const result = await chatWithFallback(messages, {
     temperature: 0.2,
-    max_tokens: 500,
+    max_tokens: 300,
     response_format: { type: "json_object" }
   });
 
@@ -1560,7 +1586,6 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     aiResponse = {
       message: result.content,
       currentStep: session.current_step,
-      question: "",
       procedureReady: false
     };
   }
@@ -1572,42 +1597,24 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
     data: aiResponse
   });
 
-  // Update session - CRITICAL FIX: Properly merge arrays instead of replacing them
-  // Without this fix, step 1 is lost when step 2 is added (spread replaces arrays)
+  // Build new collected data - preserve raw_steps
   const existingData = session.collected_data || {};
   const newData = aiResponse.collectedData || {};
-
-  // Smart merge: for 'steps' array, merge by step_number to accumulate steps
-  let mergedSteps = existingData.steps || [];
-  if (newData.steps && Array.isArray(newData.steps)) {
-    for (const newStep of newData.steps) {
-      const existingIndex = mergedSteps.findIndex(s => s.step_number === newStep.step_number);
-      if (existingIndex >= 0) {
-        // Update existing step
-        mergedSteps[existingIndex] = { ...mergedSteps[existingIndex], ...newStep };
-      } else {
-        // Add new step
-        mergedSteps.push(newStep);
-      }
-    }
-    // Sort by step_number to ensure order
-    mergedSteps.sort((a, b) => (a.step_number || 0) - (b.step_number || 0));
-  }
-
-  // Merge PPE arrays (union of existing + new)
-  let mergedPpe = existingData.ppe_required || existingData.ppe || [];
-  if (newData.ppe_required && Array.isArray(newData.ppe_required)) {
-    mergedPpe = [...new Set([...mergedPpe, ...newData.ppe_required])];
-  }
 
   const newCollectedData = {
     ...existingData,
     ...newData,
-    steps: mergedSteps,
-    ppe_required: mergedPpe
+    raw_steps: rawSteps, // Always preserve raw steps
+    title: newData.title || existingData.title || existingTitle
   };
 
-  console.log(`[PROC] Merged data: ${mergedSteps.length} steps, phase: ${aiResponse.currentStep}`);
+  // Determine new phase
+  let newPhase = aiResponse.currentStep || session.current_step;
+
+  // If AI says review and we have raw steps, flag for processing
+  const needsProcessing = newPhase === 'review' && rawSteps.length > 0;
+
+  console.log(`[PROC] Phase: ${newPhase}, raw_steps: ${rawSteps.length}, needsProcessing: ${needsProcessing}`);
 
   await pool.query(
     `UPDATE procedure_ai_sessions
@@ -1615,7 +1622,7 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
      WHERE id = $4`,
     [
       JSON.stringify(conversation),
-      aiResponse.currentStep || session.current_step,
+      newPhase,
       JSON.stringify(newCollectedData),
       sessionId
     ]
@@ -1623,13 +1630,97 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
 
   return {
     message: aiResponse.message,
-    currentStep: aiResponse.currentStep,
-    question: aiResponse.question,
-    options: aiResponse.options,
+    currentStep: newPhase,
     expectsPhoto: aiResponse.expectsPhoto,
     procedureReady: aiResponse.procedureReady,
+    needsProcessing, // Flag for frontend to show "please wait"
     collectedData: newCollectedData
   };
+}
+
+// Process raw steps into full procedure details (called after user says "terminé")
+async function processRawSteps(sessionId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM procedure_ai_sessions WHERE id = $1`,
+    [sessionId]
+  );
+
+  if (rows.length === 0) {
+    throw new Error("Session not found");
+  }
+
+  const session = rows[0];
+  const rawSteps = session.collected_data?.raw_steps || [];
+  const title = session.collected_data?.title || "Procédure sans titre";
+
+  if (rawSteps.length === 0) {
+    return session.collected_data;
+  }
+
+  console.log(`[PROC] Processing ${rawSteps.length} raw steps for "${title}"...`);
+
+  // Build prompt for quality processing
+  const stepsText = rawSteps.map(s => `Étape ${s.step_number}: ${s.raw_text}`).join('\n');
+
+  const messages = [
+    { role: "system", content: PROCEDURE_QUALITY_PROMPT },
+    {
+      role: "user",
+      content: `Procédure: "${title}"\n\nÉtapes brutes:\n${stepsText}\n\nGénère les détails complets en JSON avec: steps (array avec step_number, title, instructions, warning, duration_minutes, hazards pour chaque), description, ppe_required, risk_level`
+    }
+  ];
+
+  const result = await chatWithFallback(messages, {
+    temperature: 0.3,
+    max_tokens: 2000, // More tokens for quality output
+    response_format: { type: "json_object" }
+  });
+
+  let processedData;
+  try {
+    processedData = parseAIJson(result.content);
+  } catch {
+    console.error("[PROC] Failed to parse quality response");
+    // Fallback: convert raw steps to basic format
+    processedData = {
+      steps: rawSteps.map(s => ({
+        step_number: s.step_number,
+        title: s.raw_text.substring(0, 50),
+        instructions: s.raw_text,
+        has_photo: s.has_photo,
+        photo: s.photo
+      })),
+      ppe_required: ["Chaussures de sécurité"],
+      risk_level: "medium"
+    };
+  }
+
+  // Merge photo info from raw steps
+  if (processedData.steps) {
+    processedData.steps = processedData.steps.map((step, idx) => ({
+      ...step,
+      has_photo: rawSteps[idx]?.has_photo || false,
+      photo: rawSteps[idx]?.photo || null
+    }));
+  }
+
+  // Update session with processed data
+  const finalData = {
+    ...session.collected_data,
+    ...processedData,
+    title
+  };
+
+  await pool.query(
+    `UPDATE procedure_ai_sessions
+     SET collected_data = $1, updated_at = now()
+     WHERE id = $2`,
+    [JSON.stringify(finalData), sessionId]
+  );
+
+  console.log(`[PROC] Processing complete: ${processedData.steps?.length} steps, risk: ${processedData.risk_level}`);
+
+  return finalData;
 }
 
 // Analyze existing procedure document
@@ -4289,6 +4380,27 @@ app.post("/api/procedures/ai/chat/:sessionId", uploadPhoto.single("photo"), asyn
     res.json(response);
   } catch (err) {
     console.error("Error in AI chat:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Process raw steps into full procedure details (called when user says "terminé")
+// This is the "please wait" step that generates quality content
+app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    console.log(`[PROC] Starting quality processing for session ${sessionId}`);
+
+    const processedData = await processRawSteps(sessionId);
+
+    res.json({
+      ok: true,
+      message: `✅ ${processedData.title} - ${processedData.steps?.length || 0} étapes traitées. EPI: ${processedData.ppe_required?.join(', ') || 'Standard'}. Risque: ${processedData.risk_level || 'medium'}. Prêt à créer!`,
+      collectedData: processedData,
+      procedureReady: true
+    });
+  } catch (err) {
+    console.error("Error processing steps:", err);
     res.status(500).json({ error: err.message });
   }
 });

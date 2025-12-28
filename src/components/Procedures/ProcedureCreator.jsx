@@ -8,6 +8,7 @@ import {
   startAISession,
   continueAISession,
   finalizeAISession,
+  processAISession,
   analyzeDocument,
   analyzeReport,
   saveDraft,
@@ -271,15 +272,34 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     try {
       const response = await continueAISession(sessionId, messageText || 'Photo de l\'étape', photoToSend);
 
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: response.message }
-      ]);
-      setCurrentStep(response.currentStep);
-      setOptions(response.options || []);
-      setExpectsPhoto(response.expectsPhoto || false);
-      setCollectedData(response.collectedData || {});
-      setProcedureReady(response.procedureReady || false);
+      // If needs processing (user said "terminé"), show waiting message and process
+      if (response.needsProcessing) {
+        setMessages(prev => [
+          ...prev,
+          { role: 'assistant', content: "⏳ Traitement des étapes en cours, veuillez patienter..." }
+        ]);
+
+        // Call processing endpoint for quality generation
+        const processedResponse = await processAISession(sessionId);
+
+        setMessages(prev => [
+          ...prev.slice(0, -1), // Remove "please wait" message
+          { role: 'assistant', content: processedResponse.message }
+        ]);
+        setCurrentStep('review');
+        setCollectedData(processedResponse.collectedData || {});
+        setProcedureReady(true);
+      } else {
+        setMessages(prev => [
+          ...prev,
+          { role: 'assistant', content: response.message }
+        ]);
+        setCurrentStep(response.currentStep);
+        setOptions(response.options || []);
+        setExpectsPhoto(response.expectsPhoto || false);
+        setCollectedData(response.collectedData || {});
+        setProcedureReady(response.procedureReady || false);
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       setMessages(prev => [
