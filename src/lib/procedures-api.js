@@ -208,6 +208,14 @@ export async function finalizeAISession(sessionId) {
   return response.json();
 }
 
+// Process raw steps into quality procedure details (called when user says "terminé")
+export async function processAISession(sessionId) {
+  const response = await fetchWithAuth(`${API_BASE}/ai/process/${sessionId}`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
 // ==================== DOCUMENT ANALYSIS ====================
 
 export async function analyzeDocument(documentFile) {
