@@ -1556,16 +1556,34 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   conversation.push(userEntry);
 
   // Build messages for OpenAI
-  // IMPORTANT: Put [Photo:] at the START of user messages so AI sees it first
+  // OPTIMIZATION: Limit context size to avoid timeout on long procedures
+  // Only send summary of existing steps (not full details) and last few messages
+  const stepsSummary = (session.collected_data?.steps || [])
+    .map(s => `${s.step_number}. ${s.title || 'Sans titre'}`)
+    .join(', ');
+
+  const collectedDataSummary = {
+    title: session.collected_data?.title,
+    description: session.collected_data?.description,
+    category: session.collected_data?.category,
+    risk_level: session.collected_data?.risk_level,
+    steps_count: session.collected_data?.steps?.length || 0,
+    steps_summary: stepsSummary || 'Aucune étape',
+    ppe_required: session.collected_data?.ppe_required
+  };
+
+  // Only keep last 6 messages to avoid context explosion
+  const recentConversation = conversation.slice(-6);
+
   const messages = [
     { role: "system", content: PROCEDURE_CREATION_PROMPT },
     {
       role: "system",
       content: `État actuel de la session:
-- Étape: ${session.current_step}
-- Données collectées: ${JSON.stringify(session.collected_data, null, 2)}`
+- Étape du flow: ${session.current_step}
+- Données collectées: ${JSON.stringify(collectedDataSummary)}`
     },
-    ...conversation.map(c => ({
+    ...recentConversation.map(c => ({
       role: c.role,
       // Put [Photo:] at START so AI knows a photo was sent
       content: c.photo
@@ -1580,9 +1598,10 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   console.log(`[PROC-DEBUG] Contains [Photo:? ${lastUserMsg?.content?.includes('[Photo:')}`);
 
   // Call AI with fallback - lower temperature for more consistent responses
+  // Reduced max_tokens from 1500 to 800 to speed up responses and avoid timeout
   const result = await chatWithFallback(messages, {
     temperature: 0.3,
-    max_tokens: 1500,
+    max_tokens: 800,
     response_format: { type: "json_object" }
   });
 
