@@ -519,6 +519,13 @@ function detectProcedureIntent(message, conversationHistory = []) {
   }
 
   // 3. GUIDE - Demande de guidage
+  // First check for explicit procedure ID in message: "Guider procédure {uuid}"
+  const guideWithIdMatch = m.match(/guider?\s+proc[ée]dure\s+([a-f0-9-]{36})/i);
+  if (guideWithIdMatch) {
+    console.log(`[INTENT] Guide with explicit ID: ${guideWithIdMatch[1]}`);
+    return { type: INTENT_TYPES.GUIDE, procedureId: guideWithIdMatch[1] };
+  }
+
   const guidePatterns = [
     /guide[r]?\s*(moi|nous)?/i,
     /commence[r]?\s*(la\s+)?procédure/i,
@@ -1060,7 +1067,7 @@ app.post("/chat", async (req, res) => {
                 procedureDetails: procedure,
                 proceduresFound: [{ id: procedure.id, title: procedure.title, index: 1 }],
                 actions: [
-                  { label: '▶️ Commencer le guidage', prompt: 'Commencer la procédure' },
+                  { label: '▶️ Commencer le guidage', prompt: `Guider procédure ${procedure.id}` },
                   { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` }
                 ],
                 provider: 'system'
@@ -1186,7 +1193,7 @@ app.post("/chat", async (req, res) => {
             procedureToOpen: { id: procedure.id, title: procedure.title },
             procedureDetails: procedure,
             actions: [
-              { label: '▶️ Commencer le guidage', prompt: 'Commencer la procédure' },
+              { label: '▶️ Commencer le guidage', prompt: `Guider procédure ${procedure.id}` },
               { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` }
             ],
             provider: 'system'
