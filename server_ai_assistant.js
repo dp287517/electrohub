@@ -447,6 +447,7 @@ const INTENT_TYPES = {
   NEXT_STEP: 'next_step',     // Passer à l'étape suivante
   ANALYZE_REPORT: 'analyze_report', // Analyser un rapport
   EQUIPMENT: 'equipment',     // Question sur un équipement
+  DRAFTS: 'drafts',           // Voir les brouillons/procédures incomplètes
   NONE: 'none'                // Pas d'intention procédure
 };
 
@@ -463,6 +464,23 @@ function detectProcedureIntent(message, conversationHistory = []) {
     .filter(msg => msg.role === 'assistant')
     .pop();
   const isInGuidance = lastAssistant?.procedureGuidance?.active;
+
+  // 0. Check if user message matches a procedure title from recent results
+  const recentProcedures = conversationHistory
+    .slice().reverse()
+    .find(msg => msg.proceduresFound?.length > 0);
+
+  if (recentProcedures?.proceduresFound) {
+    const matchingProc = recentProcedures.proceduresFound.find(p =>
+      p.title.toLowerCase().trim() === m ||
+      p.title.toLowerCase().includes(m) ||
+      m.includes(p.title.toLowerCase())
+    );
+    if (matchingProc) {
+      console.log(`[INTENT] User message matches procedure title: ${matchingProc.title} (ID: ${matchingProc.id})`);
+      return { type: INTENT_TYPES.VIEW, query: matchingProc.id.toString() };
+    }
+  }
 
   // 1. NEXT STEP - En mode guidage
   if (isInGuidance) {
@@ -485,6 +503,19 @@ function detectProcedureIntent(message, conversationHistory = []) {
   if (hasCreate && hasProcedure) {
     const subject = extractProcedureSubject(m);
     return { type: INTENT_TYPES.CREATE, query: subject };
+  }
+
+  // 2b. DRAFTS - Voir les brouillons/procédures incomplètes
+  const draftsPatterns = [
+    /(?:mes\s+)?brouillons?/i,
+    /proc[ée]dures?\s+(?:incompl[èe]tes?|en\s+cours|non\s+termin[ée]es?)/i,
+    /(?:reprendre|continuer|finir)\s+(?:une?\s+)?proc[ée]dure/i,
+    /(?:o[uù]\s+)?(?:en\s+)?(?:[ée]tais|suis)[\s-]?je\s+(?:rest[ée])?/i,
+    /(?:qu'?est[\s-]ce\s+que\s+)?j'?ai\s+commenc[ée]/i,
+    /proc[ée]dures?\s+(?:[àa]\s+)?(?:terminer|finir|compl[ée]ter)/i
+  ];
+  if (draftsPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.DRAFTS };
   }
 
   // 3. GUIDE - Demande de guidage
@@ -517,6 +548,81 @@ function detectProcedureIntent(message, conversationHistory = []) {
     }
   }
 
+  // 4a. VIEW by list index - "la 1", "le 2", "la première", "numéro 3"
+  const listIndexPatterns = [
+    /^(?:la|le|l[''])\s*(\d+)$/i,
+    /^(?:la|le)\s+(?:premi[èe]re?|num[ée]ro\s*1|1[èe]re?)$/i,
+    /^(?:la|le)\s+(?:deuxi[èe]me|num[ée]ro\s*2|2[èe]me?)$/i,
+    /^(?:la|le)\s+(?:troisi[èe]me|num[ée]ro\s*3|3[èe]me?)$/i,
+    /^num[ée]ro\s*(\d+)$/i,
+    /^(\d+)[èe]?(?:me|re|er)?$/i
+  ];
+  for (const pattern of listIndexPatterns) {
+    const match = m.match(pattern);
+    if (match) {
+      // Extract the index number
+      let index = 1;
+      if (match[1]) {
+        index = parseInt(match[1]);
+      } else if (/premi|1[èe]|1er/i.test(m)) {
+        index = 1;
+      } else if (/deux|2[èe]/i.test(m)) {
+        index = 2;
+      } else if (/trois|3[èe]/i.test(m)) {
+        index = 3;
+      }
+
+      // Find the procedure from the last search results
+      const lastSearch = conversationHistory
+        .slice().reverse()
+        .find(msg => msg.proceduresFound?.length > 0);
+
+      if (lastSearch?.proceduresFound && lastSearch.proceduresFound[index - 1]) {
+        const proc = lastSearch.proceduresFound[index - 1];
+        console.log(`[INTENT] User selected list item ${index}: ${proc.title} (ID: ${proc.id})`);
+        return { type: INTENT_TYPES.VIEW, query: proc.id.toString() };
+      }
+
+      // Fallback: treat as direct ID
+      return { type: INTENT_TYPES.VIEW, query: index.toString() };
+    }
+  }
+
+  // 4b. VIEW without number - wants to see last mentioned procedure
+  const viewLastProcedurePatterns = [
+    /(?:je\s+)?(?:veux|voudrais|aimerais)\s+(?:la\s+|voir\s+la\s+)?proc[ée]dure/i,
+    /(?:montre|affiche|ouvre)[\s-]?(?:la|moi)/i,
+    /(?:voir|ouvrir)\s+(?:la\s+)?proc[ée]dure/i,
+    /(?:la\s+)?voir(?:\s+en\s+d[ée]tail)?$/i,
+    /d[ée]tails?\s+(?:de\s+)?(?:la\s+)?proc[ée]dure/i,
+    /(?:acc[ée]der|aller)\s+(?:[àa]\s+)?(?:la\s+)?proc[ée]dure/i,
+    /^(?:oui|ok|yes|go|vas-y|allons-y)[\s,!]*(?:montre|voir|affiche)?/i
+  ];
+  if (viewLastProcedurePatterns.some(p => p.test(m))) {
+    // Try to get the last mentioned procedure from conversation
+    const lastProc = conversationHistory
+      .slice().reverse()
+      .find(msg => msg.procedureToOpen || msg.procedureDetails || msg.proceduresFound?.length === 1);
+
+    if (lastProc) {
+      const procId = lastProc.procedureToOpen?.id ||
+                     lastProc.procedureDetails?.id ||
+                     lastProc.proceduresFound?.[0]?.id;
+      if (procId) {
+        return { type: INTENT_TYPES.VIEW, query: procId.toString() };
+      }
+    }
+    // If we found a single procedure in search results, use that
+    const lastSearch = conversationHistory
+      .slice().reverse()
+      .find(msg => msg.proceduresFound?.length > 0);
+    if (lastSearch?.proceduresFound?.length === 1) {
+      return { type: INTENT_TYPES.VIEW, query: lastSearch.proceduresFound[0].id.toString() };
+    }
+    // Return VIEW anyway, the handler will ask which procedure
+    return { type: INTENT_TYPES.VIEW, query: null };
+  }
+
   // 5. SEARCH - Rechercher une procédure
   const searchPatterns = [
     /(?:cherche|trouve|recherche|où\s+est)\s+(?:une?\s+)?(?:procédure|proc)/i,
@@ -530,6 +636,16 @@ function detectProcedureIntent(message, conversationHistory = []) {
       const subject = extractProcedureSubject(m);
       return { type: INTENT_TYPES.SEARCH, query: subject };
     }
+  }
+
+  // 5b. Direct procedure title detection - user types a procedure-like phrase
+  const procedureTitlePatterns = [
+    /^(?:v[ée]rifier|contr[ôo]ler|tester|inspecter|nettoyer|r[ée]parer|remplacer|installer|d[ée]monter|monter|calibrer|[ée]talonner|mesurer|diagnostiquer)/i,
+    /^(?:maintenance|entretien|mise\s+en\s+service|mise\s+hors\s+service|consignation|d[ée]consignation)/i,
+    /(?:prise|tableau|armoire|variateur|moteur|pompe|disjoncteur|transformateur|c[âa]ble)s?\s*[ée]lectriques?/i
+  ];
+  if (procedureTitlePatterns.some(p => p.test(m)) && m.length >= 10) {
+    return { type: INTENT_TYPES.SEARCH, query: m.trim() };
   }
 
   // 6. LIST - Lister les procédures
@@ -922,7 +1038,37 @@ app.post("/chat", async (req, res) => {
             });
           }
 
-          // Format procedure list with beautiful templates
+          // If exactly ONE procedure found, show full details directly
+          if (procedures.length === 1) {
+            console.log(`[CHAT] Exactly one procedure found, showing details for: ${procedures[0].title}`);
+            const procedure = await getProcedureWithSteps(pool, procedures[0].id);
+
+            if (procedure) {
+              const formattedProcedure = {
+                ...procedure,
+                ppe: (procedure.ppe_required || []).map(p => p.name || p),
+                steps: (procedure.steps || []).map(s => ({
+                  title: s.title,
+                  duration: s.duration_minutes
+                })),
+                estimated_time: procedure.steps?.reduce((sum, s) => sum + (s.duration_minutes || 0), 0)
+              };
+
+              return res.json({
+                message: ProcedureTemplates.procedureDetail(formattedProcedure),
+                procedureToOpen: { id: procedure.id, title: procedure.title },
+                procedureDetails: procedure,
+                proceduresFound: [{ id: procedure.id, title: procedure.title, index: 1 }],
+                actions: [
+                  { label: '▶️ Commencer le guidage', prompt: 'Commencer la procédure' },
+                  { label: '📥 Télécharger PDF', url: `/api/procedures/${procedure.id}/pdf` }
+                ],
+                provider: 'system'
+              });
+            }
+          }
+
+          // Multiple results: show list with beautiful templates
           const formattedProcedures = procedures.map(p => ({
             ...p,
             steps: { length: p.step_count || 0 }
@@ -946,7 +1092,44 @@ app.post("/chat", async (req, res) => {
         case INTENT_TYPES.VIEW: {
           // Get the procedure - either by index or ID
           let procedure = null;
-          const viewQuery = intent.query;
+          let viewQuery = intent.query;
+
+          // If no query, try to get the last mentioned procedure from context
+          if (!viewQuery) {
+            const lastProc = conversationHistory
+              .slice().reverse()
+              .find(msg => msg.procedureToOpen || msg.procedureDetails);
+            if (lastProc) {
+              viewQuery = (lastProc.procedureToOpen?.id || lastProc.procedureDetails?.id)?.toString();
+            } else {
+              // Try to get from last search results if there was only one
+              const lastSearch = conversationHistory
+                .slice().reverse()
+                .find(msg => msg.proceduresFound?.length > 0);
+              if (lastSearch?.proceduresFound?.length === 1) {
+                viewQuery = lastSearch.proceduresFound[0].id.toString();
+              } else if (lastSearch?.proceduresFound?.length > 1) {
+                // Multiple results - ask user to choose
+                return res.json({
+                  message: `${EMOJIS.status.info} **Quelle procédure veux-tu voir ?**\n\n` +
+                    lastSearch.proceduresFound.map((p, i) => `${i + 1}. ${p.title}`).join('\n') +
+                    `\n\n${EMOJIS.status.arrow} Dis-moi le numéro de la procédure.`,
+                  proceduresFound: lastSearch.proceduresFound,
+                  provider: 'system'
+                });
+              }
+            }
+          }
+
+          // Still no query? Ask the user
+          if (!viewQuery) {
+            return res.json({
+              message: `${EMOJIS.status.info} **Quelle procédure veux-tu voir ?**\n\n` +
+                `${EMOJIS.status.arrow} Dis "liste procédures" pour voir les options disponibles.`,
+              actions: [{ label: '📋 Lister les procédures', prompt: 'Liste des procédures' }],
+              provider: 'system'
+            });
+          }
 
           // Check if it's a number (index from previous search)
           if (/^\d+$/.test(viewQuery)) {
@@ -959,10 +1142,14 @@ app.post("/chat", async (req, res) => {
             if (lastProcedures && lastProcedures[index]) {
               procedure = await getProcedureWithSteps(pool, lastProcedures[index].id);
             } else {
-              // Fallback: search and take the nth result
-              const searchResults = await searchProcedures(pool, null, { site, limit: 20 });
-              if (searchResults[index]) {
-                procedure = await getProcedureWithSteps(pool, searchResults[index].id);
+              // Fallback: try to get by ID directly
+              procedure = await getProcedureWithSteps(pool, parseInt(viewQuery));
+              if (!procedure) {
+                // Last fallback: search and take the nth result
+                const searchResults = await searchProcedures(pool, null, { site, limit: 20 });
+                if (searchResults[index]) {
+                  procedure = await getProcedureWithSteps(pool, searchResults[index].id);
+                }
               }
             }
           } else {
@@ -1132,6 +1319,55 @@ app.post("/chat", async (req, res) => {
             },
             provider: 'system'
           });
+        }
+
+        // -----------------------------------------------------------------
+        // DRAFTS: Voir les brouillons/procédures incomplètes
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.DRAFTS: {
+          try {
+            // Get drafts from localStorage via stored data or check database
+            const { rows: drafts } = await pool.query(`
+              SELECT id, title, description, category, created_at, updated_at,
+                     (SELECT COUNT(*) FROM procedure_steps WHERE procedure_id = procedures.id) as step_count
+              FROM procedures
+              WHERE status = 'draft' OR status = 'incomplete'
+              ORDER BY updated_at DESC
+              LIMIT 10
+            `);
+
+            if (drafts.length === 0) {
+              return res.json({
+                message: `📋 **Aucun brouillon trouvé**\n\nTu n'as pas de procédures en cours de création.\n\n→ Pour créer une nouvelle procédure, dis-moi "créer une procédure" ou utilise l'assistant de création.`,
+                openProcedureCreator: false,
+                showDraftsList: true,
+                provider: 'system'
+              });
+            }
+
+            let responseText = `📋 **Tes brouillons** (${drafts.length})\n\n`;
+            drafts.forEach((draft, i) => {
+              const stepInfo = draft.step_count > 0 ? ` • ${draft.step_count} étapes` : '';
+              const dateInfo = draft.updated_at ? new Date(draft.updated_at).toLocaleDateString('fr-FR') : '';
+              responseText += `${i + 1}. **${draft.title || 'Sans titre'}**${stepInfo}\n   📅 ${dateInfo}\n\n`;
+            });
+            responseText += `→ Dis-moi le numéro pour reprendre, ou "créer" pour une nouvelle procédure.`;
+
+            return res.json({
+              message: responseText,
+              drafts: drafts,
+              showDraftsList: true,
+              provider: 'system'
+            });
+          } catch (error) {
+            console.error('[DRAFTS] Error fetching drafts:', error);
+            return res.json({
+              message: `📋 **Brouillons**\n\nPour voir tes procédures en cours de création, clique sur "Mes brouillons" dans l'assistant de création.\n\n→ L'assistant s'ouvre...`,
+              openProcedureCreator: true,
+              procedureCreatorContext: { mode: 'drafts' },
+              provider: 'system'
+            });
+          }
         }
 
         // -----------------------------------------------------------------
@@ -2245,6 +2481,120 @@ app.get("/help", (req, res) => {
       { name: 'Planification', examples: ['planning semaine', 'contrôles en retard'] }
     ]
   });
+});
+
+/**
+ * Get incomplete procedures (drafts) with AI suggestions
+ */
+app.get("/incomplete-procedures", async (req, res) => {
+  try {
+    const site = req.header('X-Site') || 'Nyon';
+    const userEmail = req.header('X-User-Email');
+
+    // Fetch drafts from procedures service
+    const draftsResponse = await fetch(`http://localhost:3026/api/procedures/drafts`, {
+      headers: {
+        'X-Site': site,
+        'X-User-Email': userEmail || ''
+      }
+    });
+
+    let drafts = [];
+    if (draftsResponse.ok) {
+      const data = await draftsResponse.json();
+      drafts = Array.isArray(data) ? data : (data.drafts || []);
+    }
+
+    // Generate AI suggestions for each draft
+    const draftsWithSuggestions = drafts.map(draft => {
+      const stepsCount = draft.step_count || 0;
+      const hasTitle = !!draft.title && draft.title !== 'Brouillon en cours';
+      const hasDescription = !!draft.description;
+
+      let suggestion = '';
+      let priority = 'low';
+      let nextAction = '';
+
+      if (!hasTitle) {
+        suggestion = 'Cette procédure n\'a pas encore de titre. Commence par définir un titre clair.';
+        nextAction = 'Définir le titre';
+        priority = 'high';
+      } else if (stepsCount === 0) {
+        suggestion = 'Aucune étape définie. Ajoute les étapes principales de cette procédure.';
+        nextAction = 'Ajouter des étapes';
+        priority = 'high';
+      } else if (stepsCount < 3) {
+        suggestion = `Seulement ${stepsCount} étape(s). Une procédure complète a généralement 3-10 étapes.`;
+        nextAction = 'Continuer les étapes';
+        priority = 'medium';
+      } else if (!hasDescription) {
+        suggestion = 'Ajoute une description pour mieux expliquer l\'objectif de cette procédure.';
+        nextAction = 'Ajouter description';
+        priority = 'low';
+      } else {
+        suggestion = 'Cette procédure semble prête à être finalisée!';
+        nextAction = 'Finaliser';
+        priority = 'ready';
+      }
+
+      return {
+        ...draft,
+        aiSuggestion: suggestion,
+        nextAction,
+        priority,
+        completionPercent: Math.min(100, (
+          (hasTitle ? 20 : 0) +
+          (hasDescription ? 10 : 0) +
+          (stepsCount > 0 ? 30 : 0) +
+          (stepsCount >= 3 ? 20 : 0) +
+          (draft.ppe?.length > 0 ? 10 : 0) +
+          (draft.risk_level && draft.risk_level !== 'low' ? 10 : 0)
+        ))
+      };
+    });
+
+    // Sort by priority
+    const priorityOrder = { high: 0, medium: 1, low: 2, ready: 3 };
+    draftsWithSuggestions.sort((a, b) =>
+      priorityOrder[a.priority] - priorityOrder[b.priority]
+    );
+
+    // Format response message
+    let message = '';
+    if (draftsWithSuggestions.length === 0) {
+      message = `${EMOJIS.status.success} **Aucun brouillon en cours**\n\nToutes tes procédures sont finalisées!`;
+    } else {
+      message = `${EMOJIS.section.notes} **${draftsWithSuggestions.length} procédure(s) à terminer**\n\n`;
+
+      draftsWithSuggestions.forEach((draft, i) => {
+        const priorityEmoji = draft.priority === 'high' ? EMOJIS.risk.high :
+                              draft.priority === 'medium' ? EMOJIS.risk.medium :
+                              draft.priority === 'ready' ? EMOJIS.status.success : EMOJIS.risk.low;
+
+        message += `**${i + 1}. ${draft.title || 'Sans titre'}** ${priorityEmoji}\n`;
+        message += `   ${createProgressBar(draft.completionPercent, 100, 10)} ${draft.completionPercent}%\n`;
+        message += `   ${EMOJIS.section.recommendations} ${draft.aiSuggestion}\n`;
+        message += `   ${EMOJIS.status.arrow} Action: **${draft.nextAction}**\n\n`;
+      });
+
+      message += `${createDivider()}\n`;
+      message += `${EMOJIS.status.arrow} Dis "reprendre [numéro]" pour continuer un brouillon`;
+    }
+
+    res.json({
+      ok: true,
+      drafts: draftsWithSuggestions,
+      totalDrafts: draftsWithSuggestions.length,
+      message,
+      quickActions: draftsWithSuggestions.slice(0, 3).map((d, i) => ({
+        label: `Reprendre "${(d.title || 'Sans titre').substring(0, 15)}..."`,
+        prompt: `Reprendre brouillon ${i + 1}`
+      }))
+    });
+  } catch (error) {
+    console.error('[AI] Incomplete procedures error:', error);
+    res.json({ ok: false, error: error.message, drafts: [] });
+  }
 });
 
 // -----------------------------------------------------------------------------

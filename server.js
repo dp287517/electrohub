@@ -4208,8 +4208,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // AUTO-DETECT PROCEDURE REQUESTS - CRITICAL FIX
     // ============================================================
 
-    // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", etc.)
-    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
+    // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", "la 1", etc.)
+    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|la \d+|le \d+|num[ée]ro \d+|\d+|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
 
     // If user confirms, check conversation history for recent procedure list
     if (isConfirmation && conversationHistory?.length > 0) {
@@ -4220,17 +4220,27 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         // Look for procedure in context
         const procedures = dbContext.procedures?.list || [];
         if (procedures.length > 0) {
-          const firstProc = procedures[0];
-          console.log(`[AI] 📖 CONFIRMATION DETECTED - Opening first procedure: ${firstProc.id} - "${firstProc.title}"`);
+          // Extract the index from user message (e.g., "la 1", "la 2", "2", "numéro 3")
+          let selectedIndex = 0; // Default to first
+          const indexMatch = msgLower.match(/(?:la|le|num[ée]ro)?\s*(\d+)/i);
+          if (indexMatch) {
+            selectedIndex = parseInt(indexMatch[1]) - 1;
+            if (selectedIndex < 0 || selectedIndex >= procedures.length) {
+              selectedIndex = 0; // Fallback to first if out of bounds
+            }
+          }
+
+          const selectedProc = procedures[selectedIndex];
+          console.log(`[AI] 📖 CONFIRMATION DETECTED - Opening procedure #${selectedIndex + 1}: ${selectedProc.id} - "${selectedProc.title}"`);
 
           return res.json({
-            message: `📋 **${firstProc.title}**\n\nJ'ouvre la procédure pour toi...`,
+            message: `📋 **${selectedProc.title}**\n\nJ'ouvre la procédure pour toi...`,
             procedureToOpen: {
-              id: firstProc.id,
-              title: firstProc.title
+              id: selectedProc.id,
+              title: selectedProc.title
             },
             actions: [
-              { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${firstProc.title}"` }
+              { label: "🚀 Commencer le guidage", prompt: `Guide-moi étape par étape sur "${selectedProc.title}"` }
             ],
             provider: "Electro"
           });
@@ -6066,10 +6076,75 @@ app.get("/api/ai-assistant/morning-brief", async (req, res) => {
         SELECT COUNT(DISTINCT building_code) as count
         FROM switchboards
         WHERE building_code IS NOT NULL
-      `)
+      `),
+      // Procedure statistics (resilient to missing tables)
+      (async () => {
+        try {
+          // Check if procedure_executions table exists
+          const tableCheck = await pool.query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables
+              WHERE table_name = 'procedure_executions'
+            ) as exists
+          `);
+
+          if (tableCheck.rows[0]?.exists) {
+            return await pool.query(`
+              SELECT
+                (SELECT COUNT(*) FROM procedures) as total,
+                (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
+                (SELECT COUNT(DISTINCT procedure_id) FROM procedure_executions WHERE started_at > CURRENT_DATE - INTERVAL '7 days') as recently_used
+            `);
+          } else {
+            // Table doesn't exist, just count procedures
+            return await pool.query(`
+              SELECT
+                (SELECT COUNT(*) FROM procedures) as total,
+                (SELECT COUNT(*) FROM procedures WHERE status = 'draft' OR status = 'incomplete') as drafts,
+                0 as recently_used
+            `);
+          }
+        } catch (e) {
+          console.log('[MorningBrief] Procedure stats fallback:', e.message);
+          return { rows: [{ total: 0, drafts: 0, recently_used: 0 }] };
+        }
+      })(),
+      // Most used procedure (resilient to missing tables)
+      (async () => {
+        try {
+          const tableCheck = await pool.query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables
+              WHERE table_name = 'procedure_executions'
+            ) as exists
+          `);
+
+          if (tableCheck.rows[0]?.exists) {
+            return await pool.query(`
+              SELECT p.id, p.title, COUNT(pe.id) as usage_count
+              FROM procedures p
+              LEFT JOIN procedure_executions pe ON pe.procedure_id = p.id AND pe.started_at > CURRENT_DATE - INTERVAL '30 days'
+              GROUP BY p.id, p.title
+              ORDER BY usage_count DESC
+              LIMIT 1
+            `);
+          } else {
+            // Just get any procedure as fallback
+            return await pool.query(`
+              SELECT id, title, 0 as usage_count
+              FROM procedures
+              ORDER BY updated_at DESC
+              LIMIT 1
+            `);
+          }
+        } catch (e) {
+          console.log('[MorningBrief] Most used proc fallback:', e.message);
+          return { rows: [] };
+        }
+      })()
     ]);
 
-    const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes] = stats;
+    const [overdueRes, weekRes, equipmentRes, completedRes, atexNcRes, neverControlledRes, buildingsRes, procedureStatsRes, mostUsedProcRes] = stats;
     const equipment = equipmentRes.rows[0];
     const totalEquipment =
       parseInt(equipment.switchboards || 0) +
@@ -6195,7 +6270,17 @@ Réponds en 1-2 phrases max, style direct et encourageant. Commence par une acti
           neverControlled
         },
         atexNc,
-        buildings: parseInt(buildingsRes.rows[0]?.count || 0)
+        buildings: parseInt(buildingsRes.rows[0]?.count || 0),
+        procedures: {
+          total: parseInt(procedureStatsRes.rows[0]?.total || 0),
+          drafts: parseInt(procedureStatsRes.rows[0]?.drafts || 0),
+          recentlyUsed: parseInt(procedureStatsRes.rows[0]?.recently_used || 0),
+          mostUsed: mostUsedProcRes.rows[0]?.title ? {
+            id: mostUsedProcRes.rows[0].id,
+            title: mostUsedProcRes.rows[0].title,
+            usageCount: parseInt(mostUsedProcRes.rows[0].usage_count || 0)
+          } : null
+        }
       },
       priorityActions,
       aiInsight,
@@ -6228,6 +6313,499 @@ function getGreeting() {
   if (hour < 18) return "Bon après-midi";
   return "Bonsoir";
 }
+
+// ============================================================
+// PROCEDURE STORIES - Like Instagram stories for yesterday's procedures
+// ============================================================
+app.get("/api/ai-assistant/procedure-stories", async (req, res) => {
+  try {
+    // Get procedure executions from the last 48 hours
+    const { rows: recentExecutions } = await pool.query(`
+      SELECT
+        pe.*,
+        p.title as procedure_title,
+        p.category,
+        p.risk_level,
+        p.ppe_required
+      FROM procedure_executions pe
+      JOIN procedures p ON p.id = pe.procedure_id
+      WHERE pe.started_at > NOW() - INTERVAL '48 hours'
+      ORDER BY pe.started_at DESC
+      LIMIT 20
+    `);
+
+    // Group by day and create stories
+    const stories = [];
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+    const todayStories = recentExecutions.filter(e =>
+      new Date(e.started_at).toDateString() === today
+    );
+    const yesterdayStories = recentExecutions.filter(e =>
+      new Date(e.started_at).toDateString() === yesterday
+    );
+
+    if (todayStories.length > 0) {
+      stories.push({
+        period: "Aujourd'hui",
+        emoji: "🔥",
+        count: todayStories.length,
+        completed: todayStories.filter(s => s.status === 'completed').length,
+        items: todayStories.slice(0, 5).map(s => ({
+          id: s.id,
+          procedureId: s.procedure_id,
+          title: s.procedure_title,
+          user: s.user_name || s.user_email?.split('@')[0] || 'Anonyme',
+          status: s.status,
+          duration: s.duration_minutes,
+          time: new Date(s.started_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+          category: s.category,
+          riskLevel: s.risk_level
+        }))
+      });
+    }
+
+    if (yesterdayStories.length > 0) {
+      stories.push({
+        period: "Hier",
+        emoji: "📅",
+        count: yesterdayStories.length,
+        completed: yesterdayStories.filter(s => s.status === 'completed').length,
+        items: yesterdayStories.slice(0, 5).map(s => ({
+          id: s.id,
+          procedureId: s.procedure_id,
+          title: s.procedure_title,
+          user: s.user_name || s.user_email?.split('@')[0] || 'Anonyme',
+          status: s.status,
+          duration: s.duration_minutes,
+          time: new Date(s.started_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+          category: s.category,
+          riskLevel: s.risk_level
+        }))
+      });
+    }
+
+    // Get top performers
+    const { rows: topPerformers } = await pool.query(`
+      SELECT user_email, user_name, COUNT(*) as execution_count
+      FROM procedure_executions
+      WHERE started_at > NOW() - INTERVAL '7 days' AND status = 'completed'
+      GROUP BY user_email, user_name
+      ORDER BY execution_count DESC
+      LIMIT 3
+    `);
+
+    res.json({
+      success: true,
+      stories,
+      highlights: {
+        totalToday: todayStories.length,
+        totalYesterday: yesterdayStories.length,
+        topPerformers: topPerformers.map(p => ({
+          name: p.user_name || p.user_email?.split('@')[0] || 'Anonyme',
+          count: parseInt(p.execution_count)
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('[ProcedureStories] Error:', error);
+    res.json({ success: true, stories: [], highlights: { totalToday: 0, totalYesterday: 0, topPerformers: [] } });
+  }
+});
+
+// ============================================================
+// OBSOLESCENCE DASHBOARD - Track equipment lifecycle
+// ============================================================
+app.get("/api/ai-assistant/obsolescence", async (req, res) => {
+  try {
+    // Get equipment approaching end of life
+    const { rows: criticalSwitchboards } = await pool.query(`
+      SELECT id, name, code, building_code, installation_date, expected_lifespan_years,
+             end_of_life_date, obsolescence_status, live_status
+      FROM switchboards
+      WHERE (
+        end_of_life_date < NOW() + INTERVAL '2 years'
+        OR (installation_date IS NOT NULL AND
+            installation_date + (expected_lifespan_years || ' years')::interval < NOW() + INTERVAL '2 years')
+        OR obsolescence_status IN ('end_of_life', 'obsolete', 'critical')
+      )
+      ORDER BY COALESCE(end_of_life_date, installation_date + (expected_lifespan_years || ' years')::interval) ASC
+      LIMIT 20
+    `);
+
+    const { rows: criticalDevices } = await pool.query(`
+      SELECT d.id, d.name, d.manufacturer, d.reference, d.installation_date,
+             d.expected_lifespan_years, d.end_of_life_date, d.obsolescence_status,
+             d.spare_parts_available, d.manufacturer_support_until,
+             s.name as switchboard_name, s.code as switchboard_code
+      FROM devices d
+      LEFT JOIN switchboards s ON s.id = d.switchboard_id
+      WHERE (
+        d.end_of_life_date < NOW() + INTERVAL '2 years'
+        OR d.spare_parts_available = false
+        OR d.manufacturer_support_until < NOW() + INTERVAL '1 year'
+        OR d.obsolescence_status IN ('end_of_life', 'obsolete', 'critical')
+      )
+      ORDER BY COALESCE(d.end_of_life_date, d.manufacturer_support_until) ASC
+      LIMIT 30
+    `);
+
+    // Calculate lifecycle metrics
+    const { rows: lifecycleStats } = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE obsolescence_status = 'active') as active_count,
+        COUNT(*) FILTER (WHERE obsolescence_status = 'aging') as aging_count,
+        COUNT(*) FILTER (WHERE obsolescence_status = 'end_of_life') as eol_count,
+        COUNT(*) FILTER (WHERE obsolescence_status = 'obsolete') as obsolete_count,
+        AVG(EXTRACT(YEAR FROM AGE(NOW(), installation_date)))::integer as avg_age_years
+      FROM switchboards
+      WHERE installation_date IS NOT NULL
+    `);
+
+    // Format response
+    const alerts = [];
+
+    criticalSwitchboards.forEach(sb => {
+      const yearsRemaining = sb.end_of_life_date
+        ? Math.round((new Date(sb.end_of_life_date) - new Date()) / (365 * 24 * 60 * 60 * 1000) * 10) / 10
+        : null;
+
+      alerts.push({
+        type: 'switchboard',
+        severity: yearsRemaining !== null && yearsRemaining < 1 ? 'critical' : 'warning',
+        id: sb.id,
+        name: sb.name,
+        code: sb.code,
+        location: sb.building_code,
+        status: sb.obsolescence_status,
+        yearsRemaining,
+        endOfLifeDate: sb.end_of_life_date,
+        installationDate: sb.installation_date,
+        icon: '⚡'
+      });
+    });
+
+    criticalDevices.forEach(d => {
+      alerts.push({
+        type: 'device',
+        severity: !d.spare_parts_available ? 'critical' : 'warning',
+        id: d.id,
+        name: d.name || `${d.manufacturer} ${d.reference}`,
+        manufacturer: d.manufacturer,
+        reference: d.reference,
+        location: `${d.switchboard_name} (${d.switchboard_code})`,
+        status: d.obsolescence_status,
+        spareParts: d.spare_parts_available,
+        supportUntil: d.manufacturer_support_until,
+        icon: '🔌'
+      });
+    });
+
+    res.json({
+      success: true,
+      alerts: alerts.slice(0, 15),
+      stats: {
+        active: parseInt(lifecycleStats.rows[0]?.active_count || 0),
+        aging: parseInt(lifecycleStats.rows[0]?.aging_count || 0),
+        endOfLife: parseInt(lifecycleStats.rows[0]?.eol_count || 0),
+        obsolete: parseInt(lifecycleStats.rows[0]?.obsolete_count || 0),
+        averageAge: lifecycleStats.rows[0]?.avg_age_years || 0
+      },
+      recommendations: alerts.length > 5 ? [
+        "Planifier un audit d'obsolescence complet",
+        "Prioriser le remplacement des équipements critiques",
+        "Vérifier la disponibilité des pièces de rechange"
+      ] : []
+    });
+  } catch (error) {
+    console.error('[Obsolescence] Error:', error);
+    res.json({ success: true, alerts: [], stats: { active: 0, aging: 0, endOfLife: 0, obsolete: 0, averageAge: 0 }, recommendations: [] });
+  }
+});
+
+// ============================================================
+// AI ROADMAP - Predictive maintenance planning
+// ============================================================
+app.get("/api/ai-assistant/roadmap", async (req, res) => {
+  try {
+    const { months = 12 } = req.query;
+
+    // Get upcoming controls
+    const { rows: upcomingControls } = await pool.query(`
+      SELECT cs.*, s.name as switchboard_name, s.code as switchboard_code, s.building_code,
+             ct.name as template_name
+      FROM control_schedules cs
+      LEFT JOIN switchboards s ON s.id = cs.switchboard_id
+      LEFT JOIN control_templates ct ON ct.id = cs.template_id
+      WHERE cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '1 month' * $1
+      ORDER BY cs.next_due_date ASC
+    `, [parseInt(months)]);
+
+    // Get equipment reaching end of life
+    const { rows: upcomingEOL } = await pool.query(`
+      SELECT id, name, code, building_code, end_of_life_date, replacement_planned_date
+      FROM switchboards
+      WHERE end_of_life_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '1 month' * $1
+      ORDER BY end_of_life_date ASC
+    `, [parseInt(months)]);
+
+    // Group by month
+    const roadmap = {};
+    const now = new Date();
+
+    for (let i = 0; i <= parseInt(months); i++) {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const monthKey = monthDate.toISOString().slice(0, 7);
+      roadmap[monthKey] = {
+        month: monthDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+        controls: [],
+        replacements: [],
+        milestones: []
+      };
+    }
+
+    // Add controls to roadmap
+    upcomingControls.forEach(control => {
+      const monthKey = control.next_due_date?.toISOString().slice(0, 7);
+      if (roadmap[monthKey]) {
+        roadmap[monthKey].controls.push({
+          id: control.id,
+          type: 'control',
+          name: control.switchboard_name || 'Équipement',
+          code: control.switchboard_code,
+          location: control.building_code,
+          template: control.template_name,
+          dueDate: control.next_due_date,
+          icon: '📋'
+        });
+      }
+    });
+
+    // Add replacements to roadmap
+    upcomingEOL.forEach(eq => {
+      const monthKey = eq.end_of_life_date?.toISOString().slice(0, 7);
+      if (roadmap[monthKey]) {
+        roadmap[monthKey].replacements.push({
+          id: eq.id,
+          type: 'replacement',
+          name: eq.name,
+          code: eq.code,
+          location: eq.building_code,
+          eolDate: eq.end_of_life_date,
+          plannedDate: eq.replacement_planned_date,
+          icon: '🔄'
+        });
+      }
+    });
+
+    // Generate AI recommendations if available
+    let aiRecommendations = [];
+    if (openai || gemini) {
+      try {
+        const roadmapSummary = Object.entries(roadmap).slice(0, 6).map(([month, data]) =>
+          `${data.month}: ${data.controls.length} contrôles, ${data.replacements.length} remplacements`
+        ).join('\n');
+
+        const prompt = `En tant qu'expert maintenance industrielle, analyse cette roadmap et donne 3 recommandations stratégiques courtes:
+
+${roadmapSummary}
+
+Format: 3 bullet points concis et actionnables.`;
+
+        const result = await chatWithFallback([{ role: "user", content: prompt }], { max_tokens: 200 });
+        aiRecommendations = result.content.split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('•')).slice(0, 3);
+      } catch (e) {
+        console.error('[Roadmap] AI error:', e);
+      }
+    }
+
+    res.json({
+      success: true,
+      roadmap: Object.entries(roadmap).map(([key, data]) => ({
+        monthKey: key,
+        ...data,
+        summary: {
+          totalControls: data.controls.length,
+          totalReplacements: data.replacements.length,
+          totalMilestones: data.milestones.length
+        }
+      })),
+      totals: {
+        controls: upcomingControls.length,
+        replacements: upcomingEOL.length
+      },
+      aiRecommendations
+    });
+  } catch (error) {
+    console.error('[Roadmap] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// EQUIPMENT LIVE STATUS - For animations and real-time display
+// ============================================================
+app.get("/api/ai-assistant/equipment-status", async (req, res) => {
+  try {
+    const { type = 'all', site } = req.query;
+
+    let switchboardStatus = [];
+    let deviceStatus = [];
+
+    if (type === 'all' || type === 'switchboards') {
+      const query = site
+        ? `SELECT id, name, code, building_code, live_status, last_status_update, device_count FROM switchboards WHERE site = $1`
+        : `SELECT id, name, code, building_code, live_status, last_status_update, device_count FROM switchboards`;
+      const { rows } = await pool.query(query, site ? [site] : []);
+      switchboardStatus = rows.map(s => ({
+        id: s.id,
+        type: 'switchboard',
+        name: s.name,
+        code: s.code,
+        location: s.building_code,
+        status: s.live_status || 'normal',
+        lastUpdate: s.last_status_update,
+        deviceCount: s.device_count,
+        animation: getStatusAnimation(s.live_status)
+      }));
+    }
+
+    if (type === 'all' || type === 'devices') {
+      const query = site
+        ? `SELECT d.id, d.name, d.live_status, d.last_status_update, s.code as switchboard_code
+           FROM devices d LEFT JOIN switchboards s ON s.id = d.switchboard_id WHERE s.site = $1 AND d.live_status != 'normal' LIMIT 50`
+        : `SELECT d.id, d.name, d.live_status, d.last_status_update, s.code as switchboard_code
+           FROM devices d LEFT JOIN switchboards s ON s.id = d.switchboard_id WHERE d.live_status != 'normal' LIMIT 50`;
+      const { rows } = await pool.query(query, site ? [site] : []);
+      deviceStatus = rows.map(d => ({
+        id: d.id,
+        type: 'device',
+        name: d.name,
+        switchboard: d.switchboard_code,
+        status: d.live_status || 'normal',
+        lastUpdate: d.last_status_update,
+        animation: getStatusAnimation(d.live_status)
+      }));
+    }
+
+    res.json({
+      success: true,
+      switchboards: switchboardStatus,
+      devices: deviceStatus,
+      summary: {
+        total: switchboardStatus.length + deviceStatus.length,
+        normal: switchboardStatus.filter(s => s.status === 'normal').length,
+        warning: switchboardStatus.filter(s => s.status === 'warning').length + deviceStatus.filter(d => d.status === 'warning').length,
+        alarm: switchboardStatus.filter(s => s.status === 'alarm').length + deviceStatus.filter(d => d.status === 'alarm').length,
+        offline: switchboardStatus.filter(s => s.status === 'offline').length + deviceStatus.filter(d => d.status === 'offline').length
+      }
+    });
+  } catch (error) {
+    console.error('[EquipmentStatus] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update equipment live status
+app.put("/api/ai-assistant/equipment-status/:type/:id", express.json(), async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const { status } = req.body;
+
+    const validStatuses = ['normal', 'warning', 'alarm', 'offline', 'maintenance', 'running'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const table = type === 'switchboard' ? 'switchboards' : 'devices';
+    const { rows } = await pool.query(
+      `UPDATE ${table} SET live_status = $1, last_status_update = NOW() WHERE id = $2 RETURNING *`,
+      [status, id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Equipment not found' });
+    }
+
+    res.json({ success: true, equipment: rows[0] });
+  } catch (error) {
+    console.error('[EquipmentStatus] Update error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper for status animations
+function getStatusAnimation(status) {
+  const animations = {
+    normal: { color: '#22c55e', pulse: false, icon: '✓' },
+    warning: { color: '#f59e0b', pulse: true, icon: '⚠️' },
+    alarm: { color: '#ef4444', pulse: true, speed: 'fast', icon: '🚨' },
+    offline: { color: '#6b7280', pulse: false, icon: '⭕' },
+    maintenance: { color: '#3b82f6', pulse: true, icon: '🔧' },
+    running: { color: '#22c55e', pulse: true, speed: 'slow', icon: '▶️' }
+  };
+  return animations[status] || animations.normal;
+}
+
+// ============================================================
+// MINI PLANS VIEWER - Quick view equipment schematics
+// ============================================================
+app.get("/api/ai-assistant/mini-plan/:type/:id", async (req, res) => {
+  try {
+    const { type, id } = req.params;
+
+    if (type === 'switchboard') {
+      const { rows } = await pool.query(
+        `SELECT s.*,
+          (SELECT COUNT(*) FROM devices WHERE switchboard_id = s.id) as device_count,
+          (SELECT json_agg(json_build_object(
+            'id', d.id, 'name', d.name, 'type', d.device_type,
+            'manufacturer', d.manufacturer, 'reference', d.reference,
+            'in_amps', d.in_amps, 'position', d.position_number,
+            'is_main', d.is_main_incoming, 'live_status', d.live_status
+          ) ORDER BY d.position_number) FROM devices d WHERE d.switchboard_id = s.id) as devices
+        FROM switchboards s WHERE s.id = $1`,
+        [id]
+      );
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: 'Switchboard not found' });
+      }
+
+      const sb = rows[0];
+      res.json({
+        success: true,
+        type: 'switchboard',
+        data: {
+          id: sb.id,
+          name: sb.name,
+          code: sb.code,
+          building: sb.building_code,
+          floor: sb.floor,
+          room: sb.room,
+          isPrincipal: sb.is_principal,
+          regimeNeutral: sb.regime_neutral,
+          deviceCount: parseInt(sb.device_count),
+          devices: sb.devices || [],
+          diagramData: sb.diagram_data,
+          liveStatus: sb.live_status,
+          hasPhoto: !!sb.photo
+        },
+        quickActions: [
+          { label: 'Voir le schéma', action: 'openDiagram', icon: '📐' },
+          { label: 'Historique contrôles', action: 'viewControls', icon: '📋' },
+          { label: 'Signaler anomalie', action: 'reportIssue', icon: '⚠️' }
+        ]
+      });
+    } else {
+      res.status(400).json({ error: 'Unsupported type' });
+    }
+  } catch (error) {
+    console.error('[MiniPlan] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ============================================================
 // ELEVENLABS TTS - Ultra-natural voice synthesis

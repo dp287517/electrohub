@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Camera, Upload, X, Sparkles, AlertTriangle,
   Shield, HardHat, Phone, Link2, CheckCircle, Loader2,
-  FileText, ChevronRight, Image, Plus, Trash2
+  FileText, ChevronRight, Image, Plus, Trash2, Save, Clock
 } from 'lucide-react';
 import {
   startAISession,
@@ -10,6 +10,9 @@ import {
   finalizeAISession,
   analyzeDocument,
   analyzeReport,
+  saveDraft,
+  getDrafts,
+  resumeDraft,
   DEFAULT_PPE,
   RISK_LEVELS,
 } from '../../lib/procedures-api';
@@ -57,7 +60,7 @@ function OptionButton({ label, onClick, selected }) {
 }
 
 export default function ProcedureCreator({ onProcedureCreated, onClose, initialContext }) {
-  const [mode, setMode] = useState('choose'); // choose, guided, import, report
+  const [mode, setMode] = useState('choose'); // choose, guided, import, report, drafts
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -71,9 +74,114 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const [analysisResult, setAnalysisResult] = useState(null);
   const [pendingPhoto, setPendingPhoto] = useState(null); // Photo en attente d'envoi
 
+  // Draft management
+  const [draftId, setDraftId] = useState(null);
+  const [drafts, setDrafts] = useState([]);
+  const [lastSaved, setLastSaved] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
+
+  // Load drafts on mount
+  useEffect(() => {
+    loadDrafts();
+  }, []);
+
+  // Auto-save when collectedData changes (debounced)
+  useEffect(() => {
+    if (!sessionId || !collectedData || Object.keys(collectedData).length === 0) return;
+
+    const saveTimer = setTimeout(() => {
+      autoSaveDraft();
+    }, 2000); // Save 2 seconds after last change
+
+    return () => clearTimeout(saveTimer);
+  }, [collectedData, sessionId]);
+
+  // Load user's drafts
+  const loadDrafts = async () => {
+    try {
+      const result = await getDrafts();
+      if (result.ok !== false) {
+        setDrafts(Array.isArray(result) ? result : result.drafts || []);
+      }
+    } catch (error) {
+      console.error('Error loading drafts:', error);
+    }
+  };
+
+  // Auto-save current progress as draft
+  const autoSaveDraft = useCallback(async () => {
+    if (!collectedData || Object.keys(collectedData).length === 0) return;
+
+    setIsSaving(true);
+    try {
+      const draftData = {
+        id: draftId,
+        title: collectedData.title || 'Brouillon en cours',
+        description: collectedData.description || '',
+        category: collectedData.category || 'general',
+        risk_level: collectedData.risk_level || 'low',
+        steps: collectedData.steps || [],
+        ppe: collectedData.ppe || [],
+        equipment_links: collectedData.equipment_links || [],
+        session_id: sessionId
+      };
+
+      const result = await saveDraft(draftData);
+      if (result.ok !== false && result.draft) {
+        setDraftId(result.draft.id);
+        setLastSaved(new Date());
+      }
+    } catch (error) {
+      console.error('Error auto-saving draft:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [collectedData, draftId, sessionId]);
+
+  // Resume from a draft
+  const handleResumeDraft = async (draft) => {
+    setIsLoading(true);
+    try {
+      const response = await resumeDraft(draft.id);
+      if (response.sessionId) {
+        setSessionId(response.sessionId);
+        setDraftId(draft.id);
+        setCollectedData(response.collectedData || {
+          title: draft.title,
+          description: draft.description,
+          category: draft.category,
+          risk_level: draft.risk_level,
+          steps: draft.steps || [],
+          ppe: draft.ppe || []
+        });
+        setMessages([
+          { role: 'assistant', content: `📋 **Reprise du brouillon: ${draft.title}**\n\nJe vois que tu as déjà commencé cette procédure. Voici ce qu'on a:\n${draft.steps?.length || 0} étape(s) créée(s).\n\nOn continue où on en était ?` }
+        ]);
+        setCurrentStep(response.currentStep || 'resume');
+        setOptions(response.options || ['Continuer', 'Voir le résumé', 'Recommencer']);
+        setMode('guided');
+      }
+    } catch (error) {
+      console.error('Error resuming draft:', error);
+      // Fallback: start new session with draft data
+      setCollectedData({
+        title: draft.title,
+        description: draft.description,
+        category: draft.category,
+        risk_level: draft.risk_level,
+        steps: draft.steps || [],
+        ppe: draft.ppe || []
+      });
+      setDraftId(draft.id);
+      startGuidedSession(`Je reprends la procédure "${draft.title}" avec ${draft.steps?.length || 0} étapes déjà créées.`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Auto-start guided mode if launched from chat with context
   useEffect(() => {
@@ -334,6 +442,113 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0" />
             </div>
           </button>
+
+          {/* Drafts - Resume unfinished procedures */}
+          {drafts.length > 0 && (
+            <button
+              onClick={() => setMode('drafts')}
+              className="w-full p-4 sm:p-5 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl border-2 border-emerald-200 active:border-emerald-400 active:scale-[0.98] transition-all text-left touch-manipulation"
+            >
+              <div className="flex items-start gap-3 sm:gap-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center flex-shrink-0 relative">
+                  <Clock className="w-6 h-6 text-white" />
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-white text-xs flex items-center justify-center font-bold">
+                    {drafts.length}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-gray-900">Reprendre un brouillon</h3>
+                  <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                    {drafts.length} procédure(s) non terminée(s)
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+              </div>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Drafts List Mode
+  if (mode === 'drafts') {
+    return (
+      <div className="bg-white rounded-t-3xl lg:rounded-2xl shadow-xl overflow-hidden w-full max-h-[80vh] flex flex-col">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
+          <div className="lg:hidden flex justify-center mb-3">
+            <div className="w-10 h-1 bg-white/30 rounded-full" />
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                <Clock className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Brouillons</h2>
+                <p className="text-sm text-white/80">{drafts.length} procédure(s) à reprendre</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setMode('choose')}
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-white/20 text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Drafts List */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
+          {drafts.map((draft) => (
+            <button
+              key={draft.id}
+              onClick={() => handleResumeDraft(draft)}
+              disabled={isLoading}
+              className="w-full p-4 bg-gray-50 hover:bg-emerald-50 rounded-xl border border-gray-200 hover:border-emerald-300 transition-all text-left disabled:opacity-50"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-medium text-gray-900 truncate">{draft.title || 'Sans titre'}</h3>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                    <span className="flex items-center gap-1">
+                      <FileText className="w-3 h-3" />
+                      {draft.step_count || 0} étape(s)
+                    </span>
+                    <span>{draft.category || 'Général'}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-xs ${
+                      draft.risk_level === 'high' ? 'bg-red-100 text-red-700' :
+                      draft.risk_level === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-green-100 text-green-700'
+                    }`}>
+                      {draft.risk_level === 'high' ? 'Élevé' :
+                       draft.risk_level === 'medium' ? 'Moyen' : 'Faible'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Modifié le {new Date(draft.updated_at).toLocaleDateString('fr-FR', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0 ml-2" />
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Back Button */}
+        <div className="p-4 border-t flex-shrink-0">
+          <button
+            onClick={() => setMode('choose')}
+            className="w-full py-3 text-gray-600 hover:text-gray-800 font-medium"
+          >
+            ← Retour
+          </button>
         </div>
       </div>
     );
@@ -548,6 +763,23 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
             );
           })}
         </div>
+
+        {/* Auto-save indicator */}
+        {(isSaving || lastSaved) && (
+          <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-white/70">
+            {isSaving ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Sauvegarde...</span>
+              </>
+            ) : lastSaved ? (
+              <>
+                <Save className="w-3 h-3" />
+                <span>Sauvegardé à {lastSaved.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+              </>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* Messages */}
