@@ -10,7 +10,7 @@ import pg from "pg";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
-import pushRouter from "./server_push.js";
+import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -7574,6 +7574,18 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
           success: true,
           details: { isHaleon, requiresValidation: true }
         });
+
+        // 🔔 Envoyer notification push aux admins
+        try {
+          const pushResult = await notifyAdminsPendingUser({
+            email: user.email,
+            name: user.name,
+            isHaleon
+          });
+          console.log(`[auth/bubble] 🔔 Admin notification sent:`, pushResult);
+        } catch (pushErr) {
+          console.log(`[auth/bubble] Push notification error (non-blocking):`, pushErr.message);
+        }
 
       } catch (insertErr) {
         console.log(`[auth/bubble] Insert pending user error: ${insertErr.message}`);

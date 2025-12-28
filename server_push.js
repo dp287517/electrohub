@@ -688,5 +688,59 @@ async function broadcastNotificationExcept(notification, excludeUserId) {
   }
 }
 
+// ============================================================
+// ADMIN NOTIFICATIONS - Pending Users
+// ============================================================
+
+// Admin emails who should receive pending user notifications
+const ADMIN_EMAILS_FOR_NOTIFICATIONS = [
+  'daniel.x.palha@haleon.com',
+  'palhadaniel.elec@gmail.com'
+];
+
+// Notify admins when a new user is pending validation
+export async function notifyAdminsPendingUser(newUser) {
+  try {
+    console.log(`[Push] 🔔 Notifying admins about pending user: ${newUser.email}`);
+
+    // Get subscriptions for admin emails
+    const result = await pool.query(`
+      SELECT DISTINCT user_id FROM push_subscriptions
+      WHERE LOWER(user_id) = ANY($1::text[])
+    `, [ADMIN_EMAILS_FOR_NOTIFICATIONS.map(e => e.toLowerCase())]);
+
+    const adminUserIds = result.rows.map(r => r.user_id);
+    console.log(`[Push] Found ${adminUserIds.length} admin subscriptions`);
+
+    if (adminUserIds.length === 0) {
+      console.log('[Push] No admin subscriptions found');
+      return { sent: 0, reason: 'no_admin_subscriptions' };
+    }
+
+    const notification = {
+      title: '👤 Nouvel utilisateur en attente',
+      body: `${newUser.name || newUser.email} demande l'accès à ElectroHub`,
+      type: 'pending_user',
+      tag: `pending-user-${newUser.email}`,
+      requireInteraction: true,
+      data: {
+        url: '/admin',
+        userEmail: newUser.email,
+        userName: newUser.name,
+        action: 'pending_validation'
+      },
+      actions: [
+        { action: 'view', title: 'Voir' },
+        { action: 'dismiss', title: 'Plus tard' }
+      ]
+    };
+
+    return sendNotificationToUsers(adminUserIds, notification);
+  } catch (error) {
+    console.error('[Push] Error notifying admins about pending user:', error);
+    return { sent: 0, error: error.message };
+  }
+}
+
 console.log('[Push] ✅ Push notification module loaded successfully');
 export default router;
