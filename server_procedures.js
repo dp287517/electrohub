@@ -1467,18 +1467,39 @@ JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":true,"pr
 const PROCEDURE_QUALITY_PROMPT = `Tu es LIA. Génère les détails complets pour cette procédure.
 
 À partir des étapes brutes fournies, génère pour CHAQUE étape:
-- title: Titre court de l'action
-- instructions: Instructions détaillées (2-3 phrases)
-- warning: Avertissement de sécurité si nécessaire
+- title: Titre court de l'action (max 60 caractères)
+- instructions: Instructions détaillées (2-3 phrases claires)
+- warning: Avertissement de sécurité si nécessaire (ou null)
 - duration_minutes: Durée estimée (1-15 min)
-- hazards: Dangers potentiels
 
-Génère aussi:
-- description: 2-3 phrases décrivant l'intervention
-- ppe_required: EPI déduits du contexte (électricité→gants isolants/lunettes, hauteur→harnais, manutention→gants)
-- risk_level: low/medium/high/critical (visuel→low, manutention→medium, électricité→high, haute tension→critical)
+Génère aussi les métadonnées de la procédure:
+- description: 2-3 phrases décrivant l'intervention, ses objectifs et le contexte
+- category: Catégorie parmi: general, maintenance, securite, mise_en_service, mise_hors_service, urgence, controle, formation
+- ppe_required: Array des EPI requis. Déduis du contexte:
+  - Électricité/tableau/disjoncteur → ["Gants isolants", "Lunettes de protection", "Chaussures de sécurité"]
+  - Hauteur/échelle → ["Harnais de sécurité", "Casque", "Chaussures de sécurité"]
+  - Manutention/charges lourdes → ["Gants de manutention", "Chaussures de sécurité", "Ceinture lombaire"]
+  - Standard → ["Chaussures de sécurité"]
+- risk_level: low/medium/high/critical
+  - Contrôle visuel simple → low
+  - Manutention, machines → medium
+  - Électricité basse tension → high
+  - Haute tension, ATEX, espaces confinés → critical
+- safety_codes: Array des codes de sécurité applicables (ex: ["Consignation électrique", "Permis de travail"])
+- emergency_contacts: Array vide [] (sera rempli par le site)
 
-Réponds en JSON.`;
+Format JSON attendu:
+{
+  "description": "...",
+  "category": "maintenance",
+  "ppe_required": ["..."],
+  "risk_level": "medium",
+  "safety_codes": ["..."],
+  "emergency_contacts": [],
+  "steps": [
+    {"step_number": 1, "title": "...", "instructions": "...", "warning": "...", "duration_minutes": 5}
+  ]
+}`;
 async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // Get or create session
   let session;
@@ -1667,7 +1688,7 @@ async function processRawSteps(sessionId) {
     { role: "system", content: PROCEDURE_QUALITY_PROMPT },
     {
       role: "user",
-      content: `Procédure: "${title}"\n\nÉtapes brutes:\n${stepsText}\n\nGénère les détails complets en JSON avec: steps (array avec step_number, title, instructions, warning, duration_minutes, hazards pour chaque), description, ppe_required, risk_level`
+      content: `Procédure: "${title}"\n\nÉtapes brutes:\n${stepsText}\n\nGénère le JSON complet avec tous les champs demandés dans le format spécifié.`
     }
   ];
 
@@ -1682,17 +1703,23 @@ async function processRawSteps(sessionId) {
     processedData = parseAIJson(result.content);
   } catch {
     console.error("[PROC] Failed to parse quality response");
-    // Fallback: convert raw steps to basic format
+    // Fallback: convert raw steps to basic format with all required fields
     processedData = {
-      steps: rawSteps.map(s => ({
+      description: `Procédure pour ${title}. Cette procédure décrit les étapes nécessaires pour réaliser l'intervention en toute sécurité.`,
+      category: "general",
+      steps: rawSteps.map((s, idx) => ({
         step_number: s.step_number,
-        title: s.raw_text.substring(0, 50),
+        title: s.raw_text.substring(0, 60),
         instructions: s.raw_text,
+        warning: null,
+        duration_minutes: 5,
         has_photo: s.has_photo,
         photo: s.photo
       })),
       ppe_required: ["Chaussures de sécurité"],
-      risk_level: "medium"
+      risk_level: "medium",
+      safety_codes: [],
+      emergency_contacts: []
     };
   }
 
