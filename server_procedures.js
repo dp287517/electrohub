@@ -19,6 +19,7 @@ import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { notifyUser } from "./lib/push-notify.js";
 
 // OpenAI for AI-guided creation
 import OpenAI from "openai";
@@ -4385,12 +4386,67 @@ app.post("/api/procedures/ai/chat/:sessionId", uploadPhoto.single("photo"), asyn
 });
 
 // Process raw steps into full procedure details (called when user says "terminé")
-// This is the "please wait" step that generates quality content
+// Supports two modes:
+// - Synchronous (default): waits and returns result
+// - Background (?background=true): returns immediately, sends push notification when done
 app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    console.log(`[PROC] Starting quality processing for session ${sessionId}`);
+  const { sessionId } = req.params;
+  const { background } = req.query;
+  const userEmail = req.headers["x-user-email"];
 
+  console.log(`[PROC] Starting quality processing for session ${sessionId}, background: ${background}`);
+
+  // Background mode: return immediately, process async, send notification
+  if (background === 'true') {
+    res.json({
+      ok: true,
+      processing: true,
+      message: "⏳ Traitement en cours... Vous recevrez une notification quand ce sera prêt."
+    });
+
+    // Process in background (don't await)
+    processRawSteps(sessionId)
+      .then(async (processedData) => {
+        console.log(`[PROC] Background processing complete for ${sessionId}`);
+
+        // Send push notification to user
+        if (userEmail) {
+          await notifyUser(userEmail,
+            '✅ Procédure prête',
+            `"${processedData.title}" - ${processedData.steps?.length || 0} étapes. Cliquez pour finaliser.`,
+            {
+              type: 'procedure_ready',
+              tag: `procedure-${sessionId}`,
+              requireInteraction: true,
+              data: {
+                url: '/procedures',
+                sessionId,
+                action: 'finalize_procedure'
+              },
+              actions: [
+                { action: 'view', title: 'Voir' }
+              ]
+            }
+          );
+        }
+      })
+      .catch((err) => {
+        console.error(`[PROC] Background processing failed for ${sessionId}:`, err);
+        // Optionally notify user of error
+        if (userEmail) {
+          notifyUser(userEmail,
+            '❌ Erreur de traitement',
+            'Une erreur est survenue lors du traitement de la procédure.',
+            { type: 'error', tag: `procedure-error-${sessionId}` }
+          );
+        }
+      });
+
+    return;
+  }
+
+  // Synchronous mode: wait and return result
+  try {
     const processedData = await processRawSteps(sessionId);
 
     res.json({
