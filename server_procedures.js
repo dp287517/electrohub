@@ -9211,7 +9211,28 @@ app.post("/api/procedures/:id/sign", async (req, res) => {
     }
 
     const procedure = procedures[0];
-    const isCreator = procedure.created_by === signerEmail;
+
+    // Check if user is creator - also allow claiming if created_by is "system" or "anonymous"
+    let isCreator = procedure.created_by === signerEmail;
+
+    // If created_by is "system" or empty, the first signer can claim creator status
+    if (!isCreator && (!procedure.created_by || procedure.created_by === 'system' || procedure.created_by === 'anonymous')) {
+      // Check if there are no other signatures yet
+      const { rows: existingSigs } = await pool.query(
+        `SELECT id FROM procedure_signatures WHERE procedure_id = $1 AND is_creator = true AND signed_at IS NOT NULL`,
+        [id]
+      );
+
+      if (existingSigs.length === 0) {
+        // Claim creator status and update procedure
+        isCreator = true;
+        await pool.query(
+          `UPDATE procedures SET created_by = $1 WHERE id = $2`,
+          [signerEmail, id]
+        );
+        console.log(`[Signatures] ${signerEmail} claimed creator status for procedure ${id}`);
+      }
+    }
 
     // Update or create signature
     const { rows } = await pool.query(
@@ -9505,6 +9526,65 @@ app.post("/api/procedures/:id/setup-creator-signature", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("Error setting up creator signature:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Claim ownership of a procedure (if created_by is system/anonymous)
+app.post("/api/procedures/:id/claim-ownership", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userEmail = req.headers["x-user-email"];
+
+    if (!userEmail) {
+      return res.status(400).json({ error: "Email utilisateur requis" });
+    }
+
+    // Get procedure
+    const { rows: procedures } = await pool.query(
+      `SELECT * FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    const procedure = procedures[0];
+
+    // Only allow claiming if created_by is system, anonymous, or empty
+    if (procedure.created_by && procedure.created_by !== 'system' && procedure.created_by !== 'anonymous') {
+      return res.status(403).json({
+        error: "Cette procédure a déjà un propriétaire",
+        current_owner: procedure.created_by
+      });
+    }
+
+    // Update ownership
+    await pool.query(
+      `UPDATE procedures SET created_by = $1, updated_at = now() WHERE id = $2`,
+      [userEmail, id]
+    );
+
+    // Also set up as creator in signatures
+    await pool.query(
+      `INSERT INTO procedure_signatures
+        (procedure_id, signer_email, signer_name, signer_role, is_creator, required, sign_order)
+      VALUES ($1, $2, $2, 'creator', true, true, 0)
+      ON CONFLICT (procedure_id, signer_email)
+      DO UPDATE SET is_creator = true, signer_role = 'creator', sign_order = 0`,
+      [id, userEmail]
+    );
+
+    console.log(`[Procedures] ${userEmail} claimed ownership of procedure ${id}`);
+
+    res.json({
+      success: true,
+      message: "Propriété récupérée avec succès",
+      created_by: userEmail
+    });
+  } catch (err) {
+    console.error("Error claiming procedure ownership:", err);
     res.status(500).json({ error: err.message });
   }
 });

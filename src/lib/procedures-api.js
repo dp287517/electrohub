@@ -4,8 +4,12 @@ const API_BASE = '/api/procedures';
 
 // Helper for fetch with auth headers
 async function fetchWithAuth(url, options = {}) {
-  const userEmail = localStorage.getItem('userEmail') || '';
-  const site = localStorage.getItem('selectedSite') || '';
+  // Try multiple localStorage keys for email (different parts of app use different keys)
+  const userEmail = localStorage.getItem('userEmail')
+    || localStorage.getItem('email')
+    || localStorage.getItem('user.email')
+    || '';
+  const site = localStorage.getItem('selectedSite') || localStorage.getItem('site') || '';
 
   const headers = {
     'Content-Type': 'application/json',
@@ -641,6 +645,14 @@ export async function invalidateSignatures(procedureId, reason) {
 // Setup creator as first signer
 export async function setupCreatorSignature(procedureId) {
   const response = await fetchWithAuth(`${API_BASE}/${procedureId}/setup-creator-signature`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
+// Claim ownership of a procedure (if created_by is system/anonymous)
+export async function claimProcedureOwnership(procedureId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/claim-ownership`, {
     method: 'POST',
   });
   return response.json();
