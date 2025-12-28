@@ -187,7 +187,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   };
 
   // Delete a draft
-  const handleDeleteDraft = async (e, draftId, draftTitle) => {
+  const handleDeleteDraft = async (e, draftIdToDelete, draftTitle) => {
     e.stopPropagation(); // Prevent triggering the resume action
 
     if (!confirm(`Supprimer le brouillon "${draftTitle || 'Sans titre'}" ?`)) {
@@ -196,9 +196,10 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
     setIsLoading(true);
     try {
-      await deleteDraft(draftId);
-      // Refresh drafts list
-      const updatedDrafts = await getDrafts();
+      await deleteDraft(draftIdToDelete);
+      // Refresh drafts list - handle {ok, drafts} response format
+      const result = await getDrafts();
+      const updatedDrafts = Array.isArray(result) ? result : result.drafts || [];
       setDrafts(updatedDrafts);
 
       // If no more drafts, go back to choose mode
