@@ -3261,9 +3261,179 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     console.log(`[AI] 🚀 Processing: "${message.substring(0, 50)}..." for site ${site}`);
 
     // =========================================================================
-    // PROCEDURE SYSTEM - Intégration microservice
+    // NAVIGATION & VISUALIZATION - Detect plan/building/equipment requests FIRST
     // =========================================================================
     const msgLower = message.toLowerCase();
+
+    // Detect plan/building/navigation requests (BEFORE procedure logic)
+    const wantsPlanOrNavigation = (
+      (msgLower.includes('plan') || msgLower.includes('carte') || msgLower.includes('localisation') ||
+       msgLower.includes('où se trouve') || msgLower.includes('montre') || msgLower.includes('ouvre')) &&
+      (msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.includes('building') ||
+       msgLower.includes('étage') || msgLower.includes('etage') || msgLower.includes('floor') ||
+       msgLower.includes('tableau') || msgLower.includes('armoire') || msgLower.includes('local') ||
+       msgLower.match(/\b[0-9]{2}\b/) || msgLower.includes('datahub'))
+    ) && !msgLower.includes('procédure') && !msgLower.includes('procedure');
+
+    if (wantsPlanOrNavigation) {
+      console.log('[AI] 🗺️ Navigation/Plan request detected');
+
+      // Extract building code (like "02", "B02", "bâtiment 02")
+      const buildingMatch = msgLower.match(/(?:bâtiment|batiment|building|bat\.?)\s*([a-z]?\d{1,3}[a-z]?)/i) ||
+                           msgLower.match(/\b([a-z]?\d{2}[a-z]?)\b/);
+      const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
+
+      // Extract floor if mentioned
+      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i);
+      const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
+
+      // Query equipment in the building
+      try {
+        let query = `
+          SELECT s.id, s.name, s.code, s.building_code, s.floor, s.room, s.type,
+                 'switchboard' as equipment_type
+          FROM switchboards s
+          WHERE s.site = $1
+        `;
+        const params = [site];
+
+        if (buildingCode) {
+          query += ` AND UPPER(s.building_code) = $${params.length + 1}`;
+          params.push(buildingCode);
+        }
+        if (floor) {
+          query += ` AND UPPER(s.floor) = $${params.length + 1}`;
+          params.push(floor);
+        }
+
+        query += ` ORDER BY s.building_code, s.floor, s.name LIMIT 20`;
+
+        const equipResult = await pool.query(query, params);
+
+        if (equipResult.rows.length > 0) {
+          // Group by floor
+          const byFloor = {};
+          equipResult.rows.forEach(eq => {
+            const f = eq.floor || 'N/A';
+            if (!byFloor[f]) byFloor[f] = [];
+            byFloor[f].push(eq);
+          });
+
+          let response = `## 🗺️ ${buildingCode ? `Bâtiment ${buildingCode}` : 'Navigation'}\n\n`;
+
+          if (floor) {
+            response += `**Étage ${floor}**\n\n`;
+          }
+
+          Object.keys(byFloor).sort().forEach(f => {
+            if (!floor) response += `### Étage ${f}\n`;
+            byFloor[f].forEach(eq => {
+              response += `• **${eq.name}** (${eq.code || 'N/A'})`;
+              if (eq.room) response += ` - ${eq.room}`;
+              response += `\n`;
+            });
+            response += '\n';
+          });
+
+          response += `\n💡 Clique sur un équipement pour voir ses détails.`;
+
+          // Create actions for navigation
+          const actions = equipResult.rows.slice(0, 5).map(eq => ({
+            label: `📍 ${eq.name.substring(0, 20)}`,
+            prompt: `Montre-moi le tableau ${eq.name}`
+          }));
+
+          // Add floor filter if building has multiple floors
+          const floors = [...new Set(equipResult.rows.map(e => e.floor).filter(Boolean))];
+          if (floors.length > 1 && !floor) {
+            floors.slice(0, 3).forEach(f => {
+              actions.push({
+                label: `Étage ${f}`,
+                prompt: `Montre-moi l'étage ${f} du bâtiment ${buildingCode}`
+              });
+            });
+          }
+
+          return res.json({
+            message: response,
+            equipmentList: equipResult.rows,
+            buildingCode,
+            floor,
+            navigationMode: true,
+            actions,
+            provider: 'system'
+          });
+        } else {
+          // No equipment found, but still helpful response
+          return res.json({
+            message: `🗺️ Je n'ai pas trouvé d'équipements${buildingCode ? ` dans le bâtiment ${buildingCode}` : ''}${floor ? ` à l'étage ${floor}` : ''}.\n\nTu veux que je cherche ailleurs ?`,
+            actions: [
+              { label: '📋 Tous les bâtiments', prompt: 'Liste des bâtiments' },
+              { label: '🔍 Rechercher', prompt: 'Chercher un tableau électrique' }
+            ],
+            provider: 'system'
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Navigation query error:', e.message);
+      }
+    }
+
+    // Detect specific equipment query (tableau, armoire, VSD, ATEX, etc.)
+    const wantsEquipmentInfo = (
+      (msgLower.includes('tableau') || msgLower.includes('armoire') || msgLower.includes('tgbt') ||
+       msgLower.includes('td ') || msgLower.includes('variateur') || msgLower.includes('vsd') ||
+       msgLower.includes('atex') || msgLower.includes('équipement')) &&
+      (msgLower.includes('montre') || msgLower.includes('voir') || msgLower.includes('info') ||
+       msgLower.includes('détail') || msgLower.includes('où') || msgLower.includes('cherche'))
+    ) && !msgLower.includes('procédure') && !msgLower.includes('procedure');
+
+    if (wantsEquipmentInfo) {
+      console.log('[AI] 🔌 Equipment info request detected');
+
+      // Extract equipment name/code
+      const equipMatch = msgLower.match(/(?:tableau|armoire|tgbt|td|variateur|vsd)\s+([^\s,?!]+)/i);
+      const searchTerm = equipMatch ? equipMatch[1] : null;
+
+      if (searchTerm) {
+        try {
+          const eqResult = await pool.query(`
+            SELECT s.*, 'switchboard' as type,
+                   (SELECT COUNT(*) FROM control_schedules WHERE switchboard_id = s.id) as control_count
+            FROM switchboards s
+            WHERE s.site = $1
+              AND (LOWER(s.name) LIKE $2 OR LOWER(s.code) LIKE $2)
+            LIMIT 5
+          `, [site, `%${searchTerm.toLowerCase()}%`]);
+
+          if (eqResult.rows.length > 0) {
+            const eq = eqResult.rows[0];
+            let response = `## 🔌 ${eq.name}\n\n`;
+            response += `📍 **Localisation:** Bâtiment ${eq.building_code || 'N/A'}, Étage ${eq.floor || 'N/A'}`;
+            if (eq.room) response += `, ${eq.room}`;
+            response += `\n`;
+            response += `🏷️ **Code:** ${eq.code || 'N/A'}\n`;
+            response += `📋 **Contrôles planifiés:** ${eq.control_count}\n`;
+
+            return res.json({
+              message: response,
+              equipment: eq,
+              actions: [
+                { label: '📋 Voir contrôles', prompt: `Contrôles pour ${eq.name}` },
+                { label: '🗺️ Voir le bâtiment', prompt: `Plan du bâtiment ${eq.building_code}` }
+              ],
+              provider: 'system'
+            });
+          }
+        } catch (e) {
+          console.error('[AI] Equipment query error:', e.message);
+        }
+      }
+    }
+
+    // =========================================================================
+    // PROCEDURE SYSTEM - Intégration microservice
+    // =========================================================================
 
     // Check if we're in an active procedure session
     const lastProcMsg = [...conversationHistory].reverse().find(m => m.procedureSessionId);
