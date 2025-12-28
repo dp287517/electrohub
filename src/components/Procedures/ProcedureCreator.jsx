@@ -13,6 +13,7 @@ import {
   saveDraft,
   getDrafts,
   resumeDraft,
+  deleteDraft,
   DEFAULT_PPE,
   RISK_LEVELS,
 } from '../../lib/procedures-api';
@@ -178,6 +179,33 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
       });
       setDraftId(draft.id);
       startGuidedSession(`Je reprends la procédure "${draft.title}" avec ${draft.steps?.length || 0} étapes déjà créées.`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Delete a draft
+  const handleDeleteDraft = async (e, draftId, draftTitle) => {
+    e.stopPropagation(); // Prevent triggering the resume action
+
+    if (!confirm(`Supprimer le brouillon "${draftTitle || 'Sans titre'}" ?`)) {
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await deleteDraft(draftId);
+      // Refresh drafts list
+      const updatedDrafts = await getDrafts();
+      setDrafts(updatedDrafts);
+
+      // If no more drafts, go back to choose mode
+      if (updatedDrafts.length === 0) {
+        setMode('choose');
+      }
+    } catch (error) {
+      console.error('Error deleting draft:', error);
+      alert('Erreur lors de la suppression du brouillon');
     } finally {
       setIsLoading(false);
     }
@@ -502,14 +530,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
         {/* Drafts List */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
           {drafts.map((draft) => (
-            <button
+            <div
               key={draft.id}
-              onClick={() => handleResumeDraft(draft)}
-              disabled={isLoading}
-              className="w-full p-4 bg-gray-50 hover:bg-emerald-50 rounded-xl border border-gray-200 hover:border-emerald-300 transition-all text-left disabled:opacity-50"
+              className={`w-full p-4 bg-gray-50 hover:bg-emerald-50 rounded-xl border border-gray-200 hover:border-emerald-300 transition-all ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}
             >
               <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
+                <button
+                  onClick={() => handleResumeDraft(draft)}
+                  disabled={isLoading}
+                  className="flex-1 min-w-0 text-left"
+                >
                   <h3 className="font-medium text-gray-900 truncate">{draft.title || 'Sans titre'}</h3>
                   <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
                     <span className="flex items-center gap-1">
@@ -534,10 +564,20 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                       minute: '2-digit'
                     })}
                   </p>
+                </button>
+                <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                  <button
+                    onClick={(e) => handleDeleteDraft(e, draft.id, draft.title)}
+                    disabled={isLoading}
+                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Supprimer le brouillon"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <ChevronRight className="w-5 h-5 text-gray-400" />
                 </div>
-                <ChevronRight className="w-5 h-5 text-gray-400 flex-shrink-0 ml-2" />
               </div>
-            </button>
+            </div>
           ))}
         </div>
 
