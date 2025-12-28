@@ -231,7 +231,12 @@ class AIAssistant {
         conversationHistory: conversationHistory.map(m => ({
           role: m.role,
           content: m.content,
-          // Procedure session tracking
+          // Procedure context for guidance (v2.0)
+          procedureToOpen: m.procedureToOpen || null,
+          proceduresFound: m.proceduresFound || null,
+          procedureDetails: m.procedureDetails || null,
+          procedureGuidance: m.procedureGuidance || null,
+          // Legacy procedure session tracking
           procedureSessionId: m.procedureSessionId,
           procedureStep: m.procedureStep,
           procedureMode: m.procedureMode,
@@ -318,7 +323,12 @@ class AIAssistant {
           role: m.role,
           content: m.content,
           photo: m.photo ? true : false, // Juste indiquer si photo, pas le contenu
-          // Procedure session tracking
+          // Procedure context for guidance (v2.0)
+          procedureToOpen: m.procedureToOpen || null,
+          proceduresFound: m.proceduresFound || null,
+          procedureDetails: m.procedureDetails || null,
+          procedureGuidance: m.procedureGuidance || null,
+          // Legacy procedure session tracking
           procedureSessionId: m.procedureSessionId,
           procedureStep: m.procedureStep,
           procedureMode: m.procedureMode,
