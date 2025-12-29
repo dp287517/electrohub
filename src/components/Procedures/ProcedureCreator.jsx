@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Send, Camera, Upload, X, Sparkles, AlertTriangle,
   Shield, HardHat, Phone, Link2, CheckCircle, Loader2,
-  FileText, ChevronRight, Image, Plus, Trash2, Save, Clock
+  FileText, ChevronRight, Image, Plus, Trash2, Save, Clock,
+  Scan, Images
 } from 'lucide-react';
+import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import {
   startAISession,
   continueAISession,
@@ -62,6 +65,15 @@ function OptionButton({ label, onClick, selected }) {
 }
 
 export default function ProcedureCreator({ onProcedureCreated, onClose, initialContext }) {
+  const location = useLocation();
+  const {
+    isCapturing,
+    captures,
+    captureCount,
+    startCapture,
+    consumeCaptures
+  } = useProcedureCapture();
+
   const [mode, setMode] = useState('choose'); // choose, guided, import, report, drafts
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -76,6 +88,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const [analysisResult, setAnalysisResult] = useState(null);
   const [pendingPhoto, setPendingPhoto] = useState(null); // Photo en attente d'envoi
   const [isProcessing, setIsProcessing] = useState(false); // Quality processing in progress
+  const [pendingCaptures, setPendingCaptures] = useState([]); // Captures from widget
 
   // Draft management
   const [draftId, setDraftId] = useState(null);
@@ -86,6 +99,31 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
+
+  // Check for captured photos when returning from capture mode
+  useEffect(() => {
+    if (!isCapturing && captureCount > 0 && mode === 'guided') {
+      // User returned with captures - consume them
+      const newCaptures = consumeCaptures();
+      if (newCaptures.length > 0) {
+        setPendingCaptures(newCaptures);
+        // Set the first capture as pending photo
+        if (newCaptures[0]?.file) {
+          setPendingPhoto(newCaptures[0].file);
+        }
+      }
+    }
+  }, [isCapturing, captureCount, mode, consumeCaptures]);
+
+  // Start capture mode for this procedure
+  const handleStartCapture = () => {
+    startCapture({
+      id: sessionId || draftId,
+      title: collectedData?.title || 'Nouvelle procédure',
+      sessionId,
+      returnPath: location.pathname + location.search
+    });
+  };
 
   // Load drafts on mount
   useEffect(() => {
@@ -979,14 +1017,57 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 </button>
               </div>
             )}
+            {/* Pending captures from capture mode */}
+            {pendingCaptures.length > 1 && (
+              <div className="flex items-center gap-2 bg-violet-50 border border-violet-200 px-3 py-2 rounded-xl">
+                <Images className="w-4 h-4 text-violet-600 flex-shrink-0" />
+                <span className="text-xs text-violet-700 flex-1">
+                  <strong>{pendingCaptures.length} captures</strong> disponibles
+                </span>
+                <div className="flex -space-x-2">
+                  {pendingCaptures.slice(0, 3).map((cap, i) => (
+                    <img
+                      key={cap.id}
+                      src={cap.preview}
+                      alt=""
+                      className="w-6 h-6 rounded-full border-2 border-white object-cover"
+                    />
+                  ))}
+                  {pendingCaptures.length > 3 && (
+                    <span className="w-6 h-6 rounded-full bg-violet-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-violet-700">
+                      +{pendingCaptures.length - 3}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
             {/* Photo requirement hint when in steps mode and no photo pending */}
-            {currentStep === 'steps' && !pendingPhoto && (
-              <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-xl">
-                <Camera className="w-4 h-4 flex-shrink-0" />
-                <span><strong>Photo obligatoire</strong> pour chaque étape</span>
+            {currentStep === 'steps' && !pendingPhoto && pendingCaptures.length === 0 && (
+              <div className="flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Camera className="w-4 h-4 flex-shrink-0" />
+                  <span><strong>Photo obligatoire</strong> pour chaque étape</span>
+                </div>
+                <button
+                  onClick={handleStartCapture}
+                  className="flex items-center gap-1 px-2 py-1 bg-violet-600 text-white rounded-lg text-[10px] font-medium hover:bg-violet-700 transition-colors"
+                >
+                  <Scan className="w-3 h-3" />
+                  Mode Capture
+                </button>
               </div>
             )}
             <div className="flex gap-2">
+              {/* Capture mode button */}
+              {currentStep === 'steps' && (
+                <button
+                  onClick={handleStartCapture}
+                  className="p-3 rounded-xl bg-violet-100 text-violet-600 active:bg-violet-200 transition-all relative flex-shrink-0"
+                  title="Mode capture - Naviguez et capturez des photos"
+                >
+                  <Scan className="w-5 h-5" />
+                </button>
+              )}
               {/* Camera button - changes style based on whether photo is pending */}
               {(expectsPhoto || currentStep === 'steps') && (
                 <button
