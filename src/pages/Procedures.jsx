@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Filter, FileText, AlertTriangle, Shield,
   Wrench, Play, PowerOff, CheckCircle, Book, Download,
@@ -235,6 +236,8 @@ function QuickStats({ procedures, loading }) {
 }
 
 export default function Procedures() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [procedures, setProcedures] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -248,6 +251,20 @@ export default function Procedures() {
   const [showDocMenu, setShowDocMenu] = useState(false);
   const [generatingDoc, setGeneratingDoc] = useState(null);
   const [showEquipmentManager, setShowEquipmentManager] = useState(false);
+  const [aiGuidedMode, setAiGuidedMode] = useState(false);
+
+  // Handle URL parameters for deep linking from QR codes
+  useEffect(() => {
+    const procedureId = searchParams.get('id');
+    const aiMode = searchParams.get('ai') === 'true';
+
+    if (procedureId) {
+      setSelectedProcedure(procedureId);
+      setAiGuidedMode(aiMode);
+      // Clear URL params after handling
+      setSearchParams({});
+    }
+  }, [searchParams, setSearchParams]);
 
   const handleDownloadDocument = async (docType) => {
     setGeneratingDoc(docType);
@@ -784,7 +801,7 @@ export default function Procedures() {
       {selectedProcedure && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end lg:items-center justify-center z-50 animate-fade-in">
           <div className="w-full lg:max-w-4xl lg:mx-4 max-h-[95vh] lg:max-h-[90vh] overflow-auto bg-white rounded-t-3xl lg:rounded-2xl animate-slide-up lg:animate-scale-in">
-            <ProcedureViewer procedureId={selectedProcedure} onClose={() => setSelectedProcedure(null)} onDeleted={() => { setSelectedProcedure(null); loadData(); }} />
+            <ProcedureViewer procedureId={selectedProcedure} aiGuidedMode={aiGuidedMode} onClose={() => { setSelectedProcedure(null); setAiGuidedMode(false); }} onDeleted={() => { setSelectedProcedure(null); setAiGuidedMode(false); loadData(); }} />
           </div>
         </div>
       )}
