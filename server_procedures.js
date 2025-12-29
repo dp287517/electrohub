@@ -8115,12 +8115,11 @@ const EXAMPLE_RAMS_DATA = {
 async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.app') {
   const data = EXAMPLE_RAMS_DATA;
 
-  // Generate QR Code - Links to AI assistant for this procedure
-  const docRef = `RAMS-${data.workDate.replace(/\//g, '')}`;
+  // Generate QR Code - Links to procedures page (example doc, no specific procedure)
   let qrCodeBuffer = null;
   try {
-    // QR Code links to the AI assistant page with procedure context
-    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=rams`, {
+    // QR Code links to the procedures page
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/app/procedures`, {
       width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
@@ -8624,12 +8623,15 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
 // ====================================
 async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
-  const docRef = `MT-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
-  // Generate QR Code
+  // Generate QR Code - Links to AI-guided procedure execution
   let qrCodeBuffer = null;
   try {
-    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=workmethod`, {
+    // Use procedure ID if available for deep linking
+    const qrUrl = data.id
+      ? `${baseUrl}/app/procedures?id=${data.id}&ai=true`
+      : `${baseUrl}/app/procedures`;
+    qrCodeBuffer = await QRCode.toBuffer(qrUrl, {
       width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
@@ -8916,12 +8918,15 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 // ====================================
 async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
-  const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
-  // Generate QR Code
+  // Generate QR Code - Links to AI-guided procedure execution
   let qrCodeBuffer = null;
   try {
-    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures/ai-assistant?ref=${docRef}&type=procedure`, {
+    // Use procedure ID if available for deep linking
+    const qrUrl = data.id
+      ? `${baseUrl}/app/procedures?id=${data.id}&ai=true`
+      : `${baseUrl}/app/procedures`;
+    qrCodeBuffer = await QRCode.toBuffer(qrUrl, {
       width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
