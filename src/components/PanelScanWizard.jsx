@@ -348,6 +348,7 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                   />
                 </th>
                 <th className="px-3 py-2 text-left">Position</th>
+                <th className="px-3 py-2 text-left">Circuit</th>
                 <th className="px-3 py-2 text-left">Type</th>
                 <th className="px-3 py-2 text-left">Fabricant</th>
                 <th className="px-3 py-2 text-left">Référence</th>
@@ -372,7 +373,16 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                       className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                     />
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs">{device.position || '-'}</td>
+                  <td className="px-3 py-2">
+                    <span className="font-mono text-xs font-bold text-indigo-600">
+                      {device.position_label || device.position || `R${device.row || '?'}-P${device.position_in_row || '?'}`}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="text-xs text-gray-600 truncate max-w-[100px] block">
+                      {device.circuit_name || '-'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2">
                     {editingIndex === idx ? (
                       <input
