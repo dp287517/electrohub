@@ -8244,12 +8244,145 @@ app.get("/api/dashboard/activities", async (req, res) => {
     }));
     activities.push(...pmActivities);
 
+    // 7. Pending Reports (ATEX DRPCE, etc.) - for action_required
+    const actionRequired = [];
+    try {
+      const { rows: pendingReports } = await pool.query(`
+        SELECT id, report_type, status, user_email, created_at, completed_at, total_items, error_message
+        FROM pending_reports
+        WHERE status IN ('pending', 'completed')
+        AND created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at DESC
+        LIMIT 10
+      `);
+
+      for (const report of pendingReports) {
+        if (report.status === 'completed') {
+          // Completed report - show in recent activities with download link
+          activities.push({
+            id: `report-${report.id}`,
+            type: 'report_ready',
+            module: 'atex',
+            title: '📄 Rapport prêt à télécharger',
+            description: `${report.report_type || 'Management Monitoring'} - ${report.total_items || 0} équipements`,
+            actor: report.user_email,
+            timestamp: report.completed_at || report.created_at,
+            url: `/app/atex?downloadReport=${report.id}`,
+            icon: '📄',
+            color: 'green',
+            actionRequired: true
+          });
+        } else if (report.status === 'pending') {
+          // Still generating - show in action_required
+          actionRequired.push({
+            id: `report-pending-${report.id}`,
+            type: 'report_pending',
+            module: 'atex',
+            title: '⏳ Rapport en cours de génération',
+            description: `${report.report_type || 'Management Monitoring'} - Veuillez patienter...`,
+            actor: report.user_email,
+            timestamp: report.created_at,
+            url: '/app/atex?tab=drpce',
+            icon: '⏳',
+            color: 'amber',
+            actionRequired: true
+          });
+        }
+      }
+    } catch (e) {
+      // pending_reports table might not exist
+    }
+
+    // 8. Pending Signature Requests - for action_required
+    try {
+      const userEmail = req.headers['x-user-email'] || req.query.email;
+      if (userEmail) {
+        const { rows: pendingSignatures } = await pool.query(`
+          SELECT psr.id, psr.procedure_id, psr.status, psr.requested_at,
+                 p.title as procedure_title, p.created_by
+          FROM procedure_signature_requests psr
+          JOIN procedures p ON psr.procedure_id = p.id
+          WHERE psr.signer_email = $1 AND psr.status = 'pending'
+          ORDER BY psr.requested_at DESC
+          LIMIT 5
+        `, [userEmail]);
+
+        for (const sig of pendingSignatures) {
+          actionRequired.push({
+            id: `sig-${sig.id}`,
+            type: 'signature_pending',
+            module: 'procedures',
+            title: '✍️ Signature requise',
+            description: `"${sig.procedure_title}" attend votre signature`,
+            actor: sig.created_by,
+            timestamp: sig.requested_at,
+            url: `/app/procedures/${sig.procedure_id}`,
+            icon: '✍️',
+            color: 'violet',
+            actionRequired: true
+          });
+        }
+      }
+    } catch (e) {
+      // procedure_signature_requests table might not exist
+    }
+
+    // 9. Recent procedure activities (created, signed, approved)
+    try {
+      const { rows: procActivities } = await pool.query(`
+        SELECT p.id, p.title, p.status, p.created_by, p.created_at, p.updated_at
+        FROM procedures p
+        WHERE p.updated_at > NOW() - INTERVAL '7 days'
+        ORDER BY p.updated_at DESC
+        LIMIT 10
+      `);
+
+      for (const proc of procActivities) {
+        const statusLabels = {
+          draft: 'Brouillon créé',
+          pending_signature: 'En attente de signature',
+          approved: 'Approuvée',
+          active: 'Activée',
+          rejected: 'Rejetée'
+        };
+        const statusColors = {
+          draft: 'blue',
+          pending_signature: 'amber',
+          approved: 'green',
+          active: 'green',
+          rejected: 'red'
+        };
+        const statusIcons = {
+          draft: '📝',
+          pending_signature: '✍️',
+          approved: '✅',
+          active: '✅',
+          rejected: '❌'
+        };
+
+        activities.push({
+          id: `proc-${proc.id}`,
+          type: `procedure_${proc.status}`,
+          module: 'procedures',
+          title: statusLabels[proc.status] || 'Procédure modifiée',
+          description: proc.title,
+          actor: proc.created_by,
+          timestamp: proc.updated_at,
+          url: `/app/procedures/${proc.id}`,
+          icon: statusIcons[proc.status] || '📋',
+          color: statusColors[proc.status] || 'violet'
+        });
+      }
+    } catch (e) {
+      // procedures table might not exist
+    }
+
     // Sort by timestamp descending
     activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     // Return structured response
     res.json({
-      action_required: [], // Could add pending approvals here
+      action_required: actionRequired,
       recent: activities.slice(0, limit)
     });
 
