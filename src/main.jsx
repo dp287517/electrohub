@@ -5,6 +5,8 @@ import { BrowserRouter } from 'react-router-dom';
 
 import App from './App.jsx';
 import NotificationProvider from './components/Notifications/NotificationProvider';
+import { ProcedureCaptureProvider } from './contexts/ProcedureCaptureContext';
+import ProcedureCaptureWidget from './components/Procedures/ProcedureCaptureWidget';
 
 // Styles globaux de l'app
 import './styles.css';
@@ -22,7 +24,10 @@ createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <NotificationProvider>
-        <App />
+        <ProcedureCaptureProvider>
+          <App />
+          <ProcedureCaptureWidget />
+        </ProcedureCaptureProvider>
       </NotificationProvider>
     </BrowserRouter>
   </React.StrictMode>

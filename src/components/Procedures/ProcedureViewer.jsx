@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   X, Download, Edit2, Trash2, AlertTriangle, Shield,
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
   FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
-  BadgeCheck, FileEdit, Pen, Users
+  BadgeCheck, FileEdit, Pen, Users, Scan, Images
 } from 'lucide-react';
+import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import {
   getProcedure,
   updateProcedure,
@@ -230,6 +232,15 @@ function EquipmentLink({ link, isEditing, onRemove }) {
 }
 
 export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMobile = false, aiGuidedMode = false }) {
+  const location = useLocation();
+  const {
+    isCapturing,
+    captures,
+    captureCount,
+    startCapture,
+    consumeCaptures
+  } = useProcedureCapture();
+
   const [procedure, setProcedure] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -244,6 +255,26 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [showAssistant, setShowAssistant] = useState(aiGuidedMode); // Auto-open AI if from QR code
   const [showSignatures, setShowSignatures] = useState(false);
   const [signatureSummary, setSignatureSummary] = useState(null);
+  const [pendingCaptures, setPendingCaptures] = useState([]);
+
+  // Check for captured photos when returning from capture mode
+  useEffect(() => {
+    if (!isCapturing && captureCount > 0 && isEditing) {
+      const newCaptures = consumeCaptures();
+      if (newCaptures.length > 0) {
+        setPendingCaptures(newCaptures);
+      }
+    }
+  }, [isCapturing, captureCount, isEditing, consumeCaptures]);
+
+  // Start capture mode for this procedure
+  const handleStartCapture = () => {
+    startCapture({
+      id: procedureId,
+      title: procedure?.title || 'Procédure',
+      returnPath: location.pathname + location.search
+    });
+  };
 
   const loadSignatures = async () => {
     try {
@@ -774,15 +805,50 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
               Étapes ({procedure.steps?.length || 0})
             </h3>
             {isEditing && (
-              <button
-                onClick={() => setShowAddStep(true)}
-                className="text-sm text-violet-600 hover:text-violet-700 flex items-center gap-1"
-              >
-                <Plus className="w-4 h-4" />
-                Ajouter une étape
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleStartCapture}
+                  className="text-sm text-violet-600 hover:text-violet-700 flex items-center gap-1 px-2 py-1 bg-violet-50 rounded-lg"
+                  title="Mode capture - Naviguez et capturez des photos"
+                >
+                  <Scan className="w-4 h-4" />
+                  Capturer
+                </button>
+                <button
+                  onClick={() => setShowAddStep(true)}
+                  className="text-sm text-violet-600 hover:text-violet-700 flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" />
+                  Ajouter une étape
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Pending captures indicator */}
+          {pendingCaptures.length > 0 && (
+            <div className="mb-3 flex items-center gap-3 p-3 bg-violet-50 border border-violet-200 rounded-xl">
+              <Images className="w-5 h-5 text-violet-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-violet-800">
+                  {pendingCaptures.length} capture(s) disponible(s)
+                </p>
+                <p className="text-xs text-violet-600">
+                  Ajoutez une étape pour utiliser ces photos
+                </p>
+              </div>
+              <div className="flex -space-x-2">
+                {pendingCaptures.slice(0, 4).map((cap) => (
+                  <img
+                    key={cap.id}
+                    src={cap.preview}
+                    alt=""
+                    className="w-8 h-8 rounded-full border-2 border-white object-cover"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           {showAddStep && (
             <div className="mb-4 p-4 bg-gray-50 rounded-xl space-y-3">
