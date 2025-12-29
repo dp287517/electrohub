@@ -1068,203 +1068,56 @@ router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
 // ============================================================
 
 // GET /api/admin/users/pending - Liste les utilisateurs en attente de validation
-// ROBUSTE: Cherche dans toutes les sources d'activité et compare avec haleon_users validés
+// SOURCE FIABLE: Utilise auth_audit_log pour trouver les LOGIN_PENDING
 router.get("/users/pending", adminOnly, async (req, res) => {
   try {
-    const pendingUsers = new Map();
-    const validatedEmails = new Set();
     const logs = [];
 
-    // 1. D'abord récupérer TOUS les emails de haleon_users (ils sont considérés comme "traités")
-    // Si la colonne is_validated existe, on l'utilise pour un filtrage plus fin
-    try {
-      // D'abord, essayer de récupérer tous les emails de haleon_users
-      const allHaleon = await pool.query(`SELECT LOWER(email) as email FROM haleon_users`);
-      allHaleon.rows.forEach(r => validatedEmails.add(r.email));
-      logs.push(`haleon_users: ${allHaleon.rows.length} total (all treated as validated)`);
-    } catch (e) {
-      logs.push(`haleon_users error: ${e.message}`);
-    }
-
-    // 2. Chercher dans askv_users
-    try {
-      const askv = await pool.query(`
+    // APPROCHE DIRECTE: Chercher dans auth_audit_log les utilisateurs avec LOGIN_PENDING
+    // qui n'ont PAS eu de LOGIN (validé) après leur dernier LOGIN_PENDING
+    const result = await pool.query(`
+      WITH latest_pending AS (
+        -- Dernier LOGIN_PENDING pour chaque email
         SELECT DISTINCT ON (LOWER(email))
-               email, name, created_at, 'askv_users' as source
-        FROM askv_users
-        WHERE email LIKE '%@haleon.com'
-        ORDER BY LOWER(email), created_at DESC
-      `);
-      askv.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: u.name,
-            source: 'askv_users',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`askv_users: ${askv.rows.length} total`);
-    } catch (e) {
-      logs.push(`askv_users error: ${e.message}`);
-    }
+               email, user_name as name, ts as created_at, site_id, company_id
+        FROM auth_audit_log
+        WHERE action = 'LOGIN_PENDING'
+          AND email IS NOT NULL
+        ORDER BY LOWER(email), ts DESC
+      ),
+      validated_after AS (
+        -- Utilisateurs qui ont eu un LOGIN (validé) après leur dernier LOGIN_PENDING
+        SELECT DISTINCT LOWER(lp.email) as email
+        FROM latest_pending lp
+        JOIN auth_audit_log a ON LOWER(a.email) = LOWER(lp.email)
+        WHERE a.action = 'LOGIN'
+          AND a.success = true
+          AND a.ts > lp.created_at
+      )
+      SELECT lp.email, lp.name, lp.created_at, lp.site_id, lp.company_id,
+             s.name as site_name, c.name as company_name,
+             'auth_audit_log' as source
+      FROM latest_pending lp
+      LEFT JOIN sites s ON lp.site_id = s.id
+      LEFT JOIN companies c ON lp.company_id = c.id
+      WHERE LOWER(lp.email) NOT IN (SELECT email FROM validated_after)
+      ORDER BY lp.created_at DESC
+    `);
 
-    // 3. Chercher dans askv_events (ts au lieu de created_at)
-    try {
-      const events = await pool.query(`
-        SELECT DISTINCT user_email as email, MIN(ts) as created_at
-        FROM askv_events
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email
-      `);
-      events.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: null,
-            source: 'askv_events',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`askv_events: ${events.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`askv_events error: ${e.message}`);
-    }
+    const users = result.rows.map(u => ({
+      id: null,
+      email: u.email,
+      name: u.name,
+      source: 'auth_audit_log (LOGIN_PENDING)',
+      created_at: u.created_at,
+      site_id: u.site_id,
+      site_name: u.site_name,
+      company_id: u.company_id,
+      company_name: u.company_name,
+      is_validated: false
+    }));
 
-    // 4. Chercher dans atex_checks (date au lieu de created_at)
-    try {
-      const atex = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(date) as created_at
-        FROM atex_checks
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email, user_name
-      `);
-      atex.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: u.name,
-            source: 'atex_checks',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`atex_checks: ${atex.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`atex_checks error: ${e.message}`);
-    }
-
-    // 5. Chercher dans vsd_checks (date au lieu de created_at)
-    try {
-      const vsd = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(date) as created_at
-        FROM vsd_checks
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email, user_name
-      `);
-      vsd.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: u.name,
-            source: 'vsd_checks',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`vsd_checks: ${vsd.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`vsd_checks error: ${e.message}`);
-    }
-
-    // 6. Chercher dans control_records (OIBT - performed_by_email au lieu de user_email)
-    try {
-      const oibt = await pool.query(`
-        SELECT DISTINCT performed_by_email as email, performed_by as name, MIN(created_at) as created_at
-        FROM control_records
-        WHERE performed_by_email LIKE '%@haleon.com'
-        GROUP BY performed_by_email, performed_by
-      `);
-      oibt.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: u.name,
-            source: 'control_records',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`control_records: ${oibt.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`control_records error: ${e.message}`);
-    }
-
-    // 7. Chercher dans learn_ex_sessions
-    try {
-      const learnex = await pool.query(`
-        SELECT DISTINCT user_email as email, MIN(started_at) as created_at
-        FROM learn_ex_sessions
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email
-      `);
-      learnex.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: null,
-            source: 'learn_ex_sessions',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`learn_ex_sessions: ${learnex.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`learn_ex_sessions error: ${e.message}`);
-    }
-
-    // 8. Chercher dans fd_checks (Fire Doors - closed_by_email au lieu de user_email)
-    try {
-      const fd = await pool.query(`
-        SELECT DISTINCT closed_by_email as email, closed_by_name as name, MIN(created_at) as created_at
-        FROM fd_checks
-        WHERE closed_by_email LIKE '%@haleon.com'
-        GROUP BY closed_by_email, closed_by_name
-      `);
-      fd.rows.forEach(u => {
-        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
-          pendingUsers.set(u.email.toLowerCase(), {
-            id: null,
-            email: u.email,
-            name: u.name,
-            source: 'fd_checks',
-            created_at: u.created_at,
-            is_validated: false
-          });
-        }
-      });
-      logs.push(`fd_checks: ${fd.rows.length} unique emails`);
-    } catch (e) {
-      logs.push(`fd_checks error: ${e.message}`);
-    }
-
-    // Convertir Map en Array et trier par date
-    const users = Array.from(pendingUsers.values())
-      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    logs.push(`auth_audit_log: ${users.length} pending users (no LOGIN after LOGIN_PENDING)`);
 
     console.log(`[ADMIN] Pending users: ${users.length} found | ${logs.join(' | ')}`);
     res.json({ users, count: users.length, sources: logs });
@@ -1276,7 +1129,9 @@ router.get("/users/pending", adminOnly, async (req, res) => {
 
 // POST /api/admin/users/validate/by-email - Valider un utilisateur par EMAIL
 // IMPORTANT: Cette route doit être AVANT validate/:id pour éviter que "by-email" soit interprété comme un ID
-// Pour les utilisateurs découverts dans les tables d'activité (pas encore dans haleon_users)
+// STRATÉGIE: Crée l'utilisateur dans la table "users" avec is_active=TRUE
+// Le code de login vérifie: is_validated = haleonUser?.is_validated === true || mainUser?.is_active === true
+// Donc en créant dans "users" avec is_active=TRUE, l'utilisateur sera validé!
 router.post("/users/validate/by-email", adminOnly, express.json(), async (req, res) => {
   try {
     const { email, allowed_apps, site_id, department_id, name } = req.body;
@@ -1285,40 +1140,37 @@ router.post("/users/validate/by-email", adminOnly, express.json(), async (req, r
       return res.status(400).json({ error: "Email required" });
     }
 
+    const emailLower = email.toLowerCase();
+    const isHaleon = emailLower.endsWith('@haleon.com');
     console.log(`[ADMIN] Validating user by email: ${email}`);
 
-    // Insert or update in haleon_users with is_validated = TRUE
-    let result;
+    // STRATÉGIE 1: Créer/mettre à jour dans la table "users" avec is_active=TRUE
+    // C'est la méthode la plus fiable car le login vérifie mainUser?.is_active === true
+    const result = await pool.query(`
+      INSERT INTO users (email, name, site_id, department_id, company_id, allowed_apps, is_active, role, origin, created_at, updated_at)
+      VALUES ($1, $2, COALESCE($3, 1), $4, $5, $6, TRUE, 'site', 'admin_validated', NOW(), NOW())
+      ON CONFLICT (email) DO UPDATE SET
+        is_active = TRUE,
+        name = COALESCE(EXCLUDED.name, users.name),
+        site_id = COALESCE(EXCLUDED.site_id, users.site_id),
+        department_id = COALESCE(EXCLUDED.department_id, users.department_id),
+        allowed_apps = COALESCE(EXCLUDED.allowed_apps, users.allowed_apps),
+        updated_at = NOW()
+      RETURNING *
+    `, [emailLower, name, site_id, department_id, isHaleon ? 1 : null, allowed_apps]);
+
+    // STRATÉGIE 2: Aussi essayer de mettre à jour haleon_users si la colonne is_validated existe
     try {
-      result = await pool.query(`
-        INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps, is_validated, created_at, updated_at)
-        VALUES ($1, $2, COALESCE($3, 1), $4, $5, TRUE, NOW(), NOW())
-        ON CONFLICT (email) DO UPDATE SET
-          is_validated = TRUE,
-          name = COALESCE(EXCLUDED.name, haleon_users.name),
-          site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
-          department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
-          allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
-          updated_at = NOW()
-        RETURNING *
-      `, [email.toLowerCase(), name, site_id, department_id, allowed_apps]);
+      await pool.query(`
+        UPDATE haleon_users SET is_validated = TRUE, updated_at = NOW()
+        WHERE LOWER(email) = $1
+      `, [emailLower]);
     } catch (e) {
-      // Fallback if is_validated column doesn't exist
-      console.log(`[ADMIN] is_validated column may not exist, trying without: ${e.message}`);
-      result = await pool.query(`
-        INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps, created_at, updated_at)
-        VALUES ($1, $2, COALESCE($3, 1), $4, $5, NOW(), NOW())
-        ON CONFLICT (email) DO UPDATE SET
-          name = COALESCE(EXCLUDED.name, haleon_users.name),
-          site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
-          department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
-          allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
-          updated_at = NOW()
-        RETURNING *
-      `, [email.toLowerCase(), name, site_id, department_id, allowed_apps]);
+      // Ignorer si la colonne n'existe pas
+      console.log(`[ADMIN] haleon_users update skipped (column may not exist): ${e.message}`);
     }
 
-    console.log(`[ADMIN] ✅ User validated by email: ${email}`);
+    console.log(`[ADMIN] ✅ User validated by email: ${email} (created in users table with is_active=TRUE)`);
     res.json({ ok: true, user: result.rows[0] });
   } catch (err) {
     console.error(`[ADMIN] Error validating user by email:`, err);
