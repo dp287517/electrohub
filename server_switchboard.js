@@ -701,6 +701,25 @@ async function ensureSchema() {
     FROM control_records;
 
     -- =======================================================
+    -- TABLE: Switchboard Audit Log (traçabilité des modifications)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS switchboard_audit_log (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      actor_name TEXT,
+      actor_email TEXT,
+      details JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_site ON switchboard_audit_log(site);
+    CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_entity ON switchboard_audit_log(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_actor ON switchboard_audit_log(actor_email);
+    CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_date ON switchboard_audit_log(created_at);
+
+    -- =======================================================
     -- MIGRATIONS: Ajouter colonnes manquantes
     -- =======================================================
     DO $$
@@ -2555,7 +2574,12 @@ POUR CHAQUE APPAREIL, extraire:
 6. Intensité nominale (In) en ampères
 7. Courbe (B, C, D) si applicable
 8. Pouvoir de coupure (Icu) en kA
-9. Nombre de pôles - TRÈS IMPORTANT: 1P (1 module), 2P/1P+N (2 modules), 3P (3 modules), 4P/3P+N (4 modules), 5P (5 modules, rare). Compte les manettes liées ensemble!
+9. Nombre de pôles - CRITIQUE pour distinguer mono/triphasé:
+   - 1P = 1 pôle, 1 module de large (18mm), MONOPHASÉ sans neutre coupé
+   - 1P+N ou 2P = 2 pôles, 2 modules de large (36mm), MONOPHASÉ avec neutre
+   - 3P = 3 pôles, 3 modules de large (54mm), TRIPHASÉ sans neutre
+   - 3P+N ou 4P = 4 pôles, 4 modules de large (72mm), TRIPHASÉ avec neutre
+   MÉTHODE: Compte la LARGEUR de l'appareil en modules (1 module = 18mm) ou le nombre de manettes liées ensemble
 10. Si différentiel: sensibilité en mA et type (AC, A, B, F)
 
 Réponds en JSON:
@@ -2574,7 +2598,7 @@ Réponds en JSON:
       "in_amps": 16,
       "curve_type": "C" ou null,
       "icu_ka": 6 ou null,
-      "poles": 1,  // 1, 2, 3, 4, ou 5 (nombre de modules/manettes liées)
+      "poles": 1,  // 1=mono sans N, 2=mono+N (1P+N), 3=tri sans N, 4=tri+N (3P+N)
       "is_differential": false,
       "differential_sensitivity_ma": null,
       "differential_type": null,
