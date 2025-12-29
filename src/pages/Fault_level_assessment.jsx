@@ -24,6 +24,13 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineEleme
 const cardClass = "bg-white rounded-xl border shadow-sm overflow-hidden";
 const badgeClass = "px-2 py-1 rounded-full text-xs font-semibold";
 
+// Safe toFixed helper
+const safeToFixed = (value, decimals = 2) => {
+  const num = Number(value);
+  if (isNaN(num) || !isFinite(num)) return '-';
+  return num.toFixed(decimals);
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CHARTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -287,14 +294,14 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <ValueCard
                   label='Ik" (Initial)'
-                  value={analysis.Ik_kA.toFixed(2)}
+                  value={safeToFixed(analysis.Ik_kA, 2)}
                   unit="kA"
                   status={!icuOk ? 'danger' : null}
                   icon={Zap}
                 />
-                <ValueCard label="Ip (Crête)" value={analysis.Ip_kA.toFixed(2)} unit="kA" icon={TrendingUp} />
-                <ValueCard label="Ib (Coupure)" value={analysis.Ib_kA.toFixed(2)} unit="kA" icon={Activity} />
-                <ValueCard label="Ith (1s)" value={analysis.Ith_kA.toFixed(2)} unit="kA" icon={Shield} />
+                <ValueCard label="Ip (Crête)" value={safeToFixed(analysis.Ip_kA, 2)} unit="kA" icon={TrendingUp} />
+                <ValueCard label="Ib (Coupure)" value={safeToFixed(analysis.Ib_kA, 2)} unit="kA" icon={Activity} />
+                <ValueCard label="Ith (1s)" value={safeToFixed(analysis.Ith_kA, 2)} unit="kA" icon={Shield} />
               </div>
 
               {/* Technical Details */}
@@ -309,7 +316,7 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
                 </div>
                 <div className="p-3 bg-gray-50 rounded-lg text-center">
                   <div className="text-xs text-gray-500">Z total</div>
-                  <div className="font-semibold">{analysis.Ztotal_mohm.toFixed(2)} mΩ</div>
+                  <div className="font-semibold">{safeToFixed(analysis.Ztotal_mohm, 2)} mΩ</div>
                 </div>
               </div>
 
@@ -331,7 +338,7 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
                   {!icuOk && (
                     <div className="mt-3 p-2 bg-red-100 rounded-lg text-red-700 text-sm flex items-center gap-2">
                       <AlertTriangle size={16} />
-                      Ik" ({analysis.Ik_kA.toFixed(1)} kA) dépasse Icu ({mainDevice.icu_ka} kA) - Disjoncteur sous-dimensionné!
+                      Ik" ({safeToFixed(analysis.Ik_kA, 1)} kA) dépasse Icu ({mainDevice.icu_ka} kA) - Disjoncteur sous-dimensionné!
                     </div>
                   )}
                 </div>
@@ -373,7 +380,7 @@ const SwitchboardCard = ({ board, devices, analysis, expanded, onToggle }) => {
                             <tr key={dev.id} className={`border-t ${!devOk ? 'bg-red-50' : ''}`}>
                               <td className="px-3 py-2 font-medium">{dev.name || dev.reference}</td>
                               <td className="px-3 py-2 text-right">{dev.in_amps}A</td>
-                              <td className="px-3 py-2 text-right font-mono">{devFla.Ik_kA.toFixed(2)}</td>
+                              <td className="px-3 py-2 text-right font-mono">{safeToFixed(devFla.Ik_kA, 2)}</td>
                               <td className="px-3 py-2 text-right">{dev.icu_ka || '-'}</td>
                               <td className="px-3 py-2 text-center">
                                 {devOk ? <CheckCircle size={16} className="inline text-green-500" /> : <XCircle size={16} className="inline text-red-500" />}
@@ -588,8 +595,8 @@ export default function FaultLevelAssessment() {
         board.name,
         board.code || '-',
         devices.length,
-        analysis ? analysis.Ik_kA.toFixed(2) : '-',
-        analysis ? analysis.Ip_kA.toFixed(2) : '-',
+        analysis ? safeToFixed(analysis.Ik_kA, 2) : '-',
+        analysis ? safeToFixed(analysis.Ip_kA, 2) : '-',
         mainDevice?.icu_ka || '-',
         icuOk ? 'OK' : 'DANGER'
       ]);

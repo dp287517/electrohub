@@ -4,6 +4,13 @@
  * Standards: IEC 60909, IEEE 1584-2018, IEC 60947-2, NFPA 70E
  */
 
+// Safe toFixed helper - handles strings, null, undefined, NaN
+const safeToFixed = (value, decimals = 2) => {
+  const num = Number(value);
+  if (isNaN(num) || !isFinite(num)) return '-';
+  return num.toFixed(decimals);
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // STANDARD PARAMETERS (Industry defaults)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -439,7 +446,7 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
 
   // Check if main breaker can handle fault
   if (mainDevice.icu_ka && results.faultLevel.Ik_kA > mainDevice.icu_ka) {
-    results.warnings.push(`DANGER: Ik" (${results.faultLevel.Ik_kA.toFixed(1)} kA) > Icu du disjoncteur principal (${mainDevice.icu_ka} kA)`);
+    results.warnings.push(`DANGER: Ik" (${safeToFixed(results.faultLevel.Ik_kA, 1)} kA) > Icu du disjoncteur principal (${mainDevice.icu_ka} kA)`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -513,7 +520,7 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
       results.selectivity.push(selectivityResult);
 
       if (!selectivityResult.isSelective) {
-        results.warnings.push(`Sélectivité non assurée entre ${upDevice.name} et ${downDevice.name} (limite: ${selectivityResult.limitCurrent?.toFixed(0) || '?'} A)`);
+        results.warnings.push(`Sélectivité non assurée entre ${upDevice.name} et ${downDevice.name} (limite: ${safeToFixed(selectivityResult.limitCurrent, 0)} A)`);
       }
     }
 
@@ -546,7 +553,7 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
     };
 
     if (!deviceAnalysis.icuOk) {
-      results.warnings.push(`${device.name}: Ik" (${deviceFla.Ik_kA.toFixed(1)} kA) > Icu (${device.icu_ka} kA)`);
+      results.warnings.push(`${device.name}: Ik" (${safeToFixed(deviceFla.Ik_kA, 1)} kA) > Icu (${device.icu_ka} kA)`);
     }
 
     results.deviceAnalysis.push(deviceAnalysis);
