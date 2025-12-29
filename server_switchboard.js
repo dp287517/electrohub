@@ -709,15 +709,43 @@ async function ensureSchema() {
     -- =======================================================
     CREATE TABLE IF NOT EXISTS switchboard_audit_log (
       id SERIAL PRIMARY KEY,
-      site TEXT NOT NULL,
-      action TEXT NOT NULL,
-      entity_type TEXT NOT NULL,
+      site TEXT,
+      action TEXT,
+      entity_type TEXT,
       entity_id INTEGER,
       actor_name TEXT,
       actor_email TEXT,
       details JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    -- Add missing columns if table was created by lib/audit-trail.js with different schema
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'site') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN site TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'action') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN action TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_type') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN entity_type TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_id') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN entity_id INTEGER;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_name') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN actor_name TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_email') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN actor_email TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'details') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN details JSONB DEFAULT '{}'::jsonb;
+      END IF;
+    END $$;
+
+    -- Now safe to create indexes (columns guaranteed to exist)
     CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_site ON switchboard_audit_log(site);
     CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_entity ON switchboard_audit_log(entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_switchboard_audit_log_actor ON switchboard_audit_log(actor_email);
@@ -926,31 +954,6 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'last_status_update') THEN
         ALTER TABLE devices ADD COLUMN last_status_update TIMESTAMPTZ;
-      END IF;
-
-      -- =====================================================
-      -- SWITCHBOARD_AUDIT_LOG: Migration colonnes manquantes
-      -- =====================================================
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'site') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN site TEXT;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'action') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN action TEXT;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_type') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN entity_type TEXT;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_id') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN entity_id INTEGER;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_name') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN actor_name TEXT;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_email') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN actor_email TEXT;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'details') THEN
-        ALTER TABLE switchboard_audit_log ADD COLUMN details JSONB DEFAULT '{}'::jsonb;
       END IF;
 
       -- =====================================================
