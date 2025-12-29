@@ -4903,25 +4903,112 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       somY += 30;
     });
 
-    // ========== Sections simplifiées pour la version async ==========
-    // Section 1: Cadre réglementaire
+    // ========== 1. CADRE RÉGLEMENTAIRE SUISSE ==========
     doc.addPage();
     doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Cadre reglementaire (Suisse)', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
     doc.fontSize(11).font('Helvetica').fillColor(colors.text);
     let regY = 100;
+
     doc.font('Helvetica-Bold').text('Ordonnance sur la prevention des accidents (OPA)', 50, regY);
     regY += 20;
-    doc.font('Helvetica').text('L\'OPA (RS 832.30) fixe les exigences en matiere de securite au travail en Suisse.', 50, regY, { width: 495 });
+    doc.font('Helvetica').text(
+      'L\'OPA (RS 832.30) fixe les exigences en matiere de securite au travail en Suisse. Elle impose aux employeurs de prendre toutes les mesures necessaires pour prevenir les accidents et maladies professionnels, y compris les risques d\'explosion.',
+      50, regY, { width: 495, align: 'justify' }
+    );
+    regY += 60;
 
-    // Section 2: Présentation
+    doc.font('Helvetica-Bold').text('Directive CFST 6512 - Equipements de travail', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text(
+      'Cette directive de la Commission federale de coordination pour la securite au travail (CFST) definit les exigences relatives aux equipements de travail, incluant les equipements utilises en zones ATEX.',
+      50, regY, { width: 495, align: 'justify' }
+    );
+    regY += 55;
+
+    doc.font('Helvetica-Bold').text('Ordonnance sur les appareils et systemes de protection ATEX (OSPA)', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text(
+      'L\'OSPA (RS 734.6) transpose la directive europeenne 2014/34/UE en droit suisse. Elle definit les exigences essentielles de sante et securite pour les appareils destines a etre utilises en atmospheres explosibles.',
+      50, regY, { width: 495, align: 'justify' }
+    );
+    regY += 60;
+
+    // Encadré important
+    doc.rect(50, regY, 495, 80).fillAndStroke('#fef3c7', colors.warning);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.warning).text('/!\\ IMPORTANT', 70, regY + 15);
+    doc.font('Helvetica').fillColor(colors.text).text(
+      'L\'employeur doit evaluer les risques d\'explosion, delimiter les zones dangereuses et s\'assurer que les equipements utilises sont conformes au zonage. Un document sur la protection contre les explosions doit etre etabli et maintenu a jour.',
+      70, regY + 35, { width: 455 }
+    );
+    regY += 100;
+
+    // Tableau zones
+    doc.font('Helvetica-Bold').fillColor(colors.text).text('Classification des zones', 50, regY);
+    regY += 25;
+
+    const zoneData = [
+      ['Zone', 'GAZ (G)', 'POUSSIERES (D)', 'Presence ATEX'],
+      ['0 / 20', 'Zone 0', 'Zone 20', 'Permanente ou frequente'],
+      ['1 / 21', 'Zone 1', 'Zone 21', 'Occasionnelle (fonct. normal)'],
+      ['2 / 22', 'Zone 2', 'Zone 22', 'Rare et de courte duree'],
+    ];
+
+    const colW = [60, 120, 120, 195];
+    zoneData.forEach((row, idx) => {
+      let xPos = 50;
+      const bgColor = idx === 0 ? colors.primary : (idx % 2 === 0 ? colors.light : '#fff');
+      const txtColor = idx === 0 ? '#fff' : colors.text;
+      doc.rect(xPos, regY, 495, 22).fillAndStroke(bgColor, '#d1d5db');
+      row.forEach((cell, ci) => {
+        doc.fontSize(9).font(idx === 0 ? 'Helvetica-Bold' : 'Helvetica').fillColor(txtColor)
+           .text(cell, xPos + 5, regY + 6, { width: colW[ci] - 10 });
+        xPos += colW[ci];
+      });
+      regY += 22;
+    });
+
+    // ========== 2. PRÉSENTATION ÉTABLISSEMENT ==========
     doc.addPage();
     doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Presentation de l\'etablissement', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
     let presY = 100;
     doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, presY);
     presY += 25;
+
+    if (siteInfo.company_address) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Adresse: ${siteInfo.company_address}`, 50, presY);
+      presY += 18;
+    }
+    if (siteInfo.company_phone) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Telephone: ${siteInfo.company_phone}`, 50, presY);
+      presY += 18;
+    }
+    if (siteInfo.company_email) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Email: ${siteInfo.company_email}`, 50, presY);
+      presY += 18;
+    }
+
     doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Site: ${siteInfo.site_name || siteName || 'Non renseigne'}`, 50, presY);
+    presY += 40;
+
+    // Stats globales
+    doc.fontSize(12).font('Helvetica-Bold').text('Synthese de l\'installation', 50, presY);
+    presY += 25;
+
+    const statsData = [
+      ['Equipements ATEX', totalEquipments],
+      ['Plans', plans.length],
+      ['Zones classees', subareas.length],
+    ];
+
+    statsData.forEach(([label, value]) => {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(label, 70, presY);
+      doc.font('Helvetica-Bold').text(String(value), 250, presY);
+      presY += 20;
+    });
 
     // Section 3: Plans
     doc.addPage();
@@ -4974,7 +5061,7 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       });
     });
 
-    // Section 5: État de conformité
+    // ========== 5. ÉTAT DE CONFORMITÉ ==========
     doc.addPage();
     doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('5. Etat de conformite', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
@@ -4984,84 +5071,314 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       { label: 'Conformes', count: conformeCount, color: colors.success, pct: totalEquipments ? Math.round(conformeCount / totalEquipments * 100) : 0 },
       { label: 'Non conformes', count: nonConformeCount, color: colors.danger, pct: totalEquipments ? Math.round(nonConformeCount / totalEquipments * 100) : 0 },
       { label: 'Non verifies', count: naCount, color: colors.muted, pct: totalEquipments ? Math.round(naCount / totalEquipments * 100) : 0 },
+      { label: 'Verification en retard', count: retardCount, color: colors.warning, pct: totalEquipments ? Math.round(retardCount / totalEquipments * 100) : 0 },
     ];
 
     confStats.forEach(stat => {
       doc.rect(50, confY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
       doc.fontSize(11).font('Helvetica-Bold').fillColor(stat.color).text(stat.label, 60, confY + 8);
       doc.fontSize(9).font('Helvetica').fillColor(colors.muted).text(`${stat.count} equipement(s)`, 60, confY + 23);
+      doc.rect(300, confY + 15, 180, 12).fillAndStroke(colors.light, '#d1d5db');
+      if (stat.pct > 0) {
+        doc.rect(300, confY + 15, Math.max(5, 180 * stat.pct / 100), 12).fill(stat.color);
+      }
       doc.fontSize(10).font('Helvetica-Bold').fillColor(stat.color).text(`${stat.pct}%`, 490, confY + 13, { align: 'right', width: 40 });
       confY += 45;
     });
 
-    // Section 6: Planification
+    confY += 20;
+
+    // Liste des non conformes
+    const nonConformes = equipments.filter(e => e.last_result === 'non_conforme');
+    if (nonConformes.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('/!\\ Equipements non conformes', 50, confY);
+      confY += 25;
+
+      nonConformes.forEach(eq => {
+        if (confY > 750) { doc.addPage(); confY = 50; }
+        doc.rect(50, confY, 495, 30).fillAndStroke('#fef2f2', '#fca5a5');
+        doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.danger).text(eq.name || 'Equipement sans nom', 60, confY + 6);
+        doc.fontSize(8).font('Helvetica').fillColor(colors.muted)
+           .text(`${eq.building || '-'} | ${eq.zone || '-'} | ${eq.type || '-'}`, 60, confY + 17);
+        confY += 35;
+      });
+    }
+
+    // ========== 6. PLANIFICATION ==========
     doc.addPage();
     doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Planification des verifications', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
-    // Section 7: Mesures
+    let planY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text('Les equipements ATEX font l\'objet de verifications periodiques conformement a la reglementation suisse (OPA/CFST).', 50, planY, { width: 495 });
+    planY += 40;
+
+    // Équipements à vérifier
+    const upcoming = equipments
+      .filter(e => e.next_check_date)
+      .sort((a, b) => new Date(a.next_check_date) - new Date(b.next_check_date));
+
+    if (upcoming.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').text('Prochaines verifications', 50, planY);
+      planY += 25;
+
+      const planHeaders = ['Equipement', 'Batiment', 'Zone', 'Date verif.', 'Statut'];
+      const planColW = [180, 100, 80, 85, 50];
+      let xPlan = 50;
+      planHeaders.forEach((h, i) => {
+        doc.rect(xPlan, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, xPlan + 4, planY + 5, { width: planColW[i] - 8 });
+        xPlan += planColW[i];
+      });
+      planY += 20;
+
+      upcoming.forEach(eq => {
+        if (planY > 750) {
+          doc.addPage();
+          planY = 50;
+          xPlan = 50;
+          planHeaders.forEach((h, i) => {
+            doc.rect(xPlan, planY, planColW[i], 20).fillAndStroke(colors.primary, colors.primary);
+            doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, xPlan + 4, planY + 5, { width: planColW[i] - 8 });
+            xPlan += planColW[i];
+          });
+          planY += 20;
+        }
+        const nextDate = new Date(eq.next_check_date);
+        const now = new Date();
+        const isLate = nextDate < now;
+        const isClose = !isLate && (nextDate - now) / (1000 * 60 * 60 * 24) < 90;
+        const statusColor = isLate ? colors.danger : (isClose ? colors.warning : colors.success);
+        const statusText = isLate ? 'RETARD' : (isClose ? 'PROCHE' : 'OK');
+
+        const row = [
+          (eq.name || '-').substring(0, 35),
+          (eq.building || '-').substring(0, 18),
+          (eq.zone || '-').substring(0, 14),
+          nextDate.toLocaleDateString('fr-FR'),
+          statusText
+        ];
+        xPlan = 50;
+        row.forEach((cell, i) => {
+          doc.rect(xPlan, planY, planColW[i], 18).fillAndStroke('#fff', '#e5e7eb');
+          const col = i === 4 ? statusColor : colors.text;
+          doc.fontSize(7).font('Helvetica').fillColor(col).text(String(cell), xPlan + 4, planY + 5, { width: planColW[i] - 8 });
+          xPlan += planColW[i];
+        });
+        planY += 18;
+      });
+    }
+
+    // ========== 7. MESURES DE PRÉVENTION ==========
     doc.addPage();
     doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Mesures de prevention et protection', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
-    // ========== Section 8: FICHES EQUIPEMENTS ==========
+    let mesY = 100;
+    const mesures = [
+      { title: 'Mesures techniques', items: [
+        'Utilisation d\'equipements ATEX conformes (directive 2014/34/UE / OSPA)',
+        'Ventilation et extraction des atmospheres explosives',
+        'Mise a la terre et equipotentialite des equipements',
+        'Controle des sources d\'inflammation',
+      ]},
+      { title: 'Mesures organisationnelles', items: [
+        'Formation du personnel aux risques ATEX',
+        'Procedures de travail et permis de feu',
+        'Signalisation des zones a risque d\'explosion',
+        'Maintenance preventive des equipements',
+      ]},
+      { title: 'Mesures de protection', items: [
+        'Detection de gaz/poussieres avec alarme',
+        'Dispositifs d\'arret d\'urgence',
+        'Equipements de protection individuelle adaptes',
+        'Plan d\'intervention en cas d\'incident',
+      ]},
+    ];
+
+    mesures.forEach(section => {
+      if (mesY > 650) { doc.addPage(); mesY = 50; }
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.primary).text(section.title, 50, mesY);
+      mesY += 22;
+      section.items.forEach(item => {
+        doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(`- ${item}`, 70, mesY, { width: 475 });
+        mesY += 20;
+      });
+      mesY += 15;
+    });
+
+    // Note finale
+    mesY += 20;
+    doc.rect(50, mesY, 495, 60).fillAndStroke('#f0fdfa', colors.success);
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.success).text('[OK] Document conforme', 70, mesY + 15);
+    doc.font('Helvetica').fillColor(colors.text).text(
+      'Ce document doit etre mis a jour lors de toute modification des installations ou des conditions d\'exploitation.',
+      70, mesY + 32, { width: 455 }
+    );
+
+    // ========== 8. FICHES EQUIPEMENTS ==========
+    // Afficher tous les équipements avec vignette du plan si disponible
     if (equipments.length > 0) {
       doc.addPage();
-      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50, { lineBreak: false });
       doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
       let ficheY = 100;
-      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(`${equipments.length} equipement(s) ATEX`, 50, ficheY);
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted)
+         .text(`${equipments.length} equipement(s) ATEX`, 50, ficheY, { lineBreak: false });
       ficheY += 30;
 
       let processedCount = 0;
       for (let i = 0; i < equipments.length; i++) {
         const eq = equipments[i];
-        const position = positionsMap.get(eq.id);
+        const position = positionsMap.get(eq.id); // Position sur le plan si disponible
 
-        if (ficheY > 500) {
+        if (ficheY > 450) {
           doc.addPage();
           ficheY = 50;
         }
 
-        // Fiche simplifiée
-        doc.rect(50, ficheY, 495, 200).stroke(colors.light);
-        doc.rect(50, ficheY, 495, 30).fill(colors.primary);
-        doc.fontSize(11).font('Helvetica-Bold').fillColor('#fff').text(eq.name || 'Equipement sans nom', 60, ficheY + 8, { width: 475 });
+        // Cadre de la fiche
+        doc.rect(50, ficheY, 495, 320).stroke(colors.light);
 
-        // Badge conformité
-        const result = eq.last_result || 'na';
-        const badgeColor = result === 'conforme' ? colors.success : result === 'non_conforme' ? colors.danger : colors.warning;
-        const badgeText = result === 'conforme' ? 'CONFORME' : result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER';
-        doc.rect(400, ficheY + 5, 90, 20).fill(badgeColor);
-        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(badgeText, 405, ficheY + 10, { width: 80, align: 'center' });
+        // En-tête avec le nom - couleur Haleon
+        doc.rect(50, ficheY, 495, 35).fill(colors.primary);
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('#fff')
+           .text(eq.name || 'Equipement sans nom', 60, ficheY + 10, { width: 380, lineBreak: false });
 
-        // Infos principales
-        let infoY = ficheY + 40;
+        // Statut
+        const statusLabel = eq.last_result === 'conforme' ? 'CONFORME' : (eq.last_result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER');
+        const statusBg = eq.last_result === 'conforme' ? '#fff' : (eq.last_result === 'non_conforme' ? colors.danger : colors.warning);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(statusBg)
+           .text(statusLabel, 450, ficheY + 13, { width: 80, align: 'right' });
+
+        let infoY = ficheY + 45;
+        const infoX = 60;
+        const infoWidth = 240;
+        const rightColX = 310;
+        const imgWidth = 115;
+        const imgHeight = 115;
+
+        // === COLONNE DROITE: Photo équipement + Vignette plan ===
+        let rightY = infoY;
+
+        // Photo de l'équipement (en haut à droite)
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            doc.image(eq.photo_content, rightColX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+            doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke('#e5e7eb');
+          } catch (photoErr) {
+            doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Photo N/A', rightColX + 35, rightY + 50, { lineBreak: false });
+          }
+        } else {
+          doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 50, { lineBreak: false });
+        }
+
+        // Vignette du plan avec localisation (à côté de la photo)
+        const planX = rightColX + imgWidth + 10;
+        if (position && (position.plan_thumbnail || position.plan_content)) {
+          try {
+            const planDisplayName = position.plan_display_name || 'Plan';
+            let planThumbnail = null;
+
+            // Utiliser le thumbnail pré-généré (PNG) avec marqueur de position
+            if (position.plan_thumbnail && position.plan_thumbnail.length > 0) {
+              const { loadImage } = await import('canvas');
+              const thumbnailBuffer = Buffer.isBuffer(position.plan_thumbnail)
+                ? position.plan_thumbnail
+                : Buffer.from(position.plan_thumbnail);
+
+              const img = await loadImage(thumbnailBuffer);
+              const canvas = createCanvas(img.width, img.height);
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+
+              // Dessiner le marqueur de position si fourni
+              if (position.x_frac !== null && position.y_frac !== null &&
+                  !isNaN(position.x_frac) && !isNaN(position.y_frac)) {
+                const markerX = position.x_frac * img.width;
+                const markerY = position.y_frac * img.height;
+                const markerRadius = Math.max(12, img.width / 25);
+
+                // Cercle extérieur rouge
+                ctx.beginPath();
+                ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
+                ctx.fillStyle = '#dc2626';
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                // Point central blanc
+                ctx.beginPath();
+                ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
+                ctx.fillStyle = '#ffffff';
+                ctx.fill();
+              }
+
+              planThumbnail = canvas.toBuffer('image/png');
+            } else if (position.plan_content) {
+              // Fallback: essayer de convertir le PDF (si pdfToImageWithMarker existe)
+              try {
+                planThumbnail = await pdfToImageWithMarker(
+                  position.plan_content,
+                  position.x_frac,
+                  position.y_frac,
+                  imgWidth * 2,
+                  planDisplayName
+                );
+              } catch (pdfErr) {
+                console.warn(`[DRPCE-Async] PDF conversion failed for ${eq.name}:`, pdfErr.message);
+              }
+            }
+
+            if (planThumbnail) {
+              doc.image(planThumbnail, planX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+              doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.primary);
+              // Nom du plan en dessous
+              doc.fontSize(6).fillColor(colors.muted)
+                 .text(planDisplayName, planX, rightY + imgHeight + 2, { width: imgWidth, align: 'center', lineBreak: false });
+            } else {
+              doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+              doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50, { lineBreak: false });
+            }
+          } catch (planErr) {
+            console.warn(`[DRPCE-Async] Plan thumbnail error for ${eq.name}:`, planErr.message);
+            doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+            doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50, { lineBreak: false });
+          }
+        } else {
+          doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 25, rightY + 50, { lineBreak: false });
+        }
+
+        // === COLONNE GAUCHE: Informations ===
+        const atexMarking = [eq.atex_mark_gas, eq.atex_mark_dust].filter(Boolean).join(' / ') || '-';
+        const zoning = [eq.zoning_gas != null ? `Gaz: ${eq.zoning_gas}` : null, eq.zoning_dust != null ? `Pous.: ${eq.zoning_dust}` : null].filter(Boolean).join(' / ') || '-';
         const infoItems = [
           ['Type', eq.type || '-'],
-          ['Batiment / Zone', `${eq.building || '-'} / ${eq.zone || '-'}`],
+          ['Batiment', eq.building || '-'],
+          ['Zone', eq.zone || '-'],
           ['Fabricant', eq.manufacturer || '-'],
-          ['Marquage ATEX', [eq.atex_mark_gas, eq.atex_mark_dust].filter(Boolean).join(' / ') || '-'],
+          ['Reference', eq.manufacturer_ref || '-'],
+          ['Equipement', eq.equipment || '-'],
+          ['Sous-equip.', eq.sub_equipment || '-'],
+          ['Marquage ATEX', atexMarking],
+          ['Zonage', zoning],
           ['Derniere verif.', eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : '-'],
           ['Prochaine verif.', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
         ];
 
         infoItems.forEach(([label, value]) => {
-          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', 60, infoY, { width: 100 });
-          doc.font('Helvetica').fillColor(colors.muted).text(value, 165, infoY, { width: 320 });
+          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 80, lineBreak: false });
+          doc.font('Helvetica').fillColor(colors.muted).text(String(value).substring(0, 40), infoX + 85, infoY, { width: infoWidth - 85, lineBreak: false });
           infoY += 16;
         });
 
-        // Photo (si disponible)
-        if (eq.photo_content && eq.photo_content.length > 0) {
-          try {
-            const photoBuffer = await sharp(eq.photo_content).resize(80, 80, { fit: 'cover' }).png().toBuffer();
-            doc.image(photoBuffer, 450, ficheY + 45, { width: 80, height: 80 });
-          } catch (e) {}
-        }
-
-        ficheY += 210;
+        ficheY += 330;
         processedCount++;
 
         // Mettre à jour la progression toutes les 10 fiches
