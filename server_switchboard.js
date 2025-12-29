@@ -1840,9 +1840,10 @@ app.post('/api/switchboard/devices', async (req, res) => {
         site, switchboard_id, parent_id, downstream_switchboard_id,
         name, device_type, manufacturer, reference,
         in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+        curve_type, differential_sensitivity_ma, differential_type,
         position_number, is_differential, is_complete, settings, is_main_incoming, diagram_data
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING *`,
       [
         site, switchboard_id,
@@ -1858,6 +1859,9 @@ app.post('/api/switchboard/devices', async (req, res) => {
         b.poles ? Number(b.poles) : null,
         b.voltage_v ? Number(b.voltage_v) : null,
         b.trip_unit || null,
+        b.curve_type || null,
+        b.differential_sensitivity_ma ? Number(b.differential_sensitivity_ma) : null,
+        b.differential_type || null,
         b.position_number || null,
         !!b.is_differential,
         is_complete,
@@ -1934,9 +1938,10 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
          manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9,
          poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
          is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
-         diagram_data = $18, updated_at = NOW()
+         diagram_data = $18, curve_type = $19, differential_sensitivity_ma = $20,
+         differential_type = $21, updated_at = NOW()
        FROM switchboards sb
-       WHERE devices.id = $19 AND devices.switchboard_id = sb.id AND sb.site = $20
+       WHERE devices.id = $22 AND devices.switchboard_id = sb.id AND sb.site = $23
        RETURNING devices.*`,
       [
         b.parent_id || null,
@@ -1957,6 +1962,9 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.settings || {},
         !!b.is_main_incoming,
         b.diagram_data || {},
+        b.curve_type || null,
+        b.differential_sensitivity_ma ? Number(b.differential_sensitivity_ma) : null,
+        b.differential_type || null,
         id,
         site
       ],
