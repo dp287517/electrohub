@@ -7,6 +7,7 @@ export const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmai
 // Available applications with routes
 export const ALL_APPS = [
   { id: 'switchboards', name: 'Electrical Switchboards', icon: '⚡', category: 'Electrical', route: '/app/switchboards' },
+  { id: 'switchboard-controls', name: 'Contrôles Périodiques', icon: '📋', category: 'Electrical', route: '/app/switchboard-controls' },
   { id: 'obsolescence', name: 'Obsolescence', icon: '♻️', category: 'Electrical', route: '/app/obsolescence' },
   { id: 'selectivity', name: 'Selectivity', icon: '🧩', category: 'Electrical', route: '/app/selectivity' },
   { id: 'fault-level', name: 'Fault Level Assessment', icon: '📈', category: 'Electrical', route: '/app/fault-level' },

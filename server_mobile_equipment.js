@@ -18,6 +18,7 @@ import QRCode from "qrcode";
 import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notify } from "./lib/push-notify.js";
 
 // MAPS - PDF handling
 import crypto from "crypto";
@@ -811,6 +812,10 @@ app.post("/api/mobile-equipment/equipments", async (req, res) => {
       details: { name, code, building, floor, location }
     });
 
+    // 🔔 Push notification for new mobile equipment
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentCreated('mobile', equipment, userId).catch(err => console.log('[MOBILE EQUIPMENT] Push notify error:', err.message));
+
     res.json({
       ok: true,
       equipment: { ...equipment, next_check_date: due, photo_url: null, equipment_state: null },
@@ -951,6 +956,18 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
       } catch (auditErr) {
         console.warn('[UPDATE MOBILE EQUIPMENT] Audit log failed (non-blocking):', auditErr.message);
       }
+
+      // 🔔 Push notification for updated mobile equipment
+      try {
+        const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+        notify('📝 Équipement mobile modifié', `${eq.name} a été mis à jour`, {
+          type: 'equipment_updated',
+          tag: `mobile-updated-${eq.id}`,
+          data: { equipmentType: 'mobile', equipmentId: eq.id, url: `/app/mobile-equipments/${eq.id}` }
+        }).catch(err => console.log('[MOBILE EQUIPMENT] Push notify error:', err.message));
+      } catch (notifyErr) {
+        console.warn('[UPDATE MOBILE EQUIPMENT] Push notify failed (non-blocking):', notifyErr.message);
+      }
     }
 
     res.json({ ok: true, equipment: rows[0] });
@@ -978,6 +995,12 @@ app.delete("/api/mobile-equipment/equipments/:id", async (req, res) => {
       entityId: equipmentId,
       details: { name: eq?.name, code: eq?.code, building: eq?.building, floor: eq?.floor, location: eq?.location }
     });
+
+    // 🔔 Push notification for deleted mobile equipment
+    if (eq) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyEquipmentDeleted('mobile', eq, userId).catch(err => console.log('[MOBILE EQUIPMENT] Push notify error:', err.message));
+    }
 
     res.json({ ok: true });
   } catch (e) {

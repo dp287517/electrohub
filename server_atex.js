@@ -21,6 +21,7 @@ import { createRequire } from "module";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity, notifyUser } from "./lib/push-notify.js";
+import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -298,6 +299,10 @@ const pool = new Pool({
   max: 10,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
+
+// 📝 AUDIT TRAIL - Initialize for ATEX module
+const audit = createAuditTrail(pool, 'atex');
+
 // -------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
@@ -1073,6 +1078,17 @@ app.post("/api/atex/equipments", async (req, res) => {
     const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
     notifyEquipmentCreated('atex', eq, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
 
+    // 📝 AUDIT: Log création équipement ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'atex_equipment',
+        entityId: eq.id,
+        details: { name: eq.name, building: eq.building, zone: eq.zone, type: eq.type, manufacturer: eq.manufacturer }
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX CREATE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -1107,6 +1123,17 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
         (eq.photo_content && eq.photo_content.length) || eq.photo_path
           ? `/api/atex/equipments/${id}/photo`
           : null;
+
+      // 📝 AUDIT: Log modification équipement ATEX
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'atex_equipment',
+          entityId: eq.id,
+          details: { name: eq.name, building: eq.building, zone: eq.zone, type: eq.type, fieldsUpdated: set.map(s => s.split('=')[0]) }
+        });
+      } catch (auditErr) {
+        console.warn('[ATEX UPDATE] Audit log failed (non-blocking):', auditErr.message);
+      }
     }
     res.json({ equipment: eq });
   } catch (e) {
@@ -1127,6 +1154,17 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
     if (equipment) {
       const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
       notifyEquipmentDeleted('atex', equipment, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
+
+      // 📝 AUDIT: Log suppression équipement ATEX
+      try {
+        await audit.log(req, AUDIT_ACTIONS.DELETED, {
+          entityType: 'atex_equipment',
+          entityId: id,
+          details: { name: equipment.name, building: equipment.building }
+        });
+      } catch (auditErr) {
+        console.warn('[ATEX DELETE] Audit log failed (non-blocking):', auditErr.message);
+      }
     }
 
     res.json({ ok: true });
@@ -1208,6 +1246,17 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
           [newEquipment.id, targetLogical, pos.plan_id, pos.page_index, pos.x_frac, pos.y_frac]
         );
       }
+    }
+
+    // 📝 AUDIT: Log duplication équipement ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'atex_equipment',
+        entityId: newEquipment.id,
+        details: { name: newEquipment.name, building: newEquipment.building, duplicatedFrom: sourceId }
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX DUPLICATE] Audit log failed (non-blocking):', auditErr.message);
     }
 
     res.json({ ok: true, equipment: newEquipment });
@@ -1495,6 +1544,18 @@ app.put("/api/atex/settings", async (req, res) => {
       [frequency || null, Array.isArray(checklist_template) ? JSON.stringify(checklist_template) : null]
     );
     const { rows } = await pool.query(`SELECT * FROM atex_settings WHERE id=1`);
+
+    // 📝 AUDIT: Log modification paramètres ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'atex_settings',
+        entityId: 1,
+        details: { frequency, hasChecklist: !!checklist_template }
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX SETTINGS] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json(rows?.[0] || {});
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
@@ -1548,6 +1609,17 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
       if (checkResult === 'non_conforme') {
         notifyNonConformity('atex', equipment, 'Contrôle non conforme')
           .catch(err => console.log('[ATEX] Push NC notify error:', err.message));
+      }
+
+      // 📝 AUDIT: Log contrôle terminé
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'atex_check',
+          entityId: checkId,
+          details: { equipmentId: id, equipmentName: equipment.name, result: checkResult, status: 'fait' }
+        });
+      } catch (auditErr) {
+        console.warn('[ATEX CHECK] Audit log failed (non-blocking):', auditErr.message);
       }
     }
 
@@ -2543,10 +2615,22 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     // --------------------------------------------------------------------------------
 
     await logEvent(req, "subarea.create", { id: created.id, logical_name, page_index, kind, name, zoning_gas, zoning_dust });
+
+    // 📝 AUDIT: Log création zone ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'atex_subarea',
+        entityId: created.id,
+        details: { name, kind, logical_name, page_index, zoning_gas, zoning_dust }
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX SUBAREA] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ ok:true, subarea: created, created: true });
 
-  } catch (e) { 
-    res.status(500).json({ ok:false, error:e.message }); 
+  } catch (e) {
+    res.status(500).json({ ok:false, error:e.message });
   }
 });
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
@@ -2667,9 +2751,22 @@ app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
-  try { const id = String(req.params.id);
+  try {
+    const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_subareas WHERE id=$1`, [id]);
     await logEvent(req, "subarea.delete", { id });
+
+    // 📝 AUDIT: Log suppression zone ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.DELETED, {
+        entityType: 'atex_subarea',
+        entityId: id,
+        details: {}
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX SUBAREA DELETE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ ok:true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });

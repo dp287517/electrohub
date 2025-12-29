@@ -1228,6 +1228,10 @@ app.post('/api/switchboard/boards', async (req, res) => {
       details: { name: sb.name, code: sb.code, site, building: sb.building_code }
     });
 
+    // 🔔 Push notification for new switchboard
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentCreated('switchboard', sb, userId).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
+
     res.status(201).json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
@@ -1318,6 +1322,18 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       });
     } catch (auditErr) {
       console.warn('[UPDATE BOARD] Audit log failed (non-blocking):', auditErr.message);
+    }
+
+    // 🔔 Push notification for updated switchboard
+    try {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notify('📝 Tableau modifié', `${sb.name} (${sb.code}) a été mis à jour`, {
+        type: 'equipment_updated',
+        tag: `switchboard-updated-${sb.id}`,
+        data: { equipmentType: 'switchboard', equipmentId: sb.id, url: `/app/switchboards/${sb.id}` }
+      }).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
+    } catch (notifyErr) {
+      console.warn('[UPDATE BOARD] Push notify failed (non-blocking):', notifyErr.message);
     }
 
     const elapsed = Date.now() - startTime;
@@ -1450,6 +1466,12 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
       entityId: id,
       details: { name: boardInfo?.name, code: boardInfo?.code, site, devicesDeleted: deviceCount }
     });
+
+    // 🔔 Push notification for deleted switchboard
+    if (boardInfo) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyEquipmentDeleted('switchboard', boardInfo, userId).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
+    }
 
     res.json({ success: true, deleted: id, name: r.rows[0].name, devices_deleted: deviceCount });
   } catch (e) {
@@ -1730,6 +1752,10 @@ app.post('/api/switchboard/devices', async (req, res) => {
       }
     });
 
+    // 🔔 Push notification for new device
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentCreated('device', { ...device, switchboard_id: switchboard_id }, userId).catch(err => console.log('[SWITCHBOARD] Device push notify error:', err.message));
+
     // Le trigger met à jour automatiquement device_count et complete_count
 
     res.status(201).json(device);
@@ -1905,6 +1931,12 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
         reference: dev?.reference
       }
     });
+
+    // 🔔 Push notification for deleted device
+    if (dev) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyEquipmentDeleted('device', dev, userId).catch(err => console.log('[SWITCHBOARD] Device push notify error:', err.message));
+    }
 
     // Le trigger met à jour automatiquement device_count et complete_count
 
