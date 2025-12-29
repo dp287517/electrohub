@@ -2390,36 +2390,35 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
           role: 'system',
           content: `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
 
-MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS les appareils modulaires visibles.
+MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS les appareils modulaires visibles AVEC leurs étiquettes de position.
+
+ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
+- Sur les tableaux, il y a des ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur
+- Ces étiquettes indiquent la POSITION/NUMÉRO du circuit (ex: "1", "2", "3", "Q1", "Q2", "A1", "B3", etc.)
+- Tu DOIS lire et retranscrire ces positions EXACTEMENT dans le champ "position_label"
+- Il peut AUSSI y avoir un nom/description du circuit - le mettre dans "circuit_name"
+- Si pas d'étiquette de position visible, mettre null
+- NE PAS inventer des positions type "R1-P1" - lire les VRAIES étiquettes !
 
 TYPES D'APPAREILS À IDENTIFIER:
 - Disjoncteurs (magnéto-thermiques)
 - Disjoncteurs différentiels
 - Interrupteurs différentiels
-- Contacteurs
-- Télérupteurs
+- Contacteurs / Télérupteurs
 - Parafoudres
 - Horloges/programmateurs
-- Bornes, répartiteurs
 
-POUR CHAQUE APPAREIL IDENTIFIÉ, extraire:
-1. Position approximative (rangée et position de gauche à droite, ex: "R1-P3")
-2. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, etc.)
-3. Type d'appareil
-4. Référence si visible
-5. Intensité nominale (In) en ampères
-6. Courbe (B, C, D) si applicable
-7. Pouvoir de coupure (Icu) en kA si visible
-8. Nombre de pôles (1P, 2P, 3P, 4P, 1P+N)
-9. Si différentiel: sensibilité en mA et type (AC, A, B, F)
-10. Largeur estimée en modules
-
-IMPORTANT:
-- Numérote les rangées de haut en bas (R1, R2, R3...)
-- Numérote les positions de gauche à droite (P1, P2, P3...)
-- Si plusieurs photos, combine les informations
-- Indique ton niveau de confiance pour chaque appareil
-- Si un appareil est partiellement visible ou flou, indique-le
+POUR CHAQUE APPAREIL, extraire:
+1. POSITION (étiquette) - Le numéro/code sur l'étiquette (PRIMORDIAL: "1", "Q3", "A2", etc.)
+2. Nom du circuit si visible (ex: "Éclairage Cuisine", "VMC", "PAC")
+3. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, Merlin Gerin, etc.)
+4. Type d'appareil
+5. Référence visible sur l'appareil
+6. Intensité nominale (In) en ampères
+7. Courbe (B, C, D) si applicable
+8. Pouvoir de coupure (Icu) en kA
+9. Nombre de pôles (1P, 2P, 3P, 4P, 1P+N)
+10. Si différentiel: sensibilité en mA et type (AC, A, B, F)
 
 Réponds en JSON:
 {
@@ -2427,20 +2426,20 @@ Réponds en JSON:
   "total_devices_detected": number,
   "devices": [
     {
-      "position": "R1-P1",
+      "position_label": "Q3" ou "1" ou "A2" ou null,
+      "circuit_name": "Éclairage Cuisine" ou null,
+      "row": 1,
+      "position_in_row": 3,
       "device_type": "Disjoncteur modulaire",
       "manufacturer": "Schneider Electric",
-      "manufacturer_confidence": "high/medium/low",
-      "reference": "iC60N C16" ou null,
+      "reference": "iC60N" ou null,
       "in_amps": 16,
       "curve_type": "C" ou null,
       "icu_ka": 6 ou null,
       "poles": 1,
-      "width_modules": 1,
       "is_differential": false,
       "differential_sensitivity_ma": null,
       "differential_type": null,
-      "visibility": "clear/partial/blurry",
       "confidence": "high/medium/low",
       "notes": "observations particulières"
     }
@@ -2451,13 +2450,17 @@ Réponds en JSON:
         {
           role: 'user',
           content: [
-            { type: 'text', text: `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique. Identifie et liste TOUS les appareils modulaires visibles.` },
+            { type: 'text', text: `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique.
+
+TRÈS IMPORTANT: Lis les ÉTIQUETTES DE POSITION sur chaque disjoncteur (au-dessus ou en-dessous). Ces étiquettes indiquent le numéro/code du circuit (ex: "1", "2", "Q1", "A3"). Lis aussi le nom du circuit si visible.
+
+Identifie TOUS les appareils modulaires avec leurs positions et caractéristiques techniques.` },
             ...imageContents
           ]
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0.1
     });
 
