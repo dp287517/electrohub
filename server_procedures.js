@@ -2371,7 +2371,7 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   // Generate QR Code
   let qrCodeBuffer = null;
   try {
-    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/procedures?id=${procedureId}&ai=true`, {
+    qrCodeBuffer = await QRCode.toBuffer(`${baseUrl}/app/procedures?id=${procedureId}&ai=true`, {
       width: 80, margin: 1, color: { dark: '#1e1b4b', light: '#ffffff' }
     });
   } catch (e) {
