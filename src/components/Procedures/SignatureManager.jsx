@@ -29,6 +29,7 @@ export default function SignatureManager({ procedureId, procedureTitle, createdB
   const currentUserEmail = localStorage.getItem('userEmail')
     || localStorage.getItem('email')
     || localStorage.getItem('user.email')
+    || localStorage.getItem('askVeeva_email')
     || '';
 
   // Check if procedure has no real owner
