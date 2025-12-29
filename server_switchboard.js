@@ -2830,12 +2830,77 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
       }
     }
 
+    job.progress = 85;
+    job.message = 'Vérification des appareils existants...';
+
+    // Charger les appareils existants du tableau pour marquer lesquels seront mis à jour vs créés
+    let existingDevices = [];
+    if (switchboardId) {
+      try {
+        const { rows } = await quickQuery(
+          'SELECT id, position_number, reference, manufacturer, in_amps, name FROM devices WHERE switchboard_id = $1 AND site = $2',
+          [switchboardId, site]
+        );
+        existingDevices = rows;
+        console.log(`[PANEL SCAN] Found ${existingDevices.length} existing devices in switchboard`);
+      } catch (e) { console.warn('[PANEL SCAN] Failed to load existing devices:', e.message); }
+    }
+
+    // Marquer chaque appareil scanné: exists_in_db, will_update, matching_device_id
+    let willUpdateCount = 0;
+    let willCreateCount = 0;
+    result.devices = result.devices.map(device => {
+      const positionNumber = device.position_label || device.position;
+      const deviceRefNorm = normalizeRef(device.reference);
+
+      const matchingDevice = existingDevices.find(e => {
+        // Match par position exacte
+        if (e.position_number && positionNumber && e.position_number === positionNumber) return true;
+
+        // Match par référence normalisée + ampérage
+        const existingRefNorm = normalizeRef(e.reference);
+        if (existingRefNorm && deviceRefNorm &&
+            (existingRefNorm === deviceRefNorm ||
+             existingRefNorm.includes(deviceRefNorm) ||
+             deviceRefNorm.includes(existingRefNorm)) &&
+            Number(e.in_amps) === Number(device.in_amps)) {
+          return true;
+        }
+        return false;
+      });
+
+      if (matchingDevice) {
+        willUpdateCount++;
+        return {
+          ...device,
+          exists_in_db: true,
+          will_update: true,
+          matching_device_id: matchingDevice.id,
+          matching_device_name: matchingDevice.name
+        };
+      } else {
+        willCreateCount++;
+        return {
+          ...device,
+          exists_in_db: false,
+          will_update: false
+        };
+      }
+    });
+
     job.progress = 90;
     job.message = 'Finalisation...';
 
-    // Debug: Log final icu_ka values before setting result
-    const finalIcuValues = result.devices?.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka, fromCache: d.from_cache, enriched: d.enriched_by_ai })) || [];
-    console.log(`[PANEL SCAN] Final icu_ka values:`, JSON.stringify(finalIcuValues));
+    // Debug: Log final values
+    const finalValues = result.devices?.map(d => ({
+      pos: d.position_label,
+      ref: d.reference,
+      icu: d.icu_ka,
+      fromCache: d.from_cache,
+      willUpdate: d.will_update
+    })) || [];
+    console.log(`[PANEL SCAN] Final values:`, JSON.stringify(finalValues));
+    console.log(`[PANEL SCAN] Summary: ${willCreateCount} to create, ${willUpdateCount} to update`);
 
     // Job complete
     job.status = 'completed';
@@ -2844,7 +2909,13 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     job.result = {
       ...result,
       photos_analyzed: images.length,
-      analysis_version: '1.0'
+      analysis_version: '1.1',
+      summary: {
+        total_detected: deviceCount,
+        will_create: willCreateCount,
+        will_update: willUpdateCount,
+        existing_in_switchboard: existingDevices.length
+      }
     };
     job.completed_at = Date.now();
 
@@ -3019,12 +3090,28 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         const positionNumber = device.position_label || device.position || String(i + 1);
 
         // Chercher si un appareil existe déjà à cette position ou avec la même référence
-        const existingDevice = existingDevices.find(e =>
-          e.position_number === positionNumber ||
-          (e.reference && device.reference &&
-           e.reference.toLowerCase() === device.reference.toLowerCase() &&
-           e.in_amps === device.in_amps)
-        );
+        const deviceRefNorm = normalizeRef(device.reference);
+        const existingDevice = existingDevices.find(e => {
+          // Match par position exacte
+          if (e.position_number === positionNumber) return true;
+
+          // Match par référence normalisée + ampérage
+          const existingRefNorm = normalizeRef(e.reference);
+          if (existingRefNorm && deviceRefNorm &&
+              existingRefNorm === deviceRefNorm &&
+              Number(e.in_amps) === Number(device.in_amps)) {
+            return true;
+          }
+
+          // Match partiel sur référence (ex: "ic60n" contient dans "a9f74216ic60n")
+          if (existingRefNorm && deviceRefNorm &&
+              (existingRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(existingRefNorm)) &&
+              Number(e.in_amps) === Number(device.in_amps)) {
+            return true;
+          }
+
+          return false;
+        });
 
         if (existingDevice) {
           // Mettre à jour l'appareil existant avec les nouvelles infos
