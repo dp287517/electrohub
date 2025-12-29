@@ -1010,7 +1010,6 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 ref={photoInputRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 onChange={handlePhotoUpload}
                 className="hidden"
               />
