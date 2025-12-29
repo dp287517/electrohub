@@ -573,9 +573,16 @@ const CreationStep = ({ switchboardId, devices, onComplete, onError }) => {
 
       {status === 'complete' && result && (
         <div className="space-y-2">
-          <p className="text-green-600 font-semibold">
-            {result.created} appareil{result.created > 1 ? 's' : ''} créé{result.created > 1 ? 's' : ''} avec succès
-          </p>
+          {result.created > 0 && (
+            <p className="text-green-600 font-semibold">
+              {result.created} appareil{result.created > 1 ? 's' : ''} créé{result.created > 1 ? 's' : ''}
+            </p>
+          )}
+          {result.updated > 0 && (
+            <p className="text-blue-600 font-semibold">
+              {result.updated} appareil{result.updated > 1 ? 's' : ''} mis à jour
+            </p>
+          )}
           {result.errors && result.errors.length > 0 && (
             <p className="text-amber-600 text-sm">
               {result.errors.length} erreur{result.errors.length > 1 ? 's' : ''}

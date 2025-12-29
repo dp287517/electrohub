@@ -2876,7 +2876,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
       return res.status(400).json({ error: 'devices array requis' });
     }
 
-    console.log(`[BULK CREATE] Creating ${devices.length} devices for switchboard ${switchboard_id}`);
+    console.log(`[BULK CREATE] Processing ${devices.length} devices for switchboard ${switchboard_id}`);
 
     // Vérifier que le tableau existe
     const { rows: [board] } = await quickQuery(
@@ -2885,7 +2885,15 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
     );
     if (!board) return res.status(404).json({ error: 'Tableau non trouvé' });
 
+    // Charger les appareils existants pour ce tableau (pour éviter les doublons)
+    const { rows: existingDevices } = await quickQuery(
+      'SELECT id, position_number, reference, manufacturer, in_amps FROM devices WHERE switchboard_id = $1 AND site = $2',
+      [switchboard_id, site]
+    );
+    console.log(`[BULK CREATE] Found ${existingDevices.length} existing devices`);
+
     const createdDevices = [];
+    const updatedDevices = [];
     const errors = [];
 
     for (let i = 0; i < devices.length; i++) {
@@ -2894,39 +2902,98 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         // Utiliser position_label comme position_number
         const positionNumber = device.position_label || device.position || String(i + 1);
 
-        const { rows: [created] } = await quickQuery(`
-          INSERT INTO devices (
-            site, switchboard_id, name, device_type, manufacturer, reference,
-            in_amps, icu_ka, ics_ka, poles, voltage_v,
-            is_differential, position_number, is_complete, settings
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-          RETURNING *
-        `, [
-          site,
-          switchboard_id,
-          device.circuit_name || device.name || `${device.device_type || 'Disjoncteur'} ${positionNumber}`,
-          device.device_type || 'Disjoncteur modulaire',
-          device.manufacturer,
-          device.reference,
-          device.in_amps,
-          device.icu_ka,
-          device.ics_ka,
-          device.poles || 1,
-          device.voltage_v || 230,
-          device.is_differential || false,
-          positionNumber,
-          false, // is_complete
-          JSON.stringify({
-            curve_type: device.curve_type,
-            differential_sensitivity_ma: device.differential_sensitivity_ma,
-            differential_type: device.differential_type,
-            width_modules: device.width_modules,
-            scanned_at: new Date().toISOString(),
-            source: 'panel_scan'
-          })
-        ]);
+        // Chercher si un appareil existe déjà à cette position ou avec la même référence
+        const existingDevice = existingDevices.find(e =>
+          e.position_number === positionNumber ||
+          (e.reference && device.reference &&
+           e.reference.toLowerCase() === device.reference.toLowerCase() &&
+           e.in_amps === device.in_amps)
+        );
 
-        createdDevices.push(created);
+        if (existingDevice) {
+          // Mettre à jour l'appareil existant avec les nouvelles infos
+          const { rows: [updated] } = await quickQuery(`
+            UPDATE devices SET
+              name = COALESCE($3, name),
+              device_type = COALESCE($4, device_type),
+              manufacturer = COALESCE($5, manufacturer),
+              reference = COALESCE($6, reference),
+              in_amps = COALESCE($7, in_amps),
+              icu_ka = COALESCE($8, icu_ka),
+              ics_ka = COALESCE($9, ics_ka),
+              poles = COALESCE($10, poles),
+              voltage_v = COALESCE($11, voltage_v),
+              is_differential = COALESCE($12, is_differential),
+              position_number = $13,
+              settings = jsonb_set(
+                COALESCE(settings, '{}'::jsonb),
+                '{last_scan}',
+                $14::jsonb
+              ),
+              updated_at = NOW()
+            WHERE id = $1 AND site = $2
+            RETURNING *
+          `, [
+            existingDevice.id,
+            site,
+            device.circuit_name || device.name,
+            device.device_type,
+            device.manufacturer,
+            device.reference,
+            device.in_amps,
+            device.icu_ka,
+            device.ics_ka,
+            device.poles,
+            device.voltage_v,
+            device.is_differential,
+            positionNumber,
+            JSON.stringify({
+              curve_type: device.curve_type,
+              differential_sensitivity_ma: device.differential_sensitivity_ma,
+              differential_type: device.differential_type,
+              width_modules: device.width_modules,
+              scanned_at: new Date().toISOString(),
+              source: 'panel_scan'
+            })
+          ]);
+          console.log(`[BULK CREATE] Updated existing device ${existingDevice.id} at position ${positionNumber}`);
+          updatedDevices.push(updated);
+        } else {
+          // Créer un nouvel appareil
+          const { rows: [created] } = await quickQuery(`
+            INSERT INTO devices (
+              site, switchboard_id, name, device_type, manufacturer, reference,
+              in_amps, icu_ka, ics_ka, poles, voltage_v,
+              is_differential, position_number, is_complete, settings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING *
+          `, [
+            site,
+            switchboard_id,
+            device.circuit_name || device.name || `${device.device_type || 'Disjoncteur'} ${positionNumber}`,
+            device.device_type || 'Disjoncteur modulaire',
+            device.manufacturer,
+            device.reference,
+            device.in_amps,
+            device.icu_ka,
+            device.ics_ka,
+            device.poles || 1,
+            device.voltage_v || 230,
+            device.is_differential || false,
+            positionNumber,
+            false, // is_complete
+            JSON.stringify({
+              curve_type: device.curve_type,
+              differential_sensitivity_ma: device.differential_sensitivity_ma,
+              differential_type: device.differential_type,
+              width_modules: device.width_modules,
+              scanned_at: new Date().toISOString(),
+              source: 'panel_scan'
+            })
+          ]);
+          console.log(`[BULK CREATE] Created new device at position ${positionNumber}`);
+          createdDevices.push(created);
+        }
 
         // Sauvegarder dans le cache des produits scannés si référence complète
         if (device.manufacturer && device.reference && device.in_amps) {
@@ -2942,7 +3009,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         }
 
       } catch (e) {
-        console.error(`[BULK CREATE] Error creating device ${i}:`, e.message);
+        console.error(`[BULK CREATE] Error processing device ${i}:`, e.message);
         errors.push({ index: i, device: device.position_label || device.name, error: e.message });
       }
     }
@@ -2960,18 +3027,20 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
       INSERT INTO switchboard_audit_log (site, action, entity_type, entity_id, actor_name, actor_email, details)
       VALUES ($1, 'bulk_created', 'devices', $2, $3, $4, $5)
     `, [site, switchboard_id, user.name, user.email, JSON.stringify({
-      count: createdDevices.length,
+      created: createdDevices.length,
+      updated: updatedDevices.length,
       errors: errors.length,
       source: 'panel_scan'
     })]);
 
-    console.log(`[BULK CREATE] Created ${createdDevices.length} devices, ${errors.length} errors`);
+    console.log(`[BULK CREATE] Created ${createdDevices.length}, updated ${updatedDevices.length}, errors ${errors.length}`);
 
     res.json({
       success: true,
       created: createdDevices.length,
+      updated: updatedDevices.length,
       errors: errors.length > 0 ? errors : undefined,
-      devices: createdDevices
+      devices: [...createdDevices, ...updatedDevices]
     });
 
   } catch (e) {
