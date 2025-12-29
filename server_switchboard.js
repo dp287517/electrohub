@@ -2938,7 +2938,7 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
               jobId,
               switchboardId,
               deviceCount,
-              url: `/app/tableaux`
+              url: `/app/tableaux?scanJobId=${jobId}&switchboardId=${switchboardId}`
             }
           }
         );
