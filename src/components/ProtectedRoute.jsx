@@ -11,6 +11,11 @@ export default function ProtectedRoute({ children }) {
     // Clear any stale data
     localStorage.removeItem('eh_user');
     localStorage.removeItem('bubble_token');
+    // Save the intended URL for after login (for QR code deep linking)
+    const returnUrl = location.pathname + location.search;
+    if (returnUrl && returnUrl !== '/') {
+      localStorage.setItem('eh_return_url', returnUrl);
+    }
     // Redirect to haleon-tool.io for proper authentication
     window.location.href = 'https://haleon-tool.io';
     return null;
