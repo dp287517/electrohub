@@ -2141,6 +2141,14 @@ export const api = {
       get(`/api/switchboard/panel-scan-job/${jobId}`),
 
     /**
+     * Liste les jobs de scan récents pour l'utilisateur
+     * @param {number} [limit=10] - Nombre max de jobs à retourner
+     * @returns {{ jobs: Array, total: number }}
+     */
+    listPanelScanJobs: (limit = 10) =>
+      get(`/api/switchboard/panel-scan-jobs`, { limit }),
+
+    /**
      * Création en masse de disjoncteurs
      * @param {number} switchboardId - ID du tableau
      * @param {Array} devices - Liste des appareils à créer
