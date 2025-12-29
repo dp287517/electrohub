@@ -48,7 +48,7 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
-      setPhotos(prev => [...prev, ...files].slice(0, 5));
+      setPhotos(prev => [...prev, ...files].slice(0, 15));
     }
   };
 
@@ -64,7 +64,7 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
         </div>
         <h3 className="text-lg font-semibold text-gray-900">Photographiez le tableau</h3>
         <p className="text-sm text-gray-500 mt-1">
-          Prenez 1 à 5 photos pour capturer tous les appareils du tableau
+          Prenez 1 à 15 photos pour capturer tous les appareils du tableau
         </p>
       </div>
 
@@ -89,7 +89,7 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
           </div>
         ))}
 
-        {photos.length < 5 && (
+        {photos.length < 15 && (
           <button
             onClick={() => fileInputRef.current?.click()}
             className="aspect-[4/3] rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-indigo-400 transition-colors flex flex-col items-center justify-center gap-2 text-gray-500"

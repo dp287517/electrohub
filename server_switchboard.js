@@ -2573,11 +2573,11 @@ Réponds en JSON:
 }
 
 // POST /api/switchboard/analyze-panel - Start async analysis
-app.post('/api/switchboard/analyze-panel', upload.array('photos', 5), async (req, res) => {
+app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (req, res) => {
   try {
     const site = req.headers['x-site'] || 'default';
     const { switchboard_id } = req.body;
-    const user = extractUser(req);
+    const user = getUser(req);
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Aucune photo fournie' });
@@ -2656,7 +2656,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
   try {
     const site = req.headers['x-site'] || 'default';
     const { switchboard_id, devices } = req.body;
-    const user = extractUser(req);
+    const user = getUser(req);
 
     if (!switchboard_id) return res.status(400).json({ error: 'switchboard_id requis' });
     if (!devices || !Array.isArray(devices) || devices.length === 0) {
