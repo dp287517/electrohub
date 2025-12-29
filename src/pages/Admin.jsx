@@ -138,6 +138,7 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
   const [pendingUsers, setPendingUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(null);
+  const [validateModalUser, setValidateModalUser] = useState(null); // User being configured for validation
 
   const fetchPending = useCallback(async () => {
     setLoading(true);
@@ -156,7 +157,7 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
     fetchPending();
   }, [fetchPending]);
 
-  const handleValidate = async (userId, allowed_apps = null, email = null) => {
+  const handleValidate = async (userId, allowed_apps = null, email = null, site_id = null, department_id = null, name = null) => {
     setValidating(userId);
     try {
       // If userId looks like an email (no numeric id), use email-based validation
@@ -164,9 +165,10 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
       const response = await fetch(`${API_BASE}/users/validate/${isEmailId ? 'by-email' : userId}`, {
         method: 'POST',
         ...getAuthOptions(),
-        body: JSON.stringify({ allowed_apps, email: isEmailId ? userId : email })
+        body: JSON.stringify({ allowed_apps, email: isEmailId ? userId : email, site_id, department_id, name })
       });
       if (!response.ok) throw new Error('Failed to validate user');
+      setValidateModalUser(null);
       fetchPending();
       onRefresh();
     } catch (err) {
@@ -174,6 +176,11 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
     } finally {
       setValidating(null);
     }
+  };
+
+  // Open validation modal instead of directly validating
+  const openValidateModal = (user) => {
+    setValidateModalUser(user);
   };
 
   const handleReject = async (userId, email = null) => {
@@ -259,7 +266,7 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleValidate(uniqueId, null, user.email)}
+                    onClick={() => openValidateModal(user)}
                     disabled={validating === uniqueId}
                     className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
                   >
@@ -284,7 +291,124 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
           );})}
         </div>
       )}
+
+      {/* Validation Modal */}
+      {validateModalUser && (
+        <ValidatePendingUserModal
+          user={validateModalUser}
+          sites={sites}
+          departments={departments}
+          onClose={() => setValidateModalUser(null)}
+          onValidate={(config) => {
+            const uniqueId = validateModalUser.id || validateModalUser.email;
+            handleValidate(uniqueId, config.allowed_apps, validateModalUser.email, config.site_id, config.department_id, config.name);
+          }}
+          validating={validating === (validateModalUser.id || validateModalUser.email)}
+        />
+      )}
     </div>
+  );
+}
+
+// ============== VALIDATE PENDING USER MODAL ==============
+function ValidatePendingUserModal({ user, sites, departments, onClose, onValidate, validating }) {
+  const [name, setName] = useState(user?.name || user?.email?.split('@')[0] || '');
+  const [siteId, setSiteId] = useState(user?.site_id || sites[0]?.id || 1);
+  const [departmentId, setDepartmentId] = useState(user?.department_id || null);
+  const [selectedApps, setSelectedApps] = useState([]); // Start with NO apps selected
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onValidate({
+      name,
+      site_id: siteId,
+      department_id: departmentId,
+      allowed_apps: selectedApps
+    });
+  };
+
+  return (
+    <Modal title="Valider l'utilisateur" icon={UserCheck} onClose={onClose} wide>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* User info */}
+        <div className="bg-green-50 rounded-xl p-4 border border-green-200">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+              <span className="text-xl font-bold text-green-600">
+                {user?.name?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || '?'}
+              </span>
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">{user?.email}</p>
+              <p className="text-sm text-green-600">Sera validé et pourra accéder aux apps sélectionnées</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Name */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Nom affiché</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-500"
+            placeholder="Nom de l'utilisateur"
+          />
+        </div>
+
+        {/* Site & Department */}
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Site</label>
+            <select
+              value={siteId || ''}
+              onChange={(e) => setSiteId(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-500"
+            >
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Département</label>
+            <select
+              value={departmentId || ''}
+              onChange={(e) => setDepartmentId(e.target.value ? parseInt(e.target.value) : null)}
+              className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-500"
+            >
+              <option value="">-- Non assigné --</option>
+              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* App selector */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Applications autorisées</label>
+          <p className="text-xs text-amber-600 mb-2">Sélectionnez les applications auxquelles cet utilisateur aura accès</p>
+          <AppSelector selectedApps={selectedApps} onChange={setSelectedApps} />
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+          >
+            Annuler
+          </button>
+          <button
+            type="submit"
+            disabled={validating || selectedApps.length === 0}
+            className="flex items-center gap-2 px-6 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl transition-colors disabled:opacity-50"
+          >
+            {validating ? <Loader2 size={16} className="animate-spin" /> : <UserCheck size={16} />}
+            Valider ({selectedApps.length} apps)
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
