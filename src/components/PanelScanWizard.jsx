@@ -677,11 +677,17 @@ const CreationStep = ({ switchboardId, devices, onComplete, onError }) => {
 // MAIN COMPONENT
 // ============================================================
 
-export default function PanelScanWizard({ switchboardId, switchboardName, onClose, onSuccess }) {
-  const [step, setStep] = useState(0);
+export default function PanelScanWizard({ switchboardId, switchboardName, onClose, onSuccess, preloadedResult }) {
+  // If preloadedResult is provided, start at review step (step 2)
+  const [step, setStep] = useState(preloadedResult ? 2 : 0);
   const [photos, setPhotos] = useState([]);
-  const [analysisResult, setAnalysisResult] = useState(null);
-  const [devices, setDevices] = useState([]);
+  const [analysisResult, setAnalysisResult] = useState(preloadedResult || null);
+  const [devices, setDevices] = useState(() => {
+    if (preloadedResult?.devices) {
+      return preloadedResult.devices.map(d => ({ ...d, selected: true }));
+    }
+    return [];
+  });
   const [error, setError] = useState(null);
 
   const steps = ['Photos', 'Analyse', 'Vérification', 'Création'];

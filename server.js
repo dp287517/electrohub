@@ -8143,20 +8143,34 @@ app.get("/api/dashboard/activities", async (req, res) => {
     };
 
     // 1. Switchboard audit
-    const switchboardActivities = await safeQuery('switchboard_audit_log', row => ({
-      id: `sw-${row.id}`,
-      type: row.action,
-      module: 'switchboard',
-      title: row.action === 'created' ? 'Tableau créé' :
-             row.action === 'updated' ? 'Tableau modifié' :
-             row.action === 'deleted' ? 'Tableau supprimé' : row.action,
-      description: row.details?.name || row.entity_type,
-      actor: row.actor_name || row.actor_email,
-      timestamp: row.ts,
-      url: '/app/switchboards',
-      icon: '⚡',
-      color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'blue'
-    }));
+    const switchboardActivities = await safeQuery('switchboard_audit_log', row => {
+      // Build description based on action
+      let description = row.details?.name || row.entity_type;
+      if (row.action === 'bulk_created' && row.details) {
+        const created = row.details.created || 0;
+        const updated = row.details.updated || 0;
+        description = `${created} créé${created > 1 ? 's' : ''}, ${updated} mis à jour`;
+      }
+
+      return {
+        id: `sw-${row.id}`,
+        type: row.action,
+        module: 'switchboard',
+        title: row.action === 'created' ? 'Tableau créé' :
+               row.action === 'updated' ? 'Tableau modifié' :
+               row.action === 'deleted' ? 'Tableau supprimé' :
+               row.action === 'bulk_created' ? '📷 Scan tableau terminé' :
+               row.action,
+        description,
+        actor: row.actor_name || row.actor_email,
+        timestamp: row.ts || row.created_at,
+        url: '/app/tableaux',
+        icon: '⚡',
+        color: row.action === 'deleted' ? 'red' :
+               row.action === 'created' ? 'green' :
+               row.action === 'bulk_created' ? 'violet' : 'blue'
+      };
+    });
     activities.push(...switchboardActivities);
 
     // 2. Fire Doors audit

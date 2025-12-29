@@ -1097,6 +1097,7 @@ export default function Switchboards() {
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [showDeviceForm, setShowDeviceForm] = useState(false);
   const [showPanelScan, setShowPanelScan] = useState(false);
+  const [preloadedScanResult, setPreloadedScanResult] = useState(null);
   const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false });
   const [deviceForm, setDeviceForm] = useState({
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
@@ -1175,6 +1176,44 @@ export default function Switchboards() {
       setSelectedBoard(null);
     }
   }, [searchParams]);
+
+  // Handle scan job URL params (from notification click)
+  useEffect(() => {
+    const scanJobId = searchParams.get('scanJobId');
+    const switchboardIdParam = searchParams.get('switchboardId');
+
+    if (scanJobId && switchboardIdParam) {
+      console.log('[Switchboards] Found scan job params:', { scanJobId, switchboardIdParam });
+
+      // Fetch the job result
+      api.switchboard.getPanelScanJob(scanJobId)
+        .then(job => {
+          if (job.status === 'completed' && job.result) {
+            console.log('[Switchboards] Scan job result loaded:', job.result);
+            setPreloadedScanResult(job.result);
+
+            // Also load the switchboard
+            return api.switchboard.getBoard(Number(switchboardIdParam));
+          } else {
+            throw new Error('Le scan n\'est pas encore terminé');
+          }
+        })
+        .then(board => {
+          if (board) {
+            setSelectedBoard(board);
+            setShowPanelScan(true);
+            // Clear URL params
+            setSearchParams({});
+          }
+        })
+        .catch(err => {
+          console.error('[Switchboards] Error loading scan job:', err);
+          setToast({ message: err.message || 'Erreur lors du chargement du scan', type: 'error' });
+          // Clear URL params
+          setSearchParams({});
+        });
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (selectedBoard) {
@@ -3021,11 +3060,20 @@ export default function Switchboards() {
         <PanelScanWizard
           switchboardId={selectedBoard.id}
           switchboardName={selectedBoard.name || selectedBoard.code}
-          onClose={() => setShowPanelScan(false)}
+          preloadedResult={preloadedScanResult}
+          onClose={() => {
+            setShowPanelScan(false);
+            setPreloadedScanResult(null);
+          }}
           onSuccess={(result) => {
             setShowPanelScan(false);
+            setPreloadedScanResult(null);
             loadDevices(selectedBoard.id);
-            setToast({ message: `${result.created} appareil${result.created > 1 ? 's' : ''} créé${result.created > 1 ? 's' : ''} avec succès !`, type: 'success' });
+            const totalCreated = (result.created || 0) + (result.updated || 0);
+            const message = result.updated > 0
+              ? `${result.created || 0} créé${(result.created || 0) > 1 ? 's' : ''}, ${result.updated} mis à jour`
+              : `${result.created} appareil${result.created > 1 ? 's' : ''} créé${result.created > 1 ? 's' : ''}`;
+            setToast({ message: message + ' avec succès !', type: 'success' });
           }}
         />
       )}
