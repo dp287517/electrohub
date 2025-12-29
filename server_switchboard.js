@@ -1615,8 +1615,22 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
     );
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
-    
+
     const sb = r.rows[0];
+
+    // 📝 AUDIT: Log duplication tableau
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: 'switchboard',
+      entityId: sb.id,
+      details: {
+        name: sb.name,
+        code: sb.code,
+        action: 'duplicated',
+        source_id: id,
+        site
+      }
+    });
+
     res.status(201).json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
@@ -2112,12 +2126,25 @@ app.put('/api/switchboard/boards/:boardId/devices/bulk-positions', async (req, r
     `;
 
     const result = await quickQuery(sql, [ids, boardId], 45000);
-    
+
     const elapsed = Date.now() - startTime;
     console.log(`[BULK POSITIONS] Updated ${result.rowCount} devices in ${elapsed}ms`);
 
-    res.json({ 
-      success: true, 
+    // 📝 AUDIT: Log mise à jour positions en masse
+    if (result.rowCount > 0) {
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'devices',
+        entityId: boardId,
+        details: {
+          action: 'bulk_positions',
+          devices_updated: result.rowCount,
+          site
+        }
+      });
+    }
+
+    res.json({
+      success: true,
       updated: result.rowCount,
       elapsed_ms: elapsed
     });
@@ -2309,6 +2336,21 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
 
     console.log(`[EXCEL IMPORT] Complete: created=${devicesCreated}, skipped=${devicesSkipped}`);
 
+    // 📝 AUDIT: Log import Excel
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: 'switchboard',
+      entityId: switchboardId,
+      details: {
+        action: 'excel_import',
+        name: tableauName,
+        code,
+        board_created: !boardAlreadyExists,
+        devices_created: devicesCreated,
+        devices_skipped: devicesSkipped,
+        site
+      }
+    });
+
     res.json({
       success: true,
       already_exists: boardAlreadyExists,
@@ -2316,7 +2358,7 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       devices_created: devicesCreated,
       devices_skipped: devicesSkipped,
       existing_devices: existingDeviceCount,
-      message: boardAlreadyExists 
+      message: boardAlreadyExists
         ? `⚠️ Board "${code}" already exists. ${devicesCreated} new devices added.`
         : `✅ Board "${code}" created with ${devicesCreated} devices.`
     });
