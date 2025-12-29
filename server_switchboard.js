@@ -557,8 +557,12 @@ async function ensureSchema() {
       curve_type TEXT
     );
 
-    -- Migration: add curve_type if missing
+    -- Migrations: add columns if missing
     ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS curve_type TEXT;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS ics_ka NUMERIC;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS voltage_v NUMERIC;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS icu_ka NUMERIC;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS poles INTEGER;
 
     CREATE INDEX IF NOT EXISTS idx_scanned_products_site ON scanned_products(site);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_reference ON scanned_products(reference);
@@ -960,6 +964,21 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'differential_type') THEN
         ALTER TABLE devices ADD COLUMN differential_type TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'ics_ka') THEN
+        ALTER TABLE devices ADD COLUMN ics_ka NUMERIC;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'voltage_v') THEN
+        ALTER TABLE devices ADD COLUMN voltage_v NUMERIC;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'icu_ka') THEN
+        ALTER TABLE devices ADD COLUMN icu_ka NUMERIC;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'poles') THEN
+        ALTER TABLE devices ADD COLUMN poles INTEGER;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'in_amps') THEN
+        ALTER TABLE devices ADD COLUMN in_amps NUMERIC;
       END IF;
 
     END $$;
