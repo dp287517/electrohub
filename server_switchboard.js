@@ -1298,10 +1298,31 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       return res.status(404).json({ error: 'Board not found' });
     }
 
+    const sb = r.rows[0];
+
+    // 📝 AUDIT: Log modification tableau
+    try {
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'switchboard',
+        entityId: sb.id,
+        details: {
+          name: sb.name,
+          code: sb.code,
+          site,
+          building: sb.building_code,
+          floor: sb.floor,
+          room: sb.room,
+          regime_neutral: sb.regime_neutral,
+          is_principal: sb.is_principal
+        }
+      });
+    } catch (auditErr) {
+      console.warn('[UPDATE BOARD] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     const elapsed = Date.now() - startTime;
     console.log(`[UPDATE BOARD] Completed in ${elapsed}ms for id=${id}`);
 
-    const sb = r.rows[0];
     res.json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
@@ -1378,7 +1399,27 @@ app.patch('/api/switchboard/boards/:id', async (req, res) => {
     );
     
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
-    
+
+    // 📝 AUDIT: Log modification partielle tableau
+    try {
+      const patchedFields = [];
+      if (b.diagram_data !== undefined) patchedFields.push('diagram_data');
+      if (b.modes !== undefined) patchedFields.push('modes');
+      if (b.quality !== undefined) patchedFields.push('quality');
+
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'switchboard',
+        entityId: id,
+        details: {
+          patchType: 'partial',
+          fieldsUpdated: patchedFields,
+          site
+        }
+      });
+    } catch (auditErr) {
+      console.warn('[PATCH BOARD] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ success: true, id });
   } catch (e) {
     console.error('[PATCH BOARD]', e.message);
@@ -1771,10 +1812,31 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
       return res.status(404).json({ error: 'Device not found' });
     }
 
+    const device = rows[0];
+
+    // 📝 AUDIT: Log modification appareil
+    try {
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'device',
+        entityId: device.id,
+        details: {
+          name: device.name,
+          deviceType: device.device_type,
+          switchboardId: device.switchboard_id,
+          manufacturer: device.manufacturer,
+          reference: device.reference,
+          inAmps: device.in_amps,
+          site
+        }
+      });
+    } catch (auditErr) {
+      console.warn('[UPDATE DEVICE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     const elapsed = Date.now() - startTime;
     console.log(`[UPDATE DEVICE] Completed in ${elapsed}ms for id=${id}`);
 
-    res.json(rows[0]);
+    res.json(device);
   } catch (e) {
     const elapsed = Date.now() - startTime;
     console.error(`[UPDATE DEVICE] Error after ${elapsed}ms:`, e.message);

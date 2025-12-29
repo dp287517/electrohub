@@ -780,10 +780,31 @@ app.put("/api/doors/doors/:id", async (req, res) => {
       values.push(location);
     }
     values.push(req.params.id);
-    await pool.query(
-      `UPDATE fd_doors SET ${fields.join(", ")}, updated_at=now() WHERE id=$${i}`,
+    const result = await pool.query(
+      `UPDATE fd_doors SET ${fields.join(", ")}, updated_at=now() WHERE id=$${i} RETURNING *`,
       values
     );
+
+    // 📝 AUDIT: Log modification porte
+    if (result.rows.length > 0) {
+      const door = result.rows[0];
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'door',
+          entityId: door.id,
+          details: {
+            name: door.name,
+            building: door.building,
+            floor: door.floor,
+            location: door.location,
+            fieldsUpdated: fields.map(f => f.split('=')[0])
+          }
+        });
+      } catch (auditErr) {
+        console.warn('[UPDATE DOOR] Audit log failed (non-blocking):', auditErr.message);
+      }
+    }
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
