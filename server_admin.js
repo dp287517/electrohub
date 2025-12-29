@@ -1134,7 +1134,8 @@ router.get("/users/pending", adminOnly, async (req, res) => {
 // Donc en créant dans "users" avec is_active=TRUE, l'utilisateur sera validé!
 router.post("/users/validate/by-email", adminOnly, express.json(), async (req, res) => {
   try {
-    const { email, allowed_apps, site_id, department_id, name } = req.body;
+    const { email, allowed_apps, site_id, department_id } = req.body;
+    let { name } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: "Email required" });
@@ -1143,6 +1144,31 @@ router.post("/users/validate/by-email", adminOnly, express.json(), async (req, r
     const emailLower = email.toLowerCase();
     const isHaleon = emailLower.endsWith('@haleon.com');
     console.log(`[ADMIN] Validating user by email: ${email}`);
+
+    // Si pas de nom fourni, essayer de le récupérer depuis haleon_users ou générer depuis l'email
+    if (!name) {
+      try {
+        const haleonResult = await pool.query(
+          `SELECT name FROM haleon_users WHERE LOWER(email) = $1`,
+          [emailLower]
+        );
+        if (haleonResult.rows[0]?.name) {
+          name = haleonResult.rows[0].name;
+          console.log(`[ADMIN] Got name from haleon_users: ${name}`);
+        }
+      } catch (e) {
+        // Ignorer l'erreur
+      }
+    }
+
+    // Si toujours pas de nom, générer depuis l'email (florian.x.pacarizi@haleon.com -> Florian X Pacarizi)
+    if (!name) {
+      const emailPart = emailLower.split('@')[0];
+      name = emailPart
+        .replace(/[._]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+      console.log(`[ADMIN] Generated name from email: ${name}`);
+    }
 
     // STRATÉGIE 1: Créer/mettre à jour dans la table "users" avec is_active=TRUE
     // C'est la méthode la plus fiable car le login vérifie mainUser?.is_active === true
