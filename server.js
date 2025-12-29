@@ -8130,11 +8130,24 @@ app.get("/api/dashboard/activities", async (req, res) => {
     // Helper to safely query audit tables
     const safeQuery = async (tableName, mapper) => {
       try {
-        const { rows } = await pool.query(`
-          SELECT * FROM ${tableName}
-          ORDER BY ts DESC
-          LIMIT 15
-        `);
+        // Try with 'ts' first (lib/audit-trail.js schema), then 'created_at' (manual schema)
+        let rows;
+        try {
+          const result = await pool.query(`
+            SELECT * FROM ${tableName}
+            ORDER BY ts DESC
+            LIMIT 15
+          `);
+          rows = result.rows;
+        } catch (tsError) {
+          // Try with created_at instead
+          const result = await pool.query(`
+            SELECT *, created_at as ts FROM ${tableName}
+            ORDER BY created_at DESC
+            LIMIT 15
+          `);
+          rows = result.rows;
+        }
         return rows.map(mapper);
       } catch (e) {
         // Table might not exist
@@ -8164,7 +8177,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
         description,
         actor: row.actor_name || row.actor_email,
         timestamp: row.ts || row.created_at,
-        url: '/app/tableaux',
+        url: '/app/switchboards',
         icon: '⚡',
         color: row.action === 'deleted' ? 'red' :
                row.action === 'created' ? 'green' :
