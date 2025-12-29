@@ -707,6 +707,30 @@ async function ensureSchema() {
     FROM control_records;
 
     -- =======================================================
+    -- TABLE: Panel Scan Jobs (persistance des analyses IA)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS panel_scan_jobs (
+      id TEXT PRIMARY KEY,
+      site TEXT NOT NULL,
+      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE SET NULL,
+      user_email TEXT,
+      status TEXT DEFAULT 'pending',
+      progress INTEGER DEFAULT 0,
+      message TEXT,
+      photos_count INTEGER DEFAULT 0,
+      result JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      notified BOOLEAN DEFAULT FALSE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_panel_scan_jobs_site ON panel_scan_jobs(site);
+    CREATE INDEX IF NOT EXISTS idx_panel_scan_jobs_user ON panel_scan_jobs(user_email);
+    CREATE INDEX IF NOT EXISTS idx_panel_scan_jobs_status ON panel_scan_jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_panel_scan_jobs_created ON panel_scan_jobs(created_at DESC);
+
+    -- =======================================================
     -- TABLE: Switchboard Audit Log (traçabilité des modifications)
     -- =======================================================
     CREATE TABLE IF NOT EXISTS switchboard_audit_log (
@@ -2617,16 +2641,87 @@ Complète les spécifications manquantes.`
 // PANEL SCAN - Analyse d'un tableau complet (multi-photos)
 // ============================================================
 
-// In-memory store for panel scan jobs (could use Redis in production)
+// In-memory cache for panel scan jobs (backed by database for persistence)
 const panelScanJobs = new Map();
 
-// Cleanup old jobs after 1 hour
+// Cleanup old jobs from memory after 1 hour (database retains them)
 setInterval(() => {
   const oneHourAgo = Date.now() - 3600000;
   for (const [id, job] of panelScanJobs) {
     if (job.created_at < oneHourAgo) panelScanJobs.delete(id);
   }
 }, 300000);
+
+// Helper: Save job to database for persistence
+async function savePanelScanJob(job) {
+  try {
+    await pool.query(`
+      INSERT INTO panel_scan_jobs (id, site, switchboard_id, user_email, status, progress, message, photos_count, result, error, created_at, completed_at, notified)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11::double precision / 1000), $12, $13)
+      ON CONFLICT (id) DO UPDATE SET
+        status = $5,
+        progress = $6,
+        message = $7,
+        result = $9,
+        error = $10,
+        completed_at = $12,
+        notified = $13
+    `, [
+      job.id,
+      job.site || 'default',
+      job.switchboard_id || null,
+      job.user_email || null,
+      job.status,
+      job.progress,
+      job.message || null,
+      job.photos_count || 0,
+      job.result ? JSON.stringify(job.result) : null,
+      job.error || null,
+      job.created_at,
+      job.completed_at ? new Date(job.completed_at) : null,
+      job.notified || false
+    ]);
+    console.log(`[PANEL SCAN] Job ${job.id} saved to database (status: ${job.status})`);
+  } catch (e) {
+    console.error(`[PANEL SCAN] Failed to save job ${job.id} to DB:`, e.message);
+  }
+}
+
+// Helper: Load job from database
+async function loadPanelScanJob(jobId) {
+  try {
+    const result = await pool.query(`
+      SELECT id, site, switchboard_id, user_email, status, progress, message,
+             photos_count, result, error,
+             EXTRACT(EPOCH FROM created_at) * 1000 as created_at,
+             EXTRACT(EPOCH FROM completed_at) * 1000 as completed_at,
+             notified
+      FROM panel_scan_jobs WHERE id = $1
+    `, [jobId]);
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      site: row.site,
+      switchboard_id: row.switchboard_id,
+      user_email: row.user_email,
+      status: row.status,
+      progress: row.progress,
+      message: row.message,
+      photos_count: row.photos_count,
+      result: row.result,
+      error: row.error,
+      created_at: parseInt(row.created_at),
+      completed_at: row.completed_at ? parseInt(row.completed_at) : null,
+      notified: row.notified
+    };
+  } catch (e) {
+    console.error(`[PANEL SCAN] Failed to load job ${jobId} from DB:`, e.message);
+    return null;
+  }
+}
 
 // Background worker function
 async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
@@ -3062,6 +3157,9 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
       }
     }
 
+    // Save completed job to database for persistence
+    await savePanelScanJob(job);
+
   } catch (error) {
     console.error(`[PANEL SCAN] Job ${jobId} failed:`, error.message);
     job.status = 'failed';
@@ -3078,10 +3176,13 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
         await notifyUser(userEmail,
           '❌ Erreur scan tableau',
           `L'analyse a échoué: ${error.message}`,
-          { type: 'panel_scan_failed', tag: `panel-scan-${jobId}` }
+          { type: 'panel_scan_failed', tag: `panel-scan-${jobId}`, data: { jobId } }
         );
       } catch (e) { /* ignore */ }
     }
+
+    // Save failed job to database for persistence
+    await savePanelScanJob(job);
   } finally {
     job.processing = false;
   }
@@ -3114,8 +3215,9 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
     });
 
     // Create job
-    panelScanJobs.set(jobId, {
+    const job = {
       id: jobId,
+      site: site,
       status: 'pending',
       progress: 0,
       message: 'En file d\'attente...',
@@ -3123,7 +3225,11 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
       photos_count: req.files.length,
       created_at: Date.now(),
       user_email: user.email
-    });
+    };
+    panelScanJobs.set(jobId, job);
+
+    // Save to database for persistence
+    await savePanelScanJob(job);
 
     // Return immediately with job ID
     res.json({
@@ -3145,11 +3251,24 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
 });
 
 // GET /api/switchboard/panel-scan-job/:id - Get job status/result
-app.get('/api/switchboard/panel-scan-job/:id', (req, res) => {
-  const job = panelScanJobs.get(req.params.id);
+app.get('/api/switchboard/panel-scan-job/:id', async (req, res) => {
+  // Try memory cache first, then database
+  let job = panelScanJobs.get(req.params.id);
 
   if (!job) {
-    return res.status(404).json({ error: 'Job non trouvé' });
+    // Load from database for persistence
+    console.log(`[PANEL SCAN] Job ${req.params.id} not in memory, checking database...`);
+    job = await loadPanelScanJob(req.params.id);
+
+    if (job) {
+      console.log(`[PANEL SCAN] Job ${req.params.id} loaded from database (status: ${job.status})`);
+      // Cache it in memory for subsequent requests
+      panelScanJobs.set(req.params.id, job);
+    }
+  }
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job non trouvé - il a peut-être expiré' });
   }
 
   res.json({
@@ -3169,6 +3288,58 @@ app.get('/api/switchboard/panel-scan-job/:id', (req, res) => {
   if (job.status === 'completed' && job.result?.devices) {
     const sentIcu = job.result.devices.map(d => ({ pos: d.position_label, icu: d.icu_ka }));
     console.log(`[PANEL SCAN] Sent to frontend:`, JSON.stringify(sentIcu));
+  }
+});
+
+// GET /api/switchboard/panel-scan-jobs - List recent panel scan jobs for user
+app.get('/api/switchboard/panel-scan-jobs', async (req, res) => {
+  try {
+    const user = getUser(req);
+    const userEmail = user.email;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+    // Get recent jobs from database
+    const result = await pool.query(`
+      SELECT
+        j.id, j.site, j.switchboard_id, j.user_email, j.status, j.progress, j.message,
+        j.photos_count, j.error,
+        EXTRACT(EPOCH FROM j.created_at) * 1000 as created_at,
+        EXTRACT(EPOCH FROM j.completed_at) * 1000 as completed_at,
+        j.result->'summary' as summary,
+        s.name as switchboard_name,
+        s.code as switchboard_code,
+        s.building_code
+      FROM panel_scan_jobs j
+      LEFT JOIN switchboards s ON j.switchboard_id = s.id
+      WHERE ($1::text IS NULL OR LOWER(j.user_email) = LOWER($1))
+      ORDER BY j.created_at DESC
+      LIMIT $2
+    `, [userEmail, limit]);
+
+    res.json({
+      jobs: result.rows.map(row => ({
+        id: row.id,
+        switchboard_id: row.switchboard_id,
+        switchboard_name: row.switchboard_name,
+        switchboard_code: row.switchboard_code,
+        building_code: row.building_code,
+        status: row.status,
+        progress: row.progress,
+        message: row.message,
+        photos_count: row.photos_count,
+        summary: row.summary,
+        error: row.error,
+        created_at: parseInt(row.created_at),
+        completed_at: row.completed_at ? parseInt(row.completed_at) : null,
+        url: row.status === 'completed' && row.switchboard_id
+          ? `/app/switchboards?scanJobId=${row.id}&switchboardId=${row.switchboard_id}`
+          : null
+      })),
+      total: result.rows.length
+    });
+  } catch (e) {
+    console.error('[PANEL SCAN JOBS LIST]', e.message);
+    res.status(500).json({ error: 'Failed to list panel scan jobs' });
   }
 });
 

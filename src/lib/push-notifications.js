@@ -34,6 +34,16 @@ class PushNotificationService {
         });
       });
 
+      // Listen for messages from service worker (e.g., notification clicks)
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        console.log('[Push] Message from SW:', event.data);
+        if (event.data?.type === 'NOTIFICATION_CLICK' && event.data?.url) {
+          console.log('[Push] Navigating to:', event.data.url);
+          // Use the router to navigate - this triggers properly in React
+          window.location.href = event.data.url;
+        }
+      });
+
       return this.swRegistration;
     } catch (error) {
       console.error('[Push] Service Worker registration failed:', error);

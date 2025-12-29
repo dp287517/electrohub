@@ -116,7 +116,9 @@ self.addEventListener('push', (event) => {
 // NOTIFICATION CLICK EVENT
 // ============================================================
 self.addEventListener('notificationclick', (event) => {
-  console.log('[SW] Notification clicked:', event.action);
+  console.log('[SW] Notification clicked');
+  console.log('[SW] Action:', event.action || 'default');
+  console.log('[SW] Notification data:', JSON.stringify(event.notification.data || {}));
 
   event.notification.close();
 
@@ -126,6 +128,7 @@ self.addEventListener('notificationclick', (event) => {
   // Handle different actions
   if (event.action === 'view') {
     targetUrl = data.url || '/dashboard';
+    console.log('[SW] View action, URL:', targetUrl);
   } else if (event.action === 'snooze') {
     // Send snooze request to backend
     if (data.controlId) {
@@ -139,23 +142,42 @@ self.addEventListener('notificationclick', (event) => {
   } else if (event.action === 'dismiss') {
     return;
   } else {
-    // Default click (no specific action)
+    // Default click (no specific action) - use data.url if available
     targetUrl = data.url || '/dashboard';
+    console.log('[SW] Default action, URL:', targetUrl);
   }
 
+  // Build the full URL
+  const fullUrl = new URL(targetUrl, self.location.origin).href;
+  console.log('[SW] Navigating to full URL:', fullUrl);
+
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Focus existing window if available
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
+      console.log('[SW] Found', clientList.length, 'window client(s)');
+
+      // Try to focus and navigate existing window
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && 'focus' in client) {
-          client.focus();
-          client.navigate(targetUrl);
-          return;
+          console.log('[SW] Found existing window, focusing and navigating...');
+          try {
+            await client.focus();
+            // Use postMessage to tell the client to navigate
+            // This is more reliable than client.navigate()
+            client.postMessage({
+              type: 'NOTIFICATION_CLICK',
+              url: targetUrl
+            });
+            return;
+          } catch (e) {
+            console.log('[SW] Focus/navigate failed:', e.message);
+          }
         }
       }
+
       // Open new window if no existing window
+      console.log('[SW] Opening new window:', fullUrl);
       if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
+        return clients.openWindow(fullUrl);
       }
     })
   );
