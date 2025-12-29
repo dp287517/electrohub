@@ -8002,6 +8002,21 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
       details: { isHaleon, site: enrichedUser.site, is_validated, isNewUser }
     });
 
+    // 6.5️⃣ Envoyer notification aux admins si LOGIN_PENDING (même pour utilisateurs existants)
+    if (!is_validated && !isNewUser) {
+      // isNewUser a déjà sa notification envoyée plus haut
+      try {
+        const pushResult = await notifyAdminsPendingUser({
+          email: enrichedUser.email,
+          name: enrichedUser.name,
+          isHaleon
+        });
+        console.log(`[auth/bubble] 🔔 Pending user notification sent:`, pushResult);
+      } catch (pushErr) {
+        console.log(`[auth/bubble] Push notification error (non-blocking):`, pushErr.message);
+      }
+    }
+
     // 7️⃣ Stocke en cookie + renvoie au front
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie("token", jwtToken, {
