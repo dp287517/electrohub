@@ -344,18 +344,35 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   };
 
   // Finalize and create procedure
+  // Uses background mode by default to avoid timeout errors on slow connections
   const handleFinalize = async () => {
     if (!sessionId) return;
 
     setIsLoading(true);
     try {
-      const procedure = await finalizeAISession(sessionId);
-      if (onProcedureCreated) {
-        onProcedureCreated(procedure);
-      }
-      // Also call onClose with the procedure for chat integration
-      if (onClose) {
-        onClose(procedure);
+      // Use background mode - returns immediately, sends push notification when done
+      const result = await finalizeAISession(sessionId, { background: true });
+
+      if (result.processing) {
+        // Background mode: close immediately, user will get notification
+        setMessages(prev => [
+          ...prev,
+          { role: 'assistant', content: "⏳ Création en cours... Vous recevrez une notification quand ce sera prêt." }
+        ]);
+        // Close after a short delay to show the message
+        setTimeout(() => {
+          if (onClose) {
+            onClose({ background: true });
+          }
+        }, 1500);
+      } else {
+        // Synchronous mode returned a procedure (fallback)
+        if (onProcedureCreated) {
+          onProcedureCreated(result);
+        }
+        if (onClose) {
+          onClose(result);
+        }
       }
     } catch (error) {
       console.error('Error finalizing procedure:', error);

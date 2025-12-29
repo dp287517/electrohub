@@ -4854,178 +4854,247 @@ app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
   }
 });
 
-// Create procedure from AI session
-app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const userEmail = req.headers["x-user-email"] || "system";
-    const site = req.headers["x-site"] || req.query.site;
+// Helper function to finalize procedure (used by both sync and async modes)
+async function finalizeProcedureInternal(sessionId, userEmail, site) {
+  // Get session data
+  const { rows: sessions } = await pool.query(
+    `SELECT * FROM procedure_ai_sessions WHERE id = $1`,
+    [sessionId]
+  );
 
-    // Get session data
-    const { rows: sessions } = await pool.query(
-      `SELECT * FROM procedure_ai_sessions WHERE id = $1`,
-      [sessionId]
-    );
+  if (sessions.length === 0) {
+    throw new Error("Session non trouvée");
+  }
 
-    if (sessions.length === 0) {
-      return res.status(404).json({ error: "Session non trouvée" });
-    }
+  const session = sessions[0];
+  const data = session.collected_data || {};
+  const conversation = session.conversation || [];
 
-    const session = sessions[0];
-    const data = session.collected_data || {};
-    const conversation = session.conversation || [];
+  // Extract photos from conversation (user messages with photos)
+  const conversationPhotos = conversation
+    .filter(msg => msg.role === 'user' && msg.photo)
+    .map(msg => msg.photo);
 
-    // Extract photos from conversation (user messages with photos)
-    const conversationPhotos = conversation
-      .filter(msg => msg.role === 'user' && msg.photo)
-      .map(msg => msg.photo);
+  console.log(`[Procedures] Finalize: Found ${conversationPhotos.length} photos in conversation`);
 
-    console.log(`[Procedures] Finalize: Found ${conversationPhotos.length} photos in conversation`);
+  // Create procedure from collected data
+  const { rows } = await pool.query(
+    `INSERT INTO procedures
+     (title, description, category, site, building, zone,
+      ppe_required, safety_codes, risk_level, emergency_contacts, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING *`,
+    [
+      data.title || "Nouvelle procédure",
+      data.description || "",
+      data.category || "general",
+      data.site || site,
+      data.building,
+      data.zone,
+      JSON.stringify(data.ppe_required || []),
+      JSON.stringify(data.safety_codes || []),
+      data.risk_level || "low",
+      JSON.stringify(data.emergency_contacts || []),
+      userEmail,
+    ]
+  );
 
-    // Create procedure from collected data
-    const { rows } = await pool.query(
-      `INSERT INTO procedures
-       (title, description, category, site, building, zone,
-        ppe_required, safety_codes, risk_level, emergency_contacts, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
-      [
-        data.title || "Nouvelle procédure",
-        data.description || "",
-        data.category || "general",
-        data.site || site,
-        data.building,
-        data.zone,
-        JSON.stringify(data.ppe_required || []),
-        JSON.stringify(data.safety_codes || []),
-        data.risk_level || "low",
-        JSON.stringify(data.emergency_contacts || []),
-        userEmail,
-      ]
-    );
+  const procedure = rows[0];
+  const stepsCount = data.steps?.length || conversationPhotos.length;
 
-    const procedure = rows[0];
+  // Add steps with photos
+  if (data.steps && data.steps.length > 0) {
+    for (let i = 0; i < data.steps.length; i++) {
+      const step = data.steps[i];
+      let photoContent = null;
+      let photoPath = null;
 
-    // Add steps with photos
-    if (data.steps && data.steps.length > 0) {
-      for (let i = 0; i < data.steps.length; i++) {
-        const step = data.steps[i];
-        let photoContent = null;
-        let photoPath = null;
-
-        // Try to link a photo to this step
-        // Use photo from step data if available, otherwise use conversation photo
-        if (step.photo) {
-          photoPath = step.photo;
-        } else if (conversationPhotos[i]) {
-          photoPath = conversationPhotos[i];
-        }
-
-        // Read photo content if we have a path
-        if (photoPath) {
-          try {
-            const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
-            if (fs.existsSync(fullPath)) {
-              photoContent = await fsp.readFile(fullPath);
-              console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath}`);
-            }
-          } catch (e) {
-            console.log(`[Procedures] Could not read photo for step ${i + 1}:`, e.message);
-          }
-        }
-
-        await pool.query(
-          `INSERT INTO procedure_steps
-           (procedure_id, step_number, title, description, instructions, warning, duration_minutes, photo_path, photo_content)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            procedure.id,
-            i + 1,
-            step.title,
-            step.description,
-            step.instructions,
-            step.warning,
-            step.duration_minutes,
-            photoPath,
-            photoContent,
-          ]
-        );
+      // Try to link a photo to this step
+      // Use photo from step data if available, otherwise use conversation photo
+      if (step.photo) {
+        photoPath = step.photo;
+      } else if (conversationPhotos[i]) {
+        photoPath = conversationPhotos[i];
       }
-    } else if (conversationPhotos.length > 0) {
-      // If no steps defined but we have photos, create steps from photos
-      console.log(`[Procedures] Creating ${conversationPhotos.length} steps from photos`);
-      for (let i = 0; i < conversationPhotos.length; i++) {
-        const photoPath = conversationPhotos[i];
-        let photoContent = null;
 
+      // Read photo content if we have a path
+      if (photoPath) {
         try {
           const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
           if (fs.existsSync(fullPath)) {
             photoContent = await fsp.readFile(fullPath);
+            console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath}`);
           }
         } catch (e) {
-          console.log(`[Procedures] Could not read photo ${i}:`, e.message);
+          console.log(`[Procedures] Could not read photo for step ${i + 1}:`, e.message);
         }
-
-        await pool.query(
-          `INSERT INTO procedure_steps
-           (procedure_id, step_number, title, photo_path, photo_content)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [
-            procedure.id,
-            i + 1,
-            `Étape ${i + 1}`,
-            photoPath,
-            photoContent,
-          ]
-        );
       }
-    }
 
-    // Link to AI session
-    await pool.query(
-      `UPDATE procedure_ai_sessions SET procedure_id = $1 WHERE id = $2`,
-      [procedure.id, sessionId]
+      await pool.query(
+        `INSERT INTO procedure_steps
+         (procedure_id, step_number, title, description, instructions, warning, duration_minutes, photo_path, photo_content)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          procedure.id,
+          i + 1,
+          step.title,
+          step.description,
+          step.instructions,
+          step.warning,
+          step.duration_minutes,
+          photoPath,
+          photoContent,
+        ]
+      );
+    }
+  } else if (conversationPhotos.length > 0) {
+    // If no steps defined but we have photos, create steps from photos
+    console.log(`[Procedures] Creating ${conversationPhotos.length} steps from photos`);
+    for (let i = 0; i < conversationPhotos.length; i++) {
+      const photoPath = conversationPhotos[i];
+      let photoContent = null;
+
+      try {
+        const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+        if (fs.existsSync(fullPath)) {
+          photoContent = await fsp.readFile(fullPath);
+        }
+      } catch (e) {
+        console.log(`[Procedures] Could not read photo ${i}:`, e.message);
+      }
+
+      await pool.query(
+        `INSERT INTO procedure_steps
+         (procedure_id, step_number, title, photo_path, photo_content)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          procedure.id,
+          i + 1,
+          `Étape ${i + 1}`,
+          photoPath,
+          photoContent,
+        ]
+      );
+    }
+  }
+
+  // Link to AI session
+  await pool.query(
+    `UPDATE procedure_ai_sessions SET procedure_id = $1 WHERE id = $2`,
+    [procedure.id, sessionId]
+  );
+
+  // === PRE-GENERATE AI RAMS ANALYSIS ===
+  // Generate and store AI analysis now, so PDF download is instant
+  try {
+    console.log(`[RAMS] Pre-generating AI analysis for procedure: ${procedure.title}`);
+
+    // Get the steps we just created
+    const { rows: createdSteps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      [procedure.id]
     );
 
-    // === PRE-GENERATE AI RAMS ANALYSIS ===
-    // Generate and store AI analysis now, so PDF download is instant
+    // Try AI analysis first, fallback if fails
+    let ramsAnalysis = null;
     try {
-      console.log(`[RAMS] Pre-generating AI analysis for procedure: ${procedure.title}`);
-
-      // Get the steps we just created
-      const { rows: createdSteps } = await pool.query(
-        `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
-        [procedure.id]
-      );
-
-      // Try AI analysis first, fallback if fails
-      let ramsAnalysis = null;
-      try {
-        ramsAnalysis = await analyzeRisksWithAI(procedure, createdSteps);
-        console.log(`[RAMS] AI analysis completed - ${ramsAnalysis?.steps?.length || 0} steps analyzed`);
-      } catch (aiErr) {
-        console.log(`[RAMS] AI analysis failed, using fallback: ${aiErr.message}`);
-        ramsAnalysis = generateFallbackRiskAnalysis(procedure, createdSteps);
-      }
-
-      // Store the analysis in the database
-      if (ramsAnalysis) {
-        await pool.query(
-          `UPDATE procedures SET ai_rams_analysis = $1 WHERE id = $2`,
-          [JSON.stringify(ramsAnalysis), procedure.id]
-        );
-        console.log(`[RAMS] Analysis stored for procedure ${procedure.id}`);
-      }
-    } catch (analysisErr) {
-      console.error(`[RAMS] Pre-generation error (non-blocking): ${analysisErr.message}`);
-      // Don't block the finalization if analysis fails
+      ramsAnalysis = await analyzeRisksWithAI(procedure, createdSteps);
+      console.log(`[RAMS] AI analysis completed - ${ramsAnalysis?.steps?.length || 0} steps analyzed`);
+    } catch (aiErr) {
+      console.log(`[RAMS] AI analysis failed, using fallback: ${aiErr.message}`);
+      ramsAnalysis = generateFallbackRiskAnalysis(procedure, createdSteps);
     }
 
+    // Store the analysis in the database
+    if (ramsAnalysis) {
+      await pool.query(
+        `UPDATE procedures SET ai_rams_analysis = $1 WHERE id = $2`,
+        [JSON.stringify(ramsAnalysis), procedure.id]
+      );
+      console.log(`[RAMS] Analysis stored for procedure ${procedure.id}`);
+    }
+  } catch (analysisErr) {
+    console.error(`[RAMS] Pre-generation error (non-blocking): ${analysisErr.message}`);
+    // Don't block the finalization if analysis fails
+  }
+
+  // Add stepsCount to the returned procedure for notification
+  procedure.stepsCount = stepsCount;
+  return procedure;
+}
+
+// Create procedure from AI session
+// Supports two modes:
+// - Synchronous (default): waits and returns result
+// - Background (?background=true): returns immediately, sends push notification when done
+app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
+  const { sessionId } = req.params;
+  const { background } = req.query;
+  const userEmail = req.headers["x-user-email"] || "system";
+  const site = req.headers["x-site"] || req.query.site;
+
+  console.log(`[PROC] Starting finalization for session ${sessionId}, background: ${background}`);
+
+  // Background mode: return immediately, finalize async, send notification
+  if (background === 'true') {
+    res.json({
+      ok: true,
+      processing: true,
+      message: "⏳ Création en cours... Vous recevrez une notification quand ce sera prêt."
+    });
+
+    // Finalize in background (don't await)
+    finalizeProcedureInternal(sessionId, userEmail, site)
+      .then(async (procedure) => {
+        console.log(`[PROC] Background finalization complete for ${sessionId}, procedure ${procedure.id}`);
+
+        // Send push notification to user
+        if (userEmail && userEmail !== 'system') {
+          await notifyUser(userEmail,
+            '✅ Procédure créée',
+            `"${procedure.title}" est prête avec ${procedure.stepsCount || 0} étapes. Cliquez pour voir.`,
+            {
+              type: 'procedure_created',
+              tag: `procedure-created-${procedure.id}`,
+              requireInteraction: true,
+              data: {
+                url: `/app/procedures/${procedure.id}`,
+                procedureId: procedure.id,
+                action: 'view_procedure'
+              },
+              actions: [
+                { action: 'view', title: 'Voir' }
+              ]
+            }
+          );
+        }
+      })
+      .catch((err) => {
+        console.error(`[PROC] Background finalization failed for ${sessionId}:`, err);
+        // Notify user of error
+        if (userEmail && userEmail !== 'system') {
+          notifyUser(userEmail,
+            '❌ Erreur de création',
+            'Une erreur est survenue lors de la création de la procédure. Veuillez réessayer.',
+            { type: 'error', tag: `procedure-error-${sessionId}` }
+          );
+        }
+      });
+
+    return;
+  }
+
+  // Synchronous mode: wait and return result
+  try {
+    const procedure = await finalizeProcedureInternal(sessionId, userEmail, site);
     res.status(201).json(procedure);
   } catch (err) {
     console.error("Error finalizing procedure:", err);
-    res.status(500).json({ error: err.message });
+    if (err.message === "Session non trouvée") {
+      res.status(404).json({ error: err.message });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
