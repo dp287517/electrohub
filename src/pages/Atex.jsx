@@ -240,6 +240,39 @@ export default function Atex() {
     }
   }, []);
 
+  // 🆕 Gérer le téléchargement automatique du rapport via notification
+  useEffect(() => {
+    const reportId = searchParams.get("downloadReport");
+    if (reportId) {
+      // Vérifier le statut et télécharger si prêt
+      const downloadReport = async () => {
+        try {
+          const status = await api.atex.drpceStatus(reportId);
+          if (status?.status === 'completed') {
+            // Télécharger le rapport
+            window.open(api.atex.drpceDownloadUrl(reportId), '_blank');
+            setToast("📄 Téléchargement du rapport en cours...");
+            setTimeout(() => setToast(""), 5000);
+          } else if (status?.status === 'pending') {
+            setToast("⏳ Le rapport est encore en cours de génération...");
+            setTimeout(() => setToast(""), 5000);
+          } else if (status?.status === 'error') {
+            setToast("❌ Erreur: " + (status.errorMessage || "Échec de la génération"));
+            setTimeout(() => setToast(""), 5000);
+          }
+        } catch (e) {
+          console.warn("[ATEX] downloadReport error:", e);
+          setToast("❌ Impossible de télécharger le rapport");
+          setTimeout(() => setToast(""), 5000);
+        }
+        // Nettoyer l'URL
+        searchParams.delete("downloadReport");
+        setSearchParams(searchParams, { replace: true });
+      };
+      downloadReport();
+    }
+  }, [searchParams]);
+
   // Update URL when tab or equipment changes
   useEffect(() => {
     const params = { tab: activeTab };
@@ -1107,16 +1140,28 @@ export default function Atex() {
                 Annuler
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   setDrpceLoading(true);
-                  // Ouvrir le PDF dans un nouvel onglet
-                  window.open(api.atex.drpceUrl(drpceFilters), '_blank');
-                  // Fermer le modal après un délai pour montrer l'animation
-                  setTimeout(() => {
+                  try {
+                    // Lancer la génération asynchrone
+                    const result = await api.atex.drpceGenerate(drpceFilters);
+                    if (result?.ok && result?.reportId) {
+                      // Fermer le modal et afficher un toast
+                      setDrpceModalOpen(false);
+                      setDrpceFilters({ building: "", zone: "", compliance: "" });
+                      setToast("⏳ Génération en cours... Vous recevrez une notification quand le rapport sera prêt.");
+                      setTimeout(() => setToast(""), 8000);
+                    } else {
+                      setToast("❌ Erreur lors du lancement de la génération");
+                      setTimeout(() => setToast(""), 5000);
+                    }
+                  } catch (err) {
+                    console.error('[DRPCE] Error:', err);
+                    setToast("❌ Erreur: " + (err.message || "Échec de la génération"));
+                    setTimeout(() => setToast(""), 5000);
+                  } finally {
                     setDrpceLoading(false);
-                    setDrpceModalOpen(false);
-                    setDrpceFilters({ building: "", zone: "", compliance: "" });
-                  }, 1500);
+                  }
                 }}
                 disabled={drpceLoading}
                 className="px-4 py-2.5 rounded-xl text-white font-medium transition-all bg-gradient-to-r from-teal-500 to-teal-700 hover:from-teal-600 hover:to-teal-800 flex items-center gap-2 disabled:opacity-70 min-w-[160px] justify-center"
@@ -1127,7 +1172,7 @@ export default function Atex() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Génération...
+                    Lancement...
                   </>
                 ) : (
                   <>
