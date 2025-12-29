@@ -440,7 +440,15 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         className="w-16 px-2 py-1 border rounded text-xs text-center"
                       />
                     ) : (
-                      device.icu_ka || '-'
+                      <span className="flex items-center justify-center gap-1">
+                        {device.icu_ka || '-'}
+                        {device.from_cache && (
+                          <span className="w-2 h-2 bg-green-500 rounded-full" title="Depuis le cache" />
+                        )}
+                        {device.enriched_by_ai && (
+                          <span className="w-2 h-2 bg-blue-500 rounded-full" title="Enrichi par IA" />
+                        )}
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center">{device.poles || 1}</td>
@@ -462,6 +470,18 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Cache legend */}
+      <div className="flex items-center gap-4 text-xs text-gray-500">
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 bg-green-500 rounded-full" />
+          Depuis le cache (déjà scanné)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 bg-blue-500 rounded-full" />
+          Enrichi par IA (nouveau)
+        </span>
       </div>
 
       {/* Analysis notes */}
