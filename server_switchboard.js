@@ -2581,6 +2581,19 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
   const job = panelScanJobs.get(jobId);
   if (!job) return;
 
+  // Prevent re-processing if job already completed or failed
+  if (job.status === 'completed' || job.status === 'failed') {
+    console.log(`[PANEL SCAN] Job ${jobId}: Already ${job.status}, skipping re-process`);
+    return;
+  }
+
+  // Mark job as processing to prevent duplicate runs
+  if (job.processing) {
+    console.log(`[PANEL SCAN] Job ${jobId}: Already processing, skipping duplicate`);
+    return;
+  }
+  job.processing = true;
+
   try {
     job.status = 'analyzing';
     job.progress = 10;
@@ -2966,8 +2979,9 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
 
     console.log(`[PANEL SCAN] Job ${jobId}: Complete with ${deviceCount} devices`);
 
-    // Send push notification
-    if (userEmail) {
+    // Send push notification (only once)
+    if (userEmail && !job.notified) {
+      job.notified = true;
       try {
         const { notifyUser } = await import('./lib/push-notify.js');
         await notifyUser(userEmail,
@@ -2997,8 +3011,9 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     job.error = error.message;
     job.completed_at = Date.now();
 
-    // Notify failure
-    if (userEmail) {
+    // Notify failure (only once)
+    if (userEmail && !job.notified) {
+      job.notified = true;
       try {
         const { notifyUser } = await import('./lib/push-notify.js');
         await notifyUser(userEmail,
@@ -3008,6 +3023,8 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
         );
       } catch (e) { /* ignore */ }
     }
+  } finally {
+    job.processing = false;
   }
 }
 
