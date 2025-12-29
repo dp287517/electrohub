@@ -17,6 +17,13 @@ import { Line } from 'react-chartjs-2';
 
 ChartJS.register(CategoryScale, LinearScale, LogarithmicScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
+// Safe toFixed helper
+const safeToFixed = (value, decimals = 2) => {
+  const num = Number(value);
+  if (isNaN(num) || !isFinite(num)) return '-';
+  return num.toFixed(decimals);
+};
+
 // ==================== IEC 60947-2 CALCULATIONS ====================
 
 const CURVE_TYPES = {
@@ -193,7 +200,7 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             </div>
             <p className="text-sm text-gray-500">
               {upstream.In}A → {downstream.In}A
-              {typeof result.limitCurrent === 'number' && <span className="text-red-600 ml-2">| Limite: {result.limitCurrent.toFixed(0)}A</span>}
+              {typeof result.limitCurrent === 'number' && <span className="text-red-600 ml-2">| Limite: {safeToFixed(result.limitCurrent, 0)}A</span>}
             </p>
           </div>
         </div>
@@ -246,10 +253,10 @@ const SelectivityPairCard = ({ upstream, downstream, result, expanded, onToggle 
             <tbody>
               {result.results.slice(0, 8).map((r, idx) => (
                 <tr key={idx} className={r.status === 'selective' ? 'bg-emerald-50' : r.status === 'partial' ? 'bg-amber-50' : r.status === 'non_selective' ? 'bg-red-50' : ''}>
-                  <td className="px-2 py-1 font-mono">{r.current.toFixed(0)}</td>
-                  <td className="px-2 py-1 font-mono">{r.tUp?.toFixed(3) || '—'}</td>
-                  <td className="px-2 py-1 font-mono">{r.tDown?.toFixed(3) || '—'}</td>
-                  <td className="px-2 py-1 font-mono">{r.margin?.toFixed(1) || '—'}%</td>
+                  <td className="px-2 py-1 font-mono">{safeToFixed(r.current, 0)}</td>
+                  <td className="px-2 py-1 font-mono">{safeToFixed(r.tUp, 3)}</td>
+                  <td className="px-2 py-1 font-mono">{safeToFixed(r.tDown, 3)}</td>
+                  <td className="px-2 py-1 font-mono">{safeToFixed(r.margin, 1)}%</td>
                   <td className="px-2 py-1">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${r.status === 'selective' ? 'bg-emerald-200 text-emerald-800' : r.status === 'partial' ? 'bg-amber-200 text-amber-800' : r.status === 'non_selective' ? 'bg-red-200 text-red-800' : 'bg-gray-200'}`}>
                       {r.status === 'selective' ? 'OK' : r.status === 'partial' ? '~' : r.status === 'non_selective' ? 'NON' : '—'}
@@ -596,7 +603,7 @@ export default function Selectivity() {
         `${p.upstream.In}A`,
         p.downstream.name,
         `${p.downstream.In}A`,
-        typeof p.result.limitCurrent === 'number' ? `${p.result.limitCurrent.toFixed(0)}A` : '—',
+        typeof p.result.limitCurrent === 'number' ? `${safeToFixed(p.result.limitCurrent, 0)}A` : '—',
         p.result.isSelective ? 'OK' : p.result.isPartiallySelective ? 'Partiel' : 'NON'
       ]);
 
@@ -670,7 +677,7 @@ export default function Selectivity() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <StatsCard icon={Building2} label="Tableaux" value={globalStats.boardsCount} color="bg-purple-500" />
           <StatsCard icon={Layers} label="Paires analysées" value={globalStats.totalPairs} color="bg-indigo-500" />
-          <StatsCard icon={CheckCircle} label="Sélectifs" value={globalStats.selective} color="bg-emerald-500" subtext={globalStats.totalPairs > 0 ? `${(globalStats.selective/globalStats.totalPairs*100).toFixed(0)}%` : ''} />
+          <StatsCard icon={CheckCircle} label="Sélectifs" value={globalStats.selective} color="bg-emerald-500" subtext={globalStats.totalPairs > 0 ? `${safeToFixed(globalStats.selective/globalStats.totalPairs*100, 0)}%` : ''} />
           <StatsCard icon={AlertTriangle} label="Partiels" value={globalStats.partial} color="bg-amber-500" />
           <StatsCard icon={XCircle} label="Non Sélectifs" value={globalStats.nonSelective} color="bg-red-500" />
         </div>
