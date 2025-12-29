@@ -43,13 +43,16 @@ const StepIndicator = ({ currentStep, steps }) => (
 // ============================================================
 
 const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
-  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
 
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
       setPhotos(prev => [...prev, ...files].slice(0, 15));
     }
+    // Reset input value to allow selecting the same file again
+    e.target.value = '';
   };
 
   const removePhoto = (index) => {
@@ -66,6 +69,26 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
         <p className="text-sm text-gray-500 mt-1">
           Prenez 1 à 15 photos pour capturer tous les appareils du tableau
         </p>
+      </div>
+
+      {/* Source selection buttons */}
+      <div className="flex gap-3 justify-center">
+        <button
+          onClick={() => cameraInputRef.current?.click()}
+          disabled={photos.length >= 15}
+          className="flex-1 max-w-[160px] py-3 px-4 bg-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          <Camera size={20} />
+          Caméra
+        </button>
+        <button
+          onClick={() => galleryInputRef.current?.click()}
+          disabled={photos.length >= 15}
+          className="flex-1 max-w-[160px] py-3 px-4 bg-purple-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          <Image size={20} />
+          Galerie
+        </button>
       </div>
 
       {/* Photo grid */}
@@ -89,9 +112,9 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
           </div>
         ))}
 
-        {photos.length < 15 && (
+        {photos.length < 15 && photos.length > 0 && (
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => galleryInputRef.current?.click()}
             className="aspect-[4/3] rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-indigo-400 transition-colors flex flex-col items-center justify-center gap-2 text-gray-500"
           >
             <Upload size={24} />
@@ -100,11 +123,22 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
         )}
       </div>
 
+      {/* Camera input - forces camera on mobile */}
       <input
-        ref={fileInputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
+        multiple
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      {/* Gallery input - allows selecting from gallery */}
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
         multiple
         onChange={handleFileSelect}
         className="hidden"
@@ -333,6 +367,26 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
         </button>
       </div>
 
+      {/* Summary of updates vs creates */}
+      {analysisResult?.summary && (
+        <div className="flex gap-3 text-sm">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg">
+            <span className="font-semibold">{analysisResult.summary.will_create || 0}</span>
+            <span>nouveaux</span>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg">
+            <RefreshCw size={14} />
+            <span className="font-semibold">{analysisResult.summary.will_update || 0}</span>
+            <span>à mettre à jour</span>
+          </div>
+          {analysisResult.summary.existing_in_switchboard > 0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg">
+              <span>{analysisResult.summary.existing_in_switchboard} existants</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Devices table */}
       <div className="border rounded-xl overflow-hidden bg-white">
         <div className="overflow-x-auto">
@@ -356,6 +410,7 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                 <th className="px-3 py-2 text-center">Icu (kA)</th>
                 <th className="px-3 py-2 text-center">Pôles</th>
                 <th className="px-3 py-2 text-center">Confiance</th>
+                <th className="px-3 py-2 text-center">Action</th>
                 <th className="px-3 py-2 text-center w-10"></th>
               </tr>
             </thead>
@@ -456,6 +511,18 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getConfidenceBadge(device.confidence)}`}>
                       {device.confidence === 'high' ? 'Sûr' : device.confidence === 'low' ? 'Incertain' : 'Moyen'}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {device.will_update ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium" title={device.matching_device_name ? `Mise à jour: ${device.matching_device_name}` : 'Sera mis à jour'}>
+                        <RefreshCw size={10} />
+                        MAJ
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                        Nouveau
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-center">
                     <button
