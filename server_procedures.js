@@ -8614,6 +8614,7 @@ async function generateExampleMethodStatementPDF(baseUrl = 'https://electrohub.a
 // ====================================
 async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
+  const docRef = `MT-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
   // Generate QR Code - Links to AI-guided procedure execution
   let qrCodeBuffer = null;
@@ -8909,6 +8910,7 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
 // ====================================
 async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://electrohub.app') {
   const data = procedureData;
+  const docRef = `PROC-${new Date().toLocaleDateString('fr-FR').replace(/\//g, '')}`;
 
   // Generate QR Code - Links to AI-guided procedure execution
   let qrCodeBuffer = null;
