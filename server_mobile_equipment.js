@@ -930,6 +930,29 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
        WHERE e.id=$1`,
       [req.params.id]
     );
+
+    // 📝 AUDIT: Log modification équipement mobile
+    if (rows.length > 0) {
+      const eq = rows[0];
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'equipment',
+          entityId: eq.id,
+          details: {
+            name: eq.name,
+            code: eq.code,
+            building: eq.building,
+            floor: eq.floor,
+            location: eq.location,
+            category: eq.category_name,
+            fieldsUpdated: fields.map(f => f.split('=')[0])
+          }
+        });
+      } catch (auditErr) {
+        console.warn('[UPDATE MOBILE EQUIPMENT] Audit log failed (non-blocking):', auditErr.message);
+      }
+    }
+
     res.json({ ok: true, equipment: rows[0] });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
