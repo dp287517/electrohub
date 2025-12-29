@@ -2650,12 +2650,18 @@ POUR CHAQUE APPAREIL, extraire TOUTES ces données:
 9. Pouvoir de coupure en service (Ics) en kA si visible (souvent Ics=Icu ou Ics=75%Icu)
 10. Tension assignée (voltage_v): 230V pour mono, 400V pour tri, ou valeur visible
 11. Nombre de pôles - CRITIQUE pour distinguer mono/triphasé:
-   - 1P = 1 pôle, 1 module de large (18mm), MONOPHASÉ sans neutre coupé, voltage=230V
-   - 1P+N ou 2P = 2 pôles, 2 modules de large (36mm), MONOPHASÉ avec neutre, voltage=230V
-   - 3P = 3 pôles, 3 modules de large (54mm), TRIPHASÉ sans neutre, voltage=400V
-   - 3P+N ou 4P = 4 pôles, 4 modules de large (72mm), TRIPHASÉ avec neutre, voltage=400V
-   MÉTHODE: Compte la LARGEUR de l'appareil en modules (1 module = 18mm) ou le nombre de manettes liées ensemble
-12. Si différentiel: sensibilité en mA (30, 300, 500) et type (AC, A, B, F, Hpi, Si)
+   MÉTHODE VISUELLE (compte les MANETTES liées ensemble ou la LARGEUR en modules):
+   - 1P = 1 manette seule, 1 module de large (18mm), MONOPHASÉ sans neutre → poles=1, voltage=230V
+   - 1P+N ou 2P = 2 manettes liées, 2 modules de large (36mm), MONOPHASÉ avec neutre → poles=2, voltage=230V
+   - 3P = 3 manettes liées, 3 modules de large (54mm), TRIPHASÉ sans neutre → poles=3, voltage=400V
+   - 3P+N ou 4P = 4 manettes liées, 4 modules de large (72mm), TRIPHASÉ avec neutre → poles=4, voltage=400V
+   INDICES VISUELS:
+   - Regarde si les manettes sont physiquement reliées par une barrette
+   - Un disjoncteur large (2-4 modules) = plusieurs pôles
+   - Les interrupteurs différentiels sont souvent 2P (2 modules) ou 4P (4 modules)
+   - Les disjoncteurs standards résidentiels sont généralement 1P+N (2 modules = poles=2)
+12. Largeur en modules (width_modules): Compte le nombre de modules de large (1 module = 17.5mm-18mm)
+13. Si différentiel: sensibilité en mA (30, 300, 500) et type (AC, A, B, F, Hpi, Si)
 
 Réponds en JSON:
 {
@@ -2675,7 +2681,8 @@ Réponds en JSON:
       "icu_ka": 6 ou null,
       "ics_ka": 6 ou null,
       "voltage_v": 230,
-      "poles": 1,  // 1=mono sans N, 2=mono+N (1P+N), 3=tri sans N, 4=tri+N (3P+N)
+      "poles": 2,  // 1=mono 1P, 2=mono 1P+N, 3=tri 3P, 4=tri 3P+N (compte les manettes liées!)
+      "width_modules": 2,  // Largeur en modules (1 module = 18mm)
       "is_differential": false,
       "differential_sensitivity_ma": null,
       "differential_type": null,
@@ -2994,7 +3001,7 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
               jobId,
               switchboardId,
               deviceCount,
-              url: `/app/tableaux?scanJobId=${jobId}&switchboardId=${switchboardId}`
+              url: `/app/switchboards?scanJobId=${jobId}&switchboardId=${switchboardId}`
             }
           }
         );
@@ -3177,6 +3184,14 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
 
         if (existingDevice) {
           // Mettre à jour l'appareil existant avec les nouvelles infos
+          // Compute is_complete for the merged device data
+          const mergedDevice = {
+            manufacturer: device.manufacturer || existingDevice.manufacturer,
+            reference: device.reference || existingDevice.reference,
+            in_amps: device.in_amps || existingDevice.in_amps
+          };
+          const deviceIsComplete = checkDeviceComplete(mergedDevice);
+
           const { rows: [updated] } = await quickQuery(`
             UPDATE devices SET
               name = COALESCE($3, name),
@@ -3193,10 +3208,11 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               curve_type = COALESCE($14, curve_type),
               differential_sensitivity_ma = COALESCE($15, differential_sensitivity_ma),
               differential_type = COALESCE($16, differential_type),
+              is_complete = $17,
               settings = jsonb_set(
                 COALESCE(settings, '{}'::jsonb),
                 '{last_scan}',
-                $17::jsonb
+                $18::jsonb
               ),
               updated_at = NOW()
             WHERE id = $1 AND site = $2
@@ -3218,6 +3234,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.curve_type,
             device.differential_sensitivity_ma,
             device.differential_type,
+            deviceIsComplete,
             JSON.stringify({
               width_modules: device.width_modules,
               scanned_at: new Date().toISOString(),
@@ -3228,6 +3245,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           updatedDevices.push(updated);
         } else {
           // Créer un nouvel appareil
+          const newDeviceComplete = checkDeviceComplete(device);
           const { rows: [created] } = await quickQuery(`
             INSERT INTO devices (
               site, switchboard_id, name, device_type, manufacturer, reference,
@@ -3250,7 +3268,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.voltage_v || 230,
             device.is_differential || false,
             positionNumber,
-            false, // is_complete
+            newDeviceComplete,
             device.curve_type || null,
             device.differential_sensitivity_ma || null,
             device.differential_type || null,
@@ -3294,6 +3312,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
     await quickQuery(`
       UPDATE switchboards SET
         device_count = (SELECT COUNT(*) FROM devices WHERE switchboard_id = $1),
+        complete_count = (SELECT COUNT(*) FROM devices WHERE switchboard_id = $1 AND is_complete = true),
         updated_at = NOW()
       WHERE id = $1
     `, [switchboard_id]);
