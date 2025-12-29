@@ -8,6 +8,7 @@ import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import multer from 'multer';
 import { getSiteFilter } from './lib/tenant-filter.js';
+import { createAuditTrail, AUDIT_ACTIONS } from './lib/audit-trail.js';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
@@ -22,6 +23,9 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// 📝 AUDIT TRAIL - Initialize for HV module
+const audit = createAuditTrail(pool, 'hv');
 
 // Data directories
 const DATA_DIR = process.env.HV_DATA_DIR || path.resolve(__dirname, './_data_hv');
@@ -271,7 +275,20 @@ app.post('/api/hv/equipments', async (req, res) => {
       INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
-    res.status(201).json(r.rows[0]);
+    const eq = r.rows[0];
+
+    // 📝 AUDIT: Log création équipement HV
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'hv_equipment',
+        entityId: eq.id,
+        details: { name: eq.name, code: eq.code, site, building: building_code }
+      });
+    } catch (auditErr) {
+      console.warn('[HV CREATE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
+    res.status(201).json(eq);
   } catch (e) { res.status(500).json({ error: 'Create failed', details: e.message }); }
 });
 
@@ -294,7 +311,20 @@ app.put('/api/hv/equipments/:id', async (req, res) => {
       WHERE id=$1 AND site=$2 RETURNING *`,
       [Number(req.params.id), site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
+    const eq = r.rows[0];
+
+    // 📝 AUDIT: Log modification équipement HV
+    try {
+      await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+        entityType: 'hv_equipment',
+        entityId: eq.id,
+        details: { name: eq.name, code: eq.code, site, building: building_code }
+      });
+    } catch (auditErr) {
+      console.warn('[HV UPDATE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
+    res.json(eq);
   } catch (e) { res.status(500).json({ error: 'Update failed', details: e.message }); }
 });
 
@@ -303,6 +333,21 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
     const r = await pool.query(`DELETE FROM hv_equipments WHERE id=$1 AND site=$2 RETURNING *`, [Number(req.params.id), site]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    const eq = r.rows[0];
+
+    // 📝 AUDIT: Log suppression équipement HV
+    if (eq) {
+      try {
+        await audit.log(req, AUDIT_ACTIONS.DELETED, {
+          entityType: 'hv_equipment',
+          entityId: eq.id,
+          details: { name: eq.name, code: eq.code, site }
+        });
+      } catch (auditErr) {
+        console.warn('[HV DELETE] Audit log failed (non-blocking):', auditErr.message);
+      }
+    }
+
     res.json({ message: 'Deleted' });
   } catch (e) { res.status(500).json({ error: 'Delete failed', details: e.message }); }
 });
