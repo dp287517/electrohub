@@ -1154,7 +1154,8 @@ Demande-moi n'importe quoi !`,
 
       {/* ProcedureCreator Modal - Ouvre quand l'utilisateur veut créer/importer une procédure */}
       {showProcedureCreator && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end lg:items-center justify-center z-[60]">
+          <div className="w-full lg:max-w-lg lg:mx-4 overflow-hidden bg-white rounded-t-3xl lg:rounded-2xl lg:shadow-2xl animate-slide-up lg:animate-scale-in">
           <ProcedureCreator
             initialContext={procedureCreatorContext}
             onProcedureCreated={(procedure) => {
@@ -1179,6 +1180,7 @@ Demande-moi n'importe quoi !`,
               setProcedureCreatorContext(null);
             }}
           />
+          </div>
         </div>
       )}
 
