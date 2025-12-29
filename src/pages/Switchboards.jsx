@@ -13,6 +13,7 @@ import { EquipmentAIChat } from '../components/AIAvatar';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
+import PanelScanWizard from '../components/PanelScanWizard.jsx';
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -1095,6 +1096,7 @@ export default function Switchboards() {
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [showDeviceForm, setShowDeviceForm] = useState(false);
+  const [showPanelScan, setShowPanelScan] = useState(false);
   const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false });
   const [deviceForm, setDeviceForm] = useState({
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
@@ -2884,11 +2886,21 @@ export default function Switchboards() {
 
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-gray-900 text-sm sm:text-base">Disjoncteurs ({devices.length})</h3>
-              <button onClick={() => setShowDeviceForm(true)} className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base">
-                <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
-                <span className="hidden sm:inline">Ajouter</span>
-                <span className="sm:hidden">+</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowPanelScan(true)}
+                  className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base hover:shadow-lg transition-shadow"
+                  title="Scanner le tableau complet"
+                >
+                  <Camera size={16} className="sm:w-[18px] sm:h-[18px]" />
+                  <span className="hidden sm:inline">Scan Tableau</span>
+                </button>
+                <button onClick={() => setShowDeviceForm(true)} className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base">
+                  <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
+                  <span className="hidden sm:inline">Ajouter</span>
+                  <span className="sm:hidden">+</span>
+                </button>
+              </div>
             </div>
 
             {devices.length === 0 ? (
@@ -3003,6 +3015,20 @@ export default function Switchboards() {
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}
+
+      {/* Panel Scan Wizard */}
+      {showPanelScan && selectedBoard && (
+        <PanelScanWizard
+          switchboardId={selectedBoard.id}
+          switchboardName={selectedBoard.name || selectedBoard.code}
+          onClose={() => setShowPanelScan(false)}
+          onSuccess={(result) => {
+            setShowPanelScan(false);
+            loadDevices(selectedBoard.id);
+            setToast({ message: `${result.created} appareil${result.created > 1 ? 's' : ''} créé${result.created > 1 ? 's' : ''} avec succès !`, type: 'success' });
+          }}
+        />
+      )}
 
       {/* Report Modal */}
       {showReportModal && (

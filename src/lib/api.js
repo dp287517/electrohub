@@ -2112,12 +2112,33 @@ export const api = {
       return upload("/api/switchboard/analyze-photo", fd);
     },
 
-    /** 
+    /**
      * Recherche les spécifications d'un disjoncteur via requête texte (IA)
      * @param {string} query - Ex: "Schneider NSX250N Micrologic 5.2"
      */
     searchDevice: (query) =>
       post("/api/switchboard/search-device", { query }),
+
+    /**
+     * Analyse un tableau complet (1-5 photos) et détecte tous les appareils
+     * @param {File[]} photos - Array de fichiers photo
+     * @param {number} switchboardId - ID du tableau
+     * @returns {{ panel_description, devices[], total_devices_detected }}
+     */
+    analyzePanel: (photos, switchboardId) => {
+      const fd = new FormData();
+      photos.forEach((photo) => fd.append("photos", photo));
+      if (switchboardId) fd.append("switchboard_id", switchboardId);
+      return upload("/api/switchboard/analyze-panel", fd);
+    },
+
+    /**
+     * Création en masse de disjoncteurs
+     * @param {number} switchboardId - ID du tableau
+     * @param {Array} devices - Liste des appareils à créer
+     */
+    bulkCreateDevices: (switchboardId, devices) =>
+      post("/api/switchboard/devices/bulk", { switchboard_id: switchboardId, devices }),
 
     /** 
      * Recherche les tableaux aval (pour liaison downstream)
