@@ -2686,16 +2686,58 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 8000,
+      max_tokens: 16000,
       temperature: 0.1
     });
 
-    let result = JSON.parse(visionResponse.choices[0].message.content);
-    const deviceCount = result.total_devices_detected || result.devices?.length || 0;
+    // Parse JSON with error recovery
+    let result;
+    const rawContent = visionResponse.choices[0].message.content;
+    try {
+      result = JSON.parse(rawContent);
+    } catch (parseError) {
+      console.warn(`[PANEL SCAN] Job ${jobId}: JSON parse error, attempting repair...`);
+      console.warn(`[PANEL SCAN] Raw content length: ${rawContent?.length}, error: ${parseError.message}`);
+
+      // Try to repair truncated JSON
+      let repairedContent = rawContent;
+
+      // If it ends with an incomplete string, try to close it
+      if (repairedContent && !repairedContent.trim().endsWith('}')) {
+        // Find the last complete device entry
+        const lastDeviceEnd = repairedContent.lastIndexOf('},');
+        if (lastDeviceEnd > 0) {
+          repairedContent = repairedContent.substring(0, lastDeviceEnd + 1);
+          // Close the devices array and main object
+          repairedContent += '], "analysis_notes": "Réponse tronquée - certains appareils peuvent manquer" }';
+        }
+      }
+
+      try {
+        result = JSON.parse(repairedContent);
+        console.log(`[PANEL SCAN] Job ${jobId}: JSON repair successful`);
+      } catch (repairError) {
+        // Last resort: return minimal result
+        console.error(`[PANEL SCAN] Job ${jobId}: JSON repair failed, using fallback`);
+        result = {
+          panel_description: "Erreur d'analyse - veuillez réessayer avec moins de photos",
+          total_devices_detected: 0,
+          devices: [],
+          analysis_notes: `Erreur de parsing: ${parseError.message}`
+        };
+      }
+    }
+
+    // Ensure devices array exists
+    if (!result.devices || !Array.isArray(result.devices)) {
+      result.devices = [];
+    }
+
+    const deviceCount = result.total_devices_detected || result.devices.length || 0;
     console.log(`[PANEL SCAN] Job ${jobId}: Detected ${deviceCount} devices`);
 
     // Debug: Log icu_ka values from AI response
-    const icuValues = result.devices?.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka })) || [];
+    const icuValues = result.devices.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka }));
     console.log(`[PANEL SCAN] Initial icu_ka values:`, JSON.stringify(icuValues));
 
     job.progress = 50;
