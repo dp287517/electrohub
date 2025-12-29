@@ -4,7 +4,7 @@ import {
   Send, Camera, Upload, X, Sparkles, AlertTriangle,
   Shield, HardHat, Phone, Link2, CheckCircle, Loader2,
   FileText, ChevronRight, Image, Plus, Trash2, Save, Clock,
-  Scan, Images
+  Scan, LayoutGrid
 } from 'lucide-react';
 import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import {
@@ -1020,7 +1020,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
             {/* Pending captures from capture mode */}
             {pendingCaptures.length > 1 && (
               <div className="flex items-center gap-2 bg-violet-50 border border-violet-200 px-3 py-2 rounded-xl">
-                <Images className="w-4 h-4 text-violet-600 flex-shrink-0" />
+                <LayoutGrid className="w-4 h-4 text-violet-600 flex-shrink-0" />
                 <span className="text-xs text-violet-700 flex-1">
                   <strong>{pendingCaptures.length} captures</strong> disponibles
                 </span>

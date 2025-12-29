@@ -5,7 +5,7 @@ import {
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
   FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
-  BadgeCheck, FileEdit, Pen, Users, Scan, Images
+  BadgeCheck, FileEdit, Pen, Users, Scan, LayoutGrid
 } from 'lucide-react';
 import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import {
@@ -828,7 +828,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
           {/* Pending captures indicator */}
           {pendingCaptures.length > 0 && (
             <div className="mb-3 flex items-center gap-3 p-3 bg-violet-50 border border-violet-200 rounded-xl">
-              <Images className="w-5 h-5 text-violet-600" />
+              <LayoutGrid className="w-5 h-5 text-violet-600" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-violet-800">
                   {pendingCaptures.length} capture(s) disponible(s)
