@@ -2469,53 +2469,145 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
     console.log(`[PANEL SCAN] Job ${jobId}: Detected ${deviceCount} devices`);
 
     job.progress = 50;
-    job.message = `${deviceCount} appareils détectés, enrichissement...`;
+    job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
 
-    // Enrichir chaque appareil (simplified - skip if too many to avoid timeout)
-    if (result.devices && result.devices.length > 0 && result.devices.length <= 20) {
-      job.progress = 60;
+    // Fonction pour normaliser les références (pour matching)
+    const normalizeRef = (ref) => {
+      if (!ref) return '';
+      return ref.toLowerCase()
+        .replace(/\s+/g, '')           // Remove spaces
+        .replace(/[^a-z0-9]/g, '');    // Keep only alphanumeric
+    };
 
-      // Simple enrichment without additional API calls for speed
-      result.devices = result.devices.map(device => ({
+    // Chercher dans le cache des produits déjà scannés
+    let cachedProducts = [];
+    try {
+      const { rows } = await quickQuery(`
+        SELECT reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, curve_type, validated, scan_count
+        FROM scanned_products WHERE site = $1
+        ORDER BY validated DESC, scan_count DESC
+      `, [site]);
+      cachedProducts = rows;
+      console.log(`[PANEL SCAN] Found ${cachedProducts.length} cached products for site ${site}`);
+    } catch (e) { console.warn('[PANEL SCAN] Cache lookup failed:', e.message); }
+
+    job.progress = 60;
+
+    // Enrichir chaque appareil depuis le cache ou avec des valeurs par défaut
+    const devicesToEnrich = [];
+    result.devices = result.devices.map((device, idx) => {
+      // Chercher dans le cache par référence normalisée
+      const deviceRefNorm = normalizeRef(device.reference);
+      const deviceMfgNorm = device.manufacturer?.toLowerCase() || '';
+
+      const cached = cachedProducts.find(c => {
+        const cachedRefNorm = normalizeRef(c.reference);
+        const cachedMfgNorm = c.manufacturer?.toLowerCase() || '';
+
+        // Match exact ou partiel sur référence
+        if (cachedRefNorm && deviceRefNorm) {
+          if (cachedRefNorm === deviceRefNorm) return true;
+          if (cachedRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(cachedRefNorm)) return true;
+        }
+        // Match par fabricant + ampérage
+        if (cachedMfgNorm === deviceMfgNorm && c.in_amps === device.in_amps && c.icu_ka) {
+          return true;
+        }
+        return false;
+      });
+
+      if (cached && cached.icu_ka) {
+        console.log(`[PANEL SCAN] Cache hit for ${device.reference}: Icu=${cached.icu_ka}kA`);
+        return {
+          ...device,
+          icu_ka: device.icu_ka || cached.icu_ka,
+          ics_ka: device.ics_ka || cached.ics_ka,
+          voltage_v: device.voltage_v || cached.voltage_v || 230,
+          poles: device.poles || cached.poles,
+          curve_type: device.curve_type || cached.curve_type,
+          from_cache: true,
+          cache_validated: cached.validated,
+          selected: true
+        };
+      }
+
+      // Pas dans le cache - marquer pour enrichissement
+      devicesToEnrich.push({ index: idx, device });
+
+      // Valeurs par défaut en attendant
+      return {
         ...device,
-        icu_ka: device.icu_ka || (device.manufacturer?.toLowerCase().includes('schneider') ? 6 :
-                                  device.manufacturer?.toLowerCase().includes('hager') ? 6 :
-                                  device.manufacturer?.toLowerCase().includes('legrand') ? 6 : 6),
+        icu_ka: device.icu_ka || null,
         voltage_v: device.voltage_v || 230,
+        from_cache: false,
         selected: true
-      }));
+      };
+    });
+
+    // Si des appareils n'ont pas d'Icu, faire un enrichissement IA groupé
+    const unknownDevices = result.devices.filter(d => !d.icu_ka && d.reference);
+    if (unknownDevices.length > 0 && unknownDevices.length <= 10 && openai) {
+      job.progress = 70;
+      job.message = `Recherche specs pour ${unknownDevices.length} références inconnues...`;
+
+      try {
+        const enrichPrompt = unknownDevices.map(d =>
+          `- ${d.manufacturer || '?'} ${d.reference || '?'} ${d.in_amps || '?'}A`
+        ).join('\n');
+
+        const specsResponse = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `Tu es un expert en appareillage électrique. Pour chaque disjoncteur, donne son Icu (pouvoir de coupure) en kA.
+Utilise tes connaissances des catalogues Schneider, Hager, Legrand, ABB, Siemens.
+
+Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_type": "B/C/D" } ] }`
+            },
+            { role: 'user', content: `Donne l'Icu pour ces disjoncteurs:\n${enrichPrompt}` }
+          ],
+          response_format: { type: 'json_object' },
+          max_tokens: 1000,
+          temperature: 0.1
+        });
+
+        const enriched = JSON.parse(specsResponse.choices[0].message.content);
+
+        // Appliquer les specs enrichies et sauvegarder dans le cache
+        if (enriched.specs && Array.isArray(enriched.specs)) {
+          for (const spec of enriched.specs) {
+            const deviceIdx = result.devices.findIndex(d =>
+              normalizeRef(d.reference) === normalizeRef(spec.reference)
+            );
+            if (deviceIdx >= 0 && spec.icu_ka) {
+              result.devices[deviceIdx].icu_ka = spec.icu_ka;
+              result.devices[deviceIdx].curve_type = result.devices[deviceIdx].curve_type || spec.curve_type;
+              result.devices[deviceIdx].enriched_by_ai = true;
+
+              // Sauvegarder dans le cache pour la prochaine fois
+              const d = result.devices[deviceIdx];
+              try {
+                await quickQuery(`
+                  INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, curve_type, poles, voltage_v, source, scan_count)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'panel_scan_ai', 1)
+                  ON CONFLICT (site, reference) DO UPDATE SET
+                    icu_ka = COALESCE(scanned_products.icu_ka, $5),
+                    curve_type = COALESCE(scanned_products.curve_type, $6),
+                    scan_count = scanned_products.scan_count + 1
+                `, [site, d.reference, d.manufacturer, d.in_amps, spec.icu_ka, spec.curve_type, d.poles, d.voltage_v]);
+                console.log(`[PANEL SCAN] Cached new product: ${d.reference} Icu=${spec.icu_ka}kA`);
+              } catch (e) { /* ignore cache errors */ }
+            }
+          }
+        }
+      } catch (enrichErr) {
+        console.warn('[PANEL SCAN] AI enrichment failed:', enrichErr.message);
+      }
     }
 
     job.progress = 90;
     job.message = 'Finalisation...';
-
-    // Chercher dans le cache des produits scannés
-    if (result.devices && result.devices.length > 0) {
-      try {
-        const { rows: cachedProducts } = await quickQuery(`
-          SELECT reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, validated
-          FROM scanned_products WHERE site = $1 AND validated = true
-        `, [site]);
-
-        result.devices = result.devices.map(device => {
-          const cached = cachedProducts.find(c =>
-            c.reference?.toLowerCase() === device.reference?.toLowerCase() ||
-            (c.manufacturer?.toLowerCase() === device.manufacturer?.toLowerCase() &&
-             c.in_amps === device.in_amps)
-          );
-          if (cached) {
-            return {
-              ...device,
-              icu_ka: device.icu_ka || cached.icu_ka,
-              ics_ka: device.ics_ka || cached.ics_ka,
-              voltage_v: device.voltage_v || cached.voltage_v,
-              from_cache: true
-            };
-          }
-          return device;
-        });
-      } catch (e) { /* ignore */ }
-    }
 
     // Job complete
     job.status = 'completed';
