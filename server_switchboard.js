@@ -2351,6 +2351,323 @@ Complète les spécifications manquantes.`
 });
 
 // ============================================================
+// PANEL SCAN - Analyse d'un tableau complet (multi-photos)
+// ============================================================
+
+app.post('/api/switchboard/analyze-panel', upload.array('photos', 5), async (req, res) => {
+  try {
+    const site = req.headers['x-site'] || 'default';
+    const { switchboard_id } = req.body;
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Aucune photo fournie' });
+    }
+    if (!openai) {
+      return res.status(503).json({ error: 'OpenAI non disponible' });
+    }
+
+    console.log(`[PANEL SCAN] Starting analysis of ${req.files.length} photo(s) for switchboard ${switchboard_id}`);
+
+    // Préparer les images en base64
+    const images = req.files.map(file => {
+      const base64Image = file.buffer.toString('base64');
+      const mimeType = file.mimetype || 'image/jpeg';
+      return { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' };
+    });
+
+    // Construire le message avec toutes les images
+    const imageContents = images.map((img, idx) => ({
+      type: 'image_url',
+      image_url: img
+    }));
+
+    const visionResponse = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
+
+MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS les appareils modulaires visibles.
+
+TYPES D'APPAREILS À IDENTIFIER:
+- Disjoncteurs (magnéto-thermiques)
+- Disjoncteurs différentiels
+- Interrupteurs différentiels
+- Contacteurs
+- Télérupteurs
+- Parafoudres
+- Horloges/programmateurs
+- Bornes, répartiteurs
+
+POUR CHAQUE APPAREIL IDENTIFIÉ, extraire:
+1. Position approximative (rangée et position de gauche à droite, ex: "R1-P3")
+2. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, etc.)
+3. Type d'appareil
+4. Référence si visible
+5. Intensité nominale (In) en ampères
+6. Courbe (B, C, D) si applicable
+7. Pouvoir de coupure (Icu) en kA si visible
+8. Nombre de pôles (1P, 2P, 3P, 4P, 1P+N)
+9. Si différentiel: sensibilité en mA et type (AC, A, B, F)
+10. Largeur estimée en modules
+
+IMPORTANT:
+- Numérote les rangées de haut en bas (R1, R2, R3...)
+- Numérote les positions de gauche à droite (P1, P2, P3...)
+- Si plusieurs photos, combine les informations
+- Indique ton niveau de confiance pour chaque appareil
+- Si un appareil est partiellement visible ou flou, indique-le
+
+Réponds en JSON:
+{
+  "panel_description": "Description générale du tableau (nombre de rangées, état, marque du coffret si visible)",
+  "total_devices_detected": number,
+  "devices": [
+    {
+      "position": "R1-P1",
+      "device_type": "Disjoncteur modulaire",
+      "manufacturer": "Schneider Electric",
+      "manufacturer_confidence": "high/medium/low",
+      "reference": "iC60N C16" ou null,
+      "in_amps": 16,
+      "curve_type": "C" ou null,
+      "icu_ka": 6 ou null,
+      "poles": 1,
+      "width_modules": 1,
+      "is_differential": false,
+      "differential_sensitivity_ma": null,
+      "differential_type": null,
+      "visibility": "clear/partial/blurry",
+      "confidence": "high/medium/low",
+      "notes": "observations particulières"
+    }
+  ],
+  "analysis_notes": "observations générales, appareils non identifiés, suggestions"
+}`
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Analyse ${req.files.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique. Identifie et liste TOUS les appareils modulaires visibles avec leurs caractéristiques techniques. Sois exhaustif.`
+            },
+            ...imageContents
+          ]
+        }
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 4000,
+      temperature: 0.1
+    });
+
+    let result = JSON.parse(visionResponse.choices[0].message.content);
+    console.log(`[PANEL SCAN] Detected ${result.total_devices_detected || result.devices?.length || 0} devices`);
+
+    // Enrichir chaque appareil avec les specs manquantes
+    if (result.devices && result.devices.length > 0) {
+      const enrichmentPromises = result.devices.map(async (device, index) => {
+        // Seulement enrichir si on a au moins le fabricant ou la référence
+        if (!device.manufacturer && !device.reference) return device;
+
+        try {
+          const enrichResponse = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `Tu es un expert en documentation technique de disjoncteurs.
+Pour l'appareil ${device.manufacturer || ''} ${device.reference || ''}, complète les specs manquantes.
+Valeurs Icu standards: Hager MCA/MCN=6kA, MCS=10kA | Schneider iC60N=6kA, iC60H=10kA | Legrand DX³=6-10kA
+Réponds en JSON: {"icu_ka": number, "ics_ka": number, "voltage_v": number, "product_range": "..."}`
+              },
+              {
+                role: 'user',
+                content: `Appareil: ${device.manufacturer || '?'} ${device.reference || '?'}, ${device.in_amps || '?'}A, ${device.poles || '?'} pôles. Complète les specs manquantes.`
+              }
+            ],
+            response_format: { type: 'json_object' },
+            max_tokens: 200,
+            temperature: 0.1
+          });
+
+          const enriched = JSON.parse(enrichResponse.choices[0].message.content);
+          return {
+            ...device,
+            icu_ka: device.icu_ka || enriched.icu_ka,
+            ics_ka: device.ics_ka || enriched.ics_ka,
+            voltage_v: device.voltage_v || enriched.voltage_v || 230,
+            product_range: enriched.product_range,
+            enriched: true
+          };
+        } catch (e) {
+          console.warn(`[PANEL SCAN] Enrichment failed for device ${index}:`, e.message);
+          return device;
+        }
+      });
+
+      // Limiter à 5 enrichissements en parallèle pour éviter le rate limiting
+      const enrichedDevices = [];
+      for (let i = 0; i < enrichmentPromises.length; i += 5) {
+        const batch = enrichmentPromises.slice(i, i + 5);
+        const batchResults = await Promise.all(batch);
+        enrichedDevices.push(...batchResults);
+      }
+      result.devices = enrichedDevices;
+    }
+
+    // Chercher dans le cache des produits scannés
+    if (result.devices && result.devices.length > 0) {
+      try {
+        const { rows: cachedProducts } = await quickQuery(`
+          SELECT reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, validated
+          FROM scanned_products WHERE site = $1 AND validated = true
+        `, [site]);
+
+        result.devices = result.devices.map(device => {
+          const cached = cachedProducts.find(c =>
+            c.reference?.toLowerCase() === device.reference?.toLowerCase() ||
+            (c.manufacturer?.toLowerCase() === device.manufacturer?.toLowerCase() &&
+             c.in_amps === device.in_amps)
+          );
+          if (cached) {
+            return {
+              ...device,
+              icu_ka: device.icu_ka || cached.icu_ka,
+              ics_ka: device.ics_ka || cached.ics_ka,
+              voltage_v: device.voltage_v || cached.voltage_v,
+              from_cache: true
+            };
+          }
+          return device;
+        });
+      } catch (e) { /* ignore */ }
+    }
+
+    console.log('[PANEL SCAN] Analysis complete:', JSON.stringify(result, null, 2));
+
+    res.json({
+      ...result,
+      photos_analyzed: req.files.length,
+      analysis_version: '1.0'
+    });
+
+  } catch (e) {
+    console.error('[PANEL SCAN] Error:', e.message);
+    res.status(500).json({ error: 'Panel analysis failed: ' + e.message });
+  }
+});
+
+// POST /api/switchboard/devices/bulk - Création en masse de disjoncteurs
+app.post('/api/switchboard/devices/bulk', async (req, res) => {
+  try {
+    const site = req.headers['x-site'] || 'default';
+    const { switchboard_id, devices } = req.body;
+    const user = extractUser(req);
+
+    if (!switchboard_id) return res.status(400).json({ error: 'switchboard_id requis' });
+    if (!devices || !Array.isArray(devices) || devices.length === 0) {
+      return res.status(400).json({ error: 'devices array requis' });
+    }
+
+    console.log(`[BULK CREATE] Creating ${devices.length} devices for switchboard ${switchboard_id}`);
+
+    // Vérifier que le tableau existe
+    const { rows: [board] } = await quickQuery(
+      'SELECT id, name FROM switchboards WHERE id = $1 AND site = $2',
+      [switchboard_id, site]
+    );
+    if (!board) return res.status(404).json({ error: 'Tableau non trouvé' });
+
+    const createdDevices = [];
+    const errors = [];
+
+    for (let i = 0; i < devices.length; i++) {
+      const device = devices[i];
+      try {
+        const { rows: [created] } = await quickQuery(`
+          INSERT INTO switchboard_devices (
+            switchboard_id, site, name, device_type, manufacturer, reference,
+            in_amps, curve_type, icu_ka, ics_ka, poles, voltage_v,
+            is_differential, differential_sensitivity_ma, differential_type,
+            position, width_modules, notes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          RETURNING *
+        `, [
+          switchboard_id,
+          site,
+          device.name || `${device.device_type || 'Disjoncteur'} ${device.position || i + 1}`,
+          device.device_type || 'Disjoncteur modulaire',
+          device.manufacturer,
+          device.reference,
+          device.in_amps,
+          device.curve_type,
+          device.icu_ka,
+          device.ics_ka,
+          device.poles || 1,
+          device.voltage_v || 230,
+          device.is_differential || false,
+          device.differential_sensitivity_ma,
+          device.differential_type,
+          device.position,
+          device.width_modules || 1,
+          device.notes
+        ]);
+
+        createdDevices.push(created);
+
+        // Sauvegarder dans le cache des produits scannés si référence complète
+        if (device.manufacturer && device.reference && device.in_amps) {
+          try {
+            await quickQuery(`
+              INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, source, scan_count)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'panel_scan', 1)
+              ON CONFLICT (site, reference) DO UPDATE SET scan_count = scanned_products.scan_count + 1
+            `, [site, device.reference, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v]);
+          } catch (e) { /* ignore cache errors */ }
+        }
+
+      } catch (e) {
+        console.error(`[BULK CREATE] Error creating device ${i}:`, e.message);
+        errors.push({ index: i, device: device.position || device.name, error: e.message });
+      }
+    }
+
+    // Mettre à jour les compteurs du tableau
+    await quickQuery(`
+      UPDATE switchboards SET
+        device_count = (SELECT COUNT(*) FROM switchboard_devices WHERE switchboard_id = $1),
+        updated_at = NOW()
+      WHERE id = $1
+    `, [switchboard_id]);
+
+    // Audit log
+    await quickQuery(`
+      INSERT INTO switchboard_audit_log (site, action, entity_type, entity_id, actor_name, actor_email, details)
+      VALUES ($1, 'bulk_created', 'devices', $2, $3, $4, $5)
+    `, [site, switchboard_id, user.name, user.email, JSON.stringify({
+      count: createdDevices.length,
+      errors: errors.length,
+      source: 'panel_scan'
+    })]);
+
+    console.log(`[BULK CREATE] Created ${createdDevices.length} devices, ${errors.length} errors`);
+
+    res.json({
+      success: true,
+      created: createdDevices.length,
+      errors: errors.length > 0 ? errors : undefined,
+      devices: createdDevices
+    });
+
+  } catch (e) {
+    console.error('[BULK CREATE] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
 // AI DEVICE SEARCH
 // ============================================================
 
