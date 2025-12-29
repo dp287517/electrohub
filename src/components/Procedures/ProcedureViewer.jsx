@@ -229,7 +229,7 @@ function EquipmentLink({ link, isEditing, onRemove }) {
   );
 }
 
-export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMobile = false }) {
+export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMobile = false, aiGuidedMode = false }) {
   const [procedure, setProcedure] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -241,7 +241,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [equipmentResults, setEquipmentResults] = useState([]);
   const [downloading, setDownloading] = useState(null); // null, 'rams', 'method', 'procedure', 'all'
   const [showPrintMenu, setShowPrintMenu] = useState(false);
-  const [showAssistant, setShowAssistant] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(aiGuidedMode); // Auto-open AI if from QR code
   const [showSignatures, setShowSignatures] = useState(false);
   const [signatureSummary, setSignatureSummary] = useState(null);
 
@@ -290,6 +290,13 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   useEffect(() => {
     loadProcedure();
   }, [procedureId]);
+
+  // Auto-open AI assistant when coming from QR code scan
+  useEffect(() => {
+    if (aiGuidedMode && procedure) {
+      setShowAssistant(true);
+    }
+  }, [aiGuidedMode, procedure]);
 
   const handleSave = async () => {
     try {
