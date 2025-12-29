@@ -31,6 +31,17 @@ dotenv.config();
 const { Pool } = pg;
 
 // ============================================================
+// UTILITY: Normalize breaker reference for consistent matching
+// Used for cache lookup and unique constraint
+// ============================================================
+const normalizeRef = (ref) => {
+  if (!ref) return '';
+  return ref.toLowerCase()
+    .replace(/\s+/g, '')           // Remove spaces
+    .replace(/[^a-z0-9]/g, '');    // Keep only alphanumeric
+};
+
+// ============================================================
 // POOL CONFIGURATION - OPTIMISÉ POUR NEON (SERVERLESS)
 // VERSION 3.0 - Plus robuste avec plus de connexions
 // ============================================================
@@ -443,9 +454,13 @@ async function ensureSchema() {
       -- COLONNES DE CACHE POUR ÉVITER LES REQUÊTES COUNT
       device_count INTEGER DEFAULT 0,
       complete_count INTEGER DEFAULT 0,
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
-    
+
+    -- Migration: add updated_at if missing
+    ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
     CREATE INDEX IF NOT EXISTS idx_switchboards_site ON switchboards(site);
     CREATE INDEX IF NOT EXISTS idx_switchboards_building ON switchboards(building_code);
     CREATE INDEX IF NOT EXISTS idx_switchboards_code ON switchboards(code);
@@ -548,6 +563,25 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_scanned_products_site ON scanned_products(site);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_reference ON scanned_products(reference);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_manufacturer ON scanned_products(manufacturer);
+
+    -- Migration: deduplicate scanned_products before creating unique index
+    -- Keep the entry with highest id for each (site, normalized_reference) pair
+    -- Normalization: lowercase, remove all non-alphanumeric characters
+    DELETE FROM scanned_products a USING scanned_products b
+    WHERE a.id < b.id
+      AND a.site = b.site
+      AND LOWER(REGEXP_REPLACE(a.reference, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE(b.reference, '[^a-zA-Z0-9]', '', 'g'));
+
+    -- Normalize existing references (lowercase, alphanumeric only)
+    UPDATE scanned_products
+    SET reference = LOWER(REGEXP_REPLACE(reference, '[^a-zA-Z0-9]', '', 'g'))
+    WHERE reference IS NOT NULL
+      AND reference != LOWER(REGEXP_REPLACE(reference, '[^a-zA-Z0-9]', '', 'g'));
+
+    -- UNIQUE constraint for ON CONFLICT upsert (site + reference)
+    -- Note: reference should be normalized (lowercase, trimmed) before insertion
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_scanned_products_site_reference
+      ON scanned_products(site, reference);
 
     -- =======================================================
     -- TABLE: Control Templates (Modèles de formulaires)
@@ -2579,13 +2613,7 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
     job.progress = 50;
     job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
 
-    // Fonction pour normaliser les références (pour matching)
-    const normalizeRef = (ref) => {
-      if (!ref) return '';
-      return ref.toLowerCase()
-        .replace(/\s+/g, '')           // Remove spaces
-        .replace(/[^a-z0-9]/g, '');    // Keep only alphanumeric
-    };
+    // Note: normalizeRef is defined globally for consistent reference matching
 
     // Chercher dans le cache des produits déjà scannés
     let cachedProducts = [];
@@ -2696,14 +2724,17 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
               // Sauvegarder dans le cache pour la prochaine fois
               const d = result.devices[deviceIdx];
               try {
+                const normalizedRef = normalizeRef(d.reference);
+                if (!normalizedRef) continue; // Skip if no valid reference
                 await quickQuery(`
                   INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, curve_type, poles, voltage_v, source, scan_count)
                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'panel_scan_ai', 1)
                   ON CONFLICT (site, reference) DO UPDATE SET
-                    icu_ka = COALESCE(scanned_products.icu_ka, $5),
-                    curve_type = COALESCE(scanned_products.curve_type, $6),
-                    scan_count = scanned_products.scan_count + 1
-                `, [site, d.reference, d.manufacturer, d.in_amps, spec.icu_ka, spec.curve_type, d.poles, d.voltage_v]);
+                    icu_ka = COALESCE(scanned_products.icu_ka, EXCLUDED.icu_ka),
+                    curve_type = COALESCE(scanned_products.curve_type, EXCLUDED.curve_type),
+                    scan_count = scanned_products.scan_count + 1,
+                    last_scanned_at = NOW()
+                `, [site, normalizedRef, d.manufacturer, d.in_amps, spec.icu_ka, spec.curve_type, d.poles, d.voltage_v]);
                 console.log(`[PANEL SCAN] Cached new product: ${d.reference} Icu=${spec.icu_ka}kA`);
               } catch (e) { /* ignore cache errors */ }
             }
@@ -2998,14 +3029,21 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         // Sauvegarder dans le cache des produits scannés si référence complète
         if (device.manufacturer && device.reference && device.in_amps) {
           try {
+            const normalizedRef = normalizeRef(device.reference);
+            if (!normalizedRef) continue; // Skip if no valid reference
             await quickQuery(`
               INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, curve_type, source, scan_count)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'panel_scan', 1)
               ON CONFLICT (site, reference) DO UPDATE SET
                 icu_ka = COALESCE(EXCLUDED.icu_ka, scanned_products.icu_ka),
-                scan_count = scanned_products.scan_count + 1
-            `, [site, device.reference, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v, device.curve_type]);
-          } catch (e) { /* ignore cache errors */ }
+                curve_type = COALESCE(EXCLUDED.curve_type, scanned_products.curve_type),
+                manufacturer = COALESCE(EXCLUDED.manufacturer, scanned_products.manufacturer),
+                scan_count = scanned_products.scan_count + 1,
+                last_scanned_at = NOW()
+            `, [site, normalizedRef, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v, device.curve_type]);
+          } catch (e) {
+            console.warn('[BULK CREATE] Cache error:', e.message);
+          }
         }
 
       } catch (e) {
@@ -3225,15 +3263,19 @@ app.post('/api/switchboard/scanned-products', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const { reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, photo_base64, source } = req.body;
     if (!reference) return res.status(400).json({ error: 'Reference required' });
-    
-    // Check if exists
+
+    // Normalize reference for consistent matching
+    const normalizedReference = normalizeRef(reference);
+    if (!normalizedReference) return res.status(400).json({ error: 'Invalid reference' });
+
+    // Check if exists (using normalized reference)
     const existing = await quickQuery(`
-      SELECT id, scan_count FROM scanned_products 
-      WHERE site = $1 AND LOWER(reference) = LOWER($2) AND LOWER(COALESCE(manufacturer, '')) = LOWER(COALESCE($3, ''))
-    `, [site, reference, manufacturer || '']);
+      SELECT id, scan_count FROM scanned_products
+      WHERE site = $1 AND reference = $2
+    `, [site, normalizedReference]);
     
     let result;
     if (existing.rows.length > 0) {
@@ -3252,8 +3294,8 @@ app.post('/api/switchboard/scanned-products', async (req, res) => {
       result = await quickQuery(`
         INSERT INTO scanned_products (site, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, photo_thumbnail, validated, source, last_scanned_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, NOW()) RETURNING *
-      `, [site, reference, manufacturer, device_type || 'Low Voltage Circuit Breaker', in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, 
-          is_differential || false, settings ? JSON.stringify(settings) : '{}', 
+      `, [site, normalizedReference, manufacturer, device_type || 'Low Voltage Circuit Breaker', in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+          is_differential || false, settings ? JSON.stringify(settings) : '{}',
           photo_base64 ? Buffer.from(photo_base64, 'base64') : null, source || 'manual_entry']);
     }
     
