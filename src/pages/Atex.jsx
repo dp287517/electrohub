@@ -875,10 +875,18 @@ export default function Atex() {
   const dirty = isDirty();
 
   // Style tabs moderne (comme SwitchboardControls)
+  // Labels courts pour mobile
+  const mobileLabels = {
+    dashboard: "TB",
+    controls: "Équip.",
+    analytics: "📊",
+    plans: "Plans"
+  };
+
   const TabButton = ({ id, label, count, color, alert }) => (
     <button
       onClick={() => setActiveTab(id)}
-      className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-sm sm:text-base ${
+      className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-medium transition-all whitespace-nowrap text-xs sm:text-base ${
         activeTab === id
           ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
           : alert
@@ -887,7 +895,7 @@ export default function Atex() {
       }`}
     >
       <span className="hidden sm:inline">{label}</span>
-      <span className="sm:hidden">{label.length > 10 ? label.slice(0, 8) + "…" : label}</span>
+      <span className="sm:hidden">{mobileLabels[id] || label}</span>
       {count !== undefined && count > 0 && (
         <span className={`ml-1 sm:ml-2 px-1.5 sm:px-2 py-0.5 rounded-full text-xs font-bold ${
           activeTab === id ? "bg-white/20 text-white" : color || "bg-gray-200 text-gray-700"
@@ -2670,8 +2678,8 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
 
   return (
     <div className="space-y-4">
-      {/* Import ZIP - Style Switchboard */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200">
+      {/* Import ZIP - Style Switchboard (caché sur mobile) */}
+      <div className="hidden sm:flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-amber-100 rounded-xl">
             <span className="text-2xl">📄</span>
