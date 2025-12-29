@@ -64,6 +64,22 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Helper to get proper QR code URL (always use production domain for external scanning)
+function getQRCodeBaseUrl(req) {
+  // Priority: 1) PRODUCTION_URL env var, 2) x-forwarded-host header, 3) hardcoded production URL
+  if (process.env.PRODUCTION_URL) {
+    return process.env.PRODUCTION_URL;
+  }
+  // Check if request is from production domain
+  const forwardedHost = req?.headers?.["x-forwarded-host"];
+  if (forwardedHost && !forwardedHost.includes("127.0.0.1") && !forwardedHost.includes("localhost")) {
+    const protocol = req.headers["x-forwarded-proto"] || "https";
+    return `${protocol}://${forwardedHost}`;
+  }
+  // Default to production URL for QR codes (they're scanned by external devices)
+  return "https://electrohub.app";
+}
+
 // ------------------------------
 // App & Config
 // ------------------------------
@@ -3453,9 +3469,8 @@ app.get("/api/procedures/example-method-statement-pdf", async (req, res) => {
   try {
     console.log("[RAMS] Generating example Method Statement PDF...");
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     const pdfBuffer = await generateExampleMethodStatementPDF(baseUrl);
 
@@ -3494,9 +3509,8 @@ app.get("/api/procedures/example-work-method-pdf", async (req, res) => {
   try {
     console.log("[Work Method] Generating example Work Method PDF...");
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     const pdfBuffer = await generateExampleWorkMethodPDF(baseUrl);
 
@@ -3519,9 +3533,8 @@ app.get("/api/procedures/example-procedure-pdf", async (req, res) => {
   try {
     console.log("[Procedure] Generating example Procedure PDF...");
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     const pdfBuffer = await generateExampleProcedurePDF(baseUrl);
 
@@ -3544,9 +3557,8 @@ app.get("/api/procedures/example-all-documents", async (req, res) => {
   try {
     console.log("[Documents] Generating all example documents (5 files)...");
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     // Example procedure data
     const exampleProcedure = {
@@ -5298,10 +5310,8 @@ app.get("/api/procedures/:id/method-statement-pdf", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get base URL from request or use default
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes (they're scanned by external devices)
+    const baseUrl = getQRCodeBaseUrl(req);
 
     const pdfBuffer = await generateMethodStatementA3PDF(id, baseUrl);
 
@@ -5328,9 +5338,8 @@ app.get("/api/procedures/:id/work-method-pdf", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     // Get procedure and steps
     const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
@@ -5365,9 +5374,8 @@ app.get("/api/procedures/:id/procedure-doc-pdf", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes
+    const baseUrl = getQRCodeBaseUrl(req);
 
     // Get procedure and steps
     const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
@@ -5402,9 +5410,8 @@ app.get("/api/procedures/:id/all-documents", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "electrohub.app";
-    const baseUrl = `${protocol}://${host}`;
+    // Use production URL for QR codes (they're scanned by external devices)
+    const baseUrl = getQRCodeBaseUrl(req);
 
     // Get procedure and steps
     const { rows: procedures } = await pool.query(`SELECT * FROM procedures WHERE id = $1`, [id]);
