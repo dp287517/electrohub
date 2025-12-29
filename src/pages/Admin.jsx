@@ -424,7 +424,8 @@ function HaleonUsersTab({ haleonUsers, sites, departments, onRefresh, loading })
   const handleSave = async (userData, isNew = false) => {
     setSaving(true);
     try {
-      const url = isNew ? `${API_BASE}/users/haleon` : `${API_BASE}/users/haleon/${editingId}`;
+      // For updates, use by-email endpoint since users can come from different tables
+      const url = isNew ? `${API_BASE}/users/haleon` : `${API_BASE}/users/haleon/by-email`;
       const method = isNew ? 'POST' : 'PUT';
 
       const response = await fetch(url, {
