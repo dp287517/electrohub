@@ -18,6 +18,7 @@ import { createCanvas } from "canvas";
 import { createRequire } from "module";
 import { getSiteFilter } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity } from "./lib/push-notify.js";
+import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -119,6 +120,10 @@ const pool = new Pool({
   max: 10,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
+
+// 📝 AUDIT TRAIL - Initialize for VSD module
+const audit = createAuditTrail(pool, 'vsd');
+
 // -------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
@@ -587,6 +592,17 @@ app.post("/api/vsd/equipments", async (req, res) => {
     // 🔔 Push notification for new equipment
     notifyEquipmentCreated('vsd', eq, u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
 
+    // 📝 AUDIT: Log création équipement VSD
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'vsd_equipment',
+        entityId: eq.id,
+        details: { name: eq.name, building: eq.building, zone: eq.zone, type: eq.type, manufacturer: eq.manufacturer }
+      });
+    } catch (auditErr) {
+      console.warn('[VSD CREATE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -665,6 +681,20 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
           : "na";
     }
     await logEvent("vsd_equipment_updated", { id, fields: Object.keys(req.body) }, u);
+
+    // 📝 AUDIT: Log modification équipement VSD
+    if (eq) {
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'vsd_equipment',
+          entityId: eq.id,
+          details: { name: eq.name, building: eq.building, zone: eq.zone, type: eq.type, fieldsUpdated: fields.map(f => f.split('=')[0]) }
+        });
+      } catch (auditErr) {
+        console.warn('[VSD UPDATE] Audit log failed (non-blocking):', auditErr.message);
+      }
+    }
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -682,6 +712,17 @@ app.delete("/api/vsd/equipments/:id", async (req, res) => {
     // 🔔 Push notification for deleted equipment
     if (old[0]) {
       notifyEquipmentDeleted('vsd', old[0], u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
+
+      // 📝 AUDIT: Log suppression équipement VSD
+      try {
+        await audit.log(req, AUDIT_ACTIONS.DELETED, {
+          entityType: 'vsd_equipment',
+          entityId: id,
+          details: { name: old[0].name }
+        });
+      } catch (auditErr) {
+        console.warn('[VSD DELETE] Audit log failed (non-blocking):', auditErr.message);
+      }
     }
 
     res.json({ ok: true });

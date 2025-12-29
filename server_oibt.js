@@ -6,10 +6,14 @@ import dotenv from "dotenv";
 import pg from "pg";
 import multer from "multer";
 import { getSiteFilter } from "./lib/tenant-filter.js";
+import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// 📝 AUDIT TRAIL - Initialize for OIBT module
+const audit = createAuditTrail(pool, 'oibt');
 
 const app = express();
 app.use(helmet());

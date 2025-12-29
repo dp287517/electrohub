@@ -10,6 +10,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import multer from 'multer';
 import axios from 'axios';
 import { getSiteFilter } from './lib/tenant-filter.js';
+import { createAuditTrail, AUDIT_ACTIONS } from './lib/audit-trail.js';
 
 dotenv.config();
 const { Pool } = pg;
@@ -20,6 +21,9 @@ const pool = new Pool({
   max: 10,                        // Limite le nombre de connexions
   statement_timeout: 10000        // Timeout pour les requêtes (10s)
 });
+
+// 📝 AUDIT TRAIL - Initialize for Obsolescence module
+const audit = createAuditTrail(pool, 'obsolescence');
 
 // Gemini setup
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;

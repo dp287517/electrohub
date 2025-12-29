@@ -17,6 +17,7 @@ import PDFDocument from "pdfkit";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted } from "./lib/push-notify.js";
+import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 
 dotenv.config();
 
@@ -123,6 +124,9 @@ const pool = new Pool({
   max: 10,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
+
+// 📝 AUDIT TRAIL - Initialize for GLO module
+const audit = createAuditTrail(pool, 'glo');
 
 // -------------------------------------------------
 // Schema BDD
@@ -619,6 +623,17 @@ app.post("/api/glo/equipments", async (req, res) => {
     // 🔔 Push notification for new equipment
     notifyEquipmentCreated('glo', eq, u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
 
+    // 📝 AUDIT: Log création équipement GLO
+    try {
+      await audit.log(req, AUDIT_ACTIONS.CREATED, {
+        entityType: 'glo_equipment',
+        entityId: eq.id,
+        details: { name: eq.name, building: eq.building, zone: eq.zone, equipment_type: eq.equipment_type }
+      });
+    } catch (auditErr) {
+      console.warn('[GLO CREATE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -703,6 +718,20 @@ app.put("/api/glo/equipments/:id", async (req, res) => {
     }
 
     await logEvent("glo_equipment_updated", { id, fields: Object.keys(body) }, u);
+
+    // 📝 AUDIT: Log modification équipement GLO
+    if (eq) {
+      try {
+        await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+          entityType: 'glo_equipment',
+          entityId: eq.id,
+          details: { name: eq.name, building: eq.building, zone: eq.zone, fieldsUpdated: Object.keys(body) }
+        });
+      } catch (auditErr) {
+        console.warn('[GLO UPDATE] Audit log failed (non-blocking):', auditErr.message);
+      }
+    }
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -724,6 +753,17 @@ app.delete("/api/glo/equipments/:id", async (req, res) => {
     // 🔔 Push notification for deleted equipment
     if (old[0]) {
       notifyEquipmentDeleted('glo', old[0], u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
+
+      // 📝 AUDIT: Log suppression équipement GLO
+      try {
+        await audit.log(req, AUDIT_ACTIONS.DELETED, {
+          entityType: 'glo_equipment',
+          entityId: id,
+          details: { name: old[0].name }
+        });
+      } catch (auditErr) {
+        console.warn('[GLO DELETE] Audit log failed (non-blocking):', auditErr.message);
+      }
     }
 
     res.json({ ok: true });

@@ -101,10 +101,17 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
   const fetchActivities = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/procedures/activities/recent?limit=50');
+      // Use unified dashboard activities endpoint that aggregates from ALL modules
+      const response = await api.get('/api/dashboard/activities?limit=50');
       if (response.ok) {
         const data = await response.json();
         setActivities(data);
+      } else {
+        // Fallback to procedures if unified endpoint fails
+        const fallback = await api.get('/api/procedures/activities/recent?limit=50');
+        if (fallback.ok) {
+          setActivities(await fallback.json());
+        }
       }
     } catch (err) {
       setError('Erreur de chargement');
@@ -259,7 +266,7 @@ export function NotificationBadge() {
   useEffect(() => {
     const fetchCount = async () => {
       try {
-        const response = await api.get('/api/procedures/activities/recent?limit=10');
+        const response = await api.get('/api/dashboard/activities?limit=10');
         if (response.ok) {
           const data = await response.json();
           setCount(data.action_required?.length || 0);

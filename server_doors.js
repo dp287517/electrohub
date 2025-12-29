@@ -18,6 +18,7 @@ import QRCode from "qrcode";
 import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notify } from "./lib/push-notify.js";
 
 // 🔹 MAPS
 import crypto from "crypto";
@@ -692,6 +693,10 @@ app.post("/api/doors/doors", async (req, res) => {
       details: { name, building, floor, location }
     });
 
+    // 🔔 Push notification for new door
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentCreated('door', door, userId).catch(err => console.log('[DOORS] Push notify error:', err.message));
+
     res.json({
       ok: true,
       door: { ...door, next_check_date: due, photo_url: null, door_state: null },
@@ -803,6 +808,18 @@ app.put("/api/doors/doors/:id", async (req, res) => {
       } catch (auditErr) {
         console.warn('[UPDATE DOOR] Audit log failed (non-blocking):', auditErr.message);
       }
+
+      // 🔔 Push notification for updated door
+      try {
+        const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+        notify('📝 Porte modifiée', `${door.name} a été mise à jour`, {
+          type: 'equipment_updated',
+          tag: `door-updated-${door.id}`,
+          data: { equipmentType: 'door', equipmentId: door.id, url: `/app/doors/${door.id}` }
+        }).catch(err => console.log('[DOORS] Push notify error:', err.message));
+      } catch (notifyErr) {
+        console.warn('[UPDATE DOOR] Push notify failed (non-blocking):', notifyErr.message);
+      }
     }
 
     res.json({ ok: true });
@@ -830,6 +847,12 @@ app.delete("/api/doors/doors/:id", async (req, res) => {
       entityId: doorId,
       details: { name: door?.name, building: door?.building, floor: door?.floor, location: door?.location }
     });
+
+    // 🔔 Push notification for deleted door
+    if (door) {
+      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+      notifyEquipmentDeleted('door', door, userId).catch(err => console.log('[DOORS] Push notify error:', err.message));
+    }
 
     res.json({ ok: true });
   } catch (e) {

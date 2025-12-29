@@ -8120,6 +8120,146 @@ app.get("/api/auth/check-status", async (req, res) => {
 });
 
 /* ================================================================
+   🔵 Unified Recent Activity - Aggregates from ALL audit tables
+   ================================================================ */
+app.get("/api/dashboard/activities", async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const activities = [];
+
+    // Helper to safely query audit tables
+    const safeQuery = async (tableName, mapper) => {
+      try {
+        const { rows } = await pool.query(`
+          SELECT * FROM ${tableName}
+          ORDER BY ts DESC
+          LIMIT 15
+        `);
+        return rows.map(mapper);
+      } catch (e) {
+        // Table might not exist
+        return [];
+      }
+    };
+
+    // 1. Switchboard audit
+    const switchboardActivities = await safeQuery('switchboard_audit_log', row => ({
+      id: `sw-${row.id}`,
+      type: row.action,
+      module: 'switchboard',
+      title: row.action === 'created' ? 'Tableau créé' :
+             row.action === 'updated' ? 'Tableau modifié' :
+             row.action === 'deleted' ? 'Tableau supprimé' : row.action,
+      description: row.details?.name || row.entity_type,
+      actor: row.actor_name || row.actor_email,
+      timestamp: row.ts,
+      url: '/app/switchboards',
+      icon: '⚡',
+      color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'blue'
+    }));
+    activities.push(...switchboardActivities);
+
+    // 2. Fire Doors audit
+    const doorsActivities = await safeQuery('fire_doors_audit_log', row => ({
+      id: `fd-${row.id}`,
+      type: row.action,
+      module: 'doors',
+      title: row.action === 'created' ? 'Porte ajoutée' :
+             row.action === 'updated' ? 'Porte modifiée' :
+             row.action === 'deleted' ? 'Porte supprimée' : row.action,
+      description: row.details?.name || row.entity_type,
+      actor: row.actor_name || row.actor_email,
+      timestamp: row.ts,
+      url: '/app/doors',
+      icon: '🚪',
+      color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'amber'
+    }));
+    activities.push(...doorsActivities);
+
+    // 3. Mobile Equipment audit
+    const mobileActivities = await safeQuery('mobile_equipment_audit_log', row => ({
+      id: `me-${row.id}`,
+      type: row.action,
+      module: 'mobile-equipment',
+      title: row.action === 'created' ? 'Équipement ajouté' :
+             row.action === 'updated' ? 'Équipement modifié' :
+             row.action === 'deleted' ? 'Équipement supprimé' : row.action,
+      description: row.details?.name || row.entity_type,
+      actor: row.actor_name || row.actor_email,
+      timestamp: row.ts,
+      url: '/app/mobile-equipments',
+      icon: '🔌',
+      color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'blue'
+    }));
+    activities.push(...mobileActivities);
+
+    // 4. DataHub audit
+    const datahubActivities = await safeQuery('datahub_audit_log', row => ({
+      id: `dh-${row.id}`,
+      type: row.action,
+      module: 'datahub',
+      title: row.action === 'created' ? 'Donnée créée' :
+             row.action === 'updated' ? 'Donnée modifiée' :
+             row.action === 'deleted' ? 'Donnée supprimée' : row.action,
+      description: row.details?.name || row.entity_type,
+      actor: row.actor_name || row.actor_email,
+      timestamp: row.ts,
+      url: '/app/datahub',
+      icon: '🗄️',
+      color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'violet'
+    }));
+    activities.push(...datahubActivities);
+
+    // 5. Procedures audit
+    const proceduresActivities = await safeQuery('procedures_audit_log', row => ({
+      id: `pr-${row.id}`,
+      type: row.action,
+      module: 'procedures',
+      title: row.action === 'created' ? 'Procédure créée' :
+             row.action === 'updated' ? 'Procédure modifiée' :
+             row.action === 'deleted' ? 'Procédure supprimée' : row.action,
+      description: row.details?.title || row.entity_type,
+      actor: row.actor_name || row.actor_email,
+      timestamp: row.ts,
+      url: '/app/procedures',
+      icon: '📋',
+      color: 'violet'
+    }));
+    activities.push(...proceduresActivities);
+
+    // 6. Project Management audit
+    const pmActivities = await safeQuery('pm_audit', row => ({
+      id: `pm-${row.id}`,
+      type: row.action,
+      module: 'projects',
+      title: row.action.includes('create') ? 'Projet créé' :
+             row.action.includes('update') ? 'Projet modifié' :
+             row.action.includes('delete') ? 'Projet supprimé' : row.action,
+      description: row.details?.name || row.action,
+      actor: row.user_email,
+      timestamp: row.ts,
+      url: '/app/projects',
+      icon: '💳',
+      color: 'green'
+    }));
+    activities.push(...pmActivities);
+
+    // Sort by timestamp descending
+    activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Return structured response
+    res.json({
+      action_required: [], // Could add pending approvals here
+      recent: activities.slice(0, limit)
+    });
+
+  } catch (err) {
+    console.error("[dashboard/activities] Error:", err);
+    res.status(500).json({ error: err.message, action_required: [], recent: [] });
+  }
+});
+
+/* ================================================================
    🔵 Save User Profile (department, site)
    ================================================================ */
 app.put("/api/user/profile", express.json(), async (req, res) => {
