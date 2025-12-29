@@ -563,6 +563,8 @@ async function ensureSchema() {
     ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS voltage_v NUMERIC;
     ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS icu_ka NUMERIC;
     ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS poles INTEGER;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS differential_sensitivity_ma NUMERIC;
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS differential_type TEXT;
 
     CREATE INDEX IF NOT EXISTS idx_scanned_products_site ON scanned_products(site);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_reference ON scanned_products(reference);
@@ -3571,7 +3573,9 @@ app.post('/api/switchboard/scanned-products', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, photo_base64, source } = req.body;
+    const { reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+            curve_type, is_differential, differential_sensitivity_ma, differential_type,
+            settings, photo_base64, source } = req.body;
     if (!reference) return res.status(400).json({ error: 'Reference required' });
 
     // Normalize reference for consistent matching
@@ -3583,29 +3587,34 @@ app.post('/api/switchboard/scanned-products', async (req, res) => {
       SELECT id, scan_count FROM scanned_products
       WHERE site = $1 AND reference = $2
     `, [site, normalizedReference]);
-    
+
     let result;
     if (existing.rows.length > 0) {
       result = await quickQuery(`
-        UPDATE scanned_products SET 
+        UPDATE scanned_products SET
           device_type = COALESCE($1, device_type), in_amps = COALESCE($2, in_amps), icu_ka = COALESCE($3, icu_ka),
-          ics_ka = COALESCE($4, ics_ka), poles = COALESCE($5, poles), voltage_v = COALESCE($6, voltage_v), 
-          trip_unit = COALESCE($7, trip_unit), is_differential = COALESCE($8, is_differential), 
+          ics_ka = COALESCE($4, ics_ka), poles = COALESCE($5, poles), voltage_v = COALESCE($6, voltage_v),
+          trip_unit = COALESCE($7, trip_unit), is_differential = COALESCE($8, is_differential),
           settings = COALESCE($9, settings), photo_thumbnail = COALESCE($10, photo_thumbnail),
-          scan_count = scan_count + 1, validated = true, last_scanned_at = NOW() 
-        WHERE id = $11 RETURNING *
-      `, [device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, 
-          settings ? JSON.stringify(settings) : null, photo_base64 ? Buffer.from(photo_base64, 'base64') : null, 
-          existing.rows[0].id]);
+          curve_type = COALESCE($11, curve_type), differential_sensitivity_ma = COALESCE($12, differential_sensitivity_ma),
+          differential_type = COALESCE($13, differential_type),
+          scan_count = scan_count + 1, validated = true, last_scanned_at = NOW()
+        WHERE id = $14 RETURNING *
+      `, [device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential,
+          settings ? JSON.stringify(settings) : null, photo_base64 ? Buffer.from(photo_base64, 'base64') : null,
+          curve_type || null, differential_sensitivity_ma ? Number(differential_sensitivity_ma) : null,
+          differential_type || null, existing.rows[0].id]);
     } else {
       result = await quickQuery(`
-        INSERT INTO scanned_products (site, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, photo_thumbnail, validated, source, last_scanned_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14, NOW()) RETURNING *
+        INSERT INTO scanned_products (site, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+          curve_type, is_differential, differential_sensitivity_ma, differential_type, settings, photo_thumbnail, validated, source, last_scanned_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, $17, NOW()) RETURNING *
       `, [site, normalizedReference, manufacturer, device_type || 'Low Voltage Circuit Breaker', in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
-          is_differential || false, settings ? JSON.stringify(settings) : '{}',
+          curve_type || null, is_differential || false, differential_sensitivity_ma ? Number(differential_sensitivity_ma) : null,
+          differential_type || null, settings ? JSON.stringify(settings) : '{}',
           photo_base64 ? Buffer.from(photo_base64, 'base64') : null, source || 'manual_entry']);
     }
-    
+
     res.json({ success: true, product: result.rows[0] });
   } catch (e) {
     console.error('[SCANNED PRODUCTS] save:', e.message);
@@ -3617,9 +3626,11 @@ app.get('/api/switchboard/scanned-products/search', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const { q, manufacturer, reference } = req.query;
-    let sql = `SELECT id, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings, scan_count, validated, last_scanned_at FROM scanned_products WHERE site = $1`;
+    let sql = `SELECT id, reference, manufacturer, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+               curve_type, is_differential, differential_sensitivity_ma, differential_type,
+               settings, scan_count, validated, last_scanned_at FROM scanned_products WHERE site = $1`;
     const params = [site];
     let idx = 2;
     

@@ -1552,8 +1552,14 @@ export default function Switchboards() {
             device_type: payload.device_type,
             in_amps: payload.in_amps,
             icu_ka: payload.icu_ka,
+            ics_ka: payload.ics_ka,
             poles: payload.poles,
+            voltage_v: payload.voltage_v,
+            trip_unit: payload.trip_unit,
+            curve_type: payload.curve_type,
             is_differential: payload.is_differential,
+            differential_sensitivity_ma: payload.differential_sensitivity_ma,
+            differential_type: payload.differential_type,
             source: 'manual_entry'
           }).catch(console.warn);
         }
