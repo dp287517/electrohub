@@ -1075,36 +1075,15 @@ router.get("/users/pending", adminOnly, async (req, res) => {
     const validatedEmails = new Set();
     const logs = [];
 
-    // 1. D'abord récupérer les emails déjà traités (validés OU rejetés) depuis haleon_users
+    // 1. D'abord récupérer TOUS les emails de haleon_users (ils sont considérés comme "traités")
+    // Si la colonne is_validated existe, on l'utilise pour un filtrage plus fin
     try {
-      // Essayer avec is_validated si la colonne existe
-      // Un utilisateur est "traité" s'il est validé (is_validated = TRUE) OU rejeté (is_active = FALSE)
-      const treated = await pool.query(`
-        SELECT LOWER(email) as email FROM haleon_users
-        WHERE is_validated = TRUE OR is_active = FALSE
-      `);
-      treated.rows.forEach(r => validatedEmails.add(r.email));
-      logs.push(`haleon_users treated: ${treated.rows.length}`);
+      // D'abord, essayer de récupérer tous les emails de haleon_users
+      const allHaleon = await pool.query(`SELECT LOWER(email) as email FROM haleon_users`);
+      allHaleon.rows.forEach(r => validatedEmails.add(r.email));
+      logs.push(`haleon_users: ${allHaleon.rows.length} total (all treated as validated)`);
     } catch (e) {
-      // Si is_validated n'existe pas, essayer avec juste is_active
-      try {
-        const treated = await pool.query(`
-          SELECT LOWER(email) as email FROM haleon_users WHERE is_active = FALSE
-        `);
-        treated.rows.forEach(r => validatedEmails.add(r.email));
-        logs.push(`haleon_users rejected: ${treated.rows.length}`);
-      } catch (e2) {
-        // Si aucune colonne n'existe, récupérer tous les emails de haleon_users
-        // Les considérer comme "traités" (legacy users avant le système de validation)
-        console.log(`[ADMIN] is_validated/is_active columns missing, fallback to all haleon_users: ${e.message}`);
-        try {
-          const all = await pool.query(`SELECT LOWER(email) as email FROM haleon_users`);
-          all.rows.forEach(r => validatedEmails.add(r.email));
-          logs.push(`haleon_users (fallback all): ${all.rows.length}`);
-        } catch (e3) {
-          logs.push(`haleon_users error: ${e3.message}`);
-        }
-      }
+      logs.push(`haleon_users error: ${e.message}`);
     }
 
     // 2. Chercher dans askv_users
@@ -1133,10 +1112,10 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       logs.push(`askv_users error: ${e.message}`);
     }
 
-    // 3. Chercher dans askv_events
+    // 3. Chercher dans askv_events (ts au lieu de created_at)
     try {
       const events = await pool.query(`
-        SELECT DISTINCT user_email as email, MIN(created_at) as created_at
+        SELECT DISTINCT user_email as email, MIN(ts) as created_at
         FROM askv_events
         WHERE user_email LIKE '%@haleon.com'
         GROUP BY user_email
@@ -1158,10 +1137,10 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       logs.push(`askv_events error: ${e.message}`);
     }
 
-    // 4. Chercher dans atex_checks
+    // 4. Chercher dans atex_checks (date au lieu de created_at)
     try {
       const atex = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        SELECT DISTINCT user_email as email, user_name as name, MIN(date) as created_at
         FROM atex_checks
         WHERE user_email LIKE '%@haleon.com'
         GROUP BY user_email, user_name
@@ -1183,10 +1162,10 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       logs.push(`atex_checks error: ${e.message}`);
     }
 
-    // 5. Chercher dans vsd_checks
+    // 5. Chercher dans vsd_checks (date au lieu de created_at)
     try {
       const vsd = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        SELECT DISTINCT user_email as email, user_name as name, MIN(date) as created_at
         FROM vsd_checks
         WHERE user_email LIKE '%@haleon.com'
         GROUP BY user_email, user_name
@@ -1208,13 +1187,13 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       logs.push(`vsd_checks error: ${e.message}`);
     }
 
-    // 6. Chercher dans control_records (OIBT)
+    // 6. Chercher dans control_records (OIBT - performed_by_email au lieu de user_email)
     try {
       const oibt = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        SELECT DISTINCT performed_by_email as email, performed_by as name, MIN(created_at) as created_at
         FROM control_records
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email, user_name
+        WHERE performed_by_email LIKE '%@haleon.com'
+        GROUP BY performed_by_email, performed_by
       `);
       oibt.rows.forEach(u => {
         if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
@@ -1258,13 +1237,13 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       logs.push(`learn_ex_sessions error: ${e.message}`);
     }
 
-    // 8. Chercher dans fd_checks (Fire Doors)
+    // 8. Chercher dans fd_checks (Fire Doors - closed_by_email au lieu de user_email)
     try {
       const fd = await pool.query(`
-        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        SELECT DISTINCT closed_by_email as email, closed_by_name as name, MIN(created_at) as created_at
         FROM fd_checks
-        WHERE user_email LIKE '%@haleon.com'
-        GROUP BY user_email, user_name
+        WHERE closed_by_email LIKE '%@haleon.com'
+        GROUP BY closed_by_email, closed_by_name
       `);
       fd.rows.forEach(u => {
         if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
