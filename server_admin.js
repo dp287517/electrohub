@@ -776,7 +776,7 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
     try {
       const haleonResult = await pool.query(`
         SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
-               h.is_validated, h.is_active, h.created_at, h.updated_at,
+               h.is_active, h.created_at, h.updated_at,
                s.name as site_name, d.name as department_name,
                'haleon_users' as source
         FROM haleon_users h
@@ -830,7 +830,7 @@ router.get("/users/haleon", adminOnly, async (req, res) => {
         LEFT JOIN sites s ON u.site_id = s.id
         LEFT JOIN departments d ON u.department_id = d.id
         WHERE u.email LIKE '%@haleon.com'
-          AND (u.password_hash IS NULL OR u.password_hash = '')
+          AND (u.password_hash IS NULL OR u.password_hash = '' OR u.password_hash = 'SSO_USER_NO_PASSWORD')
       `);
       usersResult.rows.forEach(u => {
         if (u.email) {
