@@ -1492,11 +1492,13 @@ RÈGLES SIMPLES:
 - "terminé"/"fini" = passer à review
 
 PHASES:
-- init: "📋 Titre de la procédure?" → passe à steps dès qu'on a le titre
+- init: "📋 Titre de la procédure?" → Quand l'utilisateur répond avec le titre, INCLURE le titre dans collectedData et passer à steps
 - steps: Avec photo → "✓ Étape N enregistrée. Suivante? (ou 'terminé')" | Sans photo → "📸 Photo SVP"
 - review: procedureReady:true, message récap
 
-JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":true,"procedureReady":false}`;
+IMPORTANT: Quand tu passes de init à steps, tu DOIS inclure le titre que l'utilisateur a donné.
+
+JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":true,"procedureReady":false,"collectedData":{"title":"le titre si donné"}}`;
 
 // QUALITY prompt for final processing (full details, EPI, risks)
 const PROCEDURE_QUALITY_PROMPT = `Tu es LIA. Génère les détails complets pour cette procédure.
@@ -1684,15 +1686,23 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   const existingData = session.collected_data || {};
   const newData = aiResponse.collectedData || {};
 
+  // Determine new phase
+  let newPhase = aiResponse.currentStep || session.current_step;
+
+  // TITLE EXTRACTION: If transitioning from init to steps, capture the title from user message
+  let extractedTitle = newData.title || existingData.title || existingTitle;
+  if (session.current_step === 'init' && newPhase === 'steps' && !extractedTitle) {
+    // The user's message IS the title (they responded to "📋 Titre de la procédure?")
+    extractedTitle = userMessage.trim();
+    console.log(`[PROC] Title extracted from user message: "${extractedTitle}"`);
+  }
+
   const newCollectedData = {
     ...existingData,
     ...newData,
     raw_steps: rawSteps, // Always preserve raw steps
-    title: newData.title || existingData.title || existingTitle
+    title: extractedTitle
   };
-
-  // Determine new phase
-  let newPhase = aiResponse.currentStep || session.current_step;
 
   // If AI says review and we have raw steps, flag for processing
   const needsProcessing = newPhase === 'review' && rawSteps.length > 0;
@@ -2628,21 +2638,48 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   const allEquipmentIds = new Set();
   detectedEquipment.forEach(eq => allEquipmentIds.add(eq.id));
 
-  // Map PPE names to equipment IDs
+  // Map PPE names to equipment IDs (comprehensive mapping based on AI-generated PPE)
   const ppeToEquipment = {
-    'casque': 'casque', 'casque de protection': 'casque',
-    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes',
-    'gants': 'gants', 'gants de protection': 'gants', 'gants isolants': 'gants',
-    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures',
-    'harnais': 'harnais', 'harnais antichute': 'harnais',
-    'gilet': 'gilet', 'gilet haute visibilité': 'gilet',
-    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit', 'bouchons': 'antibruit'
+    // Head protection
+    'casque': 'casque', 'casque de protection': 'casque', 'casque de chantier': 'casque', 'helmet': 'casque',
+    // Eye protection
+    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes', 'protection oculaire': 'lunettes', 'visière': 'ecran_facial',
+    'écran facial': 'ecran_facial', 'ecran facial': 'ecran_facial', 'masque de soudeur': 'ecran_facial',
+    // Hand protection
+    'gants': 'gants', 'gants de protection': 'gants', 'gants de manutention': 'gants', 'gants mécaniques': 'gants',
+    'gants isolants': 'gants_isolants', 'gants électriques': 'gants_isolants', 'gants anti-coupure': 'gants',
+    'gants chimiques': 'gants', 'gants soudeur': 'gants',
+    // Foot protection
+    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures', 'chaussures s3': 'chaussures',
+    'bottes': 'chaussures', 'chaussures s1': 'chaussures',
+    // Fall protection
+    'harnais': 'harnais', 'harnais antichute': 'harnais', 'harnais de sécurité': 'harnais',
+    'ligne de vie': 'harnais', 'système antichute': 'harnais',
+    // Visibility
+    'gilet': 'gilet', 'gilet haute visibilité': 'gilet', 'gilet réfléchissant': 'gilet', 'gilet fluo': 'gilet',
+    'vêtement haute visibilité': 'gilet',
+    // Hearing protection
+    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit', 'bouchons': 'antibruit',
+    "bouchons d'oreilles": 'antibruit', 'antibruit': 'antibruit', 'protège-oreilles': 'antibruit',
+    // Respiratory protection
+    'masque': 'masque', 'masque respiratoire': 'masque', 'masque ffp': 'masque', 'protection respiratoire': 'masque',
+    'appareil respiratoire': 'masque', 'masque à gaz': 'masque',
+    // Height access equipment
+    'échelle': 'echelle', 'echelle': 'echelle', 'escabeau': 'echelle',
+    'nacelle': 'nacelle', 'pemp': 'nacelle', 'élévateur': 'nacelle',
+    'pirl': 'pirl', 'plateforme': 'pirl',
+    // Gas detection
+    'détecteur': 'detecteur_gaz', 'detecteur': 'detecteur_gaz', 'détecteur de gaz': 'detecteur_gaz',
+    'explosimètre': 'detecteur_gaz', 'analyseur': 'detecteur_gaz',
+    // Fire safety
+    'extincteur': 'extincteur'
   };
 
   ppeList.forEach(ppe => {
-    const lowerPpe = ppe.toLowerCase();
+    const lowerPpe = ppe.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     for (const [key, id] of Object.entries(ppeToEquipment)) {
-      if (lowerPpe.includes(key)) {
+      const normalizedKey = key.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (lowerPpe.includes(normalizedKey)) {
         allEquipmentIds.add(id);
         break;
       }
@@ -5007,11 +5044,35 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
 
     // Store the analysis in the database
     if (ramsAnalysis) {
+      // Extract unique PPE from all hazards in RAMS analysis
+      const allPPE = new Set();
+      if (ramsAnalysis.steps) {
+        for (const step of ramsAnalysis.steps) {
+          if (step.hazards) {
+            for (const hazard of step.hazards) {
+              if (hazard.ppe && Array.isArray(hazard.ppe)) {
+                hazard.ppe.forEach(p => allPPE.add(p));
+              }
+            }
+          }
+        }
+      }
+
+      // Merge with existing PPE and update procedure
+      const existingPPE = procedure.ppe_required || [];
+      const mergedPPE = [...new Set([...existingPPE, ...allPPE])];
+
+      console.log(`[RAMS] Extracted ${allPPE.size} unique PPE from analysis, total: ${mergedPPE.length}`);
+
       await pool.query(
-        `UPDATE procedures SET ai_rams_analysis = $1 WHERE id = $2`,
-        [JSON.stringify(ramsAnalysis), procedure.id]
+        `UPDATE procedures SET ai_rams_analysis = $1, ppe_required = $2 WHERE id = $3`,
+        [JSON.stringify(ramsAnalysis), JSON.stringify(mergedPPE), procedure.id]
       );
-      console.log(`[RAMS] Analysis stored for procedure ${procedure.id}`);
+
+      // Update local procedure object for notification
+      procedure.ppe_required = mergedPPE;
+
+      console.log(`[RAMS] Analysis stored for procedure ${procedure.id} with PPE: ${mergedPPE.join(', ')}`);
     }
   } catch (analysisErr) {
     console.error(`[RAMS] Pre-generation error (non-blocking): ${analysisErr.message}`);
@@ -8602,18 +8663,50 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
   const detectedEquipmentWM = getEquipmentForProcedure(steps);
   const ppeListWM = data.ppe_required || [];
 
+  // Comprehensive PPE to equipment mapping
   const ppeToEquipmentWM = {
-    'casque': 'casque', 'lunettes': 'lunettes', 'gants': 'gants',
-    'chaussures': 'chaussures', 'harnais': 'harnais', 'gilet': 'gilet',
-    'protection auditive': 'antibruit', 'pirl': 'pirl', 'échelle': 'echelle', 'nacelle': 'nacelle'
+    // Head protection
+    'casque': 'casque', 'casque de protection': 'casque', 'casque de chantier': 'casque', 'helmet': 'casque',
+    // Eye protection
+    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes', 'protection oculaire': 'lunettes', 'visière': 'ecran_facial',
+    'écran facial': 'ecran_facial', 'ecran facial': 'ecran_facial', 'masque de soudeur': 'ecran_facial',
+    // Hand protection
+    'gants': 'gants', 'gants de protection': 'gants', 'gants de manutention': 'gants', 'gants mécaniques': 'gants',
+    'gants isolants': 'gants_isolants', 'gants électriques': 'gants_isolants', 'gants anti-coupure': 'gants',
+    'gants chimiques': 'gants', 'gants soudeur': 'gants',
+    // Foot protection
+    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures', 'chaussures s3': 'chaussures',
+    'bottes': 'chaussures', 'chaussures s1': 'chaussures',
+    // Fall protection
+    'harnais': 'harnais', 'harnais antichute': 'harnais', 'harnais de sécurité': 'harnais',
+    'ligne de vie': 'harnais', 'système antichute': 'harnais',
+    // Visibility
+    'gilet': 'gilet', 'gilet haute visibilité': 'gilet', 'gilet réfléchissant': 'gilet', 'gilet fluo': 'gilet',
+    'vêtement haute visibilité': 'gilet',
+    // Hearing protection
+    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit', 'bouchons': 'antibruit',
+    "bouchons d'oreilles": 'antibruit', 'antibruit': 'antibruit', 'protège-oreilles': 'antibruit',
+    // Respiratory protection
+    'masque': 'masque', 'masque respiratoire': 'masque', 'masque ffp': 'masque', 'protection respiratoire': 'masque',
+    'appareil respiratoire': 'masque', 'masque à gaz': 'masque',
+    // Height access equipment
+    'échelle': 'echelle', 'echelle': 'echelle', 'escabeau': 'echelle',
+    'nacelle': 'nacelle', 'pemp': 'nacelle', 'élévateur': 'nacelle',
+    'pirl': 'pirl', 'plateforme': 'pirl',
+    // Gas detection
+    'détecteur': 'detecteur_gaz', 'detecteur': 'detecteur_gaz', 'détecteur de gaz': 'detecteur_gaz',
+    'explosimètre': 'detecteur_gaz', 'analyseur': 'detecteur_gaz',
+    // Fire safety
+    'extincteur': 'extincteur'
   };
 
   const allEquipmentIdsWM = new Set();
   detectedEquipmentWM.forEach(eq => allEquipmentIdsWM.add(eq.id));
   ppeListWM.forEach(ppe => {
-    const lowerPpe = ppe.toLowerCase();
+    const lowerPpe = ppe.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     for (const [key, id] of Object.entries(ppeToEquipmentWM)) {
-      if (lowerPpe.includes(key)) {
+      const normalizedKey = key.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (lowerPpe.includes(normalizedKey)) {
         allEquipmentIdsWM.add(id);
         break;
       }
@@ -8870,23 +8963,50 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
   const ppeList = data.ppe_required || data.ppeRequired || [];
   const detectedEquipmentProc = getEquipmentForProcedure(steps);
 
-  // Map PPE names to equipment IDs
+  // Comprehensive PPE to equipment mapping
   const ppeToEquipmentProc = {
-    'casque': 'casque', 'casque de protection': 'casque',
-    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes',
-    'gants': 'gants', 'gants de protection': 'gants', 'gants isolants': 'gants',
-    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures',
-    'harnais': 'harnais', 'harnais antichute': 'harnais',
-    'gilet': 'gilet', 'gilet haute visibilité': 'gilet',
-    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit'
+    // Head protection
+    'casque': 'casque', 'casque de protection': 'casque', 'casque de chantier': 'casque', 'helmet': 'casque',
+    // Eye protection
+    'lunettes': 'lunettes', 'lunettes de protection': 'lunettes', 'protection oculaire': 'lunettes', 'visière': 'ecran_facial',
+    'écran facial': 'ecran_facial', 'ecran facial': 'ecran_facial', 'masque de soudeur': 'ecran_facial',
+    // Hand protection
+    'gants': 'gants', 'gants de protection': 'gants', 'gants de manutention': 'gants', 'gants mécaniques': 'gants',
+    'gants isolants': 'gants_isolants', 'gants électriques': 'gants_isolants', 'gants anti-coupure': 'gants',
+    'gants chimiques': 'gants', 'gants soudeur': 'gants',
+    // Foot protection
+    'chaussures': 'chaussures', 'chaussures de sécurité': 'chaussures', 'chaussures s3': 'chaussures',
+    'bottes': 'chaussures', 'chaussures s1': 'chaussures',
+    // Fall protection
+    'harnais': 'harnais', 'harnais antichute': 'harnais', 'harnais de sécurité': 'harnais',
+    'ligne de vie': 'harnais', 'système antichute': 'harnais',
+    // Visibility
+    'gilet': 'gilet', 'gilet haute visibilité': 'gilet', 'gilet réfléchissant': 'gilet', 'gilet fluo': 'gilet',
+    'vêtement haute visibilité': 'gilet',
+    // Hearing protection
+    'protection auditive': 'antibruit', 'casque antibruit': 'antibruit', 'bouchons': 'antibruit',
+    "bouchons d'oreilles": 'antibruit', 'antibruit': 'antibruit', 'protège-oreilles': 'antibruit',
+    // Respiratory protection
+    'masque': 'masque', 'masque respiratoire': 'masque', 'masque ffp': 'masque', 'protection respiratoire': 'masque',
+    'appareil respiratoire': 'masque', 'masque à gaz': 'masque',
+    // Height access equipment
+    'échelle': 'echelle', 'echelle': 'echelle', 'escabeau': 'echelle',
+    'nacelle': 'nacelle', 'pemp': 'nacelle', 'élévateur': 'nacelle',
+    'pirl': 'pirl', 'plateforme': 'pirl',
+    // Gas detection
+    'détecteur': 'detecteur_gaz', 'detecteur': 'detecteur_gaz', 'détecteur de gaz': 'detecteur_gaz',
+    'explosimètre': 'detecteur_gaz', 'analyseur': 'detecteur_gaz',
+    // Fire safety
+    'extincteur': 'extincteur'
   };
 
   const allEquipmentIdsProc = new Set();
   detectedEquipmentProc.forEach(eq => allEquipmentIdsProc.add(eq.id));
   ppeList.forEach(ppe => {
-    const lowerPpe = ppe.toLowerCase();
+    const lowerPpe = ppe.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     for (const [key, id] of Object.entries(ppeToEquipmentProc)) {
-      if (lowerPpe.includes(key)) {
+      const normalizedKey = key.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (lowerPpe.includes(normalizedKey)) {
         allEquipmentIdsProc.add(id);
         break;
       }
@@ -9259,16 +9379,40 @@ app.post("/api/procedures/:id/signature-requests", async (req, res) => {
 app.delete("/api/procedures/:id/signature-requests/:email", async (req, res) => {
   try {
     const { id, email } = req.params;
+    const decodedEmail = decodeURIComponent(email);
+    const userEmail = req.headers["x-user-email"] || "system";
+
+    // Get procedure info for notification
+    const { rows: procedures } = await pool.query(
+      `SELECT title FROM procedures WHERE id = $1`,
+      [id]
+    );
 
     await pool.query(
       `DELETE FROM procedure_signature_requests WHERE procedure_id = $1 AND requested_email = $2`,
-      [id, decodeURIComponent(email)]
+      [id, decodedEmail]
     );
 
     await pool.query(
       `DELETE FROM procedure_signatures WHERE procedure_id = $1 AND signer_email = $2 AND signed_at IS NULL`,
-      [id, decodeURIComponent(email)]
+      [id, decodedEmail]
     );
+
+    // Notify the removed signer
+    if (decodedEmail !== userEmail && procedures.length > 0) {
+      notifyUser(decodedEmail,
+        '🔔 Demande de signature annulée',
+        `Votre demande de signature pour "${procedures[0].title}" a été retirée.`,
+        {
+          type: 'signature_request_cancelled',
+          tag: `signature-cancelled-${id}-${decodedEmail}`,
+          data: {
+            procedureId: id,
+            url: `/app/procedures`
+          }
+        }
+      );
+    }
 
     res.json({ success: true });
   } catch (err) {
@@ -9493,11 +9637,13 @@ app.post("/api/procedures/:id/invalidate-signatures", async (req, res) => {
     );
 
     const { rows: procedures } = await pool.query(
-      `SELECT version FROM procedures WHERE id = $1`,
+      `SELECT title, version FROM procedures WHERE id = $1`,
       [id]
     );
 
     if (currentSigs.length > 0 && procedures.length > 0) {
+      const procedureTitle = procedures[0].title;
+
       // Save to history before invalidating
       await pool.query(
         `INSERT INTO procedure_signature_history (procedure_id, version, signatures, invalidated_at, invalidation_reason)
@@ -9522,6 +9668,30 @@ app.post("/api/procedures/:id/invalidate-signatures", async (req, res) => {
         `UPDATE procedures SET status = 'draft', updated_at = now() WHERE id = $1`,
         [id]
       );
+
+      // Notify all signers that their signatures have been invalidated
+      const invalidationReason = reason || 'La procédure a été modifiée';
+      for (const sig of currentSigs) {
+        if (sig.signer_email && sig.signer_email !== userEmail) {
+          notifyUser(sig.signer_email,
+            '⚠️ Signature invalidée',
+            `Votre signature sur "${procedureTitle}" a été invalidée. Raison: ${invalidationReason}`,
+            {
+              type: 'signature_invalidated',
+              tag: `signature-invalidated-${id}-${sig.signer_email}`,
+              requireInteraction: true,
+              data: {
+                procedureId: id,
+                url: `/app/procedures/${id}?sign=true`,
+                action: 'resign_procedure'
+              },
+              actions: [
+                { action: 'view', title: 'Re-signer' }
+              ]
+            }
+          );
+        }
+      }
     }
 
     res.json({ success: true, invalidated_count: currentSigs.length });
@@ -9531,7 +9701,7 @@ app.post("/api/procedures/:id/invalidate-signatures", async (req, res) => {
   }
 });
 
-// Send reminder emails for pending signatures (called by cron or manual)
+// Send reminder notifications for pending signatures (called by cron or manual)
 app.post("/api/procedures/send-signature-reminders", async (req, res) => {
   try {
     // Get all pending requests that haven't had a reminder in 24h
@@ -9539,7 +9709,8 @@ app.post("/api/procedures/send-signature-reminders", async (req, res) => {
       `SELECT
         pr.*,
         p.title as procedure_title,
-        p.category
+        p.category,
+        p.id as proc_id
       FROM procedure_signature_requests pr
       JOIN procedures p ON pr.procedure_id = p.id
       WHERE pr.status = 'pending'
@@ -9557,8 +9728,50 @@ app.post("/api/procedures/send-signature-reminders", async (req, res) => {
       byEmail[req.requested_email].push(req);
     });
 
-    // For now, just return the list - email sending would be integrated with your email service
-    const remindersSent = Object.keys(byEmail).length;
+    // Send push notifications to each user
+    let notificationsSent = 0;
+    for (const [email, requests] of Object.entries(byEmail)) {
+      if (requests.length === 1) {
+        // Single procedure reminder
+        const r = requests[0];
+        await notifyUser(email,
+          '🔔 Rappel de signature',
+          `Vous avez une signature en attente pour "${r.procedure_title}"`,
+          {
+            type: 'signature_reminder',
+            tag: `signature-reminder-${email}`,
+            requireInteraction: true,
+            data: {
+              procedureId: r.proc_id,
+              url: `/app/procedures/${r.proc_id}?sign=true`,
+              action: 'sign_procedure'
+            },
+            actions: [
+              { action: 'view', title: 'Signer maintenant' }
+            ]
+          }
+        );
+      } else {
+        // Multiple procedures reminder
+        await notifyUser(email,
+          '🔔 Rappel de signatures',
+          `Vous avez ${requests.length} signatures en attente. Cliquez pour voir.`,
+          {
+            type: 'signature_reminder',
+            tag: `signature-reminder-${email}`,
+            requireInteraction: true,
+            data: {
+              url: `/app/procedures?filter=pending_signature`,
+              action: 'view_pending_signatures'
+            },
+            actions: [
+              { action: 'view', title: 'Voir tout' }
+            ]
+          }
+        );
+      }
+      notificationsSent++;
+    }
 
     // Update reminder_sent_at
     if (pendingRequests.length > 0) {
@@ -9571,7 +9784,7 @@ app.post("/api/procedures/send-signature-reminders", async (req, res) => {
 
     res.json({
       success: true,
-      reminders_sent: remindersSent,
+      reminders_sent: notificationsSent,
       pending_by_email: Object.keys(byEmail).map(email => ({
         email,
         procedures: byEmail[email].map(r => ({
@@ -9746,6 +9959,137 @@ async function checkAndSendDailyReminders() {
     }
   }
 }
+
+// ------------------------------
+// Activity / Notification Center
+// ------------------------------
+
+// Get recent activities for notification center
+app.get("/api/activities/recent", async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const site = req.headers["x-site"] || req.query.site;
+
+    // Combine multiple activity sources
+    const activities = [];
+
+    // 1. Recent procedures created
+    const { rows: procedures } = await pool.query(
+      `SELECT id, title, created_by, created_at, status, risk_level
+       FROM procedures
+       WHERE ($1::text IS NULL OR site = $1)
+       ORDER BY created_at DESC LIMIT 20`,
+      [site]
+    );
+    procedures.forEach(p => {
+      activities.push({
+        id: `proc-${p.id}`,
+        type: 'procedure_created',
+        title: 'Procédure créée',
+        description: p.title,
+        actor: p.created_by,
+        timestamp: p.created_at,
+        metadata: { procedureId: p.id, status: p.status, riskLevel: p.risk_level },
+        url: `/app/procedures/${p.id}`,
+        icon: '📋',
+        color: 'violet'
+      });
+    });
+
+    // 2. Recent signatures
+    const { rows: signatures } = await pool.query(
+      `SELECT ps.*, p.title as procedure_title
+       FROM procedure_signatures ps
+       JOIN procedures p ON ps.procedure_id = p.id
+       WHERE ps.signed_at IS NOT NULL
+         AND ($1::text IS NULL OR p.site = $1)
+       ORDER BY ps.signed_at DESC LIMIT 20`,
+      [site]
+    );
+    signatures.forEach(s => {
+      activities.push({
+        id: `sig-${s.id}`,
+        type: 'signature_received',
+        title: 'Signature reçue',
+        description: `${s.signer_email} a signé "${s.procedure_title}"`,
+        actor: s.signer_email,
+        timestamp: s.signed_at,
+        metadata: { procedureId: s.procedure_id },
+        url: `/app/procedures/${s.procedure_id}`,
+        icon: '✍️',
+        color: 'green'
+      });
+    });
+
+    // 3. Pending signature requests for current user
+    if (userEmail) {
+      const { rows: pendingRequests } = await pool.query(
+        `SELECT pr.*, p.title as procedure_title, p.created_by
+         FROM procedure_signature_requests pr
+         JOIN procedures p ON pr.procedure_id = p.id
+         WHERE pr.requested_email = $1 AND pr.status = 'pending'
+         ORDER BY pr.created_at DESC`,
+        [userEmail]
+      );
+      pendingRequests.forEach(r => {
+        activities.push({
+          id: `req-${r.id}`,
+          type: 'signature_request',
+          title: 'Signature requise',
+          description: `Signez "${r.procedure_title}"`,
+          actor: r.created_by,
+          timestamp: r.created_at,
+          metadata: { procedureId: r.procedure_id, urgent: true },
+          url: `/app/procedures/${r.procedure_id}?sign=true`,
+          icon: '✋',
+          color: 'amber',
+          actionRequired: true
+        });
+      });
+    }
+
+    // 4. Recent executions
+    const { rows: executions } = await pool.query(
+      `SELECT pe.*, p.title as procedure_title
+       FROM procedure_executions pe
+       JOIN procedures p ON pe.procedure_id = p.id
+       WHERE ($1::text IS NULL OR p.site = $1)
+       ORDER BY pe.started_at DESC LIMIT 10`,
+      [site]
+    );
+    executions.forEach(e => {
+      activities.push({
+        id: `exec-${e.id}`,
+        type: 'procedure_executed',
+        title: e.status === 'completed' ? 'Procédure terminée' : 'Procédure en cours',
+        description: e.procedure_title,
+        actor: e.executed_by,
+        timestamp: e.started_at,
+        metadata: { procedureId: e.procedure_id, status: e.status },
+        url: `/app/procedures/${e.procedure_id}`,
+        icon: e.status === 'completed' ? '✅' : '▶️',
+        color: e.status === 'completed' ? 'green' : 'blue'
+      });
+    });
+
+    // Sort all activities by timestamp (most recent first)
+    activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Separate into action required and regular
+    const actionRequired = activities.filter(a => a.actionRequired);
+    const recent = activities.filter(a => !a.actionRequired).slice(0, limit);
+
+    res.json({
+      action_required: actionRequired,
+      recent: recent,
+      total: activities.length
+    });
+  } catch (err) {
+    console.error("Error fetching activities:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ------------------------------
 // Start Server
