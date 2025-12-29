@@ -2261,7 +2261,7 @@ INFORMATIONS À EXTRAIRE (lis toutes les inscriptions visibles):
    - Formats courants: 6kA, 10kA, 15kA, 25kA, 36kA, 50kA, 70kA, 100kA
    - Peut aussi apparaître comme "6000A" (= 6kA)
 6. Tension d'emploi (V) - 230V, 400V, etc.
-7. Nombre de pôles (1P, 2P, 3P, 4P ou 1P+N)
+7. Nombre de pôles - IMPORTANT: 1P=1 module, 2P/1P+N=2 modules, 3P=3 modules, 4P/3P+N=4 modules, 5P=5 modules. Compte les manettes liées!
 8. Différentiel (symbole Δ ou "RCCB", "RCD", sensibilité en mA)
 9. Type d'unité de déclenchement (thermique-magnétique TM, électronique)
 
@@ -2521,7 +2521,7 @@ POUR CHAQUE APPAREIL, extraire:
 6. Intensité nominale (In) en ampères
 7. Courbe (B, C, D) si applicable
 8. Pouvoir de coupure (Icu) en kA
-9. Nombre de pôles (1P, 2P, 3P, 4P, 1P+N)
+9. Nombre de pôles - TRÈS IMPORTANT: 1P (1 module), 2P/1P+N (2 modules), 3P (3 modules), 4P/3P+N (4 modules), 5P (5 modules, rare). Compte les manettes liées ensemble!
 10. Si différentiel: sensibilité en mA et type (AC, A, B, F)
 
 Réponds en JSON:
@@ -2540,7 +2540,7 @@ Réponds en JSON:
       "in_amps": 16,
       "curve_type": "C" ou null,
       "icu_ka": 6 ou null,
-      "poles": 1,
+      "poles": 1,  // 1, 2, 3, 4, ou 5 (nombre de modules/manettes liées)
       "is_differential": false,
       "differential_sensitivity_ma": null,
       "differential_type": null,
@@ -2571,6 +2571,10 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
     let result = JSON.parse(visionResponse.choices[0].message.content);
     const deviceCount = result.total_devices_detected || result.devices?.length || 0;
     console.log(`[PANEL SCAN] Job ${jobId}: Detected ${deviceCount} devices`);
+
+    // Debug: Log icu_ka values from AI response
+    const icuValues = result.devices?.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka })) || [];
+    console.log(`[PANEL SCAN] Initial icu_ka values:`, JSON.stringify(icuValues));
 
     job.progress = 50;
     job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
@@ -2713,6 +2717,10 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     job.progress = 90;
     job.message = 'Finalisation...';
 
+    // Debug: Log final icu_ka values before setting result
+    const finalIcuValues = result.devices?.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka, fromCache: d.from_cache, enriched: d.enriched_by_ai })) || [];
+    console.log(`[PANEL SCAN] Final icu_ka values:`, JSON.stringify(finalIcuValues));
+
     // Job complete
     job.status = 'completed';
     job.progress = 100;
@@ -2848,6 +2856,12 @@ app.get('/api/switchboard/panel-scan-job/:id', (req, res) => {
     result: job.result,
     error: job.error
   });
+
+  // Debug: Log sent icu_ka values when job is completed
+  if (job.status === 'completed' && job.result?.devices) {
+    const sentIcu = job.result.devices.map(d => ({ pos: d.position_label, icu: d.icu_ka }));
+    console.log(`[PANEL SCAN] Sent to frontend:`, JSON.stringify(sentIcu));
+  }
 });
 
 // POST /api/switchboard/devices/bulk - Création en masse de disjoncteurs
@@ -2877,33 +2891,39 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
     for (let i = 0; i < devices.length; i++) {
       const device = devices[i];
       try {
+        // Utiliser position_label comme position_number
+        const positionNumber = device.position_label || device.position || String(i + 1);
+
         const { rows: [created] } = await quickQuery(`
-          INSERT INTO switchboard_devices (
-            switchboard_id, site, name, device_type, manufacturer, reference,
-            in_amps, curve_type, icu_ka, ics_ka, poles, voltage_v,
-            is_differential, differential_sensitivity_ma, differential_type,
-            position, width_modules, notes
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          INSERT INTO devices (
+            site, switchboard_id, name, device_type, manufacturer, reference,
+            in_amps, icu_ka, ics_ka, poles, voltage_v,
+            is_differential, position_number, is_complete, settings
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
           RETURNING *
         `, [
-          switchboard_id,
           site,
-          device.name || `${device.device_type || 'Disjoncteur'} ${device.position || i + 1}`,
+          switchboard_id,
+          device.circuit_name || device.name || `${device.device_type || 'Disjoncteur'} ${positionNumber}`,
           device.device_type || 'Disjoncteur modulaire',
           device.manufacturer,
           device.reference,
           device.in_amps,
-          device.curve_type,
           device.icu_ka,
           device.ics_ka,
           device.poles || 1,
           device.voltage_v || 230,
           device.is_differential || false,
-          device.differential_sensitivity_ma,
-          device.differential_type,
-          device.position,
-          device.width_modules || 1,
-          device.notes
+          positionNumber,
+          false, // is_complete
+          JSON.stringify({
+            curve_type: device.curve_type,
+            differential_sensitivity_ma: device.differential_sensitivity_ma,
+            differential_type: device.differential_type,
+            width_modules: device.width_modules,
+            scanned_at: new Date().toISOString(),
+            source: 'panel_scan'
+          })
         ]);
 
         createdDevices.push(created);
@@ -2912,23 +2932,25 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         if (device.manufacturer && device.reference && device.in_amps) {
           try {
             await quickQuery(`
-              INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, source, scan_count)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'panel_scan', 1)
-              ON CONFLICT (site, reference) DO UPDATE SET scan_count = scanned_products.scan_count + 1
-            `, [site, device.reference, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v]);
+              INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, curve_type, source, scan_count)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'panel_scan', 1)
+              ON CONFLICT (site, reference) DO UPDATE SET
+                icu_ka = COALESCE(EXCLUDED.icu_ka, scanned_products.icu_ka),
+                scan_count = scanned_products.scan_count + 1
+            `, [site, device.reference, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v, device.curve_type]);
           } catch (e) { /* ignore cache errors */ }
         }
 
       } catch (e) {
         console.error(`[BULK CREATE] Error creating device ${i}:`, e.message);
-        errors.push({ index: i, device: device.position || device.name, error: e.message });
+        errors.push({ index: i, device: device.position_label || device.name, error: e.message });
       }
     }
 
     // Mettre à jour les compteurs du tableau
     await quickQuery(`
       UPDATE switchboards SET
-        device_count = (SELECT COUNT(*) FROM switchboard_devices WHERE switchboard_id = $1),
+        device_count = (SELECT COUNT(*) FROM devices WHERE switchboard_id = $1),
         updated_at = NOW()
       WHERE id = $1
     `, [switchboard_id]);
