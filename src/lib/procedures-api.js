@@ -210,8 +210,14 @@ export async function continueAISession(sessionId, message, photoFile = null) {
   return response.json();
 }
 
-export async function finalizeAISession(sessionId) {
-  const response = await fetchWithAuth(`${API_BASE}/ai/finalize/${sessionId}`, {
+// Finalize AI session and create the procedure
+// Set background=true to finalize async and receive notification when done
+export async function finalizeAISession(sessionId, { background = false } = {}) {
+  const url = background
+    ? `${API_BASE}/ai/finalize/${sessionId}?background=true`
+    : `${API_BASE}/ai/finalize/${sessionId}`;
+
+  const response = await fetchWithAuth(url, {
     method: 'POST',
   });
   return response.json();

@@ -6,7 +6,7 @@ import {
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles,
   Calendar, X, MapPin, Briefcase, Shield, Globe, Crown, Battery, Database,
   Play, Clock, CheckCircle, ChevronDown, Building2, Layers, Activity,
-  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star
+  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star, Bell
 } from 'lucide-react';
 import {
   AreaChart, Area, PieChart as RechartsPie, Pie, Cell,
@@ -18,6 +18,7 @@ import WeatherBackground from '../components/WeatherBackground';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
 import StoryBrief from '../components/StoryBrief';
 import { aiAssistant } from '../lib/ai-assistant';
+import NotificationCenter from '../components/NotificationCenter';
 
 // Chart colors
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
@@ -522,6 +523,19 @@ export default function Dashboard() {
             onClick={() => setShowStory(true)}
             index={3}
           />
+        </div>
+
+        {/* Notification Center Widget */}
+        <div className="mb-8 animate-slideUp" style={{ animationDelay: '350ms' }}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center shadow-lg">
+              <Bell size={20} className="text-white" />
+            </div>
+            <h2 className="text-xl font-black text-gray-900">Activité récente</h2>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+            <NotificationCenter compact maxItems={5} />
+          </div>
         </div>
 
         {/* Apps Section - Full names visible */}
