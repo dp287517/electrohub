@@ -3724,18 +3724,23 @@ app.get("/api/atex/drpce", async (req, res) => {
     } catch (e) { console.warn('[DRPCE] No site settings:', e.message); }
 
     // 2. Récupérer tous les équipements ATEX avec filtres
+    // Using CTE with LEFT JOIN instead of correlated subqueries for performance
     let equipmentQuery = `
+      WITH latest_checks AS (
+        SELECT DISTINCT ON (equipment_id)
+               equipment_id, result, date
+        FROM atex_checks
+        WHERE status = 'fait'
+        ORDER BY equipment_id, date DESC NULLS LAST
+      )
       SELECT e.id, e.name, e.type, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
              e.equipment, e.sub_equipment, e.atex_mark_gas, e.atex_mark_dust,
              e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_content, e.photo_path,
              e.site_id, e.company_id,
-             (SELECT result FROM atex_checks c
-              WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
-              ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result,
-             (SELECT date FROM atex_checks c
-              WHERE c.equipment_id=e.id AND c.status='fait'
-              ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_check_date
+             lc.result AS last_result,
+             lc.date AS last_check_date
       FROM atex_equipments e
+      LEFT JOIN latest_checks lc ON lc.equipment_id = e.id
       WHERE 1=1
     `;
     let equipmentParams = [];
@@ -4559,14 +4564,24 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     } catch (e) { console.warn('[DRPCE-Async] No site settings:', e.message); }
 
     // 2. Récupérer tous les équipements ATEX avec filtres
+    // Using CTE with LEFT JOIN instead of correlated subqueries for performance
     let equipmentQuery = `
+      WITH latest_checks AS (
+        SELECT DISTINCT ON (equipment_id)
+               equipment_id, result, date
+        FROM atex_checks
+        WHERE status = 'fait'
+        ORDER BY equipment_id, date DESC NULLS LAST
+      )
       SELECT e.id, e.name, e.type, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
              e.equipment, e.sub_equipment, e.atex_mark_gas, e.atex_mark_dust,
              e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_content, e.photo_path,
              e.site_id, e.company_id,
-             (SELECT result FROM atex_checks c WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result,
-             (SELECT date FROM atex_checks c WHERE c.equipment_id=e.id AND c.status='fait' ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_check_date
-      FROM atex_equipments e WHERE 1=1
+             lc.result AS last_result,
+             lc.date AS last_check_date
+      FROM atex_equipments e
+      LEFT JOIN latest_checks lc ON lc.equipment_id = e.id
+      WHERE 1=1
     `;
     let equipmentParams = [];
     let paramIndex = 1;
