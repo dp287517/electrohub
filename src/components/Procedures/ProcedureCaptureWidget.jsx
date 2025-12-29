@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Camera, X, ChevronUp, ChevronDown, ArrowLeft, Trash2,
-  Image, FileText, Minimize2, Maximize2, Check, Plus, Pause
+  Image, FileText, Minimize2, Check, Plus, Pause,
+  Monitor, Clipboard, Smartphone, Info
 } from 'lucide-react';
 import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 
@@ -24,8 +25,89 @@ export default function ProcedureCaptureWidget() {
   const [showGallery, setShowGallery] = useState(false);
   const [editingCapture, setEditingCapture] = useState(null);
   const [description, setDescription] = useState('');
+  const [isCapturingScreen, setIsCapturingScreen] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [pasteHint, setPasteHint] = useState(false);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+
+  // Detect if on mobile
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  // Listen for paste events to capture clipboard images
+  useEffect(() => {
+    if (!isCapturing) return;
+
+    const handlePaste = async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            addCapture(file, 'Screenshot collé');
+            setPasteHint(false);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [isCapturing, addCapture]);
+
+  // Screen capture using getDisplayMedia (Desktop only)
+  const handleScreenCapture = async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      alert('La capture d\'écran n\'est pas supportée sur ce navigateur');
+      return;
+    }
+
+    setIsCapturingScreen(true);
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'window', // Prefer window capture
+        },
+        preferCurrentTab: false,
+      });
+
+      // Create video element to capture frame
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      // Wait a bit for the video to be ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Create canvas and capture frame
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+
+      // Stop the stream
+      stream.getTracks().forEach(track => track.stop());
+
+      // Convert to blob
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+          addCapture(file, 'Capture d\'écran');
+        }
+      }, 'image/png');
+
+    } catch (error) {
+      if (error.name !== 'NotAllowedError') {
+        console.error('Screen capture error:', error);
+      }
+    } finally {
+      setIsCapturingScreen(false);
+    }
+  };
 
   // Don't render if not capturing
   if (!isCapturing) return null;
@@ -84,7 +166,7 @@ export default function ProcedureCaptureWidget() {
   return (
     <>
       {/* Main floating widget */}
-      <div className={`fixed bottom-20 right-4 z-50 transition-all duration-300 ${isExpanded ? 'w-72' : 'w-auto'}`}>
+      <div className={`fixed bottom-20 right-4 z-50 transition-all duration-300 ${isExpanded ? 'w-80' : 'w-auto'}`}>
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
           {/* Header */}
           <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-4 py-3">
@@ -105,6 +187,13 @@ export default function ProcedureCaptureWidget() {
               </div>
               <div className="flex items-center gap-1">
                 <button
+                  onClick={() => setShowHelp(!showHelp)}
+                  className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30 transition-colors"
+                  title="Aide"
+                >
+                  <Info className="w-4 h-4" />
+                </button>
+                <button
                   onClick={() => setIsMinimized(true)}
                   className="p-1.5 rounded-lg bg-white/20 text-white hover:bg-white/30 transition-colors"
                   title="Réduire"
@@ -121,10 +210,59 @@ export default function ProcedureCaptureWidget() {
             </div>
           </div>
 
+          {/* Help panel */}
+          {showHelp && (
+            <div className="p-3 bg-blue-50 border-b border-blue-100 text-xs text-blue-800 space-y-2">
+              <p className="font-medium">Comment capturer :</p>
+              <ul className="space-y-1 ml-3">
+                {!isMobile && (
+                  <>
+                    <li className="flex items-center gap-2">
+                      <Monitor className="w-3 h-3" />
+                      <span><strong>Écran</strong> : Capturez une autre fenêtre/app</span>
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Clipboard className="w-3 h-3" />
+                      <span><strong>Ctrl+V</strong> : Collez un screenshot</span>
+                    </li>
+                  </>
+                )}
+                <li className="flex items-center gap-2">
+                  <Camera className="w-3 h-3" />
+                  <span><strong>Photo</strong> : Prenez une photo</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <Image className="w-3 h-3" />
+                  <span><strong>Galerie</strong> : Importez des images</span>
+                </li>
+              </ul>
+              {!isMobile && (
+                <p className="text-[10px] text-blue-600 mt-2">
+                  Astuce : Utilisez Win+Shift+S (Windows) ou Cmd+Shift+4 (Mac) puis Ctrl+V ici
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Capture count and quick actions */}
           <div className="p-3 border-b bg-gray-50">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                {/* Screen capture button (Desktop only) */}
+                {!isMobile && (
+                  <button
+                    onClick={handleScreenCapture}
+                    disabled={isCapturingScreen}
+                    className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-lg active:scale-95 transition-transform ${
+                      isCapturingScreen
+                        ? 'bg-gray-300 text-gray-500'
+                        : 'bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-blue-200'
+                    }`}
+                    title="Capturer l'écran / une fenêtre"
+                  >
+                    <Monitor className="w-5 h-5" />
+                  </button>
+                )}
                 {/* Camera button */}
                 <button
                   onClick={() => cameraInputRef.current?.click()}
@@ -157,6 +295,17 @@ export default function ProcedureCaptureWidget() {
                 <span className="font-medium">{captureCount}</span>
               </button>
             </div>
+
+            {/* Paste hint for desktop */}
+            {!isMobile && (
+              <div
+                onClick={() => setPasteHint(true)}
+                className="mt-2 flex items-center justify-center gap-2 py-2 px-3 bg-amber-50 border border-dashed border-amber-200 rounded-lg text-xs text-amber-700 cursor-pointer hover:bg-amber-100 transition-colors"
+              >
+                <Clipboard className="w-4 h-4" />
+                <span>Collez un screenshot (Ctrl+V)</span>
+              </div>
+            )}
           </div>
 
           {/* Hidden inputs */}
@@ -216,9 +365,16 @@ export default function ProcedureCaptureWidget() {
               )}
 
               {captures.length === 0 && (
-                <p className="text-sm text-gray-400 text-center py-4">
-                  Naviguez dans l'app et prenez des photos
-                </p>
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-400 mb-2">
+                    {isMobile ? 'Prenez des photos ou importez des images' : 'Capturez l\'écran ou collez des screenshots'}
+                  </p>
+                  {!isMobile && (
+                    <p className="text-xs text-gray-300">
+                      Win+Shift+S → sélection → Ctrl+V ici
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -340,6 +496,15 @@ export default function ProcedureCaptureWidget() {
 
             {/* Gallery footer */}
             <div className="p-4 border-t flex gap-2">
+              {!isMobile && (
+                <button
+                  onClick={handleScreenCapture}
+                  disabled={isCapturingScreen}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium disabled:opacity-50"
+                >
+                  <Monitor className="w-5 h-5" />
+                </button>
+              )}
               <button
                 onClick={() => cameraInputRef.current?.click()}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-violet-600 text-white rounded-xl font-medium"
