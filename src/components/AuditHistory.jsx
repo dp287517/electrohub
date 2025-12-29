@@ -157,8 +157,13 @@ export default function AuditHistory({
 
       let url = apiEndpoint;
       if (entityId) {
-        // apiEndpoint is like /api/atex/audit/equipment, just add the ID
-        url = `${apiEndpoint}/${entityId}`;
+        // apiEndpoint is like /api/switchboard/audit/entity, add type and ID
+        // entityType is required for the backend route /:type/:id
+        if (entityType) {
+          url = `${apiEndpoint}/${entityType}/${entityId}`;
+        } else {
+          url = `${apiEndpoint}/${entityId}`;
+        }
       }
 
       const params = new URLSearchParams();

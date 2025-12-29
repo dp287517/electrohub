@@ -21,6 +21,13 @@ import 'jspdf-autotable';
 const cardClass = "bg-white rounded-xl border shadow-sm overflow-hidden";
 const badgeClass = "px-2 py-0.5 rounded-full text-xs font-semibold";
 
+// Safe toFixed helper - handles strings, null, undefined
+const safeToFixed = (value, decimals = 2) => {
+  const num = Number(value);
+  if (isNaN(num)) return '-';
+  return num.toFixed(decimals);
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SUB-COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -85,15 +92,15 @@ const FaultLevelSection = ({ data, mainDeviceIcu }) => {
       </div>
       <div className="p-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <ValueBox label='Ik" (Initial)' value={data.Ik_kA.toFixed(2)} unit="kA" status={icuOk ? 'ok' : 'danger'} />
-          <ValueBox label="Ip (Crête)" value={data.Ip_kA.toFixed(2)} unit="kA" />
-          <ValueBox label="Ib (Coupure)" value={data.Ib_kA.toFixed(2)} unit="kA" />
-          <ValueBox label="Ith (1s)" value={data.Ith_kA.toFixed(2)} unit="kA" />
+          <ValueBox label='Ik" (Initial)' value={safeToFixed(data.Ik_kA, 2)} unit="kA" status={icuOk ? 'ok' : 'danger'} />
+          <ValueBox label="Ip (Crête)" value={safeToFixed(data.Ip_kA, 2)} unit="kA" />
+          <ValueBox label="Ib (Coupure)" value={safeToFixed(data.Ib_kA, 2)} unit="kA" />
+          <ValueBox label="Ith (1s)" value={safeToFixed(data.Ith_kA, 2)} unit="kA" />
         </div>
         <div className="mt-3 grid grid-cols-3 gap-3">
-          <ValueBox label="R/X" value={data.RX_ratio} small />
-          <ValueBox label="κ" value={data.kappa} small />
-          <ValueBox label="Z total" value={data.Ztotal_mohm.toFixed(2)} unit="mΩ" small />
+          <ValueBox label="R/X" value={safeToFixed(data.RX_ratio, 3)} small />
+          <ValueBox label="κ" value={safeToFixed(data.kappa, 3)} small />
+          <ValueBox label="Z total" value={safeToFixed(data.Ztotal_mohm, 2)} unit="mΩ" small />
         </div>
         {mainDeviceIcu && (
           <div className="mt-3 text-sm">
@@ -217,7 +224,7 @@ const SelectivitySection = ({ data }) => {
                   <span className="font-semibold">{sel.downstream.name}</span>
                 </div>
                 <span className={`${badgeClass} ${sel.isSelective ? 'bg-emerald-100 text-emerald-700' : sel.isPartiallySelective ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-                  {sel.isSelective ? '✓ Sélectif' : sel.isPartiallySelective ? `Partiel (${sel.limitCurrent?.toFixed(0)}A)` : '✗ Non sélectif'}
+                  {sel.isSelective ? '✓ Sélectif' : sel.isPartiallySelective ? `Partiel (${safeToFixed(sel.limitCurrent, 0)}A)` : '✗ Non sélectif'}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
@@ -284,7 +291,7 @@ const DeviceAnalysisSummary = ({ data }) => {
                 <tr key={idx} className={`border-t ${d.icuOk ? '' : 'bg-red-50'}`}>
                   <td className="px-2 py-2 font-medium">{d.device.name || d.device.reference}</td>
                   <td className="px-2 py-2 text-right">{d.device.in_amps}A</td>
-                  <td className="px-2 py-2 text-right">{d.faultLevel.Ik_kA.toFixed(2)} kA</td>
+                  <td className="px-2 py-2 text-right">{safeToFixed(d.faultLevel?.Ik_kA, 2)} kA</td>
                   <td className="px-2 py-2 text-right">{d.device.icu_ka || '-'} kA</td>
                   <td className="px-2 py-2 text-center">
                     {d.icuOk ? (
@@ -448,11 +455,11 @@ export default function AutoAnalysisPanel({ switchboard, devices, onClose }) {
         startY: y,
         head: [['Paramètre', 'Valeur', 'Unité']],
         body: [
-          ['Ik" (Initial)', analysis.faultLevel.Ik_kA.toFixed(2), 'kA'],
-          ['Ip (Crête)', analysis.faultLevel.Ip_kA.toFixed(2), 'kA'],
-          ['Ib (Coupure)', analysis.faultLevel.Ib_kA.toFixed(2), 'kA'],
-          ['Ith (1s)', analysis.faultLevel.Ith_kA.toFixed(2), 'kA'],
-          ['R/X', analysis.faultLevel.RX_ratio, '-'],
+          ['Ik" (Initial)', safeToFixed(analysis.faultLevel.Ik_kA, 2), 'kA'],
+          ['Ip (Crête)', safeToFixed(analysis.faultLevel.Ip_kA, 2), 'kA'],
+          ['Ib (Coupure)', safeToFixed(analysis.faultLevel.Ib_kA, 2), 'kA'],
+          ['Ith (1s)', safeToFixed(analysis.faultLevel.Ith_kA, 2), 'kA'],
+          ['R/X', safeToFixed(analysis.faultLevel.RX_ratio, 3), '-'],
         ],
         theme: 'striped',
         headStyles: { fillColor: [59, 130, 246] },
@@ -496,7 +503,7 @@ export default function AutoAnalysisPanel({ switchboard, devices, onClose }) {
           `${s.upstream.name} (${s.upstream.in_amps}A)`,
           `${s.downstream.name} (${s.downstream.in_amps}A)`,
           s.isSelective ? 'Sélectif' : s.isPartiallySelective ? 'Partiel' : 'Non sélectif',
-          s.limitCurrent ? `${s.limitCurrent.toFixed(0)} A` : '-',
+          s.limitCurrent ? `${safeToFixed(s.limitCurrent, 0)} A` : '-',
         ]),
         theme: 'striped',
         headStyles: { fillColor: [16, 185, 129] },

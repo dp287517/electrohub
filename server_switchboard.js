@@ -2156,13 +2156,21 @@ INFORMATIONS À EXTRAIRE (lis toutes les inscriptions visibles):
 2. Référence complète (ex: MCA320, iC60N C16, S201 B10)
 3. Intensité nominale In (A) - souvent le plus gros chiffre
 4. Courbe de déclenchement (B, C, D, K, Z) - lettre avant l'intensité
-5. Pouvoir de coupure Icu/Icn (kA) - souvent en bas
+5. Pouvoir de coupure Icu/Icn (kA) - TRÈS IMPORTANT, cherche:
+   - Inscription "Icu" ou "Icn" suivie d'un nombre en kA
+   - Nombre dans un rectangle/carré suivi de "kA" (ex: "6000", "10000", "6kA", "10kA")
+   - Position: souvent en bas de la face avant, parfois sur le côté
+   - Formats courants: 6kA, 10kA, 15kA, 25kA, 36kA, 50kA, 70kA, 100kA
+   - Peut aussi apparaître comme "6000A" (= 6kA)
 6. Tension d'emploi (V) - 230V, 400V, etc.
 7. Nombre de pôles (1P, 2P, 3P, 4P ou 1P+N)
 8. Différentiel (symbole Δ ou "RCCB", "RCD", sensibilité en mA)
 9. Type d'unité de déclenchement (thermique-magnétique TM, électronique)
 
-IMPORTANT: Analyse TOUT le texte visible, même les petits caractères.
+IMPORTANT:
+- Analyse TOUT le texte visible, même les petits caractères
+- Le pouvoir de coupure (Icu) est CRITIQUE - cherche-le attentivement partout sur l'appareil
+- Si tu vois un nombre comme 6000, 10000, 15000 avec ou sans "A" ou "kA", c'est probablement l'Icu
 
 Réponds en JSON avec TOUS ces champs (null si non visible):
 {
@@ -2212,19 +2220,28 @@ Réponds en JSON avec TOUS ces champs (null si non visible):
           messages: [
             {
               role: 'system',
-              content: `Tu es un expert en documentation technique de disjoncteurs électriques.
+              content: `Tu es un expert en documentation technique de disjoncteurs électriques avec une connaissance approfondie des catalogues fabricants.
 
 Pour le disjoncteur ${result.manufacturer} ${result.reference}, fournis les spécifications techniques complètes basées sur tes connaissances des catalogues fabricants.
 
-Si certaines valeurs ont déjà été identifiées visuellement, confirme-les ou corrige-les.
-Ajoute les valeurs manquantes en te basant sur les caractéristiques standards de cette référence.
+POUVOIR DE COUPURE (Icu) - CRITIQUE:
+Le pouvoir de coupure Icu est OBLIGATOIRE. Voici les valeurs standards par gamme:
+- Hager MCA/MCN: 6kA | MCS: 10kA
+- Schneider iC60N: 6kA | iC60H: 10kA | iC60L: 25kA | Compact NSX: 25-150kA
+- ABB S200: 6kA | S200M: 10kA | S800: 50kA
+- Legrand DNX³: 4.5kA | DX³: 6-10kA | DPX³: 16-150kA
+- Siemens 5SL: 6kA | 5SY: 10kA
+- General Electric EP: 6kA | EP100: 10kA
+
+Si tu connais la référence exacte, donne la valeur Icu précise du catalogue.
+Sinon, donne la valeur standard de la gamme.
 
 Réponds en JSON avec les spécifications enrichies:
 {
   "confirmed_reference": "référence vérifiée/corrigée",
   "in_amps": number,
   "curve_type": "B/C/D",
-  "icu_ka": number,
+  "icu_ka": number (OBLIGATOIRE - valeur du catalogue ou estimation basée sur la gamme),
   "ics_ka": number,
   "voltage_v": number,
   "poles": number,
