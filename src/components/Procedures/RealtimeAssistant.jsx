@@ -7,9 +7,18 @@ import {
 
 const API_BASE = '/api/procedures';
 
+// Get user email from any localStorage key
+function getUserEmail() {
+  return localStorage.getItem('userEmail')
+    || localStorage.getItem('email')
+    || localStorage.getItem('user.email')
+    || localStorage.getItem('askVeeva_email')
+    || '';
+}
+
 // Fetch helper
 async function fetchWithAuth(url, options = {}) {
-  const userEmail = localStorage.getItem('userEmail') || '';
+  const userEmail = getUserEmail();
   const site = localStorage.getItem('selectedSite') || '';
 
   const headers = {

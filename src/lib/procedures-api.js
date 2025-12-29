@@ -2,13 +2,18 @@
 
 const API_BASE = '/api/procedures';
 
-// Helper for fetch with auth headers
-async function fetchWithAuth(url, options = {}) {
-  // Try multiple localStorage keys for email (different parts of app use different keys)
-  const userEmail = localStorage.getItem('userEmail')
+// Get user email from any localStorage key
+function getUserEmail() {
+  return localStorage.getItem('userEmail')
     || localStorage.getItem('email')
     || localStorage.getItem('user.email')
+    || localStorage.getItem('askVeeva_email')
     || '';
+}
+
+// Helper for fetch with auth headers
+async function fetchWithAuth(url, options = {}) {
+  const userEmail = getUserEmail();
   const site = localStorage.getItem('selectedSite') || localStorage.getItem('site') || '';
 
   const headers = {
@@ -263,7 +268,7 @@ export function getProcedurePdfUrl(procedureId) {
 export async function downloadProcedurePdf(procedureId) {
   const response = await fetch(getProcedurePdfUrl(procedureId), {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -300,7 +305,7 @@ export async function generateExampleMethodStatement() {
 export async function downloadExampleRAMSPdf() {
   const response = await fetch(`${API_BASE}/example-method-statement-pdf`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -327,7 +332,7 @@ export const downloadExampleMethodStatementPdf = downloadExampleRAMSPdf;
 export async function downloadExampleWorkMethodPdf() {
   const response = await fetch(`${API_BASE}/example-work-method-pdf`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -351,7 +356,7 @@ export async function downloadExampleWorkMethodPdf() {
 export async function downloadExampleProcedurePdf() {
   const response = await fetch(`${API_BASE}/example-procedure-pdf`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -375,7 +380,7 @@ export async function downloadExampleProcedurePdf() {
 export async function downloadAllExampleDocuments() {
   const response = await fetch(`${API_BASE}/example-all-documents`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -398,7 +403,7 @@ export async function downloadAllExampleDocuments() {
 export async function downloadMethodStatementPdf(procedureId) {
   const response = await fetch(getMethodStatementPdfUrl(procedureId), {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -422,7 +427,7 @@ export async function downloadMethodStatementPdf(procedureId) {
 export async function downloadWorkMethodPdf(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/work-method-pdf`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -446,7 +451,7 @@ export async function downloadWorkMethodPdf(procedureId) {
 export async function downloadProcedureDocPdf(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/procedure-doc-pdf`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -470,7 +475,7 @@ export async function downloadProcedureDocPdf(procedureId) {
 export async function downloadAllDocuments(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/all-documents`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -494,7 +499,7 @@ export async function downloadAllDocuments(procedureId) {
 export async function downloadRAMSExcel(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/rams-excel`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -518,7 +523,7 @@ export async function downloadRAMSExcel(procedureId) {
 export async function downloadExampleRAMSExcel() {
   const response = await fetch(`${API_BASE}/example-rams-excel`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -542,7 +547,7 @@ export async function downloadExampleRAMSExcel() {
 export async function downloadMethodeWord(procedureId) {
   const response = await fetch(`${API_BASE}/${procedureId}/methode-word`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });
@@ -566,7 +571,7 @@ export async function downloadMethodeWord(procedureId) {
 export async function downloadExampleMethodeWord() {
   const response = await fetch(`${API_BASE}/example-methode-word`, {
     headers: {
-      'X-User-Email': localStorage.getItem('userEmail') || '',
+      'X-User-Email': getUserEmail(),
       'X-Site': localStorage.getItem('selectedSite') || '',
     },
   });

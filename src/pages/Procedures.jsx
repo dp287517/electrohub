@@ -652,7 +652,7 @@ export default function Procedures() {
 
               <button
                 onClick={() => setShowCreator(true)}
-                className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-medium hover:from-violet-700 hover:to-purple-700 transition-all flex items-center gap-2 shadow-lg shadow-violet-200/50 hover:scale-105 active:scale-95"
+                className="px-4 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl font-medium hover:from-violet-700 hover:to-purple-700 transition-all flex items-center gap-2 shadow-lg shadow-violet-200/50 hover:scale-105 active:scale-95"
               >
                 <Plus className="w-5 h-5" />
                 Nouvelle procédure
