@@ -19,7 +19,14 @@ import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
-import { notifyUser } from "./lib/push-notify.js";
+import {
+  notifyUser,
+  notifyProcedureCreated,
+  notifyProcedureDeleted,
+  notifyProcedureSignatureRequested,
+  notifyProcedureSigned,
+  notifyProcedureStatusChanged
+} from "./lib/push-notify.js";
 
 // OpenAI for AI-guided creation
 import OpenAI from "openai";
@@ -4269,6 +4276,12 @@ app.post("/api/procedures", async (req, res) => {
       await audit.log(req, AUDIT_ACTIONS.CREATE, { procedureId: procedure.id, title });
     }
 
+    // 🔔 Send push notification for new procedure
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'] || userEmail;
+    notifyProcedureCreated(procedure, userId).catch(err =>
+      console.log('[Procedures] Push notify error:', err.message)
+    );
+
     res.status(201).json(procedure);
   } catch (err) {
     console.error("Error creating procedure:", err);
@@ -4379,33 +4392,11 @@ app.delete("/api/procedures/:id", async (req, res) => {
       await audit.log(req, AUDIT_ACTIONS.DELETE, { procedureId: id, title: procedure.title });
     }
 
-    // Notify creator if different from the person deleting
-    if (procedure.created_by && procedure.created_by !== userEmail && procedure.created_by !== 'system') {
-      notifyUser(procedure.created_by,
-        '🗑️ Procédure supprimée',
-        `La procédure "${procedure.title}" a été supprimée par ${userEmail}`,
-        {
-          type: 'procedure_deleted',
-          tag: `procedure-deleted-${id}`,
-          data: { url: '/app/procedures' }
-        }
-      );
-    }
-
-    // Notify signers (except the person deleting)
-    for (const signer of signers) {
-      if (signer.signer_email && signer.signer_email !== userEmail && signer.signer_email !== procedure.created_by) {
-        notifyUser(signer.signer_email,
-          '🗑️ Procédure supprimée',
-          `La procédure "${procedure.title}" sur laquelle vous étiez signataire a été supprimée`,
-          {
-            type: 'procedure_deleted',
-            tag: `procedure-deleted-${id}-${signer.signer_email}`,
-            data: { url: '/app/procedures' }
-          }
-        );
-      }
-    }
+    // 🔔 Send broadcast notification for deleted procedure (to all users except deleter)
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'] || userEmail;
+    notifyProcedureDeleted({ id, title: procedure.title }, userId).catch(err =>
+      console.log('[Procedures] Push notify error:', err.message)
+    );
 
     res.json({ success: true });
   } catch (err) {
@@ -9423,6 +9414,14 @@ app.post("/api/procedures/:id/signature-requests", async (req, res) => {
       ).catch(err => console.error('[Signature] Creator notification error:', err));
     }
 
+    // 🔔 Broadcast to all users that a signature is pending
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'] || requestedBy;
+    notifyProcedureSignatureRequested(
+      { id, title: procedureTitle },
+      name || email,
+      userId
+    ).catch(err => console.log('[Procedures] Broadcast notify error:', err.message));
+
     res.json({ success: true, message: "Demande de signature envoyée" });
   } catch (err) {
     console.error("Error creating signature request:", err);
@@ -9578,6 +9577,12 @@ app.post("/api/procedures/:id/sign", async (req, res) => {
         }
       ).catch(err => console.error('[Signature] Creator notification error:', err));
     }
+
+    // 🔔 Broadcast to all users that procedure was signed
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'] || signerEmail;
+    notifyProcedureSigned(procedure, signerEmail, userId).catch(err =>
+      console.log('[Procedures] Broadcast notify error:', err.message)
+    );
 
     // If all signatures complete and has creator signature, validate procedure
     if (allSignaturesComplete && allSigs.some(s => s.is_creator && s.signed_at)) {
