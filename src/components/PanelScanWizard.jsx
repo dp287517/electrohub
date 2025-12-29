@@ -407,8 +407,11 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                 <th className="px-3 py-2 text-left">Fabricant</th>
                 <th className="px-3 py-2 text-left">Référence</th>
                 <th className="px-3 py-2 text-center">In (A)</th>
+                <th className="px-3 py-2 text-center">Courbe</th>
                 <th className="px-3 py-2 text-center">Icu (kA)</th>
                 <th className="px-3 py-2 text-center">Pôles</th>
+                <th className="px-3 py-2 text-center">V</th>
+                <th className="px-3 py-2 text-center">Diff</th>
                 <th className="px-3 py-2 text-center">Confiance</th>
                 <th className="px-3 py-2 text-center">Action</th>
                 <th className="px-3 py-2 text-center w-10"></th>
@@ -488,6 +491,24 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                   </td>
                   <td className="px-3 py-2 text-center">
                     {editingIndex === idx ? (
+                      <select
+                        value={device.curve_type || ''}
+                        onChange={(e) => updateDevice(idx, 'curve_type', e.target.value || null)}
+                        className="w-14 px-1 py-1 border rounded text-xs text-center"
+                      >
+                        <option value="">-</option>
+                        <option value="B">B</option>
+                        <option value="C">C</option>
+                        <option value="D">D</option>
+                        <option value="K">K</option>
+                        <option value="Z">Z</option>
+                      </select>
+                    ) : (
+                      <span className="font-medium">{device.curve_type || '-'}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {editingIndex === idx ? (
                       <input
                         type="number"
                         value={device.icu_ka || ''}
@@ -506,7 +527,34 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-center">{device.poles || 1}</td>
+                  <td className="px-3 py-2 text-center">
+                    {editingIndex === idx ? (
+                      <select
+                        value={device.poles || 1}
+                        onChange={(e) => updateDevice(idx, 'poles', parseInt(e.target.value))}
+                        className="w-14 px-1 py-1 border rounded text-xs text-center"
+                      >
+                        <option value={1}>1P</option>
+                        <option value={2}>2P</option>
+                        <option value={3}>3P</option>
+                        <option value={4}>4P</option>
+                      </select>
+                    ) : (
+                      <span>{device.poles || 1}P</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center text-xs text-gray-600">
+                    {device.voltage_v || (device.poles >= 3 ? 400 : 230)}V
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {device.is_differential ? (
+                      <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium" title={`${device.differential_sensitivity_ma || '?'}mA ${device.differential_type || ''}`}>
+                        {device.differential_sensitivity_ma || '?'}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300">-</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-center">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getConfidenceBadge(device.confidence)}`}>
                       {device.confidence === 'high' ? 'Sûr' : device.confidence === 'low' ? 'Incertain' : 'Moyen'}
