@@ -3038,6 +3038,30 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
 
     console.log(`[PANEL SCAN] Job ${jobId}: Complete with ${deviceCount} devices`);
 
+    // Log audit event for Panel Scan completion
+    try {
+      const mockReq = {
+        user: { email: userEmail },
+        headers: {
+          'x-site': site,
+          'x-user-email': userEmail
+        }
+      };
+      await audit.log(mockReq, 'panel_scan_completed', {
+        entityType: 'switchboard',
+        entityId: switchboardId,
+        details: {
+          job_id: jobId,
+          devices_detected: deviceCount,
+          photos_analyzed: images.length,
+          will_create: willCreateCount,
+          will_update: willUpdateCount
+        }
+      });
+    } catch (auditErr) {
+      console.warn('[PANEL SCAN] Audit log failed:', auditErr.message);
+    }
+
     // Send push notification (only once)
     if (userEmail && !job.notified) {
       job.notified = true;

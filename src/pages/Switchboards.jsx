@@ -1158,6 +1158,7 @@ export default function Switchboards() {
   const [photoVersion, setPhotoVersion] = useState({});
 
   const boardPhotoRef = useRef(null);
+  const fromNotificationRef = useRef(false); // Track if we came from a notification click
 
   // Effects
   useEffect(() => {
@@ -1188,7 +1189,12 @@ export default function Switchboards() {
         })
         .catch(() => showToast('Tableau non trouvé', 'error'));
     } else if (!boardId && selectedBoard) {
-      setSelectedBoard(null);
+      // Don't reset if we just came from a notification click
+      if (fromNotificationRef.current) {
+        fromNotificationRef.current = false;
+      } else {
+        setSelectedBoard(null);
+      }
     }
   }, [searchParams]);
 
@@ -1217,6 +1223,8 @@ export default function Switchboards() {
           if (board) {
             setSelectedBoard(board);
             setShowPanelScan(true);
+            // Set flag to prevent URL params effect from resetting selectedBoard
+            fromNotificationRef.current = true;
             // Clear URL params
             setSearchParams({});
           }

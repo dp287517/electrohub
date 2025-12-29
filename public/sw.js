@@ -73,7 +73,15 @@ self.addEventListener('push', (event) => {
     badge: data.badge || '/icons/badge-72x72.png',
     tag: data.tag || 'electrohub-notification',
     vibrate: [100, 50, 100],
-    data: data.data || {},
+    // CRITICAL: Merge nested data (which contains url) with top-level fields
+    // URL is in data.data.url (from server), NOT at data.url
+    data: {
+      ...(data.data || {}),                              // Contains url, jobId, switchboardId, etc.
+      type: data.type,                                   // Pass type for action buttons
+      controlId: data.controlId || data.data?.controlId, // Fallback to nested
+      switchboardId: data.switchboardId || data.data?.switchboardId,
+      scanJobId: data.scanJobId || data.data?.scanJobId
+    },
     actions: data.actions || [],
     requireInteraction: data.requireInteraction || false,
     renotify: data.renotify || false,
@@ -105,7 +113,15 @@ self.addEventListener('push', (event) => {
       { action: 'dismiss', title: 'Plus tard', icon: '/icons/dismiss.png' }
     ];
     options.requireInteraction = true;
+  } else if (data.type === 'panel_scan' || data.type === 'panel_scan_complete') {
+    // Panel Scan completion - user must review results
+    options.actions = [
+      { action: 'view', title: 'Voir les résultats', icon: '/icons/view.png' }
+    ];
+    options.requireInteraction = true; // Keep notification until user acts
   }
+
+  console.log('[SW] Notification data prepared:', JSON.stringify(options.data));
 
   event.waitUntil(
     self.registration.showNotification(data.title, options)
@@ -121,11 +137,15 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const data = event.notification.data || {};
+  console.log('[SW] Notification data on click:', JSON.stringify(data));
+  console.log('[SW] URL from notification:', data.url);
+
   let targetUrl = '/dashboard';
 
   // Handle different actions
   if (event.action === 'view') {
     targetUrl = data.url || '/dashboard';
+    console.log('[SW] View action - navigating to:', targetUrl);
   } else if (event.action === 'snooze') {
     // Send snooze request to backend
     if (data.controlId) {
