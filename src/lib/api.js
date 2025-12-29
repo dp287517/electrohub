@@ -2120,10 +2120,10 @@ export const api = {
       post("/api/switchboard/search-device", { query }),
 
     /**
-     * Analyse un tableau complet (1-5 photos) et détecte tous les appareils
+     * Lance l'analyse d'un tableau complet (1-5 photos) en arrière-plan
      * @param {File[]} photos - Array de fichiers photo
      * @param {number} switchboardId - ID du tableau
-     * @returns {{ panel_description, devices[], total_devices_detected }}
+     * @returns {{ job_id, status, message, poll_url }}
      */
     analyzePanel: (photos, switchboardId) => {
       const fd = new FormData();
@@ -2131,6 +2131,14 @@ export const api = {
       if (switchboardId) fd.append("switchboard_id", switchboardId);
       return upload("/api/switchboard/analyze-panel", fd);
     },
+
+    /**
+     * Récupère le statut d'un job de scan de tableau
+     * @param {string} jobId - ID du job
+     * @returns {{ id, status, progress, message, result?, error? }}
+     */
+    getPanelScanJob: (jobId) =>
+      get(`/api/switchboard/panel-scan-job/${jobId}`),
 
     /**
      * Création en masse de disjoncteurs

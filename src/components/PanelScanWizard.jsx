@@ -140,41 +140,75 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
 };
 
 // ============================================================
-// STEP 2: ANALYSIS IN PROGRESS
+// STEP 2: ANALYSIS IN PROGRESS (Async with polling)
 // ============================================================
 
-const AnalysisStep = ({ photos, onComplete, onError }) => {
-  const [status, setStatus] = useState('analyzing');
+const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
+  const [status, setStatus] = useState('uploading');
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('Envoi des photos...');
+  const [jobId, setJobId] = useState(null);
 
   React.useEffect(() => {
     let cancelled = false;
+    let pollInterval = null;
 
-    const analyze = async () => {
+    const startAnalysis = async () => {
       try {
-        setProgress(10);
+        setProgress(5);
         setMessage('Envoi des photos...');
 
-        // Simulate progress during API call
-        const progressInterval = setInterval(() => {
-          setProgress(p => Math.min(p + 5, 85));
-        }, 500);
-
-        setMessage('Analyse IA en cours...');
-        const result = await api.switchboard.analyzePanel(photos);
-
-        clearInterval(progressInterval);
+        // Start the async job
+        const response = await api.switchboard.analyzePanel(photos, switchboardId);
 
         if (cancelled) return;
 
-        setProgress(100);
-        setMessage(`${result.total_devices_detected || result.devices?.length || 0} appareils détectés !`);
-        setStatus('complete');
+        if (response.job_id) {
+          // Async mode - start polling
+          setJobId(response.job_id);
+          setStatus('analyzing');
+          setProgress(10);
+          setMessage('Analyse IA démarrée...');
 
-        setTimeout(() => {
-          if (!cancelled) onComplete(result);
-        }, 1000);
+          // Poll for job status
+          pollInterval = setInterval(async () => {
+            try {
+              const job = await api.switchboard.getPanelScanJob(response.job_id);
+
+              if (cancelled) return;
+
+              setProgress(job.progress || 0);
+              setMessage(job.message || 'Analyse en cours...');
+
+              if (job.status === 'completed') {
+                clearInterval(pollInterval);
+                setStatus('complete');
+                setProgress(100);
+                const deviceCount = job.result?.total_devices_detected || job.result?.devices?.length || 0;
+                setMessage(`${deviceCount} appareils détectés !`);
+
+                setTimeout(() => {
+                  if (!cancelled) onComplete(job.result);
+                }, 1000);
+              } else if (job.status === 'failed') {
+                clearInterval(pollInterval);
+                setStatus('error');
+                setMessage(job.error || 'Erreur lors de l\'analyse');
+                onError(job.error);
+              }
+            } catch (pollErr) {
+              console.warn('[PanelScan] Poll error:', pollErr.message);
+            }
+          }, 2000); // Poll every 2 seconds
+        } else {
+          // Sync mode fallback (if result is returned directly)
+          setProgress(100);
+          setMessage(`${response.total_devices_detected || response.devices?.length || 0} appareils détectés !`);
+          setStatus('complete');
+          setTimeout(() => {
+            if (!cancelled) onComplete(response);
+          }, 1000);
+        }
 
       } catch (err) {
         if (cancelled) return;
@@ -184,19 +218,24 @@ const AnalysisStep = ({ photos, onComplete, onError }) => {
       }
     };
 
-    analyze();
-    return () => { cancelled = true; };
-  }, [photos, onComplete, onError]);
+    startAnalysis();
+
+    return () => {
+      cancelled = true;
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [photos, switchboardId, onComplete, onError]);
 
   return (
     <div className="py-12 text-center">
       <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-100 rounded-full mb-6">
-        {status === 'analyzing' && <Loader2 size={40} className="text-indigo-600 animate-spin" />}
+        {(status === 'uploading' || status === 'analyzing') && <Loader2 size={40} className="text-indigo-600 animate-spin" />}
         {status === 'complete' && <CheckCircle size={40} className="text-green-600" />}
         {status === 'error' && <XCircle size={40} className="text-red-600" />}
       </div>
 
       <h3 className="text-xl font-semibold text-gray-900 mb-2">
+        {status === 'uploading' && 'Envoi des photos...'}
         {status === 'analyzing' && 'Analyse en cours...'}
         {status === 'complete' && 'Analyse terminée !'}
         {status === 'error' && 'Erreur d\'analyse'}
@@ -226,6 +265,13 @@ const AnalysisStep = ({ photos, onComplete, onError }) => {
       <div className="text-xs text-gray-400 mt-1">
         {photos.length} photo{photos.length > 1 ? 's' : ''} en cours d'analyse
       </div>
+
+      {/* Notification hint */}
+      {status === 'analyzing' && (
+        <div className="mt-6 p-3 bg-blue-50 rounded-xl text-sm text-blue-700 max-w-sm mx-auto">
+          <p>Vous recevrez une notification quand l'analyse sera terminée.</p>
+        </div>
+      )}
     </div>
   );
 };
@@ -607,6 +653,7 @@ export default function PanelScanWizard({ switchboardId, switchboardName, onClos
           {step === 1 && (
             <AnalysisStep
               photos={photos}
+              switchboardId={switchboardId}
               onComplete={handleAnalysisComplete}
               onError={(msg) => setError(msg)}
             />
