@@ -909,7 +909,7 @@ export const api = {
       ),
 
     calendar: () => get(`/api/atex/calendar`),
-    // Générer le Management Monitoring (anciennement DRPCE)
+    // Générer le Management Monitoring (anciennement DRPCE) - version synchrone (peut timeout sur gros rapports)
     drpceUrl: (filters = {}) => {
       const params = new URLSearchParams({ site: currentSite() });
       if (filters.building) params.append('building', filters.building);
@@ -917,6 +917,19 @@ export const api = {
       if (filters.compliance) params.append('compliance', filters.compliance);
       return `${API_BASE}/api/atex/drpce?${params.toString()}`;
     },
+    // Générer le rapport en arrière-plan (async) - recommandé pour gros rapports
+    drpceGenerate: (filters = {}) => post(`/api/atex/drpce/generate`, {
+      site: currentSite(),
+      building: filters.building || null,
+      zone: filters.zone || null,
+      compliance: filters.compliance || null
+    }),
+    // Vérifier le statut d'un rapport en cours de génération
+    drpceStatus: (reportId) => get(`/api/atex/drpce/status/${encodeURIComponent(reportId)}`),
+    // Télécharger un rapport généré
+    drpceDownloadUrl: (reportId) => `${API_BASE}/api/atex/drpce/download/${encodeURIComponent(reportId)}`,
+    // Liste des rapports en attente pour l'utilisateur
+    drpcePending: () => get(`/api/atex/drpce/pending`),
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 

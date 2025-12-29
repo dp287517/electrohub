@@ -20,7 +20,7 @@ import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, addTenantToData, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
-import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity } from "./lib/push-notify.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyNonConformity, notifyUser } from "./lib/push-notify.js";
 const require = createRequire(import.meta.url);
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
@@ -740,6 +740,35 @@ async function ensureSchema() {
   } catch (cleanupError) {
     console.error('[ATEX] Cleanup error (non-fatal):', cleanupError.message);
   }
+
+  // ============================================================
+  // TABLE: pending_reports - Pour la génération asynchrone des rapports volumineux
+  // ============================================================
+  console.log('[ATEX] Creating pending_reports table...');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      report_type TEXT NOT NULL DEFAULT 'drpce',
+      status TEXT NOT NULL DEFAULT 'pending',
+      filters JSONB DEFAULT '{}'::jsonb,
+      user_email TEXT,
+      user_name TEXT,
+      site_name TEXT,
+      site_id INTEGER,
+      company_id INTEGER,
+      pdf_content BYTEA NULL,
+      pdf_filename TEXT,
+      error_message TEXT,
+      progress INTEGER DEFAULT 0,
+      total_items INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT now(),
+      completed_at TIMESTAMP NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_reports_status ON pending_reports(status);
+    CREATE INDEX IF NOT EXISTS idx_pending_reports_user ON pending_reports(user_email);
+    CREATE INDEX IF NOT EXISTS idx_pending_reports_created ON pending_reports(created_at DESC);
+  `);
+  console.log('[ATEX] pending_reports table created ✅');
 }
 // -------------------------------------------------
 // Utils
@@ -4483,7 +4512,642 @@ app.get("/api/atex/drpce", async (req, res) => {
 });
 
 // -------------------------------------------------
-// FIN DU DRPCE
+// FIN DU DRPCE (synchrone)
+// -------------------------------------------------
+
+// ============================================================
+// GENERATION ASYNCHRONE DU DRPCE (pour les gros rapports)
+// ============================================================
+
+// Fonction interne pour générer le PDF en arrière-plan
+async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userName) {
+  console.log(`[DRPCE-Async] Starting background generation for report ${reportId}`);
+
+  try {
+    let siteId = null;
+    let companyId = null;
+    const filterBuilding = filters.building || null;
+    const filterZone = filters.zone || null;
+    const filterCompliance = filters.compliance || null;
+
+    if (siteName) {
+      try {
+        const siteRes = await pool.query(
+          `SELECT id, company_id FROM sites WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+          [siteName]
+        );
+        if (siteRes.rows[0]) {
+          siteId = siteRes.rows[0].id;
+          companyId = siteRes.rows[0].company_id;
+        }
+      } catch (e) {
+        console.warn('[DRPCE-Async] Site lookup failed:', e.message);
+      }
+    }
+
+    // 1. Récupérer les informations du site
+    let siteInfo = { company_name: "Entreprise", site_name: siteName || "Site", logo: null, logo_mime: null };
+    try {
+      const siteRes = await pool.query(
+        `SELECT company_name, company_address, company_phone, company_email, logo, logo_mime
+         FROM site_settings WHERE site = $1`,
+        [siteName || 'default']
+      );
+      if (siteRes.rows[0]) {
+        siteInfo = { ...siteInfo, ...siteRes.rows[0], site_name: siteName || siteRes.rows[0].company_name || "Site" };
+      }
+    } catch (e) { console.warn('[DRPCE-Async] No site settings:', e.message); }
+
+    // 2. Récupérer tous les équipements ATEX avec filtres
+    let equipmentQuery = `
+      SELECT e.id, e.name, e.type, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
+             e.equipment, e.sub_equipment, e.atex_mark_gas, e.atex_mark_dust,
+             e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_content, e.photo_path,
+             e.site_id, e.company_id,
+             (SELECT result FROM atex_checks c WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_result,
+             (SELECT date FROM atex_checks c WHERE c.equipment_id=e.id AND c.status='fait' ORDER BY c.date DESC NULLS LAST LIMIT 1) AS last_check_date
+      FROM atex_equipments e WHERE 1=1
+    `;
+    let equipmentParams = [];
+    let paramIndex = 1;
+
+    if (siteId) {
+      equipmentQuery += ` AND e.site_id = $${paramIndex}`;
+      equipmentParams.push(siteId);
+      paramIndex++;
+    } else if (companyId) {
+      equipmentQuery += ` AND e.company_id = $${paramIndex}`;
+      equipmentParams.push(companyId);
+      paramIndex++;
+    }
+
+    if (filterBuilding) {
+      equipmentQuery += ` AND e.building = $${paramIndex}`;
+      equipmentParams.push(filterBuilding);
+      paramIndex++;
+    }
+
+    if (filterZone) {
+      equipmentQuery += ` AND e.zone = $${paramIndex}`;
+      equipmentParams.push(filterZone);
+      paramIndex++;
+    }
+
+    equipmentQuery += ` ORDER BY e.building, e.zone, e.name`;
+
+    let { rows: equipments } = await pool.query(equipmentQuery, equipmentParams);
+
+    // Filtrer par compliance
+    if (filterCompliance) {
+      equipments = equipments.filter(e => {
+        if (filterCompliance === 'conforme') return e.last_result === 'conforme';
+        if (filterCompliance === 'non_conforme') return e.last_result === 'non_conforme';
+        if (filterCompliance === 'na') return !e.last_result || e.last_result === 'na';
+        return true;
+      });
+    }
+
+    // Mettre à jour le total_items
+    await pool.query(`UPDATE pending_reports SET total_items = $1 WHERE id = $2`, [equipments.length, reportId]);
+
+    console.log(`[DRPCE-Async] Found ${equipments.length} equipments`);
+
+    // Récupérer les positions des équipements
+    const equipmentIds = equipments.map(e => e.id);
+    let positionsMap = new Map();
+    if (equipmentIds.length > 0) {
+      const { rows: positions } = await pool.query(`
+        SELECT pos.equipment_id, pos.logical_name, pos.plan_id, pos.x_frac, pos.y_frac,
+               COALESCE(p_by_logical.thumbnail, p_by_id.thumbnail) AS plan_thumbnail,
+               COALESCE(p_by_logical.content, p_by_id.content) AS plan_content,
+               COALESCE(pn.display_name, pos.logical_name, 'Plan') AS plan_display_name
+        FROM atex_positions pos
+        LEFT JOIN (SELECT DISTINCT ON (logical_name) id, logical_name, content, thumbnail FROM atex_plans ORDER BY logical_name, version DESC) p_by_logical ON p_by_logical.logical_name = pos.logical_name
+        LEFT JOIN atex_plans p_by_id ON p_by_id.id = pos.plan_id
+        LEFT JOIN atex_plan_names pn ON pn.logical_name = COALESCE(pos.logical_name, p_by_id.logical_name)
+        WHERE pos.equipment_id = ANY($1)
+      `, [equipmentIds]);
+
+      for (const pos of positions) {
+        if (!positionsMap.has(pos.equipment_id)) {
+          positionsMap.set(pos.equipment_id, pos);
+        }
+      }
+    }
+
+    // Récupérer les plans et sous-zones
+    const { rows: plans } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name) p.id, p.logical_name, p.building, p.zone, p.is_multi_zone, p.building_name,
+             COALESCE(pn.display_name, p.logical_name) AS display_name
+      FROM atex_plans p LEFT JOIN atex_plan_names pn ON pn.logical_name = p.logical_name
+      ORDER BY p.logical_name, p.version DESC
+    `);
+    const { rows: subareas } = await pool.query(`SELECT * FROM atex_subareas ORDER BY logical_name, name`);
+
+    // Statistiques
+    const totalEquipments = equipments.length;
+    const conformeCount = equipments.filter(e => e.last_result === 'conforme').length;
+    const nonConformeCount = equipments.filter(e => e.last_result === 'non_conforme').length;
+    const naCount = totalEquipments - conformeCount - nonConformeCount;
+    const retardCount = equipments.filter(e => e.next_check_date && new Date(e.next_check_date) < new Date()).length;
+
+    // Grouper par bâtiment/zone
+    const byBuilding = {};
+    for (const eq of equipments) {
+      const bat = eq.building || 'Non renseigne';
+      const z = eq.zone || 'Non renseignee';
+      if (!byBuilding[bat]) byBuilding[bat] = {};
+      if (!byBuilding[bat][z]) byBuilding[bat][z] = [];
+      byBuilding[bat][z].push(eq);
+    }
+
+    // Créer le PDF en mémoire
+    const chunks = [];
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 50,
+      bufferPages: true,
+      info: {
+        Title: 'Management Monitoring - ATEX Equipment Report',
+        Author: siteInfo.company_name,
+        Subject: 'ATEX Installation Management Report',
+        Keywords: 'ATEX, management, monitoring, explosions, safety'
+      }
+    });
+
+    doc.on('data', chunk => chunks.push(chunk));
+
+    const colors = {
+      primary: '#00857C',
+      secondary: '#1e40af',
+      success: '#00857C',
+      danger: '#dc2626',
+      warning: '#d97706',
+      text: '#111827',
+      muted: '#6b7280',
+      light: '#f3f4f6',
+      accent: '#4ade80',
+    };
+
+    // ========== PAGE DE GARDE ==========
+    doc.rect(0, 0, 595, 842).fill('#f0fdfa');
+    doc.rect(0, 0, 595, 120).fill(colors.primary);
+
+    let contentStartY = 140;
+    if (siteInfo.logo && siteInfo.logo.length > 0) {
+      try { doc.image(siteInfo.logo, 50, 25, { height: 70 }); } catch (e) {}
+    }
+
+    doc.fontSize(28).font('Helvetica-Bold').fillColor('#fff').text('Management Monitoring', 200, 35, { width: 350, align: 'right' });
+    doc.fontSize(12).font('Helvetica').fillColor('#fff').text('ATEX Equipment Report', 200, 70, { width: 350, align: 'right' });
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, contentStartY + 30, { align: 'center', width: 495 });
+
+    if (siteInfo.company_address) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(siteInfo.company_address, 50, contentStartY + 65, { align: 'center', width: 495 });
+    }
+
+    doc.fontSize(16).font('Helvetica').fillColor(colors.text).text(`Site: ${siteInfo.site_name || siteName || 'Non renseigne'}`, 50, contentStartY + 100, { align: 'center', width: 495 });
+
+    let filterText = '';
+    if (filterBuilding) filterText += `Batiment: ${filterBuilding}  `;
+    if (filterZone) filterText += `Zone: ${filterZone}  `;
+    if (filterCompliance) filterText += `Conformite: ${filterCompliance}`;
+    if (filterText) {
+      doc.fontSize(10).fillColor(colors.muted).text(`Filtres: ${filterText}`, 50, contentStartY + 125, { align: 'center', width: 495 });
+    }
+
+    doc.fontSize(10).fillColor(colors.muted).text(`Document genere le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 50, contentStartY + 150, { align: 'center', width: 495 });
+
+    // Encadré stats
+    const statsY = contentStartY + 200;
+    doc.rect(100, statsY, 395, 180).fillAndStroke('#fff', colors.primary);
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text('Synthese', 120, statsY + 15, { width: 355, align: 'center' });
+
+    const statsItems = [
+      { label: 'Equipements ATEX', value: totalEquipments, color: colors.primary },
+      { label: 'Conformes', value: conformeCount, color: colors.success },
+      { label: 'Non conformes', value: nonConformeCount, color: colors.danger },
+      { label: 'A verifier', value: naCount, color: colors.warning },
+      { label: 'En retard', value: retardCount, color: colors.danger },
+    ];
+
+    let statY = statsY + 45;
+    statsItems.forEach(item => {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(item.label, 130, statY);
+      doc.font('Helvetica-Bold').fillColor(item.color).text(String(item.value), 400, statY, { width: 70, align: 'right' });
+      statY += 25;
+    });
+
+    doc.fontSize(9).fillColor(colors.muted).text(`${plans.length} plan(s) | ${subareas.length} zone(s) classee(s)`, 0, 780, { align: 'center', width: 595 });
+
+    // ========== SOMMAIRE ==========
+    doc.addPage();
+    doc.fontSize(24).font('Helvetica-Bold').fillColor(colors.primary).text('Sommaire', 50, 50);
+    doc.moveTo(50, 85).lineTo(545, 85).strokeColor(colors.primary).lineWidth(2).stroke();
+
+    const sommaire = [
+      { num: '1', title: 'Cadre reglementaire (Suisse)' },
+      { num: '2', title: 'Presentation de l\'etablissement' },
+      { num: '3', title: 'Plans ATEX' },
+      { num: '4', title: 'Inventaire des equipements' },
+      { num: '5', title: 'Etat de conformite' },
+      { num: '6', title: 'Planification des verifications' },
+      { num: '7', title: 'Mesures de prevention et protection' },
+      { num: '8', title: 'Fiches equipements' },
+    ];
+
+    let somY = 110;
+    sommaire.forEach(item => {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
+      doc.font('Helvetica').text(item.title, 80, somY);
+      somY += 30;
+    });
+
+    // ========== Sections simplifiées pour la version async ==========
+    // Section 1: Cadre réglementaire
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('1. Cadre reglementaire (Suisse)', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text);
+    let regY = 100;
+    doc.font('Helvetica-Bold').text('Ordonnance sur la prevention des accidents (OPA)', 50, regY);
+    regY += 20;
+    doc.font('Helvetica').text('L\'OPA (RS 832.30) fixe les exigences en matiere de securite au travail en Suisse.', 50, regY, { width: 495 });
+
+    // Section 2: Présentation
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('2. Presentation de l\'etablissement', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+    let presY = 100;
+    doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary).text(siteInfo.company_name || 'Entreprise', 50, presY);
+    presY += 25;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`Site: ${siteInfo.site_name || siteName || 'Non renseigne'}`, 50, presY);
+
+    // Section 3: Plans
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('3. Plans ATEX', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+    let planListY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`${plans.length} plan(s) disponible(s).`, 50, planListY);
+    planListY += 25;
+    plans.forEach((p, idx) => {
+      if (planListY > 750) { doc.addPage(); planListY = 50; }
+      doc.rect(50, planListY, 495, 25).fillAndStroke(idx % 2 === 0 ? colors.light : '#fff', '#e5e7eb');
+      doc.fontSize(9).font('Helvetica').fillColor(colors.text).text(`${idx + 1}. ${p.display_name || p.logical_name}`, 60, planListY + 7);
+      planListY += 25;
+    });
+
+    // Section 4: Inventaire
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('4. Inventaire des equipements', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+    let invY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(`${totalEquipments} equipement(s) ATEX inventorie(s).`, 50, invY);
+    invY += 35;
+
+    const batHeaders = ['Batiment', 'Zone', 'Equip.', 'Conformes', 'Non conf.'];
+    const batColW = [140, 140, 70, 75, 70];
+    let x = 50;
+    batHeaders.forEach((h, i) => {
+      doc.rect(x, invY, batColW[i], 22).fillAndStroke(colors.primary, colors.primary);
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#fff').text(h, x + 5, invY + 6, { width: batColW[i] - 10 });
+      x += batColW[i];
+    });
+    invY += 22;
+
+    Object.entries(byBuilding).forEach(([bat, zones]) => {
+      Object.entries(zones).forEach(([zone, eqs]) => {
+        if (invY > 750) { doc.addPage(); invY = 50; }
+        const conf = eqs.filter(e => e.last_result === 'conforme').length;
+        const nonConf = eqs.filter(e => e.last_result === 'non_conforme').length;
+        const row = [bat.substring(0, 28), zone.substring(0, 28), eqs.length, conf, nonConf];
+        x = 50;
+        row.forEach((cell, i) => {
+          doc.rect(x, invY, batColW[i], 20).fillAndStroke('#fff', '#e5e7eb');
+          let txtCol = colors.text;
+          if (i === 4 && cell > 0) txtCol = colors.danger;
+          if (i === 3 && cell > 0) txtCol = colors.success;
+          doc.fontSize(8).font('Helvetica').fillColor(txtCol).text(String(cell), x + 5, invY + 5, { width: batColW[i] - 10 });
+          x += batColW[i];
+        });
+        invY += 20;
+      });
+    });
+
+    // Section 5: État de conformité
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('5. Etat de conformite', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+    let confY = 100;
+
+    const confStats = [
+      { label: 'Conformes', count: conformeCount, color: colors.success, pct: totalEquipments ? Math.round(conformeCount / totalEquipments * 100) : 0 },
+      { label: 'Non conformes', count: nonConformeCount, color: colors.danger, pct: totalEquipments ? Math.round(nonConformeCount / totalEquipments * 100) : 0 },
+      { label: 'Non verifies', count: naCount, color: colors.muted, pct: totalEquipments ? Math.round(naCount / totalEquipments * 100) : 0 },
+    ];
+
+    confStats.forEach(stat => {
+      doc.rect(50, confY, 495, 40).fillAndStroke('#fff', '#e5e7eb');
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(stat.color).text(stat.label, 60, confY + 8);
+      doc.fontSize(9).font('Helvetica').fillColor(colors.muted).text(`${stat.count} equipement(s)`, 60, confY + 23);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(stat.color).text(`${stat.pct}%`, 490, confY + 13, { align: 'right', width: 40 });
+      confY += 45;
+    });
+
+    // Section 6: Planification
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Planification des verifications', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    // Section 7: Mesures
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Mesures de prevention et protection', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    // ========== Section 8: FICHES EQUIPEMENTS ==========
+    if (equipments.length > 0) {
+      doc.addPage();
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50);
+      doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+      let ficheY = 100;
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text(`${equipments.length} equipement(s) ATEX`, 50, ficheY);
+      ficheY += 30;
+
+      let processedCount = 0;
+      for (let i = 0; i < equipments.length; i++) {
+        const eq = equipments[i];
+        const position = positionsMap.get(eq.id);
+
+        if (ficheY > 500) {
+          doc.addPage();
+          ficheY = 50;
+        }
+
+        // Fiche simplifiée
+        doc.rect(50, ficheY, 495, 200).stroke(colors.light);
+        doc.rect(50, ficheY, 495, 30).fill(colors.primary);
+        doc.fontSize(11).font('Helvetica-Bold').fillColor('#fff').text(eq.name || 'Equipement sans nom', 60, ficheY + 8, { width: 475 });
+
+        // Badge conformité
+        const result = eq.last_result || 'na';
+        const badgeColor = result === 'conforme' ? colors.success : result === 'non_conforme' ? colors.danger : colors.warning;
+        const badgeText = result === 'conforme' ? 'CONFORME' : result === 'non_conforme' ? 'NON CONFORME' : 'A VERIFIER';
+        doc.rect(400, ficheY + 5, 90, 20).fill(badgeColor);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(badgeText, 405, ficheY + 10, { width: 80, align: 'center' });
+
+        // Infos principales
+        let infoY = ficheY + 40;
+        const infoItems = [
+          ['Type', eq.type || '-'],
+          ['Batiment / Zone', `${eq.building || '-'} / ${eq.zone || '-'}`],
+          ['Fabricant', eq.manufacturer || '-'],
+          ['Marquage ATEX', [eq.atex_mark_gas, eq.atex_mark_dust].filter(Boolean).join(' / ') || '-'],
+          ['Derniere verif.', eq.last_check_date ? new Date(eq.last_check_date).toLocaleDateString('fr-FR') : '-'],
+          ['Prochaine verif.', eq.next_check_date ? new Date(eq.next_check_date).toLocaleDateString('fr-FR') : '-'],
+        ];
+
+        infoItems.forEach(([label, value]) => {
+          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', 60, infoY, { width: 100 });
+          doc.font('Helvetica').fillColor(colors.muted).text(value, 165, infoY, { width: 320 });
+          infoY += 16;
+        });
+
+        // Photo (si disponible)
+        if (eq.photo_content && eq.photo_content.length > 0) {
+          try {
+            const photoBuffer = await sharp(eq.photo_content).resize(80, 80, { fit: 'cover' }).png().toBuffer();
+            doc.image(photoBuffer, 450, ficheY + 45, { width: 80, height: 80 });
+          } catch (e) {}
+        }
+
+        ficheY += 210;
+        processedCount++;
+
+        // Mettre à jour la progression toutes les 10 fiches
+        if (processedCount % 10 === 0) {
+          await pool.query(`UPDATE pending_reports SET progress = $1 WHERE id = $2`, [processedCount, reportId]);
+        }
+      }
+    }
+
+    // Numérotation des pages
+    const range = doc.bufferedPageRange();
+    const totalPages = range.count;
+    for (let i = range.start; i < range.start + totalPages; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor(colors.muted).text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
+    }
+
+    // Finaliser le PDF
+    await new Promise((resolve, reject) => {
+      doc.on('end', resolve);
+      doc.on('error', reject);
+      doc.end();
+    });
+
+    const pdfBuffer = Buffer.concat(chunks);
+    const pdfFilename = `Management_Monitoring_${(siteInfo.site_name || 'site').replace(/[^a-zA-Z0-9-_]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+    console.log(`[DRPCE-Async] PDF generated: ${pdfBuffer.length} bytes, ${totalPages} pages`);
+
+    // Sauvegarder le PDF dans la base
+    await pool.query(`
+      UPDATE pending_reports
+      SET status = 'completed', pdf_content = $1, pdf_filename = $2, completed_at = NOW(), progress = $3
+      WHERE id = $4
+    `, [pdfBuffer, pdfFilename, equipments.length, reportId]);
+
+    // Envoyer une notification push à l'utilisateur
+    if (userEmail) {
+      try {
+        await notifyUser(userEmail, '📄 Rapport prêt !', `Votre rapport Management Monitoring est prêt (${equipments.length} équipements).`, {
+          type: 'report_ready',
+          tag: `report-${reportId}`,
+          requireInteraction: true,
+          data: {
+            reportId,
+            url: `/app/atex?downloadReport=${reportId}`
+          }
+        });
+        console.log(`[DRPCE-Async] Notification sent to ${userEmail}`);
+      } catch (notifErr) {
+        console.warn('[DRPCE-Async] Failed to send notification:', notifErr.message);
+      }
+    }
+
+    console.log(`[DRPCE-Async] Report ${reportId} completed successfully`);
+
+  } catch (error) {
+    console.error(`[DRPCE-Async] Error generating report ${reportId}:`, error);
+    await pool.query(`
+      UPDATE pending_reports SET status = 'error', error_message = $1, completed_at = NOW() WHERE id = $2
+    `, [error.message, reportId]);
+
+    // Notifier l'utilisateur de l'erreur
+    if (userEmail) {
+      try {
+        await notifyUser(userEmail, '❌ Erreur de génération', `Le rapport Management Monitoring n'a pas pu être généré: ${error.message}`, {
+          type: 'report_error',
+          tag: `report-error-${reportId}`
+        });
+      } catch (notifErr) {}
+    }
+  }
+}
+
+// POST /api/atex/drpce/generate - Lancer la génération asynchrone
+app.post("/api/atex/drpce/generate", async (req, res) => {
+  try {
+    const siteName = req.body.site || req.query.site;
+    const filters = {
+      building: req.body.building || req.query.building || null,
+      zone: req.body.zone || req.query.zone || null,
+      compliance: req.body.compliance || req.query.compliance || null
+    };
+    const user = getUser(req);
+
+    // Récupérer site_id et company_id
+    let siteId = null;
+    let companyId = null;
+    if (siteName) {
+      const siteRes = await pool.query(`SELECT id, company_id FROM sites WHERE LOWER(name) = LOWER($1) LIMIT 1`, [siteName]);
+      if (siteRes.rows[0]) {
+        siteId = siteRes.rows[0].id;
+        companyId = siteRes.rows[0].company_id;
+      }
+    }
+
+    // Créer l'enregistrement du rapport en attente
+    const insertRes = await pool.query(`
+      INSERT INTO pending_reports (report_type, status, filters, user_email, user_name, site_name, site_id, company_id)
+      VALUES ('drpce', 'pending', $1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `, [JSON.stringify(filters), user.email || null, user.name || null, siteName, siteId, companyId]);
+
+    const reportId = insertRes.rows[0].id;
+    console.log(`[DRPCE-Async] Created pending report ${reportId} for ${user.email || 'anonymous'}`);
+
+    // Lancer la génération en arrière-plan (ne pas attendre)
+    generateDRPCEAsync(reportId, siteName, filters, user.email, user.name)
+      .catch(err => console.error(`[DRPCE-Async] Background error:`, err.message));
+
+    // Répondre immédiatement
+    res.json({
+      ok: true,
+      reportId,
+      message: "⏳ Génération en cours... Vous recevrez une notification quand le rapport sera prêt.",
+      status: 'pending'
+    });
+
+  } catch (e) {
+    console.error('[DRPCE-Async] Error creating report:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/atex/drpce/status/:id - Vérifier le statut d'un rapport
+app.get("/api/atex/drpce/status/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT id, status, progress, total_items, error_message, pdf_filename, created_at, completed_at
+      FROM pending_reports WHERE id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Rapport non trouvé' });
+    }
+
+    const report = result.rows[0];
+    res.json({
+      ok: true,
+      reportId: report.id,
+      status: report.status,
+      progress: report.progress,
+      totalItems: report.total_items,
+      filename: report.pdf_filename,
+      errorMessage: report.error_message,
+      createdAt: report.created_at,
+      completedAt: report.completed_at
+    });
+
+  } catch (e) {
+    console.error('[DRPCE-Status] Error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/atex/drpce/download/:id - Télécharger le rapport généré
+app.get("/api/atex/drpce/download/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT status, pdf_content, pdf_filename, error_message FROM pending_reports WHERE id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Rapport non trouvé' });
+    }
+
+    const report = result.rows[0];
+
+    if (report.status === 'pending') {
+      return res.status(202).json({ ok: false, error: 'Le rapport est encore en cours de génération', status: 'pending' });
+    }
+
+    if (report.status === 'error') {
+      return res.status(500).json({ ok: false, error: report.error_message || 'Erreur lors de la génération', status: 'error' });
+    }
+
+    if (!report.pdf_content) {
+      return res.status(500).json({ ok: false, error: 'Le contenu du rapport est vide' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${report.pdf_filename || 'Management_Monitoring.pdf'}"`);
+    res.setHeader('Content-Length', report.pdf_content.length);
+    res.send(report.pdf_content);
+
+  } catch (e) {
+    console.error('[DRPCE-Download] Error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/atex/drpce/pending - Liste des rapports en attente pour l'utilisateur
+app.get("/api/atex/drpce/pending", async (req, res) => {
+  try {
+    const user = getUser(req);
+    const result = await pool.query(`
+      SELECT id, status, progress, total_items, pdf_filename, created_at, completed_at
+      FROM pending_reports
+      WHERE user_email = $1 AND created_at > NOW() - INTERVAL '24 hours'
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [user.email || '']);
+
+    res.json({
+      ok: true,
+      reports: result.rows.map(r => ({
+        id: r.id,
+        status: r.status,
+        progress: r.progress,
+        totalItems: r.total_items,
+        filename: r.pdf_filename,
+        createdAt: r.created_at,
+        completedAt: r.completed_at
+      }))
+    });
+
+  } catch (e) {
+    console.error('[DRPCE-Pending] Error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// -------------------------------------------------
+// FIN DRPCE ASYNC
 // -------------------------------------------------
 
 await ensureSchema();
