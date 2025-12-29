@@ -25,7 +25,10 @@ export default function AuthCard({ title, subtitle, children }) {
           };
           localStorage.setItem("eh_user", JSON.stringify(userWithSite));
           setLoginStatus('Success! Redirecting...');
-          setTimeout(() => navigate("/dashboard"), 500);
+          // Check for saved return URL (from QR code deep linking)
+          const returnUrl = localStorage.getItem('eh_return_url');
+          localStorage.removeItem('eh_return_url');
+          setTimeout(() => navigate(returnUrl || "/dashboard"), 500);
         } else {
           setLoginStatus('');
           setHasHaleonToken(true);
@@ -70,7 +73,10 @@ export default function AuthCard({ title, subtitle, children }) {
           site: res.user?.site || "Nyon"
         };
         localStorage.setItem("eh_user", JSON.stringify(userWithSite));
-        navigate("/dashboard");
+        // Check for saved return URL (from QR code deep linking)
+        const returnUrl = localStorage.getItem('eh_return_url');
+        localStorage.removeItem('eh_return_url');
+        navigate(returnUrl || "/dashboard");
       } else {
         setLoginStatus('');
         alert("Haleon login failed");
