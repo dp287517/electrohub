@@ -1330,7 +1330,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       notify('📝 Tableau modifié', `${sb.name} (${sb.code}) a été mis à jour`, {
         type: 'equipment_updated',
         tag: `switchboard-updated-${sb.id}`,
-        data: { equipmentType: 'switchboard', equipmentId: sb.id, url: `/app/switchboards/${sb.id}` }
+        data: { equipmentType: 'switchboard', equipmentId: sb.id, url: `/app/switchboards?board=${sb.id}` }
       }).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
     } catch (notifyErr) {
       console.warn('[UPDATE BOARD] Push notify failed (non-blocking):', notifyErr.message);
@@ -3309,14 +3309,14 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
 
     // Build URL based on equipment type
     let controlUrl = '/app/switchboard-controls';
-    if (switchboard_id) controlUrl = `/app/switchboards/${switchboard_id}`;
-    else if (device_id) controlUrl = `/app/switchboard/device/${device_id}`;
-    else if (vsd_equipment_id) controlUrl = `/app/vsd/equipment/${vsd_equipment_id}`;
-    else if (meca_equipment_id) controlUrl = `/app/meca/equipment/${meca_equipment_id}`;
-    else if (mobile_equipment_id) controlUrl = `/app/mobile-equipment/${mobile_equipment_id}`;
-    else if (hv_equipment_id) controlUrl = `/app/hv/equipment/${hv_equipment_id}`;
-    else if (glo_equipment_id) controlUrl = `/app/glo/equipment/${glo_equipment_id}`;
-    else if (datahub_equipment_id) controlUrl = `/app/datahub/equipment/${datahub_equipment_id}`;
+    if (switchboard_id) controlUrl = `/app/switchboards?board=${switchboard_id}`;
+    else if (device_id) controlUrl = `/app/switchboards?device=${device_id}`;
+    else if (vsd_equipment_id) controlUrl = `/app/vsd?vsd=${vsd_equipment_id}`;
+    else if (meca_equipment_id) controlUrl = `/app/meca?meca=${meca_equipment_id}`;
+    else if (mobile_equipment_id) controlUrl = `/app/mobile-equipments?equipment=${mobile_equipment_id}`;
+    else if (hv_equipment_id) controlUrl = `/app/hv?equipment=${hv_equipment_id}`;
+    else if (glo_equipment_id) controlUrl = `/app/glo?glo=${glo_equipment_id}`;
+    else if (datahub_equipment_id) controlUrl = `/app/datahub?equipment=${datahub_equipment_id}`;
 
     notify(
       isConform ? '✅ Contrôle terminé' : '⚠️ Contrôle avec NC',
