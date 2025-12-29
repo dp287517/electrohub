@@ -101,7 +101,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
   const fetchActivities = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/activities/recent?limit=50');
+      const response = await api.get('/api/procedures/activities/recent?limit=50');
       if (response.ok) {
         const data = await response.json();
         setActivities(data);
@@ -259,7 +259,7 @@ export function NotificationBadge() {
   useEffect(() => {
     const fetchCount = async () => {
       try {
-        const response = await api.get('/api/activities/recent?limit=10');
+        const response = await api.get('/api/procedures/activities/recent?limit=10');
         if (response.ok) {
           const data = await response.json();
           setCount(data.action_required?.length || 0);

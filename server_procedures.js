@@ -4340,18 +4340,59 @@ app.put("/api/procedures/:id", async (req, res) => {
 app.delete("/api/procedures/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const userEmail = req.headers["x-user-email"] || "system";
 
-    const { rowCount } = await pool.query(
-      `DELETE FROM procedures WHERE id = $1`,
+    // Get procedure info and signers before deletion for notifications
+    const { rows: procedures } = await pool.query(
+      `SELECT title, created_by FROM procedures WHERE id = $1`,
       [id]
     );
 
-    if (rowCount === 0) {
+    if (procedures.length === 0) {
       return res.status(404).json({ error: "Procédure non trouvée" });
     }
 
+    const procedure = procedures[0];
+
+    // Get all signers to notify them
+    const { rows: signers } = await pool.query(
+      `SELECT DISTINCT signer_email FROM procedure_signatures WHERE procedure_id = $1`,
+      [id]
+    );
+
+    // Delete the procedure
+    await pool.query(`DELETE FROM procedures WHERE id = $1`, [id]);
+
     if (audit) {
-      await audit.log(req, AUDIT_ACTIONS.DELETE, { procedureId: id });
+      await audit.log(req, AUDIT_ACTIONS.DELETE, { procedureId: id, title: procedure.title });
+    }
+
+    // Notify creator if different from the person deleting
+    if (procedure.created_by && procedure.created_by !== userEmail && procedure.created_by !== 'system') {
+      notifyUser(procedure.created_by,
+        '🗑️ Procédure supprimée',
+        `La procédure "${procedure.title}" a été supprimée par ${userEmail}`,
+        {
+          type: 'procedure_deleted',
+          tag: `procedure-deleted-${id}`,
+          data: { url: '/app/procedures' }
+        }
+      );
+    }
+
+    // Notify signers (except the person deleting)
+    for (const signer of signers) {
+      if (signer.signer_email && signer.signer_email !== userEmail && signer.signer_email !== procedure.created_by) {
+        notifyUser(signer.signer_email,
+          '🗑️ Procédure supprimée',
+          `La procédure "${procedure.title}" sur laquelle vous étiez signataire a été supprimée`,
+          {
+            type: 'procedure_deleted',
+            tag: `procedure-deleted-${id}-${signer.signer_email}`,
+            data: { url: '/app/procedures' }
+          }
+        );
+      }
     }
 
     res.json({ success: true });
@@ -9965,7 +10006,7 @@ async function checkAndSendDailyReminders() {
 // ------------------------------
 
 // Get recent activities for notification center
-app.get("/api/activities/recent", async (req, res) => {
+app.get("/api/procedures/activities/recent", async (req, res) => {
   try {
     const userEmail = req.headers["x-user-email"];
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
