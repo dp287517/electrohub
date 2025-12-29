@@ -538,9 +538,13 @@ async function ensureSchema() {
       last_scanned_at TIMESTAMPTZ DEFAULT NOW(),
       created_at TIMESTAMPTZ DEFAULT NOW(),
       validated BOOLEAN DEFAULT FALSE,
-      source TEXT DEFAULT 'photo_scan'
+      source TEXT DEFAULT 'photo_scan',
+      curve_type TEXT
     );
-    
+
+    -- Migration: add curve_type if missing
+    ALTER TABLE scanned_products ADD COLUMN IF NOT EXISTS curve_type TEXT;
+
     CREATE INDEX IF NOT EXISTS idx_scanned_products_site ON scanned_products(site);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_reference ON scanned_products(reference);
     CREATE INDEX IF NOT EXISTS idx_scanned_products_manufacturer ON scanned_products(manufacturer);
@@ -2494,13 +2498,19 @@ MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS le
 - Si pas d'étiquette de position visible, mettre null
 - NE PAS inventer des positions type "R1-P1" - lire les VRAIES étiquettes !
 
-TYPES D'APPAREILS À IDENTIFIER:
+TYPES D'APPAREILS À IDENTIFIER (TOUS sans exception):
 - Disjoncteurs (magnéto-thermiques)
 - Disjoncteurs différentiels
 - Interrupteurs différentiels
-- Contacteurs / Télérupteurs
+- Interrupteurs sectionneurs
+- Contacteurs (jour/nuit, heures creuses)
+- Télérupteurs
+- Relais (temporisés, impulsionnels)
+- Minuteries
 - Parafoudres
 - Horloges/programmateurs
+- Délesteurs
+- Transformateurs modulaires
 
 POUR CHAQUE APPAREIL, extraire:
 1. POSITION (étiquette) - Le numéro/code sur l'étiquette (PRIMORDIAL: "1", "Q3", "A2", etc.)
