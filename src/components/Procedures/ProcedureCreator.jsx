@@ -816,7 +816,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
   // Guided Creation Mode
   return (
-    <div className="bg-white rounded-t-3xl lg:rounded-2xl shadow-xl overflow-hidden w-full flex flex-col h-[85vh] lg:h-[80vh] lg:max-h-[700px]">
+    <div className="bg-white rounded-t-3xl lg:rounded-2xl shadow-xl overflow-hidden w-full flex flex-col h-[85vh] lg:h-[520px]">
       {/* Header */}
       <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-4 sm:px-6 py-3 sm:py-4 flex-shrink-0">
         {/* Mobile handle */}

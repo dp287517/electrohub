@@ -775,7 +775,7 @@ export default function Procedures() {
       {/* Modals */}
       {showCreator && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end lg:items-center justify-center z-50 animate-fade-in">
-          <div className="w-full lg:max-w-2xl lg:mx-4 max-h-[95vh] lg:max-h-[90vh] overflow-auto bg-white rounded-t-3xl lg:rounded-2xl animate-slide-up lg:animate-scale-in">
+          <div className="w-full lg:max-w-lg lg:mx-4 overflow-hidden bg-white rounded-t-3xl lg:rounded-2xl lg:shadow-2xl animate-slide-up lg:animate-scale-in">
             <ProcedureCreator onProcedureCreated={handleProcedureCreated} onClose={() => setShowCreator(false)} />
           </div>
         </div>
