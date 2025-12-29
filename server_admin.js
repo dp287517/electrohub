@@ -1075,6 +1075,7 @@ router.get("/users/pending", adminOnly, async (req, res) => {
 
     // APPROCHE DIRECTE: Chercher dans auth_audit_log les utilisateurs avec LOGIN_PENDING
     // qui n'ont PAS eu de LOGIN (validé) après leur dernier LOGIN_PENDING
+    // ET qui ne sont pas déjà validés dans la table users (is_active = TRUE)
     const result = await pool.query(`
       WITH latest_pending AS (
         -- Dernier LOGIN_PENDING pour chaque email
@@ -1093,6 +1094,12 @@ router.get("/users/pending", adminOnly, async (req, res) => {
         WHERE a.action = 'LOGIN'
           AND a.success = true
           AND a.ts > lp.created_at
+      ),
+      already_validated_in_users AS (
+        -- Utilisateurs déjà validés dans la table users
+        SELECT LOWER(email) as email
+        FROM users
+        WHERE is_active = TRUE
       )
       SELECT lp.email, lp.name, lp.created_at, lp.site_id, lp.company_id,
              s.name as site_name, c.name as company_name,
@@ -1101,6 +1108,7 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       LEFT JOIN sites s ON lp.site_id = s.id
       LEFT JOIN companies c ON lp.company_id = c.id
       WHERE LOWER(lp.email) NOT IN (SELECT email FROM validated_after)
+        AND LOWER(lp.email) NOT IN (SELECT email FROM already_validated_in_users)
       ORDER BY lp.created_at DESC
     `);
 
@@ -1117,7 +1125,7 @@ router.get("/users/pending", adminOnly, async (req, res) => {
       is_validated: false
     }));
 
-    logs.push(`auth_audit_log: ${users.length} pending users (no LOGIN after LOGIN_PENDING)`);
+    logs.push(`auth_audit_log: ${users.length} pending users`);
 
     console.log(`[ADMIN] Pending users: ${users.length} found | ${logs.join(' | ')}`);
     res.json({ users, count: users.length, sources: logs });
