@@ -1146,9 +1146,10 @@ router.post("/users/validate/by-email", adminOnly, express.json(), async (req, r
 
     // STRATÉGIE 1: Créer/mettre à jour dans la table "users" avec is_active=TRUE
     // C'est la méthode la plus fiable car le login vérifie mainUser?.is_active === true
+    // Note: password_hash est NOT NULL donc on met un placeholder (utilisateurs SSO n'ont pas besoin de password)
     const result = await pool.query(`
-      INSERT INTO users (email, name, site_id, department_id, company_id, allowed_apps, is_active, role, origin, created_at, updated_at)
-      VALUES ($1, $2, COALESCE($3, 1), $4, $5, $6, TRUE, 'site', 'admin_validated', NOW(), NOW())
+      INSERT INTO users (email, name, site_id, department_id, company_id, allowed_apps, is_active, role, origin, password_hash, created_at, updated_at)
+      VALUES ($1, $2, COALESCE($3, 1), $4, $5, $6, TRUE, 'site', 'admin_validated', 'SSO_USER_NO_PASSWORD', NOW(), NOW())
       ON CONFLICT (email) DO UPDATE SET
         is_active = TRUE,
         name = COALESCE(EXCLUDED.name, users.name),
