@@ -710,7 +710,13 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
           reference: photoResult.reference || specs.reference,
           is_differential: photoResult.is_differential ?? specs.is_differential,
           in_amps: photoResult.in_amps || specs.in_amps,
-          poles: photoResult.poles || specs.poles
+          icu_ka: photoResult.icu_ka || specs.icu_ka,
+          ics_ka: photoResult.ics_ka || specs.ics_ka,
+          poles: photoResult.poles || specs.poles,
+          curve_type: photoResult.curve_type || specs.curve_type,
+          differential_sensitivity_ma: photoResult.differential_sensitivity_ma || specs.differential_sensitivity_ma,
+          differential_type: photoResult.differential_type || specs.differential_type,
+          trip_unit: photoResult.trip_unit || specs.trip_unit
         });
         setStep(3);
       }
@@ -727,11 +733,15 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
       reference: photoResult.reference || '',
       device_type: 'Low Voltage Circuit Breaker',
       in_amps: photoResult.in_amps || null,
-      is_differential: photoResult.is_differential || false,
+      icu_ka: photoResult.icu_ka || null,
+      ics_ka: photoResult.ics_ka || null,
+      voltage_v: photoResult.voltage_v || null,
       poles: photoResult.poles || null,
-      icu_ka: null,
-      voltage_v: null,
-      trip_unit: null,
+      curve_type: photoResult.curve_type || null,
+      is_differential: photoResult.is_differential || false,
+      differential_sensitivity_ma: photoResult.differential_sensitivity_ma || null,
+      differential_type: photoResult.differential_type || null,
+      trip_unit: photoResult.trip_unit || null,
       settings: {}
     });
     setStep(3);
@@ -744,9 +754,13 @@ const AIPhotoWizard = ({ isOpen, onClose, onComplete, showToast }) => {
       device_type: product.device_type || 'Low Voltage Circuit Breaker',
       in_amps: product.in_amps,
       icu_ka: product.icu_ka,
+      ics_ka: product.ics_ka || null,
       poles: product.poles,
       voltage_v: product.voltage_v,
+      curve_type: product.curve_type || null,
       is_differential: product.is_differential,
+      differential_sensitivity_ma: product.differential_sensitivity_ma || null,
+      differential_type: product.differential_type || null,
       trip_unit: product.trip_unit || null,
       settings: product.settings || {}
     });
@@ -1102,6 +1116,7 @@ export default function Switchboards() {
   const [deviceForm, setDeviceForm] = useState({
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
     in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
+    curve_type: 'C', differential_sensitivity_ma: '', differential_type: '',
     position_number: '', is_differential: false, is_main_incoming: false,
     downstream_switchboard_id: null, downstream_name: '',
     settings: { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
@@ -1498,6 +1513,7 @@ export default function Switchboards() {
         ics_ka: deviceForm.ics_ka ? Number(deviceForm.ics_ka) : null,
         poles: deviceForm.poles ? Number(deviceForm.poles) : null,
         voltage_v: deviceForm.voltage_v ? Number(deviceForm.voltage_v) : null,
+        differential_sensitivity_ma: deviceForm.differential_sensitivity_ma ? Number(deviceForm.differential_sensitivity_ma) : null,
         downstream_switchboard_id: deviceForm.downstream_switchboard_id || null
       };
       
@@ -1643,8 +1659,14 @@ export default function Switchboards() {
       reference: specs.reference || prev.reference,
       in_amps: specs.in_amps || prev.in_amps,
       icu_ka: specs.icu_ka || prev.icu_ka,
+      ics_ka: specs.ics_ka || prev.ics_ka,
       poles: specs.poles || prev.poles,
-      is_differential: specs.is_differential ?? prev.is_differential
+      voltage_v: specs.voltage_v || prev.voltage_v,
+      trip_unit: specs.trip_unit || prev.trip_unit,
+      curve_type: specs.curve_type || prev.curve_type,
+      is_differential: specs.is_differential ?? prev.is_differential,
+      differential_sensitivity_ma: specs.differential_sensitivity_ma || prev.differential_sensitivity_ma,
+      differential_type: specs.differential_type || prev.differential_type
     }));
   };
 
@@ -1659,6 +1681,7 @@ export default function Switchboards() {
     setDeviceForm({
       name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
       in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
+      curve_type: 'C', differential_sensitivity_ma: '', differential_type: '',
       position_number: '', is_differential: false, is_main_incoming: false,
       downstream_switchboard_id: null, downstream_name: '',
       settings: { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
@@ -1696,6 +1719,9 @@ export default function Switchboards() {
       poles: device.poles || 3,
       voltage_v: device.voltage_v || 400,
       trip_unit: device.trip_unit || '',
+      curve_type: device.curve_type || 'C',
+      differential_sensitivity_ma: device.differential_sensitivity_ma || '',
+      differential_type: device.differential_type || '',
       position_number: device.position_number || '',
       is_differential: device.is_differential || false,
       is_main_incoming: device.is_main_incoming || false,
@@ -1976,7 +2002,7 @@ export default function Switchboards() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-sm">
+            <div className="grid grid-cols-4 gap-2 text-sm">
               <div className="bg-gray-50 rounded-lg p-2 text-center">
                 <span className="text-gray-500 text-xs block">In</span>
                 <span className="font-semibold text-gray-900">{device.in_amps ? `${device.in_amps}A` : '-'}</span>
@@ -1984,6 +2010,10 @@ export default function Switchboards() {
               <div className="bg-gray-50 rounded-lg p-2 text-center">
                 <span className="text-gray-500 text-xs block">Icu</span>
                 <span className="font-semibold text-gray-900">{device.icu_ka ? `${device.icu_ka}kA` : '-'}</span>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-2 text-center">
+                <span className="text-gray-500 text-xs block">Courbe</span>
+                <span className="font-semibold text-gray-900">{device.curve_type || '-'}</span>
               </div>
               <div className="bg-gray-50 rounded-lg p-2 text-center">
                 <span className="text-gray-500 text-xs block">Pôles</span>
@@ -1994,6 +2024,13 @@ export default function Switchboards() {
             {(device.manufacturer || device.reference) && (
               <div className="mt-2 text-xs text-gray-500 truncate">
                 {device.manufacturer} {device.reference}
+              </div>
+            )}
+
+            {device.is_differential && device.differential_sensitivity_ma && (
+              <div className="mt-1 text-xs text-purple-600 flex items-center gap-1">
+                <ShieldCheck size={12} />
+                {device.differential_sensitivity_ma}mA {device.differential_type && `(Type ${device.differential_type})`}
               </div>
             )}
           </div>
@@ -2237,6 +2274,32 @@ export default function Switchboards() {
               />
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Ics (kA)</label>
+              <input
+                type="number"
+                value={deviceForm.ics_ka}
+                onChange={(e) => setDeviceForm(prev => ({ ...prev, ics_ka: e.target.value }))}
+                className={inputBaseClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Courbe</label>
+              <select
+                value={deviceForm.curve_type}
+                onChange={(e) => setDeviceForm(prev => ({ ...prev, curve_type: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="B">B</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+                <option value="K">K</option>
+                <option value="Z">Z</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Pôles</label>
               <select
                 value={deviceForm.poles}
@@ -2258,6 +2321,19 @@ export default function Switchboards() {
                 className={inputBaseClass}
               />
             </div>
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Déclencheur</label>
+              <select
+                value={deviceForm.trip_unit}
+                onChange={(e) => setDeviceForm(prev => ({ ...prev, trip_unit: e.target.value }))}
+                className={selectBaseClass}
+              >
+                <option value="">-</option>
+                <option value="thermique-magnétique">Thermique-magnétique (TM)</option>
+                <option value="électronique">Électronique</option>
+                <option value="magnétique">Magnétique seul</option>
+              </select>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2275,7 +2351,7 @@ export default function Switchboards() {
                 </span>
               </div>
             </label>
-            
+
             <label className="flex items-center gap-3 p-3 bg-amber-50 rounded-xl cursor-pointer">
               <input
                 type="checkbox"
@@ -2286,6 +2362,41 @@ export default function Switchboards() {
               <span className="font-medium text-amber-700">Disjoncteur d'arrivée</span>
             </label>
           </div>
+
+          {deviceForm.is_differential && (
+            <div className="grid grid-cols-2 gap-3 p-3 bg-purple-50/50 rounded-xl border border-purple-100">
+              <div>
+                <label className="block text-sm font-medium text-purple-700 mb-1">Sensibilité (mA)</label>
+                <select
+                  value={deviceForm.differential_sensitivity_ma}
+                  onChange={(e) => setDeviceForm(prev => ({ ...prev, differential_sensitivity_ma: e.target.value }))}
+                  className={selectBaseClass}
+                >
+                  <option value="">-</option>
+                  <option value="10">10 mA</option>
+                  <option value="30">30 mA</option>
+                  <option value="100">100 mA</option>
+                  <option value="300">300 mA</option>
+                  <option value="500">500 mA</option>
+                  <option value="1000">1000 mA</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-purple-700 mb-1">Type différentiel</label>
+                <select
+                  value={deviceForm.differential_type}
+                  onChange={(e) => setDeviceForm(prev => ({ ...prev, differential_type: e.target.value }))}
+                  className={selectBaseClass}
+                >
+                  <option value="">-</option>
+                  <option value="AC">AC (courant alternatif)</option>
+                  <option value="A">A (AC + pulsé)</option>
+                  <option value="F">F (AC + pulsé + haute fréq)</option>
+                  <option value="B">B (tous courants)</option>
+                </select>
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="border-t p-4 flex gap-3">
