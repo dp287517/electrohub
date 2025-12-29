@@ -1035,6 +1035,77 @@ router.post("/users/haleon", adminOnly, express.json(), async (req, res) => {
   }
 });
 
+// PUT /api/admin/users/haleon/by-email - Modifier un utilisateur Haleon par EMAIL
+// IMPORTANT: Cette route doit être AVANT /:id pour éviter que "by-email" soit interprété comme un ID
+// Plus fiable car l'email est unique à travers toutes les tables
+router.put("/users/haleon/by-email", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { email, name, site_id, department_id, allowed_apps, is_active } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email required" });
+    }
+
+    const emailLower = email.toLowerCase();
+    console.log(`[ADMIN] Updating Haleon user by email: ${emailLower}`);
+
+    let updated = false;
+
+    // 1. Try to update users table first (validated users are here)
+    try {
+      const usersResult = await pool.query(`
+        UPDATE users
+        SET name = COALESCE($1, name),
+            site_id = COALESCE($2, site_id),
+            department_id = COALESCE($3, department_id),
+            allowed_apps = $4,
+            is_active = COALESCE($5, is_active),
+            updated_at = NOW()
+        WHERE LOWER(email) = $6
+        RETURNING *
+      `, [name, site_id, department_id, allowed_apps, is_active, emailLower]);
+
+      if (usersResult.rows.length > 0) {
+        console.log(`[ADMIN] ✅ Updated users table for ${emailLower}`);
+        updated = true;
+      }
+    } catch (usersErr) {
+      console.log(`[ADMIN] ⚠️ users table update failed: ${usersErr.message}`);
+    }
+
+    // 2. Also try to update haleon_users table
+    try {
+      const haleonResult = await pool.query(`
+        UPDATE haleon_users
+        SET name = COALESCE($1, name),
+            site_id = COALESCE($2, site_id),
+            department_id = COALESCE($3, department_id),
+            allowed_apps = COALESCE($4, allowed_apps),
+            is_active = COALESCE($5, is_active),
+            updated_at = NOW()
+        WHERE LOWER(email) = $6
+        RETURNING *
+      `, [name, site_id, department_id, allowed_apps, is_active, emailLower]);
+
+      if (haleonResult.rows.length > 0) {
+        console.log(`[ADMIN] ✅ Updated haleon_users table for ${emailLower}`);
+        updated = true;
+      }
+    } catch (haleonErr) {
+      console.log(`[ADMIN] ⚠️ haleon_users table update failed: ${haleonErr.message}`);
+    }
+
+    if (!updated) {
+      return res.status(404).json({ error: "User not found in any table" });
+    }
+
+    res.json({ success: true, email: emailLower });
+  } catch (err) {
+    console.error(`[ADMIN] Error updating user by email:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /api/admin/users/haleon/:id - Modifier un utilisateur Haleon
 // IMPORTANT: Met à jour haleon_users ET users (si l'utilisateur a été validé)
 router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
@@ -1089,77 +1160,6 @@ router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
 
     res.json(haleonUser);
   } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/admin/users/haleon/by-email - Modifier un utilisateur Haleon par EMAIL
-// Plus fiable car l'email est unique à travers toutes les tables
-router.put("/users/haleon/by-email", adminOnly, express.json(), async (req, res) => {
-  try {
-    const { email, name, site_id, department_id, allowed_apps, is_active } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ error: "Email required" });
-    }
-
-    const emailLower = email.toLowerCase();
-    console.log(`[ADMIN] Updating Haleon user by email: ${emailLower}`);
-
-    let updated = false;
-
-    // 1. Try to update users table first (validated users are here)
-    try {
-      const usersResult = await pool.query(`
-        UPDATE users
-        SET name = COALESCE($1, name),
-            site_id = COALESCE($2, site_id),
-            department_id = COALESCE($3, department_id),
-            allowed_apps = $4,
-            is_active = COALESCE($5, is_active),
-            updated_at = NOW()
-        WHERE LOWER(email) = $6
-        RETURNING *
-      `, [name, site_id, department_id, allowed_apps, is_active, emailLower]);
-
-      if (usersResult.rows.length > 0) {
-        console.log(`[ADMIN] ✅ Updated users table for ${emailLower}`);
-        updated = true;
-      }
-    } catch (usersErr) {
-      console.log(`[ADMIN] ⚠️ users table update failed: ${usersErr.message}`);
-    }
-
-    // 2. Also try to update haleon_users table
-    try {
-      const haleonResult = await pool.query(`
-        UPDATE haleon_users
-        SET name = COALESCE($1, name),
-            site_id = COALESCE($2, site_id),
-            department_id = COALESCE($3, department_id),
-            allowed_apps = COALESCE($4, allowed_apps),
-            is_active = COALESCE($5, is_active),
-            updated_at = NOW()
-        WHERE LOWER(email) = $6
-        RETURNING *
-      `, [name, site_id, department_id, allowed_apps, is_active, emailLower]);
-
-      if (haleonResult.rows.length > 0) {
-        console.log(`[ADMIN] ✅ Updated haleon_users table for ${emailLower}`);
-        updated = true;
-        return res.json(haleonResult.rows[0]);
-      }
-    } catch (haleonErr) {
-      console.log(`[ADMIN] ⚠️ haleon_users table update failed: ${haleonErr.message}`);
-    }
-
-    if (!updated) {
-      return res.status(404).json({ error: "User not found in any table" });
-    }
-
-    res.json({ success: true, email: emailLower });
-  } catch (err) {
-    console.error(`[ADMIN] Error updating user by email:`, err);
     res.status(500).json({ error: err.message });
   }
 });
