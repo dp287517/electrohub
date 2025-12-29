@@ -6553,7 +6553,14 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
   });
 
   // ========== SECTION 6: SÉQUENCE DES TRAVAUX (DÉTAILLÉE) ==========
-  const workSteps = aiAnalysis?.steps || steps;
+  // Merge aiAnalysis.steps with original steps to get both hazards AND proper titles/instructions
+  const workSteps = steps.map((step, idx) => {
+    const aiStep = aiAnalysis?.steps?.find(s => s.step_number === step.step_number) || aiAnalysis?.steps?.[idx];
+    return {
+      ...step,
+      hazards: aiStep?.hazards || []
+    };
+  });
   const sequenceParagraphs = [
     new Paragraph({
       children: [new TextRun({ text: "6.0 Séquence des travaux (instructions étape par étape)", bold: true, size: 20 })],
