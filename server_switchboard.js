@@ -924,6 +924,44 @@ async function ensureSchema() {
         ALTER TABLE devices ADD COLUMN last_status_update TIMESTAMPTZ;
       END IF;
 
+      -- =====================================================
+      -- SWITCHBOARD_AUDIT_LOG: Migration colonnes manquantes
+      -- =====================================================
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'site') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN site TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'action') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN action TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_type') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN entity_type TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'entity_id') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN entity_id INTEGER;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_name') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN actor_name TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'actor_email') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN actor_email TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboard_audit_log' AND column_name = 'details') THEN
+        ALTER TABLE switchboard_audit_log ADD COLUMN details JSONB DEFAULT '{}'::jsonb;
+      END IF;
+
+      -- =====================================================
+      -- DEVICES: Colonnes additionnelles pour scan complet
+      -- =====================================================
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'curve_type') THEN
+        ALTER TABLE devices ADD COLUMN curve_type TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'differential_sensitivity_ma') THEN
+        ALTER TABLE devices ADD COLUMN differential_sensitivity_ma NUMERIC;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'differential_type') THEN
+        ALTER TABLE devices ADD COLUMN differential_type TEXT;
+      END IF;
+
     END $$;
 
     -- =======================================================
@@ -2565,22 +2603,24 @@ TYPES D'APPAREILS À IDENTIFIER (TOUS sans exception):
 - Délesteurs
 - Transformateurs modulaires
 
-POUR CHAQUE APPAREIL, extraire:
+POUR CHAQUE APPAREIL, extraire TOUTES ces données:
 1. POSITION (étiquette) - Le numéro/code sur l'étiquette (PRIMORDIAL: "1", "Q3", "A2", etc.)
 2. Nom du circuit si visible (ex: "Éclairage Cuisine", "VMC", "PAC")
 3. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, Merlin Gerin, etc.)
 4. Type d'appareil
-5. Référence visible sur l'appareil
+5. Référence visible sur l'appareil (ex: iC60N, C60N, DX3, etc.)
 6. Intensité nominale (In) en ampères
-7. Courbe (B, C, D) si applicable
-8. Pouvoir de coupure (Icu) en kA
-9. Nombre de pôles - CRITIQUE pour distinguer mono/triphasé:
-   - 1P = 1 pôle, 1 module de large (18mm), MONOPHASÉ sans neutre coupé
-   - 1P+N ou 2P = 2 pôles, 2 modules de large (36mm), MONOPHASÉ avec neutre
-   - 3P = 3 pôles, 3 modules de large (54mm), TRIPHASÉ sans neutre
-   - 3P+N ou 4P = 4 pôles, 4 modules de large (72mm), TRIPHASÉ avec neutre
+7. Courbe de déclenchement (B, C, D, K, Z) si visible
+8. Pouvoir de coupure ultime (Icu) en kA - souvent marqué "6kA", "10kA", "15kA"
+9. Pouvoir de coupure en service (Ics) en kA si visible (souvent Ics=Icu ou Ics=75%Icu)
+10. Tension assignée (voltage_v): 230V pour mono, 400V pour tri, ou valeur visible
+11. Nombre de pôles - CRITIQUE pour distinguer mono/triphasé:
+   - 1P = 1 pôle, 1 module de large (18mm), MONOPHASÉ sans neutre coupé, voltage=230V
+   - 1P+N ou 2P = 2 pôles, 2 modules de large (36mm), MONOPHASÉ avec neutre, voltage=230V
+   - 3P = 3 pôles, 3 modules de large (54mm), TRIPHASÉ sans neutre, voltage=400V
+   - 3P+N ou 4P = 4 pôles, 4 modules de large (72mm), TRIPHASÉ avec neutre, voltage=400V
    MÉTHODE: Compte la LARGEUR de l'appareil en modules (1 module = 18mm) ou le nombre de manettes liées ensemble
-10. Si différentiel: sensibilité en mA et type (AC, A, B, F)
+12. Si différentiel: sensibilité en mA (30, 300, 500) et type (AC, A, B, F, Hpi, Si)
 
 Réponds en JSON:
 {
@@ -2598,6 +2638,8 @@ Réponds en JSON:
       "in_amps": 16,
       "curve_type": "C" ou null,
       "icu_ka": 6 ou null,
+      "ics_ka": 6 ou null,
+      "voltage_v": 230,
       "poles": 1,  // 1=mono sans N, 2=mono+N (1P+N), 3=tri sans N, 4=tri+N (3P+N)
       "is_differential": false,
       "differential_sensitivity_ma": null,
@@ -2980,10 +3022,13 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               voltage_v = COALESCE($11, voltage_v),
               is_differential = COALESCE($12, is_differential),
               position_number = $13,
+              curve_type = COALESCE($14, curve_type),
+              differential_sensitivity_ma = COALESCE($15, differential_sensitivity_ma),
+              differential_type = COALESCE($16, differential_type),
               settings = jsonb_set(
                 COALESCE(settings, '{}'::jsonb),
                 '{last_scan}',
-                $14::jsonb
+                $17::jsonb
               ),
               updated_at = NOW()
             WHERE id = $1 AND site = $2
@@ -3002,10 +3047,10 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.voltage_v,
             device.is_differential,
             positionNumber,
+            device.curve_type,
+            device.differential_sensitivity_ma,
+            device.differential_type,
             JSON.stringify({
-              curve_type: device.curve_type,
-              differential_sensitivity_ma: device.differential_sensitivity_ma,
-              differential_type: device.differential_type,
               width_modules: device.width_modules,
               scanned_at: new Date().toISOString(),
               source: 'panel_scan'
@@ -3019,8 +3064,9 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             INSERT INTO devices (
               site, switchboard_id, name, device_type, manufacturer, reference,
               in_amps, icu_ka, ics_ka, poles, voltage_v,
-              is_differential, position_number, is_complete, settings
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              is_differential, position_number, is_complete,
+              curve_type, differential_sensitivity_ma, differential_type, settings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             RETURNING *
           `, [
             site,
@@ -3037,10 +3083,10 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.is_differential || false,
             positionNumber,
             false, // is_complete
+            device.curve_type || null,
+            device.differential_sensitivity_ma || null,
+            device.differential_type || null,
             JSON.stringify({
-              curve_type: device.curve_type,
-              differential_sensitivity_ma: device.differential_sensitivity_ma,
-              differential_type: device.differential_type,
               width_modules: device.width_modules,
               scanned_at: new Date().toISOString(),
               source: 'panel_scan'
