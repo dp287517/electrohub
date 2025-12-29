@@ -2774,15 +2774,33 @@ app.get("/api/atex/logs", async (req, res) => {
 // IA — helpers (à placer juste AVANT le bloc  // ------------------------------------------------- // IA)
 // =====================================================================
 
-const ATEX_PROMPT = `Tu es un assistant d'inspection ATEX. Analyse les photos d'équipements et extrait les informations suivantes:
+const ATEX_PROMPT = `Tu es un assistant d'inspection ATEX expert. Analyse attentivement les photos d'équipements pour extraire les marquages ATEX.
+
+MARQUAGES ATEX À RECHERCHER:
+- Marquage GAZ: contient la lettre "G" (ex: II 2G, II 1G, II 3G, Ex d IIC T6, Ex e II T3, etc.)
+- Marquage POUSSIÈRE: contient la lettre "D" (ex: II 2D, II 1D, II 3D, Ex tb IIIC T85°C, etc.)
+
+ATTENTION: Un équipement peut avoir:
+- UNIQUEMENT un marquage Gaz (G)
+- UNIQUEMENT un marquage Poussière (D)
+- LES DEUX marquages Gaz ET Poussière (équipement mixte)
+- Aucun marquage visible
+
+Cherche bien TOUS les marquages présents sur la plaque signalétique. Les marquages poussière (D) sont souvent sur une ligne séparée.
+
+Extrait les informations suivantes:
 - manufacturer: le fabricant de l'équipement
 - manufacturer_ref: la référence fabricant / numéro de modèle
-- atex_mark_gas: le marquage ATEX gaz (ex: II 2G, II 1G, etc.)
-- atex_mark_dust: le marquage ATEX poussière (ex: II 2D, II 1D, etc.)
-- type: le type d'équipement (moteur, capteur, luminaire, etc.)
+- atex_mark_gas: le marquage ATEX gaz complet (vide si absent)
+- atex_mark_dust: le marquage ATEX poussière complet (vide si absent)
+- type: le type d'équipement (moteur, capteur, luminaire, boîtier, etc.)
 
 IMPORTANT: Réponds UNIQUEMENT avec un objet JSON valide contenant ces 5 champs. Pas de texte avant ou après.
-Exemple: {"manufacturer":"ABB","manufacturer_ref":"M2AA 100L","atex_mark_gas":"II 2G","atex_mark_dust":"","type":"moteur"}`;
+
+Exemples:
+- Équipement gaz uniquement: {"manufacturer":"ABB","manufacturer_ref":"M2AA 100L","atex_mark_gas":"II 2G Ex d IIC T4","atex_mark_dust":"","type":"moteur"}
+- Équipement poussière uniquement: {"manufacturer":"Stahl","manufacturer_ref":"8040/1","atex_mark_gas":"","atex_mark_dust":"II 2D Ex tb IIIC T80°C","type":"boîtier"}
+- Équipement mixte gaz+poussière: {"manufacturer":"R.STAHL","manufacturer_ref":"8146","atex_mark_gas":"II 2G Ex d IIC T6","atex_mark_dust":"II 2D Ex tb IIIC T85°C","type":"luminaire"}`;
 
 // Préparer les images (redimensionnement)
 async function prepareImagesForAI(files) {

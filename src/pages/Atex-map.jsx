@@ -2470,8 +2470,8 @@ function setupHandleDrag(map, onMoveCallback) {
           {/* Dialog - 🖥️ Plus large sur grand écran */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1400px,96vw)] lg:w-[min(1800px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
-              {/* 🆕 Header redesigné - compact sur mobile */}
-              <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+              {/* 🆕 Header redesigné - compact sur mobile + safe-area iOS */}
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white pt-[env(safe-area-inset-top)]">
                 {/* Ligne 1: Titre + Fermer */}
                 <div className="flex items-center justify-between px-3 py-2 sm:px-4 sm:py-3">
                   <div className="flex items-center gap-2 min-w-0">
