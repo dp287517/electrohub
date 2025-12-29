@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, Shield, Mail, ArrowLeft } from 'lucide-react';
+import { Clock, Shield, Mail, ArrowLeft, Loader2 } from 'lucide-react';
 
 /**
  * Component shown to users who are pending admin validation
@@ -7,6 +8,8 @@ import { Clock, Shield, Mail, ArrowLeft } from 'lucide-react';
  */
 export default function PendingValidation({ user }) {
   const navigate = useNavigate();
+  const [checking, setChecking] = useState(false);
+  const [message, setMessage] = useState(null);
 
   const handleLogout = () => {
     localStorage.removeItem('eh_token');
@@ -15,9 +18,44 @@ export default function PendingValidation({ user }) {
     window.location.href = 'https://haleon-tool.io';
   };
 
-  const handleRefresh = () => {
-    // Force re-check of validation status
-    window.location.reload();
+  const handleRefresh = async () => {
+    setChecking(true);
+    setMessage(null);
+
+    try {
+      // Get current token from localStorage
+      const token = localStorage.getItem('eh_token');
+
+      const response = await fetch('/api/auth/check-status', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+      });
+
+      const data = await response.json();
+
+      if (data.is_validated) {
+        // User is now validated! Update localStorage and reload
+        if (data.jwt) {
+          localStorage.setItem('eh_token', data.jwt);
+        }
+        if (data.user) {
+          localStorage.setItem('eh_user', JSON.stringify(data.user));
+        }
+        setMessage({ type: 'success', text: 'Compte validé ! Redirection...' });
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        setMessage({ type: 'info', text: 'Votre compte est toujours en attente de validation par un administrateur.' });
+      }
+    } catch (err) {
+      console.error('Check status error:', err);
+      setMessage({ type: 'error', text: 'Erreur lors de la vérification. Réessayez.' });
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
@@ -92,11 +130,28 @@ export default function PendingValidation({ user }) {
 
           {/* Footer actions */}
           <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 space-y-3">
+            {message && (
+              <div className={`p-3 rounded-lg text-sm ${
+                message.type === 'success' ? 'bg-green-100 text-green-800' :
+                message.type === 'error' ? 'bg-red-100 text-red-800' :
+                'bg-blue-100 text-blue-800'
+              }`}>
+                {message.text}
+              </div>
+            )}
             <button
               onClick={handleRefresh}
-              className="w-full py-3 px-4 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl transition-colors"
+              disabled={checking}
+              className="w-full py-3 px-4 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              Vérifier mon statut
+              {checking ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  Vérification...
+                </>
+              ) : (
+                'Vérifier mon statut'
+              )}
             </button>
             <button
               onClick={handleLogout}

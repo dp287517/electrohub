@@ -8033,6 +8033,93 @@ app.post("/api/auth/bubble", express.json(), async (req, res) => {
 });
 
 /* ================================================================
+   🔵 Check Validation Status - Pour rafraîchir le token après validation
+   ================================================================ */
+app.get("/api/auth/check-status", async (req, res) => {
+  try {
+    // Get user from JWT token
+    const token = req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const secret = process.env.JWT_SECRET || "devsecret";
+    let decoded;
+    try {
+      decoded = jwt.verify(token, secret);
+    } catch (jwtErr) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const email = decoded.email?.toLowerCase();
+    if (!email) {
+      return res.status(401).json({ error: "Invalid token - no email" });
+    }
+
+    console.log(`[check-status] 🔍 Checking validation status for ${email}`);
+
+    // Check if user is now validated in the users table
+    const userResult = await pool.query(`
+      SELECT id, email, name, is_active, site_id, department_id, company_id, role, allowed_apps
+      FROM users
+      WHERE LOWER(email) = $1 AND is_active = TRUE
+    `, [email]);
+
+    const isValidated = userResult.rows.length > 0;
+    console.log(`[check-status] User ${email} is_validated: ${isValidated}`);
+
+    if (isValidated) {
+      // User is now validated - generate a new JWT
+      const user = userResult.rows[0];
+      const newPayload = {
+        id: user.id || decoded.id,
+        name: user.name || decoded.name,
+        email: user.email || decoded.email,
+        source: decoded.source || "bubble",
+        site: decoded.site,
+        department_id: user.department_id || decoded.department_id,
+        company_id: user.company_id || decoded.company_id,
+        site_id: user.site_id || decoded.site_id,
+        role: user.role || decoded.role || "site",
+        allowed_apps: user.allowed_apps || decoded.allowed_apps,
+        is_validated: true,
+        isPending: false,
+      };
+
+      const newToken = jwt.sign(newPayload, secret, { expiresIn: "7d" });
+
+      // Set new cookie
+      const isProduction = process.env.NODE_ENV === 'production';
+      res.cookie("token", newToken, {
+        httpOnly: true,
+        sameSite: isProduction ? "none" : "lax",
+        secure: isProduction
+      });
+
+      console.log(`[check-status] ✅ New validated token generated for ${email}`);
+      res.json({
+        ok: true,
+        is_validated: true,
+        isPending: false,
+        jwt: newToken,
+        user: newPayload
+      });
+    } else {
+      // User is still pending
+      console.log(`[check-status] ⏳ User ${email} is still pending`);
+      res.json({
+        ok: true,
+        is_validated: false,
+        isPending: true
+      });
+    }
+  } catch (err) {
+    console.error("[check-status] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================================================================
    🔵 Save User Profile (department, site)
    ================================================================ */
 app.put("/api/user/profile", express.json(), async (req, res) => {
