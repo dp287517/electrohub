@@ -156,13 +156,15 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
     fetchPending();
   }, [fetchPending]);
 
-  const handleValidate = async (userId, allowed_apps = null) => {
+  const handleValidate = async (userId, allowed_apps = null, email = null) => {
     setValidating(userId);
     try {
-      const response = await fetch(`${API_BASE}/users/validate/${userId}`, {
+      // If userId looks like an email (no numeric id), use email-based validation
+      const isEmailId = userId && typeof userId === 'string' && userId.includes('@');
+      const response = await fetch(`${API_BASE}/users/validate/${isEmailId ? 'by-email' : userId}`, {
         method: 'POST',
         ...getAuthOptions(),
-        body: JSON.stringify({ allowed_apps })
+        body: JSON.stringify({ allowed_apps, email: isEmailId ? userId : email })
       });
       if (!response.ok) throw new Error('Failed to validate user');
       fetchPending();
@@ -174,13 +176,16 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
     }
   };
 
-  const handleReject = async (userId) => {
-    if (!confirm('Rejeter cet utilisateur ? Son compte sera supprimé.')) return;
+  const handleReject = async (userId, email = null) => {
+    if (!confirm('Rejeter cet utilisateur ? Il sera marqué comme rejeté.')) return;
     setValidating(userId);
     try {
-      const response = await fetch(`${API_BASE}/users/reject/${userId}`, {
+      // If userId looks like an email, use email-based rejection
+      const isEmailId = userId && typeof userId === 'string' && userId.includes('@');
+      const response = await fetch(`${API_BASE}/users/reject/${isEmailId ? 'by-email' : userId}`, {
         method: 'POST',
-        ...getAuthOptions()
+        ...getAuthOptions(),
+        body: JSON.stringify({ email: isEmailId ? userId : email })
       });
       if (!response.ok) throw new Error('Failed to reject user');
       fetchPending();
@@ -220,8 +225,11 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
         </div>
       ) : (
         <div className="grid gap-4">
-          {pendingUsers.map(user => (
-            <div key={user.id} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+          {pendingUsers.map(user => {
+            // Use email as identifier for users from activity tables (no id)
+            const uniqueId = user.id || user.email;
+            return (
+            <div key={uniqueId} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
               <div className="p-4 flex items-center justify-between flex-wrap gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
@@ -237,18 +245,25 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
                       </span>
                     </p>
                     <p className="text-sm text-gray-500">{user.email}</p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Première connexion: {new Date(user.created_at).toLocaleString('fr-FR')}
-                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xs text-gray-400">
+                        Première activité: {user.created_at ? new Date(user.created_at).toLocaleString('fr-FR') : 'N/A'}
+                      </p>
+                      {user.source && (
+                        <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
+                          via {user.source}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleValidate(user.id)}
-                    disabled={validating === user.id}
+                    onClick={() => handleValidate(uniqueId, null, user.email)}
+                    disabled={validating === uniqueId}
                     className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
                   >
-                    {validating === user.id ? (
+                    {validating === uniqueId ? (
                       <Loader2 size={16} className="animate-spin" />
                     ) : (
                       <UserCheck size={16} />
@@ -256,8 +271,8 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
                     Valider
                   </button>
                   <button
-                    onClick={() => handleReject(user.id)}
-                    disabled={validating === user.id}
+                    onClick={() => handleReject(uniqueId, user.email)}
+                    disabled={validating === uniqueId}
                     className="flex items-center gap-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors disabled:opacity-50"
                   >
                     <UserX size={16} />
@@ -266,7 +281,7 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
                 </div>
               </div>
             </div>
-          ))}
+          );})}
         </div>
       )}
     </div>

@@ -1068,40 +1068,316 @@ router.put("/users/haleon/:id", adminOnly, express.json(), async (req, res) => {
 // ============================================================
 
 // GET /api/admin/users/pending - Liste les utilisateurs en attente de validation
+// ROBUSTE: Cherche dans toutes les sources d'activité et compare avec haleon_users validés
 router.get("/users/pending", adminOnly, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT h.id, h.email, h.name, h.department_id, h.site_id, h.allowed_apps,
-             h.is_validated, h.created_at, h.updated_at,
-             s.name as site_name, d.name as department_name
-      FROM haleon_users h
-      LEFT JOIN sites s ON h.site_id = s.id
-      LEFT JOIN departments d ON h.department_id = d.id
-      WHERE h.is_validated = FALSE OR h.is_validated IS NULL
-      ORDER BY h.created_at DESC
-    `);
-    res.json({ users: result.rows, count: result.rows.length });
+    const pendingUsers = new Map();
+    const validatedEmails = new Set();
+    const logs = [];
+
+    // 1. D'abord récupérer les emails déjà traités (validés OU rejetés) depuis haleon_users
+    try {
+      // Essayer avec is_validated si la colonne existe
+      // Un utilisateur est "traité" s'il est validé (is_validated = TRUE) OU rejeté (is_active = FALSE)
+      const treated = await pool.query(`
+        SELECT LOWER(email) as email FROM haleon_users
+        WHERE is_validated = TRUE OR is_active = FALSE
+      `);
+      treated.rows.forEach(r => validatedEmails.add(r.email));
+      logs.push(`haleon_users treated: ${treated.rows.length}`);
+    } catch (e) {
+      // Si is_validated n'existe pas, essayer avec juste is_active
+      try {
+        const treated = await pool.query(`
+          SELECT LOWER(email) as email FROM haleon_users WHERE is_active = FALSE
+        `);
+        treated.rows.forEach(r => validatedEmails.add(r.email));
+        logs.push(`haleon_users rejected: ${treated.rows.length}`);
+      } catch (e2) {
+        // Si aucune colonne n'existe, récupérer tous les emails de haleon_users
+        // Les considérer comme "traités" (legacy users avant le système de validation)
+        console.log(`[ADMIN] is_validated/is_active columns missing, fallback to all haleon_users: ${e.message}`);
+        try {
+          const all = await pool.query(`SELECT LOWER(email) as email FROM haleon_users`);
+          all.rows.forEach(r => validatedEmails.add(r.email));
+          logs.push(`haleon_users (fallback all): ${all.rows.length}`);
+        } catch (e3) {
+          logs.push(`haleon_users error: ${e3.message}`);
+        }
+      }
+    }
+
+    // 2. Chercher dans askv_users
+    try {
+      const askv = await pool.query(`
+        SELECT DISTINCT ON (LOWER(email))
+               email, name, created_at, 'askv_users' as source
+        FROM askv_users
+        WHERE email LIKE '%@haleon.com'
+        ORDER BY LOWER(email), created_at DESC
+      `);
+      askv.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: u.name,
+            source: 'askv_users',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`askv_users: ${askv.rows.length} total`);
+    } catch (e) {
+      logs.push(`askv_users error: ${e.message}`);
+    }
+
+    // 3. Chercher dans askv_events
+    try {
+      const events = await pool.query(`
+        SELECT DISTINCT user_email as email, MIN(created_at) as created_at
+        FROM askv_events
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email
+      `);
+      events.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: null,
+            source: 'askv_events',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`askv_events: ${events.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`askv_events error: ${e.message}`);
+    }
+
+    // 4. Chercher dans atex_checks
+    try {
+      const atex = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        FROM atex_checks
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email, user_name
+      `);
+      atex.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: u.name,
+            source: 'atex_checks',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`atex_checks: ${atex.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`atex_checks error: ${e.message}`);
+    }
+
+    // 5. Chercher dans vsd_checks
+    try {
+      const vsd = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        FROM vsd_checks
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email, user_name
+      `);
+      vsd.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: u.name,
+            source: 'vsd_checks',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`vsd_checks: ${vsd.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`vsd_checks error: ${e.message}`);
+    }
+
+    // 6. Chercher dans control_records (OIBT)
+    try {
+      const oibt = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        FROM control_records
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email, user_name
+      `);
+      oibt.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: u.name,
+            source: 'control_records',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`control_records: ${oibt.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`control_records error: ${e.message}`);
+    }
+
+    // 7. Chercher dans learn_ex_sessions
+    try {
+      const learnex = await pool.query(`
+        SELECT DISTINCT user_email as email, MIN(started_at) as created_at
+        FROM learn_ex_sessions
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email
+      `);
+      learnex.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: null,
+            source: 'learn_ex_sessions',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`learn_ex_sessions: ${learnex.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`learn_ex_sessions error: ${e.message}`);
+    }
+
+    // 8. Chercher dans fd_checks (Fire Doors)
+    try {
+      const fd = await pool.query(`
+        SELECT DISTINCT user_email as email, user_name as name, MIN(created_at) as created_at
+        FROM fd_checks
+        WHERE user_email LIKE '%@haleon.com'
+        GROUP BY user_email, user_name
+      `);
+      fd.rows.forEach(u => {
+        if (u.email && !validatedEmails.has(u.email.toLowerCase()) && !pendingUsers.has(u.email.toLowerCase())) {
+          pendingUsers.set(u.email.toLowerCase(), {
+            id: null,
+            email: u.email,
+            name: u.name,
+            source: 'fd_checks',
+            created_at: u.created_at,
+            is_validated: false
+          });
+        }
+      });
+      logs.push(`fd_checks: ${fd.rows.length} unique emails`);
+    } catch (e) {
+      logs.push(`fd_checks error: ${e.message}`);
+    }
+
+    // Convertir Map en Array et trier par date
+    const users = Array.from(pendingUsers.values())
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    console.log(`[ADMIN] Pending users: ${users.length} found | ${logs.join(' | ')}`);
+    res.json({ users, count: users.length, sources: logs });
   } catch (err) {
+    console.error(`[ADMIN] /users/pending ERROR:`, err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/admin/users/validate/:id - Valider un utilisateur
+// POST /api/admin/users/validate/by-email - Valider un utilisateur par EMAIL
+// IMPORTANT: Cette route doit être AVANT validate/:id pour éviter que "by-email" soit interprété comme un ID
+// Pour les utilisateurs découverts dans les tables d'activité (pas encore dans haleon_users)
+router.post("/users/validate/by-email", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { email, allowed_apps, site_id, department_id, name } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email required" });
+    }
+
+    console.log(`[ADMIN] Validating user by email: ${email}`);
+
+    // Insert or update in haleon_users with is_validated = TRUE
+    let result;
+    try {
+      result = await pool.query(`
+        INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps, is_validated, created_at, updated_at)
+        VALUES ($1, $2, COALESCE($3, 1), $4, $5, TRUE, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          is_validated = TRUE,
+          name = COALESCE(EXCLUDED.name, haleon_users.name),
+          site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
+          department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
+          allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
+          updated_at = NOW()
+        RETURNING *
+      `, [email.toLowerCase(), name, site_id, department_id, allowed_apps]);
+    } catch (e) {
+      // Fallback if is_validated column doesn't exist
+      console.log(`[ADMIN] is_validated column may not exist, trying without: ${e.message}`);
+      result = await pool.query(`
+        INSERT INTO haleon_users (email, name, site_id, department_id, allowed_apps, created_at, updated_at)
+        VALUES ($1, $2, COALESCE($3, 1), $4, $5, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          name = COALESCE(EXCLUDED.name, haleon_users.name),
+          site_id = COALESCE(EXCLUDED.site_id, haleon_users.site_id),
+          department_id = COALESCE(EXCLUDED.department_id, haleon_users.department_id),
+          allowed_apps = COALESCE(EXCLUDED.allowed_apps, haleon_users.allowed_apps),
+          updated_at = NOW()
+        RETURNING *
+      `, [email.toLowerCase(), name, site_id, department_id, allowed_apps]);
+    }
+
+    console.log(`[ADMIN] ✅ User validated by email: ${email}`);
+    res.json({ ok: true, user: result.rows[0] });
+  } catch (err) {
+    console.error(`[ADMIN] Error validating user by email:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/validate/:id - Valider un utilisateur par ID
 router.post("/users/validate/:id", adminOnly, express.json(), async (req, res) => {
   try {
     const { id } = req.params;
     const { allowed_apps, site_id, department_id } = req.body;
 
-    const result = await pool.query(`
-      UPDATE haleon_users
-      SET is_validated = TRUE,
-          allowed_apps = COALESCE($1, allowed_apps),
-          site_id = COALESCE($2, site_id),
-          department_id = COALESCE($3, department_id),
-          updated_at = NOW()
-      WHERE id = $4
-      RETURNING *
-    `, [allowed_apps, site_id, department_id, id]);
+    // Try to update with is_validated, fallback if column doesn't exist
+    let result;
+    try {
+      result = await pool.query(`
+        UPDATE haleon_users
+        SET is_validated = TRUE,
+            allowed_apps = COALESCE($1, allowed_apps),
+            site_id = COALESCE($2, site_id),
+            department_id = COALESCE($3, department_id),
+            updated_at = NOW()
+        WHERE id = $4
+        RETURNING *
+      `, [allowed_apps, site_id, department_id, id]);
+    } catch (e) {
+      // Fallback: update without is_validated
+      result = await pool.query(`
+        UPDATE haleon_users
+        SET allowed_apps = COALESCE($1, allowed_apps),
+            site_id = COALESCE($2, site_id),
+            department_id = COALESCE($3, department_id),
+            updated_at = NOW()
+        WHERE id = $4
+        RETURNING *
+      `, [allowed_apps, site_id, department_id, id]);
+    }
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
@@ -1114,7 +1390,52 @@ router.post("/users/validate/:id", adminOnly, express.json(), async (req, res) =
   }
 });
 
-// POST /api/admin/users/reject/:id - Rejeter un utilisateur (supprimer)
+// POST /api/admin/users/reject/by-email - Rejeter un utilisateur par EMAIL
+// IMPORTANT: Cette route doit être AVANT reject/:id
+// Pour les utilisateurs découverts dans les tables d'activité
+router.post("/users/reject/by-email", adminOnly, express.json(), async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email required" });
+    }
+
+    console.log(`[ADMIN] Rejecting user by email: ${email}`);
+
+    // For users from activity tables, we don't delete them from those tables
+    // Instead, we create a haleon_users entry marked as rejected (is_validated = FALSE, is_active = FALSE)
+    // This prevents them from appearing in pending again
+    try {
+      await pool.query(`
+        INSERT INTO haleon_users (email, is_validated, is_active, created_at, updated_at)
+        VALUES ($1, FALSE, FALSE, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          is_validated = FALSE,
+          is_active = FALSE,
+          updated_at = NOW()
+      `, [email.toLowerCase()]);
+    } catch (e) {
+      // Fallback if columns don't exist
+      console.log(`[ADMIN] Column error, trying simple insert: ${e.message}`);
+      await pool.query(`
+        INSERT INTO haleon_users (email, is_active, created_at, updated_at)
+        VALUES ($1, FALSE, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          is_active = FALSE,
+          updated_at = NOW()
+      `, [email.toLowerCase()]);
+    }
+
+    console.log(`[ADMIN] ❌ User rejected by email: ${email}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[ADMIN] Error rejecting user by email:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/reject/:id - Rejeter un utilisateur par ID (supprimer)
 router.post("/users/reject/:id", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
