@@ -3837,13 +3837,25 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
 
     // 🔔 Push notification for completed control
     const isConform = status === 'conform' || status === 'ok' || status === 'conforme';
+
+    // Build URL based on equipment type
+    let controlUrl = '/app/switchboard-controls';
+    if (switchboard_id) controlUrl = `/app/switchboards/${switchboard_id}`;
+    else if (device_id) controlUrl = `/app/switchboard/device/${device_id}`;
+    else if (vsd_equipment_id) controlUrl = `/app/vsd/equipment/${vsd_equipment_id}`;
+    else if (meca_equipment_id) controlUrl = `/app/meca/equipment/${meca_equipment_id}`;
+    else if (mobile_equipment_id) controlUrl = `/app/mobile-equipment/${mobile_equipment_id}`;
+    else if (hv_equipment_id) controlUrl = `/app/hv/equipment/${hv_equipment_id}`;
+    else if (glo_equipment_id) controlUrl = `/app/glo/equipment/${glo_equipment_id}`;
+    else if (datahub_equipment_id) controlUrl = `/app/datahub/equipment/${datahub_equipment_id}`;
+
     notify(
       isConform ? '✅ Contrôle terminé' : '⚠️ Contrôle avec NC',
       `${detectedType.toUpperCase()} - ${isConform ? 'Conforme' : 'Non-conforme'}`,
       {
         type: 'control_completed',
         requireInteraction: !isConform,
-        data: { recordId: record.id, status },
+        data: { recordId: record.id, status, url: controlUrl },
         excludeUserId: performedByEmail
       }
     ).catch(err => console.log('[SWITCHBOARD] Push notify error:', err.message));
