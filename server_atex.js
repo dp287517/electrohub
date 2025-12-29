@@ -3770,7 +3770,21 @@ app.get("/api/atex/drpce", async (req, res) => {
 
     equipmentQuery += ` ORDER BY e.building, e.zone, e.name`;
 
-    let { rows: equipments } = await pool.query(equipmentQuery, equipmentParams);
+    // Use dedicated client with longer timeout for this heavy query (fetches photo_content blobs)
+    const eqClient = await pool.connect();
+    let equipments;
+    try {
+      await eqClient.query('BEGIN');
+      await eqClient.query(`SET LOCAL statement_timeout = '300s'`); // 5 minutes for heavy report with photos
+      const result = await eqClient.query(equipmentQuery, equipmentParams);
+      equipments = result.rows;
+      await eqClient.query('COMMIT');
+    } catch (e) {
+      await eqClient.query('ROLLBACK');
+      throw e;
+    } finally {
+      eqClient.release();
+    }
 
     // Filtrer par compliance si demandé (doit être fait après car c'est une sous-requête)
     if (filterCompliance) {
@@ -4610,7 +4624,21 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
 
     equipmentQuery += ` ORDER BY e.building, e.zone, e.name`;
 
-    let { rows: equipments } = await pool.query(equipmentQuery, equipmentParams);
+    // Use dedicated client with longer timeout for this heavy query (fetches photo_content blobs)
+    const client = await pool.connect();
+    let equipments;
+    try {
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL statement_timeout = '300s'`); // 5 minutes for heavy report with photos
+      const result = await client.query(equipmentQuery, equipmentParams);
+      equipments = result.rows;
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
 
     // Filtrer par compliance
     if (filterCompliance) {
