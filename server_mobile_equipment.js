@@ -963,7 +963,7 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
         notify('📝 Équipement mobile modifié', `${eq.name} a été mis à jour`, {
           type: 'equipment_updated',
           tag: `mobile-updated-${eq.id}`,
-          data: { equipmentType: 'mobile', equipmentId: eq.id, url: `/app/mobile-equipments/${eq.id}` }
+          data: { equipmentType: 'mobile', equipmentId: eq.id, url: `/app/mobile-equipments?equipment=${eq.id}` }
         }).catch(err => console.log('[MOBILE EQUIPMENT] Push notify error:', err.message));
       } catch (notifyErr) {
         console.warn('[UPDATE MOBILE EQUIPMENT] Push notify failed (non-blocking):', notifyErr.message);

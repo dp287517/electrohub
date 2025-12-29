@@ -815,7 +815,7 @@ app.put("/api/doors/doors/:id", async (req, res) => {
         notify('📝 Porte modifiée', `${door.name} a été mise à jour`, {
           type: 'equipment_updated',
           tag: `door-updated-${door.id}`,
-          data: { equipmentType: 'door', equipmentId: door.id, url: `/app/doors/${door.id}` }
+          data: { equipmentType: 'door', equipmentId: door.id, url: `/app/doors?door=${door.id}` }
         }).catch(err => console.log('[DOORS] Push notify error:', err.message));
       } catch (notifyErr) {
         console.warn('[UPDATE DOOR] Push notify failed (non-blocking):', notifyErr.message);
