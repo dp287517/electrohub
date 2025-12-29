@@ -133,24 +133,59 @@ export default function SignatureManager({ procedureId, procedureTitle, createdB
   const canSign = () => {
     if (!currentUserEmail) return false;
 
-    // Check if current user can sign
-    const userSignature = signatures.find(s => s.signer_email === currentUserEmail);
-    const userRequest = requests.find(r => r.requested_email === currentUserEmail && r.status === 'pending');
+    // Check if current user has any UNSIGNED signature entries
+    const hasUnsignedSignature = signatures.some(s =>
+      s.signer_email === currentUserEmail && !s.signed_at
+    );
+
+    // Check if there's a pending request for this user
+    const hasPendingRequest = requests.some(r =>
+      r.requested_email === currentUserEmail && r.status === 'pending'
+    );
 
     // Can sign if:
-    // 1. Has a signature entry that's not yet signed
+    // 1. Has any signature entry that's not yet signed
     // 2. Has a pending request
-    // 3. Is the creator
+    // 3. Is the creator and hasn't signed as creator yet
     // 4. Procedure has no owner (system/anonymous) - can claim and sign
-    return (userSignature && !userSignature.signed_at)
-      || userRequest
-      || procedureOwner === currentUserEmail
+    const creatorSignature = signatures.find(s =>
+      s.signer_email === currentUserEmail && s.is_creator
+    );
+    const isCreatorAndNeedToSign = procedureOwner === currentUserEmail &&
+      (!creatorSignature || !creatorSignature.signed_at);
+
+    return hasUnsignedSignature
+      || hasPendingRequest
+      || isCreatorAndNeedToSign
       || hasNoOwner;
   };
 
+  // Check if user has completed ALL their required signatures
+  const hasAllSigned = () => {
+    // Get all signature entries for current user
+    const userSignatures = signatures.filter(s => s.signer_email === currentUserEmail);
+
+    // If no signatures at all, hasn't signed
+    if (userSignatures.length === 0) return false;
+
+    // Check if ALL are signed
+    return userSignatures.every(s => s.signed_at);
+  };
+
+  // For backward compatibility - check if has at least one signature
   const hasSigned = () => {
-    const userSignature = signatures.find(s => s.signer_email === currentUserEmail);
-    return userSignature && userSignature.signed_at;
+    return signatures.some(s => s.signer_email === currentUserEmail && s.signed_at);
+  };
+
+  // Count pending signatures for current user
+  const pendingSignatureCount = () => {
+    const unsignedSigs = signatures.filter(s =>
+      s.signer_email === currentUserEmail && !s.signed_at
+    ).length;
+    const pendingReqs = requests.filter(r =>
+      r.requested_email === currentUserEmail && r.status === 'pending'
+    ).length;
+    return unsignedSigs + pendingReqs;
   };
 
   const roleLabels = {
@@ -401,17 +436,19 @@ export default function SignatureManager({ procedureId, procedureTitle, createdB
 
           <div className="flex-1" />
 
-          {canSign() && !hasSigned() && (
+          {canSign() && (
             <button
               onClick={() => setShowSignaturePad(true)}
               className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-lg hover:from-violet-700 hover:to-purple-700 transition-colors shadow-lg"
             >
               <Pen className="w-4 h-4" />
-              Signer maintenant
+              {pendingSignatureCount() > 1
+                ? `Signer (${pendingSignatureCount()} en attente)`
+                : 'Signer maintenant'}
             </button>
           )}
 
-          {hasSigned() && (
+          {hasAllSigned() && (
             <div className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-lg">
               <CheckCircle className="w-4 h-4" />
               Vous avez signé

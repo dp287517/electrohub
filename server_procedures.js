@@ -9078,7 +9078,20 @@ app.post("/api/procedures/:id/signature-requests", async (req, res) => {
       return res.status(400).json({ error: "Email requis" });
     }
 
-    // Check if already exists
+    // Check if already has a signed signature (can't add someone who already signed)
+    const { rows: existingSig } = await pool.query(
+      `SELECT id, signed_at, signer_role FROM procedure_signatures
+       WHERE procedure_id = $1 AND signer_email = $2`,
+      [id, email]
+    );
+
+    if (existingSig.length > 0 && existingSig[0].signed_at) {
+      return res.status(400).json({
+        error: `${email} a déjà signé cette procédure en tant que ${existingSig[0].signer_role}`
+      });
+    }
+
+    // Check if already exists in requests
     const { rows: existing } = await pool.query(
       `SELECT id FROM procedure_signature_requests WHERE procedure_id = $1 AND requested_email = $2`,
       [id, email]
@@ -9106,14 +9119,26 @@ app.post("/api/procedures/:id/signature-requests", async (req, res) => {
       );
     }
 
-    // Also create an empty signature entry
-    await pool.query(
-      `INSERT INTO procedure_signatures
-        (procedure_id, signer_email, signer_name, signer_role, required)
-      VALUES ($1, $2, $3, $4, true)
-      ON CONFLICT (procedure_id, signer_email) DO NOTHING`,
-      [id, email, name || email.split('@')[0], role || 'reviewer']
-    );
+    // Create or update signature entry (reset if not signed yet)
+    if (existingSig.length > 0) {
+      // Update existing unsigned entry
+      await pool.query(
+        `UPDATE procedure_signatures SET
+          signer_name = COALESCE($3, signer_name),
+          signer_role = COALESCE($4, signer_role),
+          required = true
+        WHERE procedure_id = $1 AND signer_email = $2 AND signed_at IS NULL`,
+        [id, email, name || email.split('@')[0], role || 'reviewer']
+      );
+    } else {
+      // Create new entry
+      await pool.query(
+        `INSERT INTO procedure_signatures
+          (procedure_id, signer_email, signer_name, signer_role, required)
+        VALUES ($1, $2, $3, $4, true)`,
+        [id, email, name || email.split('@')[0], role || 'reviewer']
+      );
+    }
 
     // Get procedure title for notification
     const { rows: procedures } = await pool.query(
