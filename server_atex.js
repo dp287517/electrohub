@@ -12,6 +12,7 @@ import multer from "multer";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import StreamZip from "node-stream-zip";
@@ -4737,6 +4738,42 @@ app.get("/api/atex/drpce", async (req, res) => {
 // GENERATION ASYNCHRONE DU DRPCE (pour les gros rapports)
 // ============================================================
 
+// Helper: Charger la photo d'un équipement à la demande (évite de tout garder en mémoire)
+async function loadEquipmentPhoto(equipmentId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT photo_content FROM atex_equipments WHERE id = $1 AND photo_content IS NOT NULL`,
+      [equipmentId]
+    );
+    return rows[0]?.photo_content || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper: Charger le thumbnail d'un plan à la demande
+async function loadPlanThumbnail(logicalName, planId) {
+  try {
+    if (logicalName) {
+      const { rows } = await pool.query(
+        `SELECT thumbnail FROM atex_plans WHERE logical_name = $1 ORDER BY version DESC LIMIT 1`,
+        [logicalName]
+      );
+      if (rows[0]?.thumbnail) return rows[0].thumbnail;
+    }
+    if (planId) {
+      const { rows } = await pool.query(
+        `SELECT thumbnail FROM atex_plans WHERE id = $1`,
+        [planId]
+      );
+      return rows[0]?.thumbnail || null;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Fonction interne pour générer le PDF en arrière-plan
 async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userName) {
   console.log(`[DRPCE-Async] Starting background generation for report ${reportId}`);
@@ -4777,6 +4814,7 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     } catch (e) { console.warn('[DRPCE-Async] No site settings:', e.message); }
 
     // 2. Récupérer tous les équipements ATEX avec filtres
+    // OPTIMISATION MÉMOIRE: Ne PAS charger photo_content ici - sera chargé à la demande pour chaque fiche
     // Using CTE with LEFT JOIN instead of correlated subqueries for performance
     let equipmentQuery = `
       WITH latest_checks AS (
@@ -4788,7 +4826,7 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       )
       SELECT e.id, e.name, e.type, e.building, e.zone, e.manufacturer, e.manufacturer_ref,
              e.equipment, e.sub_equipment, e.atex_mark_gas, e.atex_mark_dust,
-             e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_content, e.photo_path,
+             e.zoning_gas, e.zoning_dust, e.next_check_date, e.photo_path,
              e.site_id, e.company_id,
              lc.result AS last_result,
              lc.date AS last_check_date
@@ -4855,18 +4893,15 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     console.log(`[DRPCE-Async] Found ${equipments.length} equipments`);
 
     // Récupérer les positions des équipements
+    // OPTIMISATION MÉMOIRE: Ne PAS charger plan_thumbnail et plan_content ici - seront chargés à la demande
     const equipmentIds = equipments.map(e => e.id);
     let positionsMap = new Map();
     if (equipmentIds.length > 0) {
       const { rows: positions } = await pool.query(`
         SELECT pos.equipment_id, pos.logical_name, pos.plan_id, pos.x_frac, pos.y_frac,
-               COALESCE(p_by_logical.thumbnail, p_by_id.thumbnail) AS plan_thumbnail,
-               COALESCE(p_by_logical.content, p_by_id.content) AS plan_content,
                COALESCE(pn.display_name, pos.logical_name, 'Plan') AS plan_display_name
         FROM atex_positions pos
-        LEFT JOIN (SELECT DISTINCT ON (logical_name) id, logical_name, content, thumbnail FROM atex_plans ORDER BY logical_name, version DESC) p_by_logical ON p_by_logical.logical_name = pos.logical_name
-        LEFT JOIN atex_plans p_by_id ON p_by_id.id = pos.plan_id
-        LEFT JOIN atex_plan_names pn ON pn.logical_name = COALESCE(pos.logical_name, p_by_id.logical_name)
+        LEFT JOIN atex_plan_names pn ON pn.logical_name = pos.logical_name
         WHERE pos.equipment_id = ANY($1)
       `, [equipmentIds]);
 
@@ -4903,12 +4938,13 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       byBuilding[bat][z].push(eq);
     }
 
-    // Créer le PDF en mémoire
-    const chunks = [];
+    // Créer le PDF - stream vers un fichier temporaire pour économiser la mémoire
+    const tempPdfPath = path.join(os.tmpdir(), `drpce-${reportId}-${Date.now()}.pdf`);
+    const pdfWriteStream = fs.createWriteStream(tempPdfPath);
     const doc = new PDFDocument({
       size: 'A4',
       margin: 50,
-      bufferPages: true,
+      bufferPages: true, // Nécessaire pour la numérotation des pages
       info: {
         Title: 'Management Monitoring - ATEX Equipment Report',
         Author: siteInfo.company_name,
@@ -4917,7 +4953,7 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       }
     });
 
-    doc.on('data', chunk => chunks.push(chunk));
+    doc.pipe(pdfWriteStream);
 
     const colors = {
       primary: '#00857C',
@@ -5365,10 +5401,11 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
         // === COLONNE DROITE: Photo équipement + Vignette plan ===
         let rightY = infoY;
 
-        // Photo de l'équipement (en haut à droite)
-        if (eq.photo_content && eq.photo_content.length > 0) {
+        // Photo de l'équipement (en haut à droite) - CHARGEMENT À LA DEMANDE
+        const photoContent = await loadEquipmentPhoto(eq.id);
+        if (photoContent && photoContent.length > 0) {
           try {
-            doc.image(eq.photo_content, rightColX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
+            doc.image(photoContent, rightColX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
             doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke('#e5e7eb');
           } catch (photoErr) {
             doc.rect(rightColX, rightY, imgWidth, imgHeight).stroke(colors.light);
@@ -5379,19 +5416,20 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
           doc.fontSize(7).fillColor(colors.muted).text('Pas de photo', rightColX + 30, rightY + 50, { lineBreak: false });
         }
 
-        // Vignette du plan avec localisation (à côté de la photo)
+        // Vignette du plan avec localisation (à côté de la photo) - CHARGEMENT À LA DEMANDE
         const planX = rightColX + imgWidth + 10;
-        if (position && (position.plan_thumbnail || position.plan_content)) {
+        const planThumbnailData = position ? await loadPlanThumbnail(position.logical_name, position.plan_id) : null;
+        if (position && planThumbnailData) {
           try {
             const planDisplayName = position.plan_display_name || 'Plan';
             let planThumbnail = null;
 
             // Utiliser le thumbnail pré-généré (PNG) avec marqueur de position
-            if (position.plan_thumbnail && position.plan_thumbnail.length > 0) {
+            if (planThumbnailData.length > 0) {
               const { loadImage } = await import('canvas');
-              const thumbnailBuffer = Buffer.isBuffer(position.plan_thumbnail)
-                ? position.plan_thumbnail
-                : Buffer.from(position.plan_thumbnail);
+              const thumbnailBuffer = Buffer.isBuffer(planThumbnailData)
+                ? planThumbnailData
+                : Buffer.from(planThumbnailData);
 
               const img = await loadImage(thumbnailBuffer);
               const canvas = createCanvas(img.width, img.height);
@@ -5422,20 +5460,9 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
               }
 
               planThumbnail = canvas.toBuffer('image/png');
-            } else if (position.plan_content) {
-              // Fallback: essayer de convertir le PDF (si pdfToImageWithMarker existe)
-              try {
-                planThumbnail = await pdfToImageWithMarker(
-                  position.plan_content,
-                  position.x_frac,
-                  position.y_frac,
-                  imgWidth * 2,
-                  planDisplayName
-                );
-              } catch (pdfErr) {
-                console.warn(`[DRPCE-Async] PDF conversion failed for ${eq.name}:`, pdfErr.message);
-              }
             }
+            // NOTE: Fallback plan_content supprimé pour économiser la mémoire
+            // Les plans sans thumbnail pré-généré n'auront pas de vignette
 
             if (planThumbnail) {
               doc.image(planThumbnail, planX, rightY, { fit: [imgWidth, imgHeight], align: 'center' });
@@ -5483,8 +5510,16 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
         ficheY += 330;
         processedCount++;
 
-        // Mettre à jour la progression toutes les 10 fiches
-        if (processedCount % 10 === 0) {
+        // Mettre à jour la progression et logger la mémoire toutes les 50 fiches
+        if (processedCount % 50 === 0) {
+          await pool.query(`UPDATE pending_reports SET progress = $1 WHERE id = $2`, [processedCount, reportId]);
+          const memUsage = process.memoryUsage();
+          console.log(`[DRPCE-Async] Progress: ${processedCount}/${equipments.length} - Memory: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`);
+          // Forcer le garbage collection si disponible (node --expose-gc)
+          if (global.gc) {
+            global.gc();
+          }
+        } else if (processedCount % 10 === 0) {
           await pool.query(`UPDATE pending_reports SET progress = $1 WHERE id = $2`, [processedCount, reportId]);
         }
       }
@@ -5498,14 +5533,16 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       doc.fontSize(8).fillColor(colors.muted).text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
     }
 
-    // Finaliser le PDF
+    // Finaliser le PDF - attendre que le fichier soit complètement écrit
     await new Promise((resolve, reject) => {
-      doc.on('end', resolve);
+      pdfWriteStream.on('finish', resolve);
+      pdfWriteStream.on('error', reject);
       doc.on('error', reject);
       doc.end();
     });
 
-    const pdfBuffer = Buffer.concat(chunks);
+    // Lire le PDF depuis le fichier temporaire
+    const pdfBuffer = await fsp.readFile(tempPdfPath);
     const pdfFilename = `Management_Monitoring_${(siteInfo.site_name || 'site').replace(/[^a-zA-Z0-9-_]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
 
     console.log(`[DRPCE-Async] PDF generated: ${pdfBuffer.length} bytes, ${totalPages} pages`);
@@ -5516,6 +5553,13 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       SET status = 'completed', pdf_content = $1, pdf_filename = $2, completed_at = NOW(), progress = $3
       WHERE id = $4
     `, [pdfBuffer, pdfFilename, equipments.length, reportId]);
+
+    // Nettoyer le fichier temporaire
+    try {
+      await fsp.unlink(tempPdfPath);
+    } catch (e) {
+      // Ignorer les erreurs de suppression
+    }
 
     // Envoyer une notification push à l'utilisateur
     if (userEmail) {
@@ -5539,6 +5583,18 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
 
   } catch (error) {
     console.error(`[DRPCE-Async] Error generating report ${reportId}:`, error);
+
+    // Nettoyer les fichiers temporaires en cas d'erreur
+    try {
+      const tempDir = os.tmpdir();
+      const tempFiles = await fsp.readdir(tempDir);
+      for (const file of tempFiles) {
+        if (file.startsWith(`drpce-${reportId}-`)) {
+          await fsp.unlink(path.join(tempDir, file)).catch(() => {});
+        }
+      }
+    } catch (cleanupErr) {}
+
     await pool.query(`
       UPDATE pending_reports SET status = 'error', error_message = $1, completed_at = NOW() WHERE id = $2
     `, [error.message, reportId]);
