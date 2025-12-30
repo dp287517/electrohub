@@ -5306,6 +5306,8 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
   const procedure = rows[0];
   const stepsCount = data.steps?.length || conversationPhotos.length;
 
+  console.log(`[Procedures] Finalize: ${stepsCount} steps to process, steps have photo field: ${data.steps?.some(s => s.photo)}`);
+
   // Add steps with photos
   if (data.steps && data.steps.length > 0) {
     for (let i = 0; i < data.steps.length; i++) {
@@ -5315,6 +5317,8 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
 
       // Try to link a photo to this step
       // Use photo from step data if available, otherwise use conversation photo
+      console.log(`[Procedures] Step ${i + 1}: step.photo=${step.photo}, step.has_photo=${step.has_photo}`);
+
       if (step.photo) {
         photoPath = step.photo;
       } else if (conversationPhotos[i]) {
@@ -5325,9 +5329,12 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
       if (photoPath) {
         try {
           const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+          console.log(`[Procedures] Step ${i + 1}: Trying to load photo from ${fullPath}`);
           if (fs.existsSync(fullPath)) {
             photoContent = await fsp.readFile(fullPath);
-            console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath}`);
+            console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath} (${photoContent.length} bytes)`);
+          } else {
+            console.log(`[Procedures] Step ${i + 1}: Photo file not found at ${fullPath}`);
           }
         } catch (e) {
           console.log(`[Procedures] Could not read photo for step ${i + 1}:`, e.message);
