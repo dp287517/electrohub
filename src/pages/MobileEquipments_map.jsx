@@ -1276,6 +1276,14 @@ export default function MobileEquipmentsMap() {
                 onReady={() => setPdfReady(true)}
               />
 
+              {/* PDF Loading overlay - shown while PDF is being rendered */}
+              {!pdfReady && (
+                <div className="absolute inset-0 bg-gray-100/90 flex flex-col items-center justify-center z-20 pointer-events-none">
+                  <RefreshCw size={32} className="animate-spin text-cyan-500 mb-3" />
+                  <p className="text-gray-600 text-sm">Chargement du plan...</p>
+                </div>
+              )}
+
               {/* Floating toolbar inside Leaflet */}
               <div className="absolute top-2 left-2 sm:top-3 sm:left-3 z-[5000] flex flex-col gap-2">
                 <button
