@@ -5739,8 +5739,12 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
     console.log(`[RAMS] Pre-generating AI analysis for procedure: ${procedure.title}`);
 
     // Get the steps we just created
+    // 🔧 PERF: Exclude photo_content BYTEA for AI analysis (not needed)
     const { rows: createdSteps } = await pool.query(
-      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      `SELECT id, procedure_id, step_number, title, description, instructions, warning,
+              duration_minutes, requires_validation, validation_criteria, photo_path,
+              (photo_content IS NOT NULL) AS has_photo, created_at, updated_at
+       FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
       [procedure.id]
     );
 
@@ -5970,8 +5974,12 @@ app.post("/api/procedures/:id/recover-photos", async (req, res) => {
     });
 
     // Get procedure steps
+    // 🔧 PERF: Exclude photo_content BYTEA (not needed for recovery matching)
     const { rows: steps } = await pool.query(
-      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      `SELECT id, procedure_id, step_number, title, description, instructions, warning,
+              duration_minutes, requires_validation, validation_criteria, photo_path,
+              (photo_content IS NOT NULL) AS has_photo, created_at, updated_at
+       FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
       [id]
     );
 
@@ -8525,8 +8533,12 @@ app.post("/api/procedures/ai/assist/start", async (req, res) => {
     const { rows: procedures } = await pool.query(
       `SELECT * FROM procedures WHERE id = $1`, [procedureId]
     );
+    // 🔧 PERF: Exclude photo_content BYTEA for AI session (not needed)
     const { rows: steps } = await pool.query(
-      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [procedureId]
+      `SELECT id, procedure_id, step_number, title, description, instructions, warning,
+              duration_minutes, requires_validation, validation_criteria, photo_path,
+              (photo_content IS NOT NULL) AS has_photo, created_at, updated_at
+       FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`, [procedureId]
     );
 
     const procedure = procedures[0];
@@ -8642,8 +8654,12 @@ app.post("/api/procedures/ai/assist/:sessionId", uploadPhoto.single("photo"), as
     const collectedData = session.collected_data || {};
 
     // Get steps
+    // 🔧 PERF: Exclude photo_content BYTEA for AI chat (not needed)
     const { rows: steps } = await pool.query(
-      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      `SELECT id, procedure_id, step_number, title, description, instructions, warning,
+              duration_minutes, requires_validation, validation_criteria, photo_path,
+              (photo_content IS NOT NULL) AS has_photo, created_at, updated_at
+       FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
       [session.procedure_id]
     );
 
