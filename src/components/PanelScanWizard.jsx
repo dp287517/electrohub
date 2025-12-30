@@ -71,6 +71,23 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
         </p>
       </div>
 
+      {/* Important: Listing photos instruction */}
+      <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4 mb-4">
+        <div className="flex items-start gap-3">
+          <div className="p-2 bg-amber-100 rounded-lg shrink-0">
+            <Grid3X3 size={20} className="text-amber-600" />
+          </div>
+          <div>
+            <h4 className="font-semibold text-amber-900 mb-1">Commencez par le LISTING !</h4>
+            <p className="text-sm text-amber-800">
+              Prenez d'abord en photo la <strong>feuille de listing/nomenclature</strong> du tableau
+              (document papier avec la liste des circuits). Cela permet de détecter correctement
+              le <strong>nombre de pôles</strong> (1P, 2P, 3P, 4P) de chaque appareil.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Source selection buttons */}
       <div className="flex gap-3 justify-center">
         <button
@@ -151,10 +168,11 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
           Conseils pour de meilleurs résultats
         </div>
         <ul className="space-y-1 text-blue-700">
-          <li>• Photographiez de face, bien droit</li>
-          <li>• Assurez un bon éclairage (pas de reflets)</li>
+          <li><strong>1. Photo du LISTING</strong> (document papier) - Pour les pôles et circuits</li>
+          <li><strong>2. Photos du TABLEAU</strong> - De face, bien droit, bon éclairage</li>
           <li>• Incluez toutes les rangées du tableau</li>
           <li>• Zoomez sur les zones avec petits caractères si besoin</li>
+          <li>• Évitez les reflets sur les plastiques</li>
         </ul>
       </div>
 
