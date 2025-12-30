@@ -5624,7 +5624,8 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     const devices = devicesRes.rows;
 
     const upstreamRes = await quickQuery(
-      `SELECT d.*, sb.name as source_board_name, sb.code as source_board_code
+      `SELECT d.id, d.name, d.reference, d.manufacturer, d.in_amps, d.icu_ka,
+              sb.name as source_board_name, sb.code as source_board_code
        FROM devices d
        JOIN switchboards sb ON d.switchboard_id = sb.id
        WHERE d.downstream_switchboard_id = $1`, [id]
@@ -5652,7 +5653,12 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     
     let upstreamText = "Source: Inconnue / Principale";
     if (upstreamDevices.length > 0) {
-      upstreamText = "Alimenté par: " + upstreamDevices.map(d => `${d.source_board_code} (${d.name})`).join(', ');
+      upstreamText = "Alimenté par: " + upstreamDevices.map(d => {
+        const breakerInfo = d.reference || d.manufacturer || '';
+        const ampsInfo = d.in_amps ? `${d.in_amps}A` : '';
+        const breakerDesc = [breakerInfo, ampsInfo].filter(Boolean).join(' ');
+        return `${d.source_board_code}${breakerDesc ? ` via ${breakerDesc}` : ''}`;
+      }).join(', ');
     } else if (board.is_principal) {
       upstreamText = "Type: Tableau Principal (TGBT)";
     }

@@ -416,12 +416,26 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
     timestamp: new Date().toISOString(),
   };
 
-  // Get main incoming device
-  const mainDevice = devices.find(d => d.is_main_incoming) || devices[0];
+  // Get main incoming device - ONLY use if explicitly marked, don't fallback to first device
+  const explicitMainDevice = devices.find(d => d.is_main_incoming);
+  const mainDevice = explicitMainDevice || devices[0];
+  const hasExplicitMain = !!explicitMainDevice;
 
   if (!mainDevice) {
     results.warnings.push('Aucun disjoncteur principal trouvé');
     return results;
+  }
+
+  // Check for upstream sources (fed from another board)
+  const hasUpstreamSources = switchboard.upstream_sources && switchboard.upstream_sources.length > 0;
+
+  if (!hasExplicitMain && devices.length > 0) {
+    if (hasUpstreamSources) {
+      const upstreamInfo = switchboard.upstream_sources.map(s => s.source_board_code).join(', ');
+      results.warnings.push(`Tableau alimenté par ${upstreamInfo} - cochez "Arrivée" sur le disjoncteur d'arrivée local pour une analyse de sélectivité complète`);
+    } else if (!switchboard.is_principal) {
+      results.warnings.push('Aucun disjoncteur d\'arrivée défini - cochez "Arrivée" sur le disjoncteur principal pour une analyse de sélectivité complète');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -485,8 +499,11 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
     // Find upstream device (parent or main)
     let upstream = null;
     if (device.parent_id) {
+      // Device has explicit parent - use it
       upstream = deviceMap.get(device.parent_id);
-    } else if (!device.is_main_incoming && mainDevice.id !== device.id) {
+    } else if (hasExplicitMain && !device.is_main_incoming && mainDevice.id !== device.id) {
+      // Only compare with main device if we have an explicit main (is_main_incoming)
+      // This prevents false selectivity warnings when no main breaker is defined
       upstream = mainDevice;
     }
 
