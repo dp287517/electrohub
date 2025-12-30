@@ -4035,6 +4035,35 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
 
     console.log(`[BULK CREATE] Processing ${devices.length} devices for switchboard ${switchboard_id}`);
 
+    // Helper function to parse in_amps from AI output (handles "250A", "C16", "C63", etc.)
+    const parseInAmps = (value) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') {
+        // Remove common suffixes/prefixes: "A", "C", "B", "D", "K", "Z" (curve types)
+        const cleaned = value.replace(/^[CBDKZ]/i, '').replace(/A$/i, '').trim();
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? null : num;
+      }
+      return null;
+    };
+
+    // Helper function to parse icu_ka (handles "6kA", "10000", etc.)
+    const parseIcuKa = (value) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') {
+        // Handle "6kA", "10kA", "6000", "10000"
+        let cleaned = value.replace(/kA$/i, '').replace(/A$/i, '').trim();
+        let num = parseFloat(cleaned);
+        if (isNaN(num)) return null;
+        // If value > 100, assume it's in Amps, convert to kA
+        if (num > 100) num = num / 1000;
+        return num;
+      }
+      return null;
+    };
+
     // Vérifier que le tableau existe
     const { rows: [board] } = await quickQuery(
       'SELECT id, name FROM switchboards WHERE id = $1 AND site = $2',
@@ -4067,16 +4096,17 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
 
           // Match par référence normalisée + ampérage
           const existingRefNorm = normalizeRef(e.reference);
+          const deviceAmps = parseInAmps(device.in_amps);
           if (existingRefNorm && deviceRefNorm &&
               existingRefNorm === deviceRefNorm &&
-              Number(e.in_amps) === Number(device.in_amps)) {
+              Number(e.in_amps) === deviceAmps) {
             return true;
           }
 
           // Match partiel sur référence (ex: "ic60n" contient dans "a9f74216ic60n")
           if (existingRefNorm && deviceRefNorm &&
               (existingRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(existingRefNorm)) &&
-              Number(e.in_amps) === Number(device.in_amps)) {
+              Number(e.in_amps) === deviceAmps) {
             return true;
           }
 
@@ -4125,9 +4155,9 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.device_type,
             device.manufacturer,
             device.reference,
-            device.in_amps,
-            device.icu_ka,
-            device.ics_ka,
+            parseInAmps(device.in_amps),
+            parseIcuKa(device.icu_ka),
+            parseIcuKa(device.ics_ka),
             device.poles,
             device.voltage_v,
             device.is_differential,
@@ -4162,9 +4192,9 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             device.device_type || 'Disjoncteur modulaire',
             device.manufacturer,
             device.reference,
-            device.in_amps,
-            device.icu_ka,
-            device.ics_ka,
+            parseInAmps(device.in_amps),
+            parseIcuKa(device.icu_ka),
+            parseIcuKa(device.ics_ka),
             device.poles || 1,
             device.voltage_v || 230,
             device.is_differential || false,
@@ -4197,7 +4227,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
                 manufacturer = COALESCE(EXCLUDED.manufacturer, scanned_products.manufacturer),
                 scan_count = scanned_products.scan_count + 1,
                 last_scanned_at = NOW()
-            `, [site, normalizedRef, device.manufacturer, device.in_amps, device.icu_ka, device.ics_ka, device.poles, device.voltage_v, device.curve_type]);
+            `, [site, normalizedRef, device.manufacturer, parseInAmps(device.in_amps), parseIcuKa(device.icu_ka), parseIcuKa(device.ics_ka), device.poles, device.voltage_v, device.curve_type]);
           } catch (e) {
             console.warn('[BULK CREATE] Cache error:', e.message);
           }
