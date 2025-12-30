@@ -2798,9 +2798,21 @@ export default function Switchboards() {
                         {selectedBoard.upstream_sources?.length > 0 && (
                           <div className="mt-1">
                             {selectedBoard.upstream_sources.map(source => (
-                              <span key={source.id} className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2">
+                              <button
+                                key={source.id}
+                                onClick={() => {
+                                  setSearchParams(prev => {
+                                    const next = new URLSearchParams(prev);
+                                    next.set('board', source.source_switchboard_id);
+                                    return next;
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2 hover:bg-amber-100 transition-colors cursor-pointer"
+                                title={`Aller vers ${source.source_board_name}`}
+                              >
                                 ← {source.source_board_code}
-                              </span>
+                                {source.in_amps && <span className="text-amber-600 font-medium">{source.in_amps}A</span>}
+                              </button>
                             ))}
                           </div>
                         )}
