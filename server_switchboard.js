@@ -2849,25 +2849,32 @@ MISSION CRITIQUE: Analyser la/les photo(s) d'un tableau électrique et identifie
 
 🚨🚨🚨 RÈGLE CRITIQUE - ANALYSE INDIVIDUELLE OBLIGATOIRE 🚨🚨🚨
 
-⛔ INTERDICTION ABSOLUE DE COPIER-COLLER ⛔
-Si tu mets le MÊME calibre (ex: "C16") pour plusieurs disjoncteurs de même référence (ex: C60N),
-c'est une ERREUR GRAVE. Sur un tableau réel, les calibres VARIENT TOUJOURS !
+⛔ CE QUE TU DOIS FAIRE:
+Lis le CALIBRE IMPRIMÉ sur la face avant de CHAQUE disjoncteur séparément.
+Rapporte EXACTEMENT ce que tu vois, même si ça donne des répétitions !
 
-OBLIGATION:
-1. Regarde CHAQUE disjoncteur UN PAR UN dans l'image
-2. Lis le CALIBRE IMPRIMÉ sur SA face avant (C10, C13, C16, C20, C32...)
-3. Si tu ne peux pas lire clairement, mets confidence="low" et note "calibre illisible"
-4. Le visual_evidence DOIT ÊTRE UNIQUE pour chaque appareil - jamais identique !
+✅ EXEMPLES VALIDES (répétitions légitimes OK):
+- C16, C16, C13, C16, C20 → OK (plusieurs C16 c'est normal)
+- C13, C13, C13, C10, C16 → OK (3x C13 consécutifs = possible pour éclairage)
+- C20, C20, C20, C20, C32 → OK (4x C20 pour circuits prises)
+- C10, C10, C10, C10, C10, C16 → OK (5x C10 pour éclairage = COURANT !)
 
-RÉALITÉ TERRAIN (très important):
-- Sur 10 disjoncteurs C60N, tu auras typiquement: C16, C10, C13, C16, C20, C13, C16, C32, C10, C16
-- JAMAIS 10x C16 ! Si tu vois ça, tu as fait du copier-coller = ERREUR
-- Les calibres 13A et 6A sont COURANTS (éclairage), pas seulement 16A ou 20A
+❌ CE QUI EST SUSPECT (probable erreur):
+- 15+ disjoncteurs TOUS avec le MÊME calibre sans variation → Improbable, vérifie bien !
+- TOUS les visual_evidence textuellement identiques → Tu n'as pas regardé chaque appareil
 
-TEST DE QUALITÉ:
-- Si tous tes disjoncteurs de même référence ont le même calibre → Tu as échoué
-- Si tous tes visual_evidence sont identiques → Tu as échoué
-- Chaque appareil doit avoir une description UNIQUE de ce que tu as lu dessus
+OBLIGATION pour CHAQUE disjoncteur:
+1. Regarde SA face avant spécifiquement dans l'image
+2. Lis SON calibre imprimé (C6, C10, C13, C16, C20, C25, C32, C40, C50, C63...)
+3. Si ILLISIBLE sur la photo, mets confidence="low" et visual_evidence="ILLISIBLE - [raison]"
+4. Décris dans visual_evidence ce que tu as VU sur CET appareil précis
+
+RÉALITÉ TERRAIN:
+- 2, 3, 4 ou même 5 disjoncteurs consécutifs avec le même calibre = TRÈS NORMAL
+- Circuits éclairage: souvent C10 ou C13 en série
+- Circuits prises: souvent C16 ou C20 en série
+- Gros consommateurs: C32, C40 pour plaques, fours, etc.
+- Ce qui est SUSPECT: 10+ sur 10 identiques ET visual_evidence copiés
 
 ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
 - Lis les ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur (ex: "1", "Q1", "11F1", "FI 11F1.A")
