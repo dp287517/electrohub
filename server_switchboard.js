@@ -4108,7 +4108,98 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
       }
     }
 
+    // ============================================================
+    // PHASE 6: Cross-validation listing vs panel photos
+    // ============================================================
     job.progress = 85;
+    job.message = 'Validation croisée listing / photos...';
+
+    let listingValidation = { used: false, matches: 0, mismatches: 0, corrections: 0 };
+
+    if (listingData && listingData.length > 0) {
+      console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+      console.log(`[PANEL SCAN] PHASE 6: Cross-Validation Listing vs Panel Photos`);
+      console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+
+      listingValidation.used = true;
+      listingValidation.listing_entries = listingData.length;
+
+      // Build listing lookup by position
+      const listingByPosition = {};
+      for (const entry of listingData) {
+        if (entry.position) {
+          listingByPosition[entry.position] = entry;
+        }
+      }
+
+      let validationMatches = 0;
+      let validationMismatches = 0;
+      let validationCorrections = [];
+
+      result.devices = result.devices.map(device => {
+        const position = device.position_label || device.position;
+        const listingEntry = listingByPosition[position];
+
+        if (!listingEntry) {
+          return device; // No listing data for this position
+        }
+
+        const validation = {
+          position,
+          listing: { poles: listingEntry.poles, in_amps: listingEntry.in_amps },
+          panel_ai: { poles: device.poles, in_amps: device.in_amps },
+          matches: { poles: true, in_amps: true },
+          corrected: false
+        };
+
+        // Check poles mismatch
+        if (listingEntry.poles && device.poles && listingEntry.poles !== device.poles) {
+          validation.matches.poles = false;
+          validationMismatches++;
+          console.log(`[PANEL SCAN] ⚠️  POLES MISMATCH ${position}: listing=${listingEntry.poles}P, panel=${device.poles}P → Using listing`);
+          device.poles = listingEntry.poles; // Listing is authoritative for poles
+          device.poles_source = 'listing';
+          validation.corrected = true;
+        } else if (listingEntry.poles) {
+          device.poles = listingEntry.poles;
+          device.poles_source = 'listing_confirmed';
+        }
+
+        // Check in_amps mismatch (tolerate small differences)
+        const listingAmps = parseInt(listingEntry.in_amps);
+        const panelAmps = parseInt(device.in_amps);
+        if (listingAmps && panelAmps && listingAmps !== panelAmps) {
+          validation.matches.in_amps = false;
+          validationMismatches++;
+          console.log(`[PANEL SCAN] ⚠️  AMPS MISMATCH ${position}: listing=${listingAmps}A, panel=${panelAmps}A → Keep panel (photo is authoritative)`);
+          // For amps, the physical panel photo is more authoritative
+          device.in_amps_listing = listingAmps;
+          device.in_amps_mismatch = true;
+        } else if (listingAmps && !panelAmps) {
+          // Panel didn't detect, use listing
+          device.in_amps = listingAmps;
+          device.in_amps_source = 'listing';
+        }
+
+        if (validation.matches.poles && validation.matches.in_amps) {
+          validationMatches++;
+        }
+
+        // Add designation from listing if missing
+        if (!device.circuit_name && listingEntry.designation) {
+          device.circuit_name = listingEntry.designation;
+        }
+
+        device.validation = validation;
+        return device;
+      });
+
+      listingValidation.matches = validationMatches;
+      listingValidation.mismatches = validationMismatches;
+      console.log(`[PANEL SCAN] Cross-validation: ${validationMatches} matches, ${validationMismatches} corrections`);
+    }
+
+    job.progress = 88;
     job.message = 'Vérification des appareils existants...';
 
     // Charger les appareils existants du tableau pour marquer lesquels seront mis à jour vs créés
@@ -4184,12 +4275,13 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     job.result = {
       ...result,
       photos_analyzed: images.length,
-      analysis_version: '1.1',
+      analysis_version: '1.2',
       summary: {
         total_detected: deviceCount,
         will_create: willCreateCount,
         will_update: willUpdateCount,
-        existing_in_switchboard: existingDevices.length
+        existing_in_switchboard: existingDevices.length,
+        listing_validation: listingValidation
       }
     };
     job.completed_at = Date.now();
