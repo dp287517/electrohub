@@ -82,6 +82,7 @@ let poolStats = {
 // KEEPALIVE - Empêche les cold starts Neon (ping toutes les 4 min)
 // ============================================================
 let keepaliveInterval = null;
+let selfPingInterval = null;
 
 function startKeepalive() {
   if (keepaliveInterval) return;
@@ -100,6 +101,48 @@ function startKeepalive() {
   }, 4 * 60 * 1000); // Toutes les 4 minutes
 
   console.log('[SWITCHBOARD] Keepalive started (4min interval)');
+}
+
+// ============================================================
+// SELF-PING: Keep server awake during active scans
+// Render free tier sleeps after 15min of inactivity
+// ============================================================
+function startSelfPing() {
+  if (selfPingInterval) return;
+
+  const port = process.env.SWITCHBOARD_PORT || 3003;
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
+
+  selfPingInterval = setInterval(async () => {
+    // Count active jobs
+    let activeJobs = 0;
+    for (const [, job] of panelScanJobs) {
+      if (job.status === 'pending' || job.status === 'analyzing') {
+        activeJobs++;
+      }
+    }
+
+    // Only ping if there are active jobs
+    if (activeJobs > 0) {
+      try {
+        const response = await fetch(`${selfUrl}/api/switchboard/health`);
+        if (response.ok) {
+          console.log(`[SELF-PING] Server kept awake (${activeJobs} active job(s))`);
+        }
+      } catch (e) {
+        // Ignore errors - might be localhost in dev
+      }
+    }
+  }, 30 * 1000); // Every 30 seconds
+
+  console.log('[SWITCHBOARD] Self-ping started (30s interval when jobs active)');
+}
+
+function stopSelfPing() {
+  if (selfPingInterval) {
+    clearInterval(selfPingInterval);
+    selfPingInterval = null;
+  }
 }
 
 // ============================================================
@@ -6670,6 +6713,9 @@ app.listen(port, () => {
 
   // ✅ Démarrer le keepalive pour éviter les cold starts Neon
   startKeepalive();
+
+  // ✅ Démarrer le self-ping pour garder le serveur actif pendant les scans
+  startSelfPing();
 
   // ✅ Warm up la connexion DB au démarrage
   pool.query('SELECT 1').then(async () => {
