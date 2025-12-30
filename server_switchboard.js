@@ -558,6 +558,26 @@ async function ensureSchema() {
     -- Index pour recherche par site + switchboard (multi-tenant)
     CREATE INDEX IF NOT EXISTS idx_devices_site_switchboard ON devices(site, switchboard_id);
 
+    -- ✅ CONTRAINTE UNIQUE: Pas de doublons de position par tableau
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'devices_switchboard_position_unique'
+      ) THEN
+        -- Nettoyer les doublons existants avant d'ajouter la contrainte
+        DELETE FROM devices a USING devices b
+        WHERE a.id < b.id
+          AND a.switchboard_id = b.switchboard_id
+          AND a.position_number = b.position_number
+          AND a.position_number IS NOT NULL;
+        -- Ajouter la contrainte
+        ALTER TABLE devices ADD CONSTRAINT devices_switchboard_position_unique
+          UNIQUE (switchboard_id, position_number);
+      END IF;
+    EXCEPTION WHEN others THEN
+      -- Ignore si la contrainte existe déjà ou si le nettoyage échoue
+      NULL;
+    END $$;
+
     -- =======================================================
     -- TABLE: Site Settings
     -- =======================================================
@@ -4454,7 +4474,69 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         const parsedIcu = parseIcuKa(device.icu_ka);
         const parsedIcs = parseIcuKa(device.ics_ka);
 
-        // Déterminer le type de déclencheur automatiquement si non fourni
+        // ============================================================
+        // INFÉRENCE DES PÔLES - Basée sur width_modules et référence
+        // ============================================================
+        const inferPoles = (dev) => {
+          // Si déjà renseigné et valide
+          const rawPoles = typeof dev.poles === 'number' ? dev.poles :
+                          typeof dev.poles === 'string' ? parseInt(dev.poles) : null;
+          if (rawPoles && rawPoles >= 1 && rawPoles <= 4) {
+            return rawPoles;
+          }
+
+          // Inférer depuis width_modules (méthode la plus fiable)
+          const width = dev.width_modules;
+          if (width) {
+            // 1 module = 1P, 2 modules = 1P+N ou 2P, 3 modules = 3P, 4 modules = 3P+N ou 4P
+            if (width === 1) return 1;
+            if (width === 2) return 2; // 1P+N compte comme 2P
+            if (width === 3) return 3;
+            if (width >= 4) return 4;
+          }
+
+          // Inférer depuis la référence du produit
+          const ref = (dev.reference || '').toUpperCase();
+          // Références Schneider avec indication de pôles
+          if (ref.match(/3P\+N|4P|3PN/)) return 4;
+          if (ref.match(/3P(?!N)/)) return 3;
+          if (ref.match(/2P|1P\+N|1PN/)) return 2;
+          if (ref.match(/1P(?!N)/)) return 1;
+
+          // Inférer depuis la tension
+          const voltage = dev.voltage_v;
+          if (voltage === 400 || voltage === '400' || voltage === '400V') return 3; // Triphasé = minimum 3P
+          if (voltage === 230 || voltage === '230' || voltage === '230V') return 1; // Monophasé = 1P par défaut
+
+          // Défaut pour disjoncteurs modulaires: 1P (le plus courant)
+          const deviceType = (dev.device_type || '').toLowerCase();
+          if (deviceType.includes('disjoncteur') && !deviceType.includes('différentiel')) {
+            return 1;
+          }
+          // Interrupteurs différentiels: généralement 2P ou 4P
+          if (deviceType.includes('différentiel') || deviceType.includes('inter diff')) {
+            return 2;
+          }
+
+          return 1; // Défaut ultime
+        };
+
+        // ============================================================
+        // INFÉRENCE DE LA TENSION - Basée sur les pôles
+        // ============================================================
+        const inferVoltage = (dev, poles) => {
+          const rawVoltage = typeof dev.voltage_v === 'number' ? dev.voltage_v :
+                            typeof dev.voltage_v === 'string' ? parseInt(dev.voltage_v) : null;
+          if (rawVoltage && rawVoltage > 0) return rawVoltage;
+
+          // Inférer depuis les pôles
+          if (poles >= 3) return 400; // Triphasé
+          return 230; // Monophasé
+        };
+
+        // ============================================================
+        // INFÉRENCE DU TYPE DE DÉCLENCHEUR
+        // ============================================================
         const inferTripUnit = (dev) => {
           if (dev.trip_unit) return dev.trip_unit;
           const deviceType = (dev.device_type || '').toLowerCase();
@@ -4485,19 +4567,33 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           return null;
         };
 
+        // Inférer les pôles d'abord (nécessaire pour la tension)
+        const inferredPoles = inferPoles(device);
+        const inferredVoltage = inferVoltage(device, inferredPoles);
+
         const parsedDevice = {
           ...device,
           in_amps: parseInAmps(device.in_amps),
           icu_ka: parsedIcu,
-          // Ics = Icu pour les modulaires (100%), sinon utiliser la valeur fournie
+          // Ics = Icu pour tous les disjoncteurs (100% pour modulaires)
           ics_ka: parsedIcs || parsedIcu,
-          poles: typeof device.poles === 'number' ? device.poles :
-                 typeof device.poles === 'string' ? parseInt(device.poles) || null : null,
-          voltage_v: typeof device.voltage_v === 'number' ? device.voltage_v :
-                     typeof device.voltage_v === 'string' ? parseInt(device.voltage_v) || null : null,
-          // Type de déclencheur - inférer si non fourni
+          // Pôles inférés intelligemment
+          poles: inferredPoles,
+          // Tension basée sur les pôles
+          voltage_v: inferredVoltage,
+          // Type de déclencheur inféré
           trip_unit: inferTripUnit(device),
         };
+
+        // ============================================================
+        // VALIDATION - Ne pas créer de devices complètement vides
+        // ============================================================
+        const hasMinimumData = parsedDevice.manufacturer || parsedDevice.reference ||
+                               parsedDevice.in_amps || parsedDevice.device_type;
+        if (!hasMinimumData) {
+          console.log(`[BULK CREATE] Skipping empty device at position ${positionNumber}`);
+          continue; // Skip this device
+        }
 
         // Log pour debug
         if (i < 5 || parsedDevice.in_amps !== parseInAmps(device.in_amps)) {
@@ -4593,6 +4689,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           updatedDevices.push(updated);
         } else {
           // Créer un nouvel appareil - utiliser parsedDevice !
+          // ON CONFLICT pour éviter les doublons de position
           const newDeviceComplete = checkDeviceComplete(parsedDevice);
           const { rows: [created] } = await quickQuery(`
             INSERT INTO devices (
@@ -4601,7 +4698,25 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               is_differential, position_number, is_complete,
               curve_type, differential_sensitivity_ma, differential_type, trip_unit, settings
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-            RETURNING *
+            ON CONFLICT (switchboard_id, position_number) DO UPDATE SET
+              name = COALESCE(EXCLUDED.name, devices.name),
+              device_type = COALESCE(EXCLUDED.device_type, devices.device_type),
+              manufacturer = COALESCE(EXCLUDED.manufacturer, devices.manufacturer),
+              reference = COALESCE(EXCLUDED.reference, devices.reference),
+              in_amps = COALESCE(EXCLUDED.in_amps, devices.in_amps),
+              icu_ka = COALESCE(EXCLUDED.icu_ka, devices.icu_ka),
+              ics_ka = COALESCE(EXCLUDED.ics_ka, devices.ics_ka),
+              poles = COALESCE(EXCLUDED.poles, devices.poles),
+              voltage_v = COALESCE(EXCLUDED.voltage_v, devices.voltage_v),
+              is_differential = COALESCE(EXCLUDED.is_differential, devices.is_differential),
+              is_complete = EXCLUDED.is_complete,
+              curve_type = COALESCE(EXCLUDED.curve_type, devices.curve_type),
+              differential_sensitivity_ma = COALESCE(EXCLUDED.differential_sensitivity_ma, devices.differential_sensitivity_ma),
+              differential_type = COALESCE(EXCLUDED.differential_type, devices.differential_type),
+              trip_unit = COALESCE(EXCLUDED.trip_unit, devices.trip_unit),
+              settings = EXCLUDED.settings,
+              updated_at = NOW()
+            RETURNING *, (xmax = 0) AS inserted
           `, [
             site,
             switchboard_id,
@@ -4612,8 +4727,8 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             parsedDevice.in_amps,
             parsedDevice.icu_ka,
             parsedDevice.ics_ka,
-            parsedDevice.poles || 1,
-            parsedDevice.voltage_v || 230,
+            parsedDevice.poles,
+            parsedDevice.voltage_v,
             parsedDevice.is_differential || false,
             positionNumber,
             newDeviceComplete,
@@ -4627,8 +4742,13 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               source: 'panel_scan'
             })
           ]);
-          console.log(`[BULK CREATE] Created new device at position ${positionNumber} (complete: ${newDeviceComplete})`);
-          createdDevices.push(created);
+          if (created.inserted) {
+            console.log(`[BULK CREATE] Created new device at position ${positionNumber} (complete: ${newDeviceComplete})`);
+            createdDevices.push(created);
+          } else {
+            console.log(`[BULK CREATE] Updated existing device at position ${positionNumber} via ON CONFLICT`);
+            updatedDevices.push(created);
+          }
         }
 
         // Sauvegarder dans le cache des produits scannés si référence complète
