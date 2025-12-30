@@ -356,7 +356,13 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
 app.get('/api/hv/equipments/:id/devices', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
-    const r = await pool.query(`SELECT * FROM hv_devices WHERE hv_equipment_id=$1 AND site=$2 ORDER BY id ASC`, [Number(req.params.id), site]);
+    const r = await pool.query(`
+      SELECT id, site, hv_equipment_id, parent_id, downstream_hv_equipment_id, downstream_device_id,
+             name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka,
+             insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings,
+             is_main_incoming, created_at, updated_at,
+             COALESCE(array_length(photos, 1), 0) AS photos_count
+      FROM hv_devices WHERE hv_equipment_id=$1 AND site=$2 ORDER BY id ASC`, [Number(req.params.id), site]);
     res.json(r.rows);
   } catch (e) { res.status(500).json({ error: 'Devices list failed', details: e.message }); }
 });
@@ -369,7 +375,11 @@ app.post('/api/hv/equipments/:id/devices', async (req, res) => {
     if (!body.device_type) return res.status(400).json({ error: 'Device type is required' });
     const r = await pool.query(`
       INSERT INTO hv_devices (site,hv_equipment_id,parent_id,downstream_hv_equipment_id,downstream_device_id,name,device_type,manufacturer,reference,voltage_class_kv,short_circuit_current_ka,insulation_type,mechanical_endurance_class,electrical_endurance_class,poles,settings,is_main_incoming)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      RETURNING id, site, hv_equipment_id, parent_id, downstream_hv_equipment_id, downstream_device_id,
+                name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka,
+                insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings,
+                is_main_incoming, created_at, updated_at, 0 AS photos_count`,
       [site, hv_equipment_id, body.parent_id ?? null, body.downstream_hv_equipment_id ?? null, body.downstream_device_id ?? null, body.name ?? null, body.device_type, body.manufacturer ?? null, body.reference ?? null, body.voltage_class_kv ?? null, body.short_circuit_current_ka ?? null, body.insulation_type ?? null, body.mechanical_endurance_class ?? null, body.electrical_endurance_class ?? null, body.poles ?? null, body.settings || {}, body.is_main_incoming ?? false]
     );
     res.status(201).json(r.rows[0]);
@@ -386,7 +396,11 @@ app.put('/api/hv/devices/:id', async (req, res) => {
         name=$3, device_type=$4, manufacturer=$5, reference=$6, voltage_class_kv=$7, short_circuit_current_ka=$8,
         insulation_type=$9, mechanical_endurance_class=$10, electrical_endurance_class=$11, poles=$12, settings=$13,
         is_main_incoming=$14, parent_id=$15, downstream_hv_equipment_id=$16, downstream_device_id=$17, updated_at=NOW()
-      WHERE id=$1 AND site=$2 RETURNING *`,
+      WHERE id=$1 AND site=$2
+      RETURNING id, site, hv_equipment_id, parent_id, downstream_hv_equipment_id, downstream_device_id,
+                name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka,
+                insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings,
+                is_main_incoming, created_at, updated_at, COALESCE(array_length(photos, 1), 0) AS photos_count`,
       [Number(req.params.id), site, body.name ?? null, body.device_type, body.manufacturer ?? null, body.reference ?? null, body.voltage_class_kv ?? null, body.short_circuit_current_ka ?? null, body.insulation_type ?? null, body.mechanical_endurance_class ?? null, body.electrical_endurance_class ?? null, body.poles ?? null, body.settings || {}, body.is_main_incoming ?? false, body.parent_id ?? null, body.downstream_hv_equipment_id ?? null, body.downstream_device_id ?? null]
     );
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });

@@ -2008,8 +2008,15 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid device ID' });
 
+    // 🔧 Exclure photos BYTEA[] et pv_tests BYTEA pour éviter latence
     const r = await quickQuery(
-      `SELECT d.*, s.name as switchboard_name, s.code as switchboard_code,
+      `SELECT d.id, d.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id, d.name,
+              d.device_type, d.manufacturer, d.reference, d.in_amps, d.icu_ka, d.ics_ka, d.poles,
+              d.voltage_v, d.trip_unit, d.position_number, d.is_differential, d.is_complete,
+              d.settings, d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
+              COALESCE(array_length(d.photos, 1), 0) AS photos_count,
+              (d.pv_tests IS NOT NULL) AS has_pv_tests,
+              s.name as switchboard_name, s.code as switchboard_code,
               sb_down.name as downstream_switchboard_name, sb_down.code as downstream_switchboard_code
        FROM devices d
        JOIN switchboards s ON d.switchboard_id = s.id
@@ -5483,9 +5490,16 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
     
     const buildTree = async (switchboardId, depth = 0) => {
       if (depth > MAX_DEPTH) return { switchboard_id: switchboardId, devices: [], truncated: true };
-      
+
+      // 🔧 Exclure photos BYTEA[] et pv_tests BYTEA pour éviter latence
       const { rows: devs } = await quickQuery(
-        'SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST', 
+        `SELECT id, site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type,
+                manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
+                position_number, is_differential, is_complete, settings, is_main_incoming,
+                diagram_data, created_at, updated_at,
+                COALESCE(array_length(photos, 1), 0) AS photos_count,
+                (pv_tests IS NOT NULL) AS has_pv_tests
+         FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST`,
         [switchboardId]
       );
       
@@ -5688,12 +5702,24 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
 
-    const boardRes = await quickQuery(`SELECT * FROM switchboards WHERE id = $1 AND site = $2`, [id, site]);
+    // 🔧 Exclure photo BYTEA pour éviter latence
+    const boardRes = await quickQuery(
+      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
+              modes, quality, diagram_data, device_count, complete_count, created_at, updated_at,
+              (photo IS NOT NULL) AS has_photo
+       FROM switchboards WHERE id = $1 AND site = $2`, [id, site]);
     if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
     const board = boardRes.rows[0];
 
+    // 🔧 Exclure photos BYTEA[] et pv_tests BYTEA pour éviter latence
     const devicesRes = await quickQuery(
-      `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
+      `SELECT d.id, d.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id, d.name,
+              d.device_type, d.manufacturer, d.reference, d.in_amps, d.icu_ka, d.ics_ka, d.poles,
+              d.voltage_v, d.trip_unit, d.position_number, d.is_differential, d.is_complete,
+              d.settings, d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
+              COALESCE(array_length(d.photos, 1), 0) AS photos_count,
+              (d.pv_tests IS NOT NULL) AS has_pv_tests,
+              sb_down.name as downstream_name, sb_down.code as downstream_code
        FROM devices d
        LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
        WHERE d.switchboard_id = $1
