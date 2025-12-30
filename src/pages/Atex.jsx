@@ -191,6 +191,9 @@ export default function Atex() {
   // 🆕 Sélection équipement pour highlight sur carte
   const [selectedEquipmentId, setSelectedEquipmentId] = useState(null);
 
+  // 🟣 Équipements récemment dupliqués (pour affichage violet)
+  const [recentDuplicates, setRecentDuplicates] = useState(new Set());
+
   // Toast
   const [toast, setToast] = useState("");
 
@@ -637,6 +640,18 @@ export default function Atex() {
     try {
       const result = await api.atex.duplicateEquipment(editing.id, { copy_position: false });
       if (result?.equipment) {
+        // 🟣 Marquer comme récemment dupliqué pour affichage violet
+        const newId = result.equipment.id;
+        setRecentDuplicates(prev => new Set([...prev, newId]));
+        // Auto-effacer le highlight violet après 30 secondes
+        setTimeout(() => {
+          setRecentDuplicates(prev => {
+            const next = new Set(prev);
+            next.delete(newId);
+            return next;
+          });
+        }, 30000);
+
         // Fermer le drawer actuel et ouvrir le nouvel équipement
         closeEdit();
         await reload();
@@ -1319,6 +1334,7 @@ export default function Atex() {
             loading={loading}
             onOpenEquipment={openEdit}
             onGoToMap={goToEquipmentOnMap}
+            recentDuplicates={recentDuplicates}
           />
         )}
 
@@ -2366,7 +2382,7 @@ function AnalyticsTab({ items, stats, loading }) {
 // EQUIPMENTS TAB - Avec arborescence Bâtiment > Zone > Équipement
 // ============================================================
 
-function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
+function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDuplicates = new Set() }) {
   const statusLabel = (st) => {
     if (st === "a_faire") return "À faire";
     if (st === "en_cours_30") return "En cours";
@@ -2430,19 +2446,22 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
   }
 
   // 🆕 Composant carte équipement compact
-  const EquipmentCard = ({ eq }) => (
-    <div className="bg-white border rounded-xl p-3 shadow-sm hover:shadow-md transition-all">
+  // 🟣 Violet pour équipements récemment dupliqués
+  const EquipmentCard = ({ eq }) => {
+    const isDuplicate = recentDuplicates.has(eq.id);
+    return (
+    <div className={`border rounded-xl p-3 shadow-sm hover:shadow-md transition-all ${isDuplicate ? "bg-violet-50 border-violet-300 ring-2 ring-violet-400" : "bg-white"}`}>
       <div className="flex items-start gap-3">
-        <div className="w-12 h-12 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
+        <div className={`w-12 h-12 rounded-lg border overflow-hidden flex items-center justify-center shrink-0 ${isDuplicate ? "bg-violet-100 border-violet-300" : "bg-gray-100"}`}>
           {eq.photo_url ? (
             <img src={api.atex.photoUrl(eq.id, { thumb: true, bust: false })} alt="" loading="lazy" className="w-full h-full object-cover" />
           ) : (
-            <span className="text-gray-400 text-xl">🔥</span>
+            <span className={`text-xl ${isDuplicate ? "text-violet-500" : "text-gray-400"}`}>{isDuplicate ? "✨" : "🔥"}</span>
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <button className="text-blue-600 font-semibold hover:underline text-left truncate w-full text-sm" onClick={() => onOpenEquipment(eq)}>
-            {eq.name || eq.type || "Équipement"}
+          <button className={`font-semibold hover:underline text-left truncate w-full text-sm ${isDuplicate ? "text-violet-700" : "text-blue-600"}`} onClick={() => onOpenEquipment(eq)}>
+            {eq.name || eq.type || "Équipement"} {isDuplicate && <span className="text-xs font-normal">(dupliqué)</span>}
           </button>
           <div className="flex flex-wrap gap-1 mt-1">
             {eq.zoning_gas != null && <Badge color="orange">Gaz {eq.zoning_gas}</Badge>}
@@ -2468,6 +2487,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
       </div>
     </div>
   );
+  };
 
   // 🆕 Vue arborescence (comme PlansTab)
   return (
