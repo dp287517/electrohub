@@ -8123,6 +8123,7 @@ app.get("/api/auth/check-status", async (req, res) => {
    🔵 Unified Recent Activity - Aggregates from ALL audit tables
    ================================================================ */
 app.get("/api/dashboard/activities", async (req, res) => {
+  console.log(`[DASHBOARD ACTIVITIES] 🔵 Request received`);
   try {
     const limit = Math.min(parseInt(req.query.limit) || 30, 100);
     const activities = [];
@@ -8132,6 +8133,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
       try {
         // Try with 'ts' first (lib/audit-trail.js schema), then 'created_at' (manual schema)
         let rows;
+        let usedColumn = 'ts';
         try {
           const result = await pool.query(`
             SELECT * FROM ${tableName}
@@ -8141,6 +8143,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
           rows = result.rows;
         } catch (tsError) {
           // Try with created_at instead
+          usedColumn = 'created_at';
           const result = await pool.query(`
             SELECT *, created_at as ts FROM ${tableName}
             ORDER BY created_at DESC
@@ -8148,9 +8151,11 @@ app.get("/api/dashboard/activities", async (req, res) => {
           `);
           rows = result.rows;
         }
+        console.log(`[DASHBOARD ACTIVITIES]   📋 ${tableName}: ${rows.length} rows (using ${usedColumn})`);
         return rows.map(mapper);
       } catch (e) {
         // Table might not exist
+        console.log(`[DASHBOARD ACTIVITIES]   ⚠️ ${tableName}: table not found or error - ${e.message}`);
         return [];
       }
     };
@@ -8407,6 +8412,8 @@ app.get("/api/dashboard/activities", async (req, res) => {
     // 10. Panel Scan Jobs - Completed AI scans
     try {
       const userEmail = req.headers['x-user-email'] || req.query.email;
+      console.log(`[DASHBOARD ACTIVITIES]   🔍 Querying panel_scan_jobs (userEmail: ${userEmail || 'none'})`);
+
       const { rows: panelScans } = await pool.query(`
         SELECT id, site, switchboard_id, user_email, status, progress, message,
                photos_count, result, error, created_at, completed_at
@@ -8417,11 +8424,16 @@ app.get("/api/dashboard/activities", async (req, res) => {
         LIMIT 15
       `);
 
+      console.log(`[DASHBOARD ACTIVITIES]   📷 panel_scan_jobs: ${panelScans.length} completed scans found`);
+
+      let addedScans = 0;
       for (const scan of panelScans) {
+        console.log(`[DASHBOARD ACTIVITIES]     - Scan ${scan.id}: status="${scan.status}", completed_at=${scan.completed_at}`);
         const isSuccess = scan.status === 'completed';
         const deviceCount = scan.result?.devices?.length || scan.result?.length || 0;
 
         if (isSuccess) {
+          addedScans++;
           activities.push({
             id: `scan-${scan.id}`,
             type: 'panel_scan_complete',
@@ -8436,6 +8448,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
             actionRequired: scan.user_email === userEmail // Only action required for the user who launched it
           });
         } else if (scan.status === 'failed') {
+          addedScans++;
           activities.push({
             id: `scan-${scan.id}`,
             type: 'panel_scan_failed',
@@ -8448,8 +8461,11 @@ app.get("/api/dashboard/activities", async (req, res) => {
             icon: '❌',
             color: 'red'
           });
+        } else {
+          console.log(`[DASHBOARD ACTIVITIES]     ⚠️ Scan ${scan.id} skipped: unexpected status "${scan.status}"`);
         }
       }
+      console.log(`[DASHBOARD ACTIVITIES]   ✅ Added ${addedScans} panel scan activities`);
 
       // Also check for in-progress scans for action_required
       const { rows: inProgressScans } = await pool.query(`
@@ -8461,6 +8477,8 @@ app.get("/api/dashboard/activities", async (req, res) => {
         ORDER BY created_at DESC
         LIMIT 5
       `, [userEmail || '']);
+
+      console.log(`[DASHBOARD ACTIVITIES]   ⏳ In-progress scans: ${inProgressScans.length}`);
 
       for (const scan of inProgressScans) {
         actionRequired.push({
@@ -8478,11 +8496,14 @@ app.get("/api/dashboard/activities", async (req, res) => {
         });
       }
     } catch (e) {
-      console.log('[dashboard/activities] Panel scan query skipped:', e.message);
+      console.log(`[DASHBOARD ACTIVITIES]   ❌ Panel scan query error: ${e.message}`);
     }
 
     // Sort by timestamp descending
     activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    console.log(`[DASHBOARD ACTIVITIES] 📊 FINAL: ${activities.length} total activities, ${actionRequired.length} action_required`);
+    console.log(`[DASHBOARD ACTIVITIES] 🏁 Returning ${Math.min(activities.length, limit)} recent items`);
 
     // Return structured response
     res.json({
