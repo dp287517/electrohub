@@ -5162,24 +5162,32 @@ app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
             console.log(`[PROC] Auto-finalization complete: procedure ${procedure.id}`);
 
             // Send notification for completed procedure
+            console.log(`[PROC] Sending notification to userEmail: ${userEmail}`);
             if (userEmail) {
-              await notifyUser(userEmail,
-                '✅ Procédure créée',
-                `"${procedure.title}" - ${procedure.stepsCount || processedData.steps?.length || 0} étapes. Cliquez pour voir.`,
-                {
-                  type: 'procedure_created',
-                  tag: `procedure-created-${procedure.id}`,
-                  requireInteraction: true,
-                  data: {
-                    url: `/app/procedures/${procedure.id}`,
-                    procedureId: procedure.id,
-                    action: 'view_procedure'
-                  },
-                  actions: [
-                    { action: 'view', title: 'Voir la procédure' }
-                  ]
-                }
-              );
+              try {
+                await notifyUser(userEmail,
+                  '✅ Procédure créée',
+                  `"${procedure.title}" - ${procedure.stepsCount || processedData.steps?.length || 0} étapes. Cliquez pour voir.`,
+                  {
+                    type: 'procedure_created',
+                    tag: `procedure-created-${procedure.id}`,
+                    requireInteraction: true,
+                    data: {
+                      url: `/app/procedures/${procedure.id}`,
+                      procedureId: procedure.id,
+                      action: 'view_procedure'
+                    },
+                    actions: [
+                      { action: 'view', title: 'Voir la procédure' }
+                    ]
+                  }
+                );
+                console.log(`[PROC] Notification sent successfully to ${userEmail}`);
+              } catch (notifyErr) {
+                console.error(`[PROC] Failed to send notification:`, notifyErr);
+              }
+            } else {
+              console.log(`[PROC] No userEmail provided, skipping notification`);
             }
           } catch (finalizeErr) {
             console.error(`[PROC] Auto-finalization failed for ${sessionId}:`, finalizeErr);
