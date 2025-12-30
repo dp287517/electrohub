@@ -173,6 +173,13 @@ export async function deleteDraft(draftId) {
   return response.json();
 }
 
+export async function cleanupOrphanDrafts() {
+  const response = await fetchWithAuth(`${API_BASE}/drafts/cleanup-orphans`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
 export async function resumeDraft(draftId) {
   const response = await fetchWithAuth(`${API_BASE}/ai/resume/${draftId}`, {
     method: 'POST',

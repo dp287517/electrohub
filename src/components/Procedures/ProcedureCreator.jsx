@@ -17,6 +17,7 @@ import {
   getDrafts,
   resumeDraft,
   deleteDraft,
+  cleanupOrphanDrafts,
   DEFAULT_PPE,
   RISK_LEVELS,
 } from '../../lib/procedures-api';
@@ -130,11 +131,30 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           setCollectedData(session.collectedData || {});
           setCurrentStep(session.currentStep || 'steps');
 
-          // Show message about restored session
-          const stepsCount = session.collectedData?.raw_steps?.length || 0;
+          // Build restoration message with last step info
+          const rawSteps = session.collectedData?.raw_steps || [];
+          const stepsCount = rawSteps.length;
+          const lastStep = rawSteps[rawSteps.length - 1];
+
+          let restorationMessage = `📋 **"${session.collectedData?.title || 'Procédure en cours'}"**\n\n`;
+          restorationMessage += `✅ ${stepsCount} étape(s) enregistrée(s)\n\n`;
+
+          if (lastStep) {
+            const lastStepDesc = lastStep.raw_text || lastStep.title || 'Étape sans description';
+            const truncated = lastStepDesc.length > 60 ? lastStepDesc.substring(0, 60) + '...' : lastStepDesc;
+            restorationMessage += `📸 Dernière étape: "${truncated}"`;
+            if (lastStep.has_photo || lastStep.photo) {
+              restorationMessage += ` (avec photo)`;
+            }
+            restorationMessage += `\n\n`;
+          }
+
+          restorationMessage += `➡️ Continuez à ajouter des étapes ou dites "terminé".`;
+
           setMessages([{
             role: 'assistant',
-            content: `📋 Session restaurée automatiquement!\n\n"${session.collectedData?.title || 'Procédure en cours'}" - ${stepsCount} étape(s).\n\nContinuez à ajouter des étapes ou dites "terminé".`
+            content: restorationMessage,
+            photo: lastStep?.photo // Include photo URL if available
           }]);
         }
       } catch (e) {
@@ -211,9 +231,20 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     return () => clearTimeout(saveTimer);
   }, [collectedData, sessionId]);
 
-  // Load user's drafts
+  // Load user's drafts (with automatic orphan cleanup)
   const loadDrafts = async () => {
     try {
+      // First, cleanup any orphan drafts (drafts whose procedures are already approved)
+      try {
+        const cleanup = await cleanupOrphanDrafts();
+        if (cleanup.cleaned > 0) {
+          console.log(`[Drafts] Cleaned ${cleanup.cleaned} orphan drafts:`, cleanup.drafts);
+        }
+      } catch (cleanupErr) {
+        console.warn('[Drafts] Orphan cleanup failed:', cleanupErr.message);
+      }
+
+      // Then load remaining drafts
       const result = await getDrafts();
       if (result.ok !== false) {
         setDrafts(Array.isArray(result) ? result : result.drafts || []);
