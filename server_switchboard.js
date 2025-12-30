@@ -2741,11 +2741,21 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
   }
   job.processing = true;
 
+  // Helper to save job progress to DB (ensures persistence even if user leaves)
+  const saveProgress = async () => {
+    try {
+      await savePanelScanJob(job);
+    } catch (e) {
+      console.warn(`[PANEL SCAN] Failed to save progress: ${e.message}`);
+    }
+  };
+
   try {
     const startTime = Date.now();
     job.status = 'analyzing';
     job.progress = 5;
     job.message = 'Analyse IA GPT-4o en cours...';
+    await saveProgress(); // Save initial state
 
     console.log(`\n${'='.repeat(70)}`);
     console.log(`[PANEL SCAN] Job ${jobId}: STARTING DUAL AI ANALYSIS`);
@@ -2772,34 +2782,40 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
 MISSION CRITIQUE: Analyser la/les photo(s) d'un tableau électrique et identifier ABSOLUMENT TOUS les appareils modulaires visibles.
 ⚠️ NE MANQUER AUCUN APPAREIL - Compte chaque module visible sur chaque rangée. Si tu vois 35 appareils, tu dois en lister 35.
 
+🔴 RÈGLE FONDAMENTALE - ANALYSE INDIVIDUELLE 🔴
+CHAQUE DISJONCTEUR DOIT ÊTRE ANALYSÉ SÉPARÉMENT !
+- Même si 10 disjoncteurs ont la MÊME RÉFÉRENCE (ex: tous des "C60N"), ils peuvent avoir des CALIBRES DIFFÉRENTS
+- Tu DOIS lire le texte imprimé sur CHAQUE disjoncteur individuellement
+- NE PAS supposer que "même référence = même calibre" - C'EST FAUX !
+- Exemple: sur une rangée de C60N identiques, tu peux avoir: C16, C16, C13, C20, C10, C16, C32...
+- Exemple: sur une rangée, certains peuvent être 2P (monophasé) et d'autres 4P (triphasé)
+
 ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
 - Lis les ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur (ex: "1", "Q1", "11F1", "FI 11F1.A")
 - Transcrire EXACTEMENT dans "position_label"
 - ATTENTION: Les interrupteurs différentiels EN AMONT ont aussi une position (ex: "FI 11F1.A") - NE PAS LES OUBLIER !
 - Si pas d'étiquette visible, mettre null (ne pas inventer)
 
-LECTURE DU CALIBRE - TRÈS IMPORTANT:
-Chaque disjoncteur a du TEXTE IMPRIMÉ indiquant son calibre:
+LECTURE DU CALIBRE - ANALYSE VISUELLE INDIVIDUELLE:
+Pour CHAQUE disjoncteur, regarde le TEXTE IMPRIMÉ sur sa face avant:
 - "C16" = Courbe C, 16A | "C13" = Courbe C, 13A | "C10" = Courbe C, 10A
 - "C20" = Courbe C, 20A | "C32" = Courbe C, 32A | "C40" = Courbe C, 40A
 - "B16" = Courbe B, 16A | "D10" = Courbe D, 10A
 ⚠️ Le CALIBRE (C16, C13...) est DIFFÉRENT de la RÉFÉRENCE (C60N, iC60N...)
-⚠️ Deux disjoncteurs identiques (même référence C60N) peuvent avoir des calibres différents (C16 vs C13)
+⚠️ CHAQUE disjoncteur a SON PROPRE calibre - LIS-LE sur l'appareil !
 
-DISTINCTION MONOPHASÉ / TRIPHASÉ - MÉTHODE FIABLE:
-1. COMPTE LA LARGEUR EN MODULES (1 module = ~18mm):
-   - 1 module de large = 1P (1 pôle) = MONOPHASÉ phase seule → voltage=230V
-   - 2 modules de large = 1P+N ou 2P = MONOPHASÉ avec neutre → voltage=230V
-   - 3 modules de large = 3P = TRIPHASÉ sans neutre → voltage=400V
-   - 4 modules de large = 3P+N ou 4P = TRIPHASÉ avec neutre → voltage=400V
+DISTINCTION MONOPHASÉ / TRIPHASÉ - POUR CHAQUE APPAREIL:
+Regarde CHAQUE disjoncteur individuellement - ils peuvent être différents sur la même rangée !
+1. COMPTE LA LARGEUR EN MODULES de CET appareil:
+   - 1 module de large = 1P (1 pôle) = MONOPHASÉ → voltage=230V
+   - 2 modules de large = 1P+N ou 2P = MONOPHASÉ → voltage=230V
+   - 3 modules de large = 3P = TRIPHASÉ → voltage=400V
+   - 4 modules de large = 3P+N ou 4P = TRIPHASÉ → voltage=400V
 
-2. VÉRIFIE LE NOMBRE DE MANETTES/LEVIERS liés ensemble:
+2. COMPTE LES MANETTES/LEVIERS de CET appareil:
    - 1 manette = 1P | 2 manettes liées = 2P | 3 manettes liées = 3P | 4 manettes liées = 4P
 
-3. RÈGLE D'OR:
-   - poles = width_modules (le nombre de pôles égale généralement la largeur en modules)
-   - Si width_modules >= 3 → C'est TRIPHASÉ (voltage=400V)
-   - Si width_modules <= 2 → C'est MONOPHASÉ (voltage=230V)
+3. IMPORTANT: Sur une même rangée, tu peux avoir des disjoncteurs 2P ET des disjoncteurs 4P !
 
 TOUS LES TYPES À IDENTIFIER (sans exception):
 - Disjoncteurs magnéto-thermiques (avec calibre C10, C13, C16, C20, C32...)
@@ -2885,6 +2901,7 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
 
     job.progress = 25;
     job.message = 'GPT-4o terminé, vérification avec Gemini...';
+    await saveProgress(); // Save after GPT-4o
 
     // ============================================================
     // PHASE 2: Vérification/Complément avec Gemini
@@ -2963,6 +2980,7 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
 
     job.progress = 40;
     job.message = 'Fusion des résultats IA...';
+    await saveProgress(); // Save after Gemini
 
     // Parse JSON with error recovery
     console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
@@ -3197,6 +3215,7 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
 
     job.progress = 50;
     job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
+    await saveProgress(); // Save after merge
 
     // ============================================================
     // PHASE 5: Cache enrichment
@@ -3554,8 +3573,23 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
     });
 
     // Start processing in background (after response is sent)
-    setImmediate(() => {
-      processPanelScan(jobId, images, site, switchboard_id, user.email);
+    // Use setImmediate to ensure response is sent first, then process
+    setImmediate(async () => {
+      try {
+        console.log(`[PANEL SCAN] Background processing started for job ${jobId}`);
+        await processPanelScan(jobId, images, site, switchboard_id, user.email);
+        console.log(`[PANEL SCAN] Background processing finished for job ${jobId}`);
+      } catch (bgError) {
+        console.error(`[PANEL SCAN] Background processing error for job ${jobId}:`, bgError.message);
+        // Update job status on error
+        const failedJob = panelScanJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.error = bgError.message;
+          failedJob.completed_at = Date.now();
+          await savePanelScanJob(failedJob);
+        }
+      }
     });
 
   } catch (e) {
