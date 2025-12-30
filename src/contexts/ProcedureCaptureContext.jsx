@@ -88,6 +88,13 @@ export function ProcedureCaptureProvider({ children }) {
     navigate(returnPath);
   }, [navigate, returnPath]);
 
+  // Just reopen the modal without navigating - stay on current page
+  const reopenModal = useCallback(() => {
+    setIsCapturing(false);
+    setShouldReopenModal(true);
+    // Don't navigate - stay on current page
+  }, []);
+
   // Clear the reopen signal after it's been consumed
   const clearReopenSignal = useCallback(() => {
     setShouldReopenModal(false);
@@ -129,6 +136,7 @@ export function ProcedureCaptureProvider({ children }) {
     clearCaptures,
     consumeCaptures,
     returnToProcedure,
+    reopenModal, // Reopen modal without navigating - stay on current page
     clearReopenSignal, // FIX: Clear the reopen signal after modal is reopened
     minimizeModal, // Close the modal but keep session active
     clearMinimizeSignal,
