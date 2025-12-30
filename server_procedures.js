@@ -5279,7 +5279,10 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
     .filter(msg => msg.role === 'user' && msg.photo)
     .map(msg => msg.photo);
 
-  console.log(`[Procedures] Finalize: Found ${conversationPhotos.length} photos in conversation`);
+  // Extract photos from raw_steps (photos attached to steps during creation)
+  const rawStepsPhotos = (data.raw_steps || []).map(step => step.photo).filter(Boolean);
+
+  console.log(`[Procedures] Finalize: Found ${conversationPhotos.length} photos in conversation, ${rawStepsPhotos.length} photos in raw_steps`);
 
   // Create procedure from collected data
   const { rows } = await pool.query(
@@ -5316,11 +5319,14 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
       let photoPath = null;
 
       // Try to link a photo to this step
-      // Use photo from step data if available, otherwise use conversation photo
-      console.log(`[Procedures] Step ${i + 1}: step.photo=${step.photo}, step.has_photo=${step.has_photo}`);
+      // Priority: step.photo > raw_steps[i].photo > conversation photo
+      const rawStepPhoto = data.raw_steps?.[i]?.photo;
+      console.log(`[Procedures] Step ${i + 1}: step.photo=${step.photo}, raw_steps.photo=${rawStepPhoto}, conversation.photo=${conversationPhotos[i]}`);
 
       if (step.photo) {
         photoPath = step.photo;
+      } else if (rawStepPhoto) {
+        photoPath = rawStepPhoto;
       } else if (conversationPhotos[i]) {
         photoPath = conversationPhotos[i];
       }
@@ -5588,6 +5594,110 @@ app.post("/api/procedures/ai/finalize/:sessionId", async (req, res) => {
     } else {
       res.status(500).json({ error: err.message });
     }
+  }
+});
+
+// --- RECOVER PHOTOS FOR PROCEDURE ---
+// Recovery endpoint to link photos from session raw_steps to procedure steps
+app.post("/api/procedures/:id/recover-photos", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userEmail = req.headers["x-user-email"] || "system";
+
+    console.log(`[RECOVER] Starting photo recovery for procedure ${id}`);
+
+    // Get the procedure
+    const { rows: procedures } = await pool.query(
+      `SELECT * FROM procedures WHERE id = $1`,
+      [id]
+    );
+
+    if (procedures.length === 0) {
+      return res.status(404).json({ error: "Procédure non trouvée" });
+    }
+
+    // Find linked AI session
+    const { rows: sessions } = await pool.query(
+      `SELECT * FROM procedure_ai_sessions WHERE procedure_id = $1`,
+      [id]
+    );
+
+    if (sessions.length === 0) {
+      return res.status(404).json({ error: "Session IA non trouvée pour cette procédure" });
+    }
+
+    const session = sessions[0];
+    const data = session.collected_data || {};
+    const rawSteps = data.raw_steps || [];
+
+    console.log(`[RECOVER] Found session ${session.id} with ${rawSteps.length} raw_steps`);
+
+    // Get procedure steps
+    const { rows: steps } = await pool.query(
+      `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
+      [id]
+    );
+
+    console.log(`[RECOVER] Found ${steps.length} procedure steps`);
+
+    let recoveredCount = 0;
+
+    // Update each step with photo from raw_steps
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const rawStep = rawSteps[i];
+
+      // Skip if step already has a photo
+      if (step.photo_content || step.photo_path) {
+        console.log(`[RECOVER] Step ${i + 1}: Already has photo, skipping`);
+        continue;
+      }
+
+      // Get photo from raw_step
+      const photoPath = rawStep?.photo;
+      if (!photoPath) {
+        console.log(`[RECOVER] Step ${i + 1}: No photo in raw_steps`);
+        continue;
+      }
+
+      console.log(`[RECOVER] Step ${i + 1}: Found photo ${photoPath}`);
+
+      // Try to read photo file
+      let photoContent = null;
+      try {
+        const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+        if (fs.existsSync(fullPath)) {
+          photoContent = await fsp.readFile(fullPath);
+          console.log(`[RECOVER] Step ${i + 1}: Loaded photo (${photoContent.length} bytes)`);
+        } else {
+          console.log(`[RECOVER] Step ${i + 1}: Photo file not found at ${fullPath}`);
+        }
+      } catch (e) {
+        console.log(`[RECOVER] Step ${i + 1}: Error reading photo: ${e.message}`);
+      }
+
+      // Update step with photo
+      if (photoContent) {
+        await pool.query(
+          `UPDATE procedure_steps SET photo_path = $1, photo_content = $2 WHERE id = $3`,
+          [photoPath, photoContent, step.id]
+        );
+        recoveredCount++;
+        console.log(`[RECOVER] Step ${i + 1}: Photo recovered successfully`);
+      }
+    }
+
+    console.log(`[RECOVER] Recovery complete: ${recoveredCount} photos recovered`);
+
+    res.json({
+      ok: true,
+      message: `${recoveredCount} photos récupérées sur ${steps.length} étapes`,
+      recoveredCount,
+      totalSteps: steps.length
+    });
+  } catch (err) {
+    console.error("Error recovering photos:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
