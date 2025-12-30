@@ -2096,32 +2096,26 @@ app.put("/api/mobile-equipment/maps/plan/:logical/rename", async (req, res) => {
 });
 
 /** Get all equipment IDs that have map placements */
+// 🚀 PERF: Simplified query - no JOIN, no ORDER BY (like HV pattern)
 app.get("/api/mobile-equipment/maps/placed-ids", async (req, res) => {
   try {
+    // Simple query without JOIN - much faster
     const { rows } = await pool.query(`
-      SELECT DISTINCT p.equipment_id,
-             p.plan_logical_name AS logical_name,
-             p.page_index,
-             vp.display_name
-        FROM me_equipment_positions p
-        LEFT JOIN vsd_plans vp ON vp.logical_name = p.plan_logical_name
-       ORDER BY p.equipment_id
+      SELECT DISTINCT equipment_id, plan_logical_name AS logical_name
+        FROM me_equipment_positions
     `);
 
     const placed_ids = [...new Set(rows.map(r => r.equipment_id))];
 
-    // Build placed_details with first placement for each equipment
+    // Build placed_details
     const placed_details = {};
     rows.forEach(r => {
       if (!placed_details[r.equipment_id]) {
-        placed_details[r.equipment_id] = {
-          logical_name: r.logical_name,
-          display_name: r.display_name || r.logical_name,
-          page_index: r.page_index || 0,
-          plans: []
-        };
+        placed_details[r.equipment_id] = { plans: [] };
       }
-      placed_details[r.equipment_id].plans.push(r.logical_name);
+      if (!placed_details[r.equipment_id].plans.includes(r.logical_name)) {
+        placed_details[r.equipment_id].plans.push(r.logical_name);
+      }
     });
 
     res.json({ ok: true, placed_ids, placed_details });
