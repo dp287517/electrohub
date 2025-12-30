@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Camera, X, ArrowLeft, Check, FolderOpen } from 'lucide-react';
+import {
+  Camera, X, Check, FolderOpen, Monitor, Minimize2,
+  Maximize2, ArrowRight, Smartphone, Info
+} from 'lucide-react';
 import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 
 export default function ProcedureCaptureWidget() {
@@ -14,29 +17,67 @@ export default function ProcedureCaptureWidget() {
     endCaptureSession
   } = useProcedureCapture();
 
+  const [isMinimized, setIsMinimized] = useState(false);
   const [justCaptured, setJustCaptured] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(true);
-  const cameraInputRef = useRef(null);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [showHelp, setShowHelp] = useState(true);
   const galleryInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
-  // Hide onboarding after first capture
+  // Detect platform
   useEffect(() => {
-    if (captureCount > 0) {
-      setShowOnboarding(false);
-    }
+    const checkDesktop = () => {
+      const isDesktopDevice = window.innerWidth >= 1024 && !('ontouchstart' in window);
+      setIsDesktop(isDesktopDevice);
+    };
+    checkDesktop();
+    window.addEventListener('resize', checkDesktop);
+    return () => window.removeEventListener('resize', checkDesktop);
+  }, []);
+
+  // Hide help after first capture
+  useEffect(() => {
+    if (captureCount > 0) setShowHelp(false);
   }, [captureCount]);
 
-  // Visual + haptic feedback when captured
+  // Visual + haptic feedback
   const showCapturedFeedback = () => {
     setJustCaptured(true);
-    // Vibration on mobile if available
-    if (navigator.vibrate) {
-      navigator.vibrate(100);
-    }
+    if (navigator.vibrate) navigator.vibrate(100);
     setTimeout(() => setJustCaptured(false), 1500);
   };
 
-  // Handle camera capture
+  // Desktop: Screen capture via getDisplayMedia
+  const handleScreenCapture = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { mediaSource: 'screen' }
+      });
+
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+
+      stream.getTracks().forEach(track => track.stop());
+
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], `capture-${Date.now()}.png`, { type: 'image/png' });
+          addCapture(file, '');
+          showCapturedFeedback();
+        }
+      }, 'image/png');
+    } catch (err) {
+      console.log('Screen capture cancelled or failed:', err);
+    }
+  };
+
+  // Camera capture (mobile)
   const handleCameraCapture = (e) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -46,7 +87,7 @@ export default function ProcedureCaptureWidget() {
     e.target.value = '';
   };
 
-  // Handle gallery import
+  // Gallery import
   const handleGalleryImport = (e) => {
     const files = Array.from(e.target.files || []);
     files.forEach(file => {
@@ -60,9 +101,9 @@ export default function ProcedureCaptureWidget() {
 
   if (!isCapturing) return null;
 
-  return (
+  // Hidden inputs
+  const hiddenInputs = (
     <>
-      {/* Hidden inputs */}
       <input
         ref={cameraInputRef}
         type="file"
@@ -79,138 +120,241 @@ export default function ProcedureCaptureWidget() {
         onChange={handleGalleryImport}
         className="hidden"
       />
+    </>
+  );
 
-      {/* Full screen overlay */}
-      <div className="fixed inset-0 z-50 bg-gray-900/95 flex flex-col">
+  // MINIMIZED MODE - Floating button
+  if (isMinimized) {
+    return (
+      <>
+        {hiddenInputs}
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+          {/* Capture count badge */}
+          {captureCount > 0 && (
+            <div className="bg-green-500 text-white px-3 py-1 rounded-full text-sm font-bold shadow-lg">
+              {captureCount} photo{captureCount > 1 ? 's' : ''}
+            </div>
+          )}
+
+          {/* Main floating button */}
+          <button
+            onClick={() => setIsMinimized(false)}
+            className="w-16 h-16 bg-gradient-to-br from-violet-600 to-purple-700 rounded-full shadow-2xl flex items-center justify-center text-white active:scale-95 transition-transform"
+          >
+            <Maximize2 className="w-7 h-7" />
+          </button>
+
+          {/* Quick actions */}
+          <div className="flex gap-2">
+            {isDesktop ? (
+              <button
+                onClick={handleScreenCapture}
+                className="w-12 h-12 bg-blue-600 rounded-full shadow-lg flex items-center justify-center text-white active:scale-95"
+                title="Capturer l'écran"
+              >
+                <Monitor className="w-5 h-5" />
+              </button>
+            ) : (
+              <button
+                onClick={() => cameraInputRef.current?.click()}
+                className="w-12 h-12 bg-violet-600 rounded-full shadow-lg flex items-center justify-center text-white active:scale-95"
+                title="Prendre photo"
+              >
+                <Camera className="w-5 h-5" />
+              </button>
+            )}
+            <button
+              onClick={() => galleryInputRef.current?.click()}
+              className="w-12 h-12 bg-gray-700 rounded-full shadow-lg flex items-center justify-center text-white active:scale-95"
+              title="Importer"
+            >
+              <FolderOpen className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Success flash */}
+        {justCaptured && (
+          <div className="fixed inset-0 z-40 bg-green-500/30 pointer-events-none flex items-center justify-center">
+            <div className="bg-green-500 text-white rounded-full p-4 animate-ping">
+              <Check className="w-10 h-10" />
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // EXPANDED MODE - Bottom panel
+  return (
+    <>
+      {hiddenInputs}
+
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-40 bg-black/60"
+        onClick={() => setIsMinimized(true)}
+      />
+
+      {/* Bottom panel */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-gray-900 rounded-t-3xl max-h-[85vh] flex flex-col safe-area-bottom">
 
         {/* Header */}
-        <div className="bg-violet-600 px-4 py-4 flex items-center justify-between safe-area-top">
-          <div className="text-white">
-            <h1 className="font-bold text-lg">Mode Capture</h1>
-            <p className="text-violet-200 text-sm">
-              {procedureInfo?.title || 'Procédure en cours'}
-            </p>
+        <div className="flex items-center justify-between p-4 border-b border-gray-700">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-violet-600 rounded-xl flex items-center justify-center">
+              <Camera className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="font-bold text-white">Mode Capture</h2>
+              <p className="text-xs text-gray-400 truncate max-w-[200px]">
+                {procedureInfo?.title || 'Procédure en cours'}
+              </p>
+            </div>
           </div>
-          <button
-            onClick={endCaptureSession}
-            className="p-2 bg-white/20 rounded-full text-white"
-          >
-            <X className="w-6 h-6" />
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setIsMinimized(true)}
+              className="p-2 bg-gray-700 rounded-lg text-gray-300"
+              title="Minimiser"
+            >
+              <Minimize2 className="w-5 h-5" />
+            </button>
+            <button
+              onClick={endCaptureSession}
+              className="p-2 bg-gray-700 rounded-lg text-gray-300"
+              title="Fermer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Main content */}
-        <div className="flex-1 flex flex-col items-center justify-center p-6 overflow-auto">
-
-          {/* Success animation overlay */}
-          {justCaptured && (
-            <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center z-20 pointer-events-none">
-              <div className="bg-green-500 text-white rounded-full p-6 animate-bounce shadow-2xl">
-                <Check className="w-16 h-16" />
-              </div>
-              <p className="absolute bottom-1/3 text-white text-2xl font-bold">
-                Photo ajoutée !
-              </p>
-            </div>
-          )}
-
-          {/* Onboarding message */}
-          {showOnboarding && captureCount === 0 && (
-            <div className="bg-white rounded-2xl p-6 mb-8 max-w-sm text-center shadow-xl">
-              <div className="w-16 h-16 bg-violet-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Camera className="w-8 h-8 text-violet-600" />
-              </div>
-              <h2 className="text-xl font-bold text-gray-900 mb-2">
-                Capturez vos photos
-              </h2>
-              <ol className="text-left text-gray-600 space-y-3 mb-4">
-                <li className="flex items-start gap-3">
-                  <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">1</span>
-                  <span><strong>Prenez une photo</strong> avec la caméra</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">2</span>
-                  <span>Ou <strong>importez depuis la galerie</strong> (screenshots d'autres apps, photos existantes...)</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">3</span>
-                  <span>Appuyez sur <strong>"Terminer"</strong> quand vous avez toutes les photos</span>
-                </li>
-              </ol>
-              <p className="text-xs text-gray-400 mt-2">
-                💡 Chaque photo = une étape de la procédure
-              </p>
-            </div>
-          )}
-
-          {/* Captures grid */}
-          {captureCount > 0 && (
-            <div className="w-full max-w-sm mb-6">
-              <p className="text-white text-center mb-3 font-medium">
-                {captureCount} photo{captureCount > 1 ? 's' : ''} capturée{captureCount > 1 ? 's' : ''}
-              </p>
-              <div className="grid grid-cols-4 gap-2">
-                {captures.map((cap, i) => (
-                  <div key={cap.id} className="relative aspect-square">
-                    <img
-                      src={cap.preview}
-                      alt=""
-                      className="w-full h-full object-cover rounded-lg"
-                    />
-                    <button
-                      onClick={() => removeCapture(cap.id)}
-                      className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center text-white shadow-lg"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                    <span className="absolute bottom-1 left-1 bg-black/60 text-white text-xs px-1.5 rounded">
-                      {i + 1}
-                    </span>
-                  </div>
-                ))}
+        {/* Help section */}
+        {showHelp && (
+          <div className="mx-4 mt-4 p-4 bg-violet-900/50 rounded-xl border border-violet-700">
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 text-violet-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-violet-200">
+                {isDesktop ? (
+                  <>
+                    <p className="font-medium mb-1">💻 Sur ordinateur :</p>
+                    <p>Cliquez sur <strong>"Capturer l'écran"</strong> pour sélectionner une fenêtre ou tout l'écran d'une autre application.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium mb-1">📱 Sur mobile/tablette :</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li><strong>Minimisez</strong> ce panneau (bouton en haut)</li>
+                      <li><strong>Sortez de l'app</strong> et naviguez où vous voulez</li>
+                      <li><strong>Faites des captures</strong> (Power + Volume)</li>
+                      <li><strong>Revenez ici</strong> et importez depuis la galerie</li>
+                    </ol>
+                  </>
+                )}
               </div>
             </div>
+            <button
+              onClick={() => setShowHelp(false)}
+              className="mt-2 text-xs text-violet-400 underline"
+            >
+              Masquer l'aide
+            </button>
+          </div>
+        )}
+
+        {/* Captures preview */}
+        {captureCount > 0 && (
+          <div className="px-4 py-3">
+            <p className="text-white text-sm mb-2 font-medium">
+              {captureCount} capture{captureCount > 1 ? 's' : ''} :
+            </p>
+            <div className="flex gap-2 overflow-x-auto pb-2">
+              {captures.map((cap, i) => (
+                <div key={cap.id} className="relative flex-shrink-0">
+                  <img
+                    src={cap.preview}
+                    alt=""
+                    className="w-16 h-16 object-cover rounded-lg"
+                  />
+                  <button
+                    onClick={() => removeCapture(cap.id)}
+                    className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                  <span className="absolute bottom-0.5 left-0.5 bg-black/70 text-white text-[10px] px-1 rounded">
+                    {i + 1}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="p-4 space-y-3 mt-auto">
+          {/* Desktop: Screen capture */}
+          {isDesktop && (
+            <button
+              onClick={handleScreenCapture}
+              className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-xl flex items-center justify-center gap-3 text-white font-bold active:scale-[0.98] transition-transform"
+            >
+              <Monitor className="w-6 h-6" />
+              Capturer l'écran d'une autre app
+            </button>
           )}
-        </div>
 
-        {/* Bottom action buttons */}
-        <div className="p-4 space-y-3 safe-area-bottom bg-gray-900">
+          {/* Mobile: Camera */}
+          {!isDesktop && (
+            <button
+              onClick={() => cameraInputRef.current?.click()}
+              className="w-full py-4 bg-gradient-to-r from-violet-600 to-purple-600 rounded-xl flex items-center justify-center gap-3 text-white font-bold active:scale-[0.98] transition-transform"
+            >
+              <Camera className="w-6 h-6" />
+              Prendre une photo
+            </button>
+          )}
 
-          {/* Main capture button */}
-          <button
-            onClick={() => cameraInputRef.current?.click()}
-            className="w-full py-5 bg-gradient-to-r from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center gap-3 text-white active:scale-[0.98] transition-transform shadow-lg"
-          >
-            <Camera className="w-8 h-8" />
-            <span className="font-bold text-xl">Prendre une photo</span>
-          </button>
-
-          {/* Gallery import button */}
+          {/* Import from gallery */}
           <button
             onClick={() => galleryInputRef.current?.click()}
-            className="w-full py-3 bg-gray-700 rounded-xl flex items-center justify-center gap-2 text-gray-200 active:scale-[0.98] transition-transform"
+            className="w-full py-3 bg-gray-700 rounded-xl flex items-center justify-center gap-2 text-gray-200 font-medium active:scale-[0.98]"
           >
             <FolderOpen className="w-5 h-5" />
-            <span className="font-medium">Importer depuis la galerie</span>
+            Importer depuis la galerie
+            {!isDesktop && <span className="text-xs text-gray-400">(captures d'autres apps)</span>}
           </button>
 
-          {/* Return button */}
+          {/* Finish button */}
           <button
             onClick={returnToProcedure}
-            className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all ${
+            className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
               captureCount > 0
                 ? 'bg-green-500 text-white active:bg-green-600'
-                : 'bg-gray-700 text-gray-300 active:bg-gray-600'
+                : 'bg-gray-700 text-gray-400'
             }`}
           >
-            <ArrowLeft className="w-6 h-6" />
-            {captureCount > 0
-              ? `Terminer avec ${captureCount} photo${captureCount > 1 ? 's' : ''}`
-              : 'Annuler et revenir'
-            }
+            {captureCount > 0 ? (
+              <>
+                Terminer avec {captureCount} photo{captureCount > 1 ? 's' : ''}
+                <ArrowRight className="w-5 h-5" />
+              </>
+            ) : (
+              'Annuler'
+            )}
           </button>
         </div>
       </div>
+
+      {/* Success flash */}
+      {justCaptured && (
+        <div className="fixed inset-0 z-[60] bg-green-500/30 pointer-events-none flex items-center justify-center">
+          <div className="bg-green-500 text-white rounded-full p-6 shadow-2xl animate-bounce">
+            <Check className="w-12 h-12" />
+          </div>
+        </div>
+      )}
     </>
   );
 }
