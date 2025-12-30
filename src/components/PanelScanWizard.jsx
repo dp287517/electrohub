@@ -177,12 +177,13 @@ const PhotoCaptureStep = ({ photos, setPhotos, onNext }) => {
 // STEP 2: ANALYSIS IN PROGRESS (Async with polling)
 // ============================================================
 
-const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
+const AnalysisStep = ({ photos, switchboardId, onComplete, onError, onRetry }) => {
   const [status, setStatus] = useState('uploading');
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('Envoi des photos...');
   const [jobId, setJobId] = useState(null);
   const [phase, setPhase] = useState('upload'); // upload, gpt, gemini, merge, cache, done
+  const [retryCount, setRetryCount] = useState(0); // Force re-run effect
 
   // Determine phase from progress
   const getPhaseFromProgress = (p) => {
@@ -275,7 +276,17 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
       cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
     };
-  }, [photos, switchboardId, onComplete, onError]);
+  }, [photos, switchboardId, onComplete, onError, retryCount]);
+
+  // Handle retry
+  const handleRetry = () => {
+    setStatus('uploading');
+    setProgress(0);
+    setMessage('Réessai en cours...');
+    setPhase('upload');
+    setJobId(null);
+    setRetryCount(c => c + 1);
+  };
 
   // Phase labels for display
   const phases = [
@@ -358,6 +369,34 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
       {status === 'analyzing' && (
         <div className="mt-6 p-3 bg-blue-50 rounded-xl text-sm text-blue-700 max-w-sm mx-auto">
           <p>L'analyse continue même si vous quittez l'application. Vous recevrez une notification quand ce sera terminé.</p>
+        </div>
+      )}
+
+      {/* Error with retry button */}
+      {status === 'error' && (
+        <div className="mt-6 space-y-4 max-w-sm mx-auto">
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+            <p className="font-medium mb-1">L'analyse a échoué</p>
+            <p className="text-red-600">{message}</p>
+            {message?.includes('redémarrage') && (
+              <p className="mt-2 text-red-500 text-xs">
+                Le serveur a été mis à jour pendant l'analyse. Cela peut arriver lors de maintenances.
+              </p>
+            )}
+          </div>
+          <button
+            onClick={handleRetry}
+            className="w-full py-3 px-4 bg-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-indigo-700 transition-colors"
+          >
+            <RefreshCw size={18} />
+            Relancer l'analyse
+          </button>
+          <button
+            onClick={onRetry}
+            className="w-full py-2 text-sm text-gray-500 hover:text-gray-700"
+          >
+            ← Retourner aux photos
+          </button>
         </div>
       )}
     </div>
@@ -1041,6 +1080,7 @@ export default function PanelScanWizard({ switchboardId, switchboardName, onClos
               switchboardId={switchboardId}
               onComplete={handleAnalysisComplete}
               onError={(msg) => setError(msg)}
+              onRetry={() => setStep(0)}
             />
           )}
 

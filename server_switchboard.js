@@ -1121,6 +1121,71 @@ ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA ERROR]', e.message)
 const audit = createAuditTrail(pool, 'switchboard');
 audit.ensureTable().catch(e => console.error('[SWITCHBOARD AUDIT ERROR]', e.message));
 
+// ============================================================
+// PANEL SCAN JOBS - Recovery of stuck jobs after server restart
+// ============================================================
+async function recoverStuckPanelScanJobs() {
+  try {
+    // Find jobs that were in progress when server died (status = 'analyzing' or 'pending')
+    // and are older than 5 minutes (to avoid interfering with genuinely running jobs)
+    const { rows: stuckJobs } = await pool.query(`
+      SELECT id, site, switchboard_id, user_email, status, progress, created_at
+      FROM panel_scan_jobs
+      WHERE status IN ('analyzing', 'pending', 'processing')
+        AND completed_at IS NULL
+        AND created_at < NOW() - INTERVAL '5 minutes'
+      ORDER BY created_at DESC
+      LIMIT 10
+    `);
+
+    if (stuckJobs.length === 0) {
+      console.log('[PANEL SCAN] No stuck jobs to recover');
+      return;
+    }
+
+    console.log(`[PANEL SCAN] Found ${stuckJobs.length} stuck jobs to mark as failed`);
+
+    for (const job of stuckJobs) {
+      console.log(`[PANEL SCAN] Marking job ${job.id} as failed (was at ${job.progress}% - ${job.status})`);
+
+      await pool.query(`
+        UPDATE panel_scan_jobs
+        SET status = 'failed',
+            error = 'Analyse interrompue suite à un redémarrage du serveur. Veuillez relancer le scan.',
+            completed_at = NOW()
+        WHERE id = $1
+      `, [job.id]);
+
+      // Notify user that their job failed
+      if (job.user_email) {
+        try {
+          const { notifyUser } = await import('./lib/push-notify.js');
+          await notifyUser(job.user_email,
+            '⚠️ Scan interrompu',
+            'Le scan a été interrompu suite à une maintenance. Veuillez le relancer.',
+            {
+              type: 'panel_scan_interrupted',
+              tag: `panel-scan-${job.id}`,
+              data: { jobId: job.id, switchboardId: job.switchboard_id }
+            }
+          );
+        } catch (e) {
+          console.warn(`[PANEL SCAN] Could not notify user ${job.user_email}:`, e.message);
+        }
+      }
+    }
+
+    console.log(`[PANEL SCAN] ✅ Recovered ${stuckJobs.length} stuck jobs`);
+  } catch (e) {
+    console.error('[PANEL SCAN] Error recovering stuck jobs:', e.message);
+  }
+}
+
+// Run recovery after a short delay (give DB connection time to stabilize)
+setTimeout(() => {
+  recoverStuckPanelScanJobs().catch(e => console.error('[PANEL SCAN] Recovery failed:', e.message));
+}, 10000); // 10s after startup
+
 // Helper pour extraire l'utilisateur actuel
 function getUser(req) {
   return {
@@ -3636,6 +3701,32 @@ app.get('/api/switchboard/panel-scan-job/:id', async (req, res) => {
   if (job.status === 'completed' && job.result?.devices) {
     const sentIcu = job.result.devices.map(d => ({ pos: d.position_label, icu: d.icu_ka }));
     console.log(`[PANEL SCAN] Sent to frontend:`, JSON.stringify(sentIcu));
+  }
+});
+
+// DELETE /api/switchboard/panel-scan-job/:id - Cancel or delete a job
+app.delete('/api/switchboard/panel-scan-job/:id', async (req, res) => {
+  try {
+    const jobId = req.params.id;
+    const user = getUser(req);
+
+    // Remove from memory
+    panelScanJobs.delete(jobId);
+
+    // Mark as cancelled in database
+    await pool.query(`
+      UPDATE panel_scan_jobs
+      SET status = 'cancelled',
+          error = 'Annulé par l\\'utilisateur',
+          completed_at = NOW()
+      WHERE id = $1
+    `, [jobId]);
+
+    console.log(`[PANEL SCAN] Job ${jobId} cancelled by ${user.email}`);
+    res.json({ success: true, message: 'Job annulé' });
+  } catch (e) {
+    console.error('[PANEL SCAN] Cancel error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
