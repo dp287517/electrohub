@@ -2883,24 +2883,45 @@ Regarde CHAQUE disjoncteur individuellement - ils peuvent être différents sur 
 3. IMPORTANT: Sur une même rangée, tu peux avoir des disjoncteurs 2P ET des disjoncteurs 4P !
 
 TOUS LES TYPES À IDENTIFIER (sans exception):
-- Disjoncteurs magnéto-thermiques (avec calibre C10, C13, C16, C20, C32...)
-- Disjoncteurs différentiels (2 ou 4 modules, souvent avec bouton test)
-- Interrupteurs différentiels (ID, iID) - EN AMONT des groupes de disjoncteurs
-- Interrupteurs sectionneurs (Q1, Q2...)
-- Contacteurs jour/nuit, Télérupteurs (TL, TLi)
+
+DISJONCTEURS MODULAIRES (résidentiel/tertiaire):
+- Disjoncteurs magnéto-thermiques (calibres: C6, C10, C13, C16, C20, C25, C32, C40, C50, C63...)
+- Disjoncteurs différentiels (2 ou 4 modules, bouton test visible)
+- Interrupteurs différentiels (ID, iID) - EN AMONT des groupes
+
+DISJONCTEURS INDUSTRIELS (CRITIQUES - bien identifier):
+- Compact NSX (Schneider): 100A à 630A, boîtier moulé noir/vert
+  * NSX100/160/250/400/630 avec unités TM-D, TM-G, ou Micrologic
+  * LIRE le calibre sur la face: "100A", "160A", "250A", "400A", "630A"
+  * Unité de déclenchement visible: TM (thermique-magnétique) ou Micrologic (électronique avec écran)
+- Masterpact (Schneider): disjoncteurs ouverts/débrochables 800A à 6300A
+  * Micrologic obligatoire (écran digital visible)
+  * Lire: Icu, Icw, catégorie (A ou B)
+- Tmax/SACE (ABB): 16A à 1600A, références T1/T2/T3/T4/T5/T6/T7
+- NZM (Eaton): boîtier noir, 20A à 1600A
+- DPX³ (Legrand): 160A à 1600A, boîtier gris
+
+AUTRES ÉQUIPEMENTS:
+- Interrupteurs sectionneurs (Q1, Q2, INS, Interpact)
+- Contacteurs jour/nuit, Télérupteurs (TL, TLi, CT, iCT)
 - Relais, Minuteries, Parafoudres, Horloges, Délesteurs
 - Borniers (MGTB), Transformateurs modulaires
 
-POUR CHAQUE APPAREIL (exemple avec calibre variable - LIS le calibre sur CHAQUE appareil!):
+🔴 PREUVE VISUELLE OBLIGATOIRE - Pour CHAQUE appareil, tu DOIS remplir "visual_evidence" avec:
+- Le texte EXACT que tu as lu sur l'appareil (calibre, référence, kA...)
+- La POSITION précise de ce texte (face avant, côté, étiquette...)
+- Si tu ne peux pas lire clairement, écris "ILLISIBLE - [raison]"
+
+POUR CHAQUE APPAREIL:
 {
   "position_label": "11F3" ou null,
   "circuit_name": "Éclairage" ou null,
   "row": 1,
   "position_in_row": 3,
   "device_type": "Disjoncteur modulaire",
-  "manufacturer": "Merlin Gerin",
-  "reference": "C60N",
-  "in_amps": "⚠️ LIRE SUR L'APPAREIL: 10, 13, 16, 20, 25, 32, 40... NE PAS DEVINER!",
+  "manufacturer": "Schneider",
+  "reference": "iC60N",
+  "in_amps": "LIRE sur l'appareil - ne pas deviner",
   "curve_type": "C",
   "icu_ka": 6,
   "ics_ka": null,
@@ -2910,8 +2931,15 @@ POUR CHAQUE APPAREIL (exemple avec calibre variable - LIS le calibre sur CHAQUE 
   "is_differential": false,
   "differential_sensitivity_ma": null,
   "differential_type": null,
-  "confidence": "high si calibre lisible, low si deviné",
-  "notes": "Si calibre illisible, mettre confidence=low et noter 'calibre non lisible'"
+  "trip_unit": "TM ou Micrologic si industriel",
+  "confidence": "high/medium/low",
+  "visual_evidence": {
+    "caliber_text_seen": "C16 - lu sur face avant en gros caractères",
+    "reference_text_seen": "iC60N - écrit sous le logo Schneider",
+    "icu_text_seen": "6000 dans rectangle - bas de la face avant",
+    "other_markings": ["230/400V~", "IEC 60898"]
+  },
+  "notes": ""
 }
 
 Réponds en JSON:
@@ -3365,8 +3393,66 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
       console.log(`[PANEL SCAN] ⚠️ WARNING: ${suspiciousCount} devices with suspicious uniform calibers`);
     }
 
+    // ============================================================
+    // VALIDATION: Vérifier la qualité de l'analyse visuelle
+    // ============================================================
+    let missingEvidenceCount = 0;
+    let duplicateEvidenceCount = 0;
+    const evidenceTexts = new Map(); // Pour détecter les duplications
+
+    for (const device of result.devices) {
+      const ve = device.visual_evidence;
+
+      // Vérifier si visual_evidence existe
+      if (!ve || typeof ve !== 'object') {
+        missingEvidenceCount++;
+        device.analysis_quality = 'low';
+        device.notes = (device.notes || '') + ' [⚠️ SANS PREUVE VISUELLE]';
+        continue;
+      }
+
+      // Vérifier si le calibre a été lu
+      const caliberEvidence = ve.caliber_text_seen || '';
+      if (!caliberEvidence || caliberEvidence.includes('ILLISIBLE') || caliberEvidence.length < 2) {
+        device.caliber_confidence = 'low';
+        device.notes = (device.notes || '') + ' [calibre non confirmé visuellement]';
+      }
+
+      // Détecter les duplications suspectes (même visual_evidence = copier-coller)
+      const evidenceKey = JSON.stringify(ve);
+      if (evidenceTexts.has(evidenceKey)) {
+        duplicateEvidenceCount++;
+        device.duplicate_evidence = true;
+        device.notes = (device.notes || '') + ' [⚠️ EVIDENCE DUPLIQUÉE - analyse individuelle douteuse]';
+      } else {
+        evidenceTexts.set(evidenceKey, device.position_label || `R${device.row}-P${device.position_in_row}`);
+      }
+    }
+
+    // Log qualité d'analyse
+    console.log(`[PANEL SCAN] ✓ Analyse visuelle: ${result.devices.length - missingEvidenceCount}/${result.devices.length} avec preuves`);
+    if (missingEvidenceCount > 0) {
+      console.log(`[PANEL SCAN] ⚠️ ${missingEvidenceCount} appareils SANS preuve visuelle`);
+    }
+    if (duplicateEvidenceCount > 0) {
+      console.log(`[PANEL SCAN] ⚠️ ${duplicateEvidenceCount} appareils avec preuves DUPLIQUÉES (copier-coller suspect)`);
+      result.warnings = result.warnings || [];
+      result.warnings.push({
+        type: 'DUPLICATE_VISUAL_EVIDENCE',
+        message: `${duplicateEvidenceCount} appareils ont exactement la même preuve visuelle - l'IA n'a peut-être pas analysé chaque appareil individuellement.`,
+        count: duplicateEvidenceCount
+      });
+    }
+
+    // Score de qualité global
+    const qualityScore = Math.round(100 * (1 - (missingEvidenceCount + duplicateEvidenceCount + suspiciousCount) / Math.max(1, result.devices.length)));
+    result.analysis_quality_score = qualityScore;
+    result.analysis_quality = qualityScore >= 80 ? 'high' : qualityScore >= 50 ? 'medium' : 'low';
+    console.log(`[PANEL SCAN] ✓ Score qualité analyse: ${qualityScore}% (${result.analysis_quality})`);
+
+    const warningCount = (result.warnings || []).length;
     job.progress = 50;
-    job.message = `${deviceCount} appareils détectés${suspiciousCount > 0 ? ` (${suspiciousCount} à vérifier)` : ''}, enrichissement via cache...`;
+    job.message = `${deviceCount} appareils détectés${warningCount > 0 ? ` (${warningCount} alertes)` : ''}, enrichissement via cache...`;
     await saveProgress(); // Save after merge
 
     // ============================================================
