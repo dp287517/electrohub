@@ -5600,14 +5600,14 @@ app.delete('/api/switchboard/scanned-products/:id', async (req, res) => {
 });
 
 // ============================================================
-// PDF EXPORT
+// PDF EXPORT - Professional Design
 // ============================================================
 
 app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
 
@@ -5619,7 +5619,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
        FROM devices d
        LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
-       WHERE d.switchboard_id = $1 
+       WHERE d.switchboard_id = $1
        ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`, [id]
     );
     const devices = devicesRes.rows;
@@ -5636,109 +5636,270 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     const logoRes = await quickQuery(`SELECT logo, logo_mime, company_name FROM site_settings WHERE site = $1`, [site]);
     const settings = logoRes.rows[0] || {};
 
-    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
+    const doc = new PDFDocument({ margin: 40, size: 'A4', bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_listing.pdf"`);
     doc.pipe(res);
 
-    // Header
-    let headerY = 40, textStartX = 50;
+    // ═══════════════════════════════════════════════════════════════════
+    // COLORS
+    // ═══════════════════════════════════════════════════════════════════
+    const colors = {
+      primary: '#1e40af',
+      primaryLight: '#3b82f6',
+      secondary: '#0f766e',
+      success: '#059669',
+      warning: '#d97706',
+      danger: '#dc2626',
+      purple: '#7c3aed',
+      gray: '#6b7280',
+      grayLight: '#f3f4f6',
+      grayBorder: '#e5e7eb',
+      text: '#111827',
+      textMuted: '#6b7280',
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPER FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════════
+    const drawRoundedRect = (x, y, w, h, r, fillColor, strokeColor = null) => {
+      doc.save();
+      doc.roundedRect(x, y, w, h, r);
+      if (fillColor) doc.fillColor(fillColor).fill();
+      if (strokeColor) doc.strokeColor(strokeColor).stroke();
+      doc.restore();
+    };
+
+    const drawBadge = (text, x, y, bgColor, textColor = '#ffffff', minWidth = 50) => {
+      doc.font('Helvetica-Bold').fontSize(7);
+      const textWidth = doc.widthOfString(text);
+      const badgeWidth = Math.max(textWidth + 10, minWidth);
+      drawRoundedRect(x, y, badgeWidth, 14, 3, bgColor);
+      doc.fillColor(textColor).text(text, x, y + 3, { width: badgeWidth, align: 'center' });
+      return badgeWidth;
+    };
+
+    const drawStatCard = (x, y, w, h, value, label, color) => {
+      drawRoundedRect(x, y, w, h, 6, '#ffffff', colors.grayBorder);
+      doc.moveTo(x, y + 4).lineTo(x, y + h - 4).lineWidth(3).strokeColor(color).stroke();
+      doc.lineWidth(1);
+      doc.font('Helvetica-Bold').fontSize(18).fillColor(color).text(value, x + 10, y + 10, { width: w - 20 });
+      doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted).text(label, x + 10, y + 32, { width: w - 20 });
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HEADER
+    // ═══════════════════════════════════════════════════════════════════
+    // Blue gradient header
+    doc.rect(0, 0, 595, 85).fillColor(colors.primary).fill();
+    doc.rect(0, 75, 595, 10).fillColor(colors.primaryLight).fill();
+
+    let logoWidth = 0;
     if (settings.logo) {
-      try { doc.image(settings.logo, 50, headerY, { width: 70, height: 50 }); textStartX = 130; } catch (e) {}
+      try {
+        doc.image(settings.logo, 40, 15, { width: 55, height: 55 });
+        logoWidth = 70;
+      } catch (e) {}
     }
 
-    doc.fontSize(18).font('Helvetica-Bold').fillColor('#1e40af').text(board.name, textStartX, headerY);
-    doc.fontSize(10).font('Helvetica').fillColor('#374151');
-    doc.text(`Code: ${board.code || '-'}`, textStartX, headerY + 25);
-    doc.text(`Bâtiment: ${board.building_code || '-'} | Étage: ${board.floor || '-'} | Local: ${board.room || '-'}`, textStartX, headerY + 40);
-    
-    let upstreamText = "Source: Inconnue / Principale";
+    // Title
+    doc.font('Helvetica-Bold').fontSize(22).fillColor('#ffffff');
+    doc.text(board.name, 40 + logoWidth, 18, { width: 350 });
+
+    // Code badge
+    doc.font('Helvetica-Bold').fontSize(10);
+    const codeText = board.code || '-';
+    const codeWidth = doc.widthOfString(codeText) + 16;
+    drawRoundedRect(40 + logoWidth, 48, codeWidth, 20, 4, 'rgba(255,255,255,0.2)');
+    doc.fillColor('#ffffff').text(codeText, 40 + logoWidth + 8, 53);
+
+    // Right side info
+    doc.font('Helvetica').fontSize(9).fillColor('rgba(255,255,255,0.9)');
+    doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 400, 20, { width: 155, align: 'right' });
+    if (settings.company_name) {
+      doc.fontSize(8).text(settings.company_name, 400, 35, { width: 155, align: 'right' });
+    }
+
+    // Location info
+    const location = [board.building_code, board.floor ? `Étage ${board.floor}` : null, board.room].filter(Boolean).join(' • ');
+    if (location) {
+      doc.fontSize(8).fillColor('rgba(255,255,255,0.8)').text(location, 400, 50, { width: 155, align: 'right' });
+    }
+
+    // Principal badge
+    if (board.is_principal) {
+      drawRoundedRect(480, 62, 75, 16, 3, colors.success);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff').text('TGBT', 480, 66, { width: 75, align: 'center' });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UPSTREAM SOURCE
+    // ═══════════════════════════════════════════════════════════════════
+    let currentY = 95;
+
     if (upstreamDevices.length > 0) {
-      upstreamText = "Alimenté par: " + upstreamDevices.map(d => {
+      const upText = upstreamDevices.map(d => {
         const breakerInfo = d.reference || d.manufacturer || '';
         const ampsInfo = d.in_amps ? `${d.in_amps}A` : '';
-        const breakerDesc = [breakerInfo, ampsInfo].filter(Boolean).join(' ');
-        return `${d.source_board_code}${breakerDesc ? ` via ${breakerDesc}` : ''}`;
+        return `${d.source_board_code} via ${[breakerInfo, ampsInfo].filter(Boolean).join(' ') || 'départ'}`;
       }).join(', ');
-    } else if (board.is_principal) {
-      upstreamText = "Type: Tableau Principal (TGBT)";
-    }
-    doc.text(upstreamText, textStartX, headerY + 55);
-    doc.fontSize(9).text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 400, headerY, { align: 'right' });
-    if (settings.company_name) doc.fontSize(8).fillColor('#6b7280').text(settings.company_name, 400, headerY + 15, { align: 'right' });
-    doc.moveTo(50, 110).lineTo(545, 110).strokeColor('#e5e7eb').stroke();
 
-    // Summary
-    const summaryY = 125;
+      drawRoundedRect(40, currentY, 515, 22, 4, '#fef3c7');
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.warning).text('⚡ ALIMENTÉ PAR', 50, currentY + 6);
+      doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(upText, 145, currentY + 6, { width: 400 });
+      currentY += 30;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STATISTICS CARDS
+    // ═══════════════════════════════════════════════════════════════════
     const totalDevices = devices.length;
     const completeDevices = devices.filter(d => d.is_complete).length;
     const differentialDevices = devices.filter(d => d.is_differential).length;
     const mainIncoming = devices.find(d => d.is_main_incoming);
+    const downstreamCount = devices.filter(d => d.downstream_switchboard_id).length;
+    const completionPct = totalDevices > 0 ? Math.round((completeDevices / totalDevices) * 100) : 0;
 
-    doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827').text('Résumé', 50, summaryY);
-    doc.fontSize(9).font('Helvetica').fillColor('#374151');
-    doc.text(`Total: ${totalDevices}`, 50, summaryY + 15);
-    doc.text(`Complètes: ${completeDevices}/${totalDevices}`, 150, summaryY + 15);
-    doc.text(`DDR: ${differentialDevices}`, 300, summaryY + 15);
-    if (mainIncoming) doc.text(`Arrivée: ${mainIncoming.manufacturer || ''} ${mainIncoming.in_amps || ''}A`, 50, summaryY + 30);
+    const cardWidth = 118;
+    const cardHeight = 48;
+    const cardGap = 10;
+    const cardsY = currentY + 5;
 
-    // Table
-    const tableStartY = summaryY + 55;
-    const colWidths = [35, 140, 75, 65, 40, 40, 35, 65];
+    drawStatCard(40, cardsY, cardWidth, cardHeight, String(totalDevices), 'Équipements', colors.primary);
+    drawStatCard(40 + cardWidth + cardGap, cardsY, cardWidth, cardHeight, `${completionPct}%`, 'Complétion', completionPct === 100 ? colors.success : colors.warning);
+    drawStatCard(40 + (cardWidth + cardGap) * 2, cardsY, cardWidth, cardHeight, String(differentialDevices), 'Différentiels (DDR)', colors.purple);
+    drawStatCard(40 + (cardWidth + cardGap) * 3, cardsY, cardWidth, cardHeight, String(downstreamCount), 'Départs tableaux', colors.secondary);
+
+    currentY = cardsY + cardHeight + 15;
+
+    // Main breaker info
+    if (mainIncoming) {
+      drawRoundedRect(40, currentY, 515, 24, 4, '#ecfdf5', colors.success);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.success).text('DISJONCTEUR D\'ARRIVÉE', 50, currentY + 7);
+      const mainInfo = [mainIncoming.manufacturer, mainIncoming.reference, mainIncoming.in_amps ? `${mainIncoming.in_amps}A` : null, mainIncoming.icu_ka ? `${mainIncoming.icu_ka}kA` : null].filter(Boolean).join(' • ');
+      doc.font('Helvetica').fontSize(9).fillColor('#065f46').text(mainInfo, 180, currentY + 7, { width: 365 });
+      currentY += 32;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DEVICES TABLE
+    // ═══════════════════════════════════════════════════════════════════
+    currentY += 5;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.text).text('Liste des équipements', 40, currentY);
+    currentY += 18;
+
+    const colWidths = [32, 145, 90, 70, 42, 42, 32, 62];
     const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
     const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+    const tableX = 40;
 
-    const drawHeader = (y) => {
-      doc.rect(50, y, totalWidth, 22).fillColor('#f3f4f6').fill();
-      doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
-      let x = 50;
-      headers.forEach((h, i) => { doc.text(h, x + 4, y + 6, { width: colWidths[i] - 8 }); x += colWidths[i]; });
-      doc.rect(50, y, totalWidth, 22).strokeColor('#d1d5db').stroke();
-    };
-
-    drawHeader(tableStartY);
-    doc.font('Helvetica').fontSize(8);
-    let y = tableStartY + 22;
-    const rowHeight = 20;
-    
-    devices.forEach((d, idx) => {
-      if (y > 780) { doc.addPage(); y = 50; drawHeader(y); y += 22; doc.font('Helvetica').fontSize(8); }
-      if (idx % 2 === 1) doc.rect(50, y, totalWidth, rowHeight).fillColor('#fafafa').fill();
-
-      let typeText = '-', typeColor = '#6b7280';
-      if (d.downstream_code) { typeText = `→ ${d.downstream_code}`; typeColor = '#059669'; }
-      else if (d.is_main_incoming) { typeText = 'Arrivée'; typeColor = '#d97706'; }
-      else if (d.is_differential) { typeText = 'DDR'; typeColor = '#7c3aed'; }
-      else if (!d.is_complete) { typeText = 'Incomplet'; typeColor = '#ea580c'; }
-
-      const row = [
-        d.position_number || String(idx + 1), (d.name || '-').substring(0, 35),
-        (d.reference || '-').substring(0, 18), (d.manufacturer || '-').substring(0, 15),
-        d.in_amps ? `${d.in_amps}A` : '-', d.icu_ka ? `${d.icu_ka}kA` : '-',
-        d.poles ? `${d.poles}P` : '-', typeText
-      ];
-      
-      let x = 50;
-      doc.fillColor('#111827');
-      row.forEach((cell, i) => {
-        if (i === row.length - 1) doc.fillColor(typeColor);
-        doc.text(String(cell), x + 4, y + 5, { width: colWidths[i] - 8, lineBreak: false, ellipsis: true });
-        if (i === row.length - 1) doc.fillColor('#111827');
+    const drawTableHeader = (y) => {
+      drawRoundedRect(tableX, y, totalWidth, 22, 4, colors.primary);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff');
+      let x = tableX;
+      headers.forEach((h, i) => {
+        doc.text(h, x + 5, y + 7, { width: colWidths[i] - 10 });
         x += colWidths[i];
       });
-      doc.rect(50, y, totalWidth, rowHeight).strokeColor('#e5e7eb').stroke();
-      y += rowHeight;
+      return y + 22;
+    };
+
+    const measureRowHeight = (device, idx) => {
+      doc.font('Helvetica').fontSize(8);
+      const name = device.name || '-';
+      const nameHeight = doc.heightOfString(name, { width: colWidths[1] - 10 });
+      return Math.max(22, nameHeight + 10);
+    };
+
+    const getTypeInfo = (d) => {
+      if (d.downstream_code) return { text: `→ ${d.downstream_code}`, color: colors.success, bg: '#d1fae5' };
+      if (d.is_main_incoming) return { text: 'Arrivée', color: colors.warning, bg: '#fef3c7' };
+      if (d.is_differential) return { text: 'DDR', color: colors.purple, bg: '#ede9fe' };
+      if (!d.is_complete) return { text: 'Incomplet', color: colors.danger, bg: '#fee2e2' };
+      return { text: '-', color: colors.gray, bg: null };
+    };
+
+    currentY = drawTableHeader(currentY);
+
+    devices.forEach((d, idx) => {
+      const rowHeight = measureRowHeight(d, idx);
+
+      // Check for page break
+      if (currentY + rowHeight > 780) {
+        doc.addPage();
+        currentY = 40;
+        currentY = drawTableHeader(currentY);
+      }
+
+      // Alternating row background
+      if (idx % 2 === 0) {
+        doc.rect(tableX, currentY, totalWidth, rowHeight).fillColor(colors.grayLight).fill();
+      }
+
+      // Row border
+      doc.rect(tableX, currentY, totalWidth, rowHeight).strokeColor(colors.grayBorder).stroke();
+
+      // Draw cells
+      doc.font('Helvetica').fontSize(8).fillColor(colors.text);
+      let x = tableX;
+
+      // Position number
+      doc.font('Helvetica-Bold').fillColor(colors.primary);
+      doc.text(d.position_number || String(idx + 1), x + 5, currentY + 6, { width: colWidths[0] - 10 });
+      x += colWidths[0];
+
+      // Name (with word wrap)
+      doc.font('Helvetica').fillColor(colors.text);
+      doc.text(d.name || '-', x + 5, currentY + 6, { width: colWidths[1] - 10 });
+      x += colWidths[1];
+
+      // Reference
+      doc.fillColor(colors.textMuted);
+      doc.text(d.reference || '-', x + 5, currentY + 6, { width: colWidths[2] - 10, lineBreak: false, ellipsis: true });
+      x += colWidths[2];
+
+      // Manufacturer
+      doc.text(d.manufacturer || '-', x + 5, currentY + 6, { width: colWidths[3] - 10, lineBreak: false, ellipsis: true });
+      x += colWidths[3];
+
+      // In (Amps) - highlighted
+      doc.font('Helvetica-Bold').fillColor(colors.text);
+      doc.text(d.in_amps ? `${d.in_amps}A` : '-', x + 5, currentY + 6, { width: colWidths[4] - 10 });
+      x += colWidths[4];
+
+      // Icu
+      doc.font('Helvetica').fillColor(colors.textMuted);
+      doc.text(d.icu_ka ? `${d.icu_ka}kA` : '-', x + 5, currentY + 6, { width: colWidths[5] - 10 });
+      x += colWidths[5];
+
+      // Poles
+      doc.text(d.poles ? `${d.poles}P` : '-', x + 5, currentY + 6, { width: colWidths[6] - 10 });
+      x += colWidths[6];
+
+      // Type badge
+      const typeInfo = getTypeInfo(d);
+      if (typeInfo.bg) {
+        drawRoundedRect(x + 3, currentY + 4, colWidths[7] - 6, 14, 3, typeInfo.bg);
+      }
+      doc.font('Helvetica-Bold').fontSize(7).fillColor(typeInfo.color);
+      doc.text(typeInfo.text, x + 5, currentY + 7, { width: colWidths[7] - 10, align: 'center', lineBreak: false, ellipsis: true });
+
+      currentY += rowHeight;
     });
 
-    // Page numbers
+    // ═══════════════════════════════════════════════════════════════════
+    // PAGE NUMBERS
+    // ═══════════════════════════════════════════════════════════════════
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#9ca3af').text(`${board.code || board.name} - Page ${i + 1}/${range.count}`, 50, 820, { align: 'center', width: 495 });
+      doc.font('Helvetica').fontSize(8).fillColor(colors.gray);
+      doc.text(`${board.code || board.name} — Page ${i + 1} / ${range.count}`, 40, 815, { width: 515, align: 'center' });
     }
+
     doc.end();
   } catch (e) {
-    console.error('[PDF EXPORT]', e.message);
+    console.error('[PDF EXPORT]', e.message, e.stack);
     if (!res.headersSent) res.status(500).json({ error: 'PDF generation failed' });
   }
 });
