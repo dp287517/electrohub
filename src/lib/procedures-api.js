@@ -232,10 +232,14 @@ export async function finalizeAISession(sessionId, { background = false } = {}) 
 
 // Process raw steps into quality procedure details (called when user says "terminé")
 // Set background=true to process async and receive notification when done
-export async function processAISession(sessionId, { background = false } = {}) {
-  const url = background
-    ? `${API_BASE}/ai/process/${sessionId}?background=true`
-    : `${API_BASE}/ai/process/${sessionId}`;
+// Set autoFinalize=true to also create the procedure automatically (recommended for background mode)
+export async function processAISession(sessionId, { background = false, autoFinalize = false } = {}) {
+  let url = `${API_BASE}/ai/process/${sessionId}`;
+
+  if (background) {
+    // In background mode, always auto-finalize for better UX
+    url += `?background=true&autoFinalize=true`;
+  }
 
   const response = await fetchWithAuth(url, {
     method: 'POST',

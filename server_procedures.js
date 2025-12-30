@@ -5137,43 +5137,91 @@ app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
 
   console.log(`[PROC] Starting quality processing for session ${sessionId}, background: ${background}`);
 
-  // Background mode: return immediately, process async, send notification
+  // Background mode: return immediately, process async, auto-finalize, send notification
+  const autoFinalize = req.query.autoFinalize === 'true';
+  const site = req.headers["x-site"] || req.query.site;
+
   if (background === 'true') {
     res.json({
       ok: true,
       processing: true,
-      message: "⏳ Traitement en cours... Vous recevrez une notification quand ce sera prêt."
+      message: autoFinalize
+        ? "⏳ Création de la procédure en cours... Vous recevrez une notification quand ce sera prêt."
+        : "⏳ Traitement en cours... Vous recevrez une notification quand ce sera prêt."
     });
 
     // Process in background (don't await)
     processRawSteps(sessionId)
       .then(async (processedData) => {
-        console.log(`[PROC] Background processing complete for ${sessionId}`);
+        console.log(`[PROC] Background processing complete for ${sessionId}, autoFinalize: ${autoFinalize}`);
 
-        // Send push notification to user
-        if (userEmail) {
-          await notifyUser(userEmail,
-            '✅ Procédure prête',
-            `"${processedData.title}" - ${processedData.steps?.length || 0} étapes. Cliquez pour finaliser.`,
-            {
-              type: 'procedure_ready',
-              tag: `procedure-${sessionId}`,
-              requireInteraction: true,
-              data: {
-                url: '/procedures',
-                sessionId,
-                action: 'finalize_procedure'
-              },
-              actions: [
-                { action: 'view', title: 'Voir' }
-              ]
+        // Auto-finalize if requested (creates the actual procedure)
+        if (autoFinalize) {
+          try {
+            const procedure = await finalizeProcedureInternal(sessionId, userEmail, site);
+            console.log(`[PROC] Auto-finalization complete: procedure ${procedure.id}`);
+
+            // Send notification for completed procedure
+            if (userEmail) {
+              await notifyUser(userEmail,
+                '✅ Procédure créée',
+                `"${procedure.title}" - ${procedure.stepsCount || processedData.steps?.length || 0} étapes. Cliquez pour voir.`,
+                {
+                  type: 'procedure_created',
+                  tag: `procedure-created-${procedure.id}`,
+                  requireInteraction: true,
+                  data: {
+                    url: `/app/procedures/${procedure.id}`,
+                    procedureId: procedure.id,
+                    action: 'view_procedure'
+                  },
+                  actions: [
+                    { action: 'view', title: 'Voir la procédure' }
+                  ]
+                }
+              );
             }
-          );
+          } catch (finalizeErr) {
+            console.error(`[PROC] Auto-finalization failed for ${sessionId}:`, finalizeErr);
+            if (userEmail) {
+              await notifyUser(userEmail,
+                '⚠️ Traitement terminé',
+                `"${processedData.title}" est prête mais la création a échoué. Cliquez pour finaliser manuellement.`,
+                {
+                  type: 'procedure_ready',
+                  tag: `procedure-${sessionId}`,
+                  requireInteraction: true,
+                  data: { url: '/procedures', sessionId, action: 'finalize_procedure' }
+                }
+              );
+            }
+          }
+        } else {
+          // Just notify processing is done (user needs to finalize manually)
+          if (userEmail) {
+            await notifyUser(userEmail,
+              '✅ Procédure prête',
+              `"${processedData.title}" - ${processedData.steps?.length || 0} étapes. Cliquez pour finaliser.`,
+              {
+                type: 'procedure_ready',
+                tag: `procedure-${sessionId}`,
+                requireInteraction: true,
+                data: {
+                  url: '/procedures',
+                  sessionId,
+                  action: 'finalize_procedure'
+                },
+                actions: [
+                  { action: 'view', title: 'Voir' }
+                ]
+              }
+            );
+          }
         }
       })
       .catch((err) => {
         console.error(`[PROC] Background processing failed for ${sessionId}:`, err);
-        // Optionally notify user of error
+        // Notify user of error
         if (userEmail) {
           notifyUser(userEmail,
             '❌ Erreur de traitement',
