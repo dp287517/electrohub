@@ -19,6 +19,11 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
+// Pool séparé pour la base ATEX (si différente) - utilisé pour pending_reports
+const atexPool = new Pool({
+  connectionString: process.env.ATEX_DATABASE_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL
+});
+
 // ============================================================
 // AI SETUP - OpenAI + Gemini (fallback)
 // ============================================================
@@ -8277,9 +8282,10 @@ app.get("/api/dashboard/activities", async (req, res) => {
     activities.push(...pmActivities);
 
     // 7. Pending Reports (ATEX DRPCE, etc.) - for action_required
+    // NOTE: Utilise atexPool car pending_reports est dans la base ATEX
     const actionRequired = [];
     try {
-      const { rows: pendingReports } = await pool.query(`
+      const { rows: pendingReports } = await atexPool.query(`
         SELECT id, report_type, status, user_email, created_at, completed_at, total_items, error_message
         FROM pending_reports
         WHERE status IN ('pending', 'completed')
