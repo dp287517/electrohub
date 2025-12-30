@@ -4,7 +4,7 @@ import {
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
   FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
-  BadgeCheck, FileEdit, Pen, Users, RefreshCw
+  BadgeCheck, FileEdit, Pen, Users, RefreshCw, ImagePlus
 } from 'lucide-react';
 import {
   getProcedure,
@@ -32,6 +32,7 @@ import {
   STATUS_LABELS,
   DEFAULT_PPE,
 } from '../../lib/procedures-api';
+import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import RealtimeAssistant from './RealtimeAssistant';
 import SignatureManager from './SignatureManager';
 
@@ -248,6 +249,12 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [isRecoveringPhotos, setIsRecoveringPhotos] = useState(false);
   const [photosRecovered, setPhotosRecovered] = useState(0);
   const [hasPhotoErrors, setHasPhotoErrors] = useState(false);
+  const [showPhotoAssignment, setShowPhotoAssignment] = useState(false);
+  const [pendingPhotos, setPendingPhotos] = useState([]);
+  const [uploadingStepId, setUploadingStepId] = useState(null);
+
+  // Capture context for photo recapture
+  const { startCapture, isCapturing, captures, captureCount, consumeCaptures } = useProcedureCapture();
 
   const loadSignatures = async () => {
     try {
@@ -278,6 +285,45 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
       alert(`Erreur: ${err.message}`);
     } finally {
       setIsRecoveringPhotos(false);
+    }
+  };
+
+  // Start photo capture mode for this procedure
+  const handleStartPhotoCapture = () => {
+    startCapture({
+      id: procedureId,
+      title: procedure?.title || 'Procédure',
+      returnPath: window.location.pathname,
+      mode: 'recapture'
+    });
+  };
+
+  // Handle returning from capture mode with photos
+  useEffect(() => {
+    if (!isCapturing && captureCount > 0 && procedure) {
+      const newCaptures = consumeCaptures();
+      if (newCaptures.length > 0) {
+        console.log('[ProcedureViewer] Got captures to assign:', newCaptures.length);
+        setPendingPhotos(newCaptures);
+        setShowPhotoAssignment(true);
+      }
+    }
+  }, [isCapturing, captureCount, procedure]);
+
+  // Assign a photo to a specific step
+  const handleAssignPhoto = async (stepId, photo) => {
+    setUploadingStepId(stepId);
+    try {
+      await uploadStepPhoto(procedureId, stepId, photo.file);
+      // Remove from pending
+      setPendingPhotos(prev => prev.filter(p => p.id !== photo.id));
+      // Reload to show new photo
+      await loadProcedure();
+    } catch (err) {
+      console.error('Error uploading photo:', err);
+      alert(`Erreur: ${err.message}`);
+    } finally {
+      setUploadingStepId(null);
     }
   };
 
@@ -847,29 +893,41 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
             )}
           </div>
 
-          {/* Photo recovery alert - show if any step is missing photo OR if there have been photo loading errors */}
+          {/* Photo management - capture or recover */}
           {procedure.steps?.length > 0 && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
-              <div className="flex items-center gap-2 text-amber-800">
-                <Camera className="w-5 h-5" />
-                <span className="text-sm">
-                  {procedure.steps.some(s => !s.photo_path)
-                    ? "Certaines étapes n'ont pas de photos"
-                    : "Photos des étapes"}
-                </span>
+            <div className="mb-4 p-3 bg-violet-50 border border-violet-200 rounded-xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-violet-800">
+                  <Camera className="w-5 h-5" />
+                  <span className="text-sm font-medium">
+                    {procedure.steps.filter(s => s.photo_path).length}/{procedure.steps.length} photos
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleStartPhotoCapture}
+                    className="px-3 py-1.5 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 flex items-center gap-2"
+                  >
+                    <ImagePlus className="w-4 h-4" />
+                    Capturer
+                  </button>
+                  <button
+                    onClick={handleRecoverPhotos}
+                    disabled={isRecoveringPhotos}
+                    className="px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isRecoveringPhotos ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-4 h-4" />
+                    )}
+                    Récupérer
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={handleRecoverPhotos}
-                disabled={isRecoveringPhotos}
-                className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isRecoveringPhotos ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-4 h-4" />
-                )}
-                Récupérer
-              </button>
+              <p className="text-xs text-violet-600 mt-2">
+                Cliquez sur "Capturer" pour naviguer et prendre des screenshots, puis les assigner aux étapes.
+              </p>
             </div>
           )}
 
@@ -1071,6 +1129,85 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
           onClose={() => { setShowSignatures(false); loadProcedure(); }}
           onValidated={() => { setShowSignatures(false); loadProcedure(); }}
         />
+      )}
+
+      {/* Photo Assignment Modal */}
+      {showPhotoAssignment && pendingPhotos.length > 0 && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+            <div className="bg-violet-600 text-white p-4 flex items-center justify-between">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <ImagePlus className="w-5 h-5" />
+                Assigner les photos ({pendingPhotos.length})
+              </h3>
+              <button onClick={() => setShowPhotoAssignment(false)} className="p-1 hover:bg-white/20 rounded">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              {/* Photos to assign */}
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-3">Photos capturées - cliquez sur une étape pour y assigner la photo</p>
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                  {pendingPhotos.map((photo) => (
+                    <div key={photo.id} className="flex-shrink-0">
+                      <img
+                        src={photo.preview}
+                        alt=""
+                        className="w-20 h-20 object-cover rounded-lg border-2 border-violet-300"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Steps list */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">Étapes de la procédure :</p>
+                {procedure?.steps?.map((step) => (
+                  <div
+                    key={step.id}
+                    className="flex items-center gap-3 p-3 border rounded-lg hover:bg-violet-50 cursor-pointer"
+                    onClick={() => pendingPhotos.length > 0 && handleAssignPhoto(step.id, pendingPhotos[0])}
+                  >
+                    <div className="w-8 h-8 bg-violet-100 text-violet-700 rounded-full flex items-center justify-center font-semibold text-sm">
+                      {step.step_number}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">{step.title}</p>
+                    </div>
+                    {uploadingStepId === step.id ? (
+                      <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
+                    ) : step.photo_path ? (
+                      <CheckCircle className="w-5 h-5 text-green-500" />
+                    ) : (
+                      <Camera className="w-5 h-5 text-gray-300" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="border-t p-4 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setPendingPhotos([]);
+                  setShowPhotoAssignment(false);
+                }}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => setShowPhotoAssignment(false)}
+                className="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700"
+              >
+                Terminer
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

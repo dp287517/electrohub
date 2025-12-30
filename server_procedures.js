@@ -3250,112 +3250,98 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
   doc.text(`${new Date().toLocaleDateString("fr-FR")} | ID: ${procedureId.slice(0, 8)}`, pageWidth - margin - 150, footerY + 5, { width: 150, align: "right" });
 
   // === ANNEXE: PHOTOS DES ETAPES ===
-  // Check if there are any photos to show
-  const stepsWithPhotos = steps.filter(s => s.photo_content || s.photo_path);
+  // Only include steps that have actual photo content (not just path)
+  const stepsWithPhotos = steps.filter(s => {
+    if (s.photo_content && s.photo_content.length > 100) return true;
+    if (s.photo_path) {
+      try {
+        const imgPath = path.join(PHOTOS_DIR, path.basename(s.photo_path));
+        return fs.existsSync(imgPath);
+      } catch { return false; }
+    }
+    return false;
+  });
 
   if (stepsWithPhotos.length > 0) {
     doc.addPage();
 
     // Annexe header
-    let annexeY = margin;
     doc.rect(0, 0, pageWidth, 35).fill(c.headerBg);
     doc.font("Helvetica-Bold").fontSize(14).fillColor(c.headerText)
        .text("ANNEXE: PHOTOS DES ÉTAPES", margin, 12);
-    doc.fontSize(8).text(`${stepsWithPhotos.length} photos sur ${steps.length} étapes`, pageWidth - margin - 150, 14, { width: 150, align: "right" });
+    doc.fontSize(8).text(`${stepsWithPhotos.length} photos`, pageWidth - margin - 100, 14, { width: 100, align: "right" });
 
-    annexeY = 45;
+    // Compact grid: 3 columns, 2 rows = 6 photos per page
+    const cols = 3;
+    const rows = 2;
+    const photosPerPage = cols * rows;
+    const gap = 8;
+    const photoW = (pageWidth - margin * 2 - gap * (cols - 1)) / cols;
+    const photoH = (pageHeight - 35 - 25 - margin - gap) / rows; // header 35, footer 25, margin, gap
+    const startY = 40;
 
-    // Photo grid: 2 columns, as many rows as needed
-    const photoW = (pageWidth - margin * 3) / 2;
-    const photoH = 180; // Height for each photo block
-    const photosPerPage = 4; // 2x2 grid
     let photoIndex = 0;
+    let pageNum = 1;
 
     for (const step of stepsWithPhotos) {
-      // Check if we need a new page
-      const col = photoIndex % 2;
-      const row = Math.floor((photoIndex % photosPerPage) / 2);
+      const posOnPage = photoIndex % photosPerPage;
+      const col = posOnPage % cols;
+      const row = Math.floor(posOnPage / cols);
 
-      if (photoIndex > 0 && photoIndex % photosPerPage === 0) {
-        // Add footer to current page
-        doc.rect(0, pageHeight - 18, pageWidth, 18).fill(c.headerBg);
+      // New page needed?
+      if (photoIndex > 0 && posOnPage === 0) {
+        // Footer on current page
+        doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
         doc.font("Helvetica-Bold").fontSize(6).fillColor(c.headerText)
-           .text(`RAMS - ${procedure.title} - Annexe Photos`, margin, pageHeight - 13);
-        doc.text(`Page ${Math.floor(photoIndex / photosPerPage) + 1}`, pageWidth - margin - 50, pageHeight - 13, { width: 50, align: "right" });
+           .text(`RAMS - ${procedure.title} - Annexe Photos - Page ${pageNum}`, margin, pageHeight - 14);
+        pageNum++;
 
         doc.addPage();
-        annexeY = margin;
-
-        // Page header
-        doc.rect(0, 0, pageWidth, 25).fill(c.headerBg);
+        doc.rect(0, 0, pageWidth, 28).fill(c.headerBg);
         doc.font("Helvetica-Bold").fontSize(10).fillColor(c.headerText)
-           .text("ANNEXE: PHOTOS DES ÉTAPES (suite)", margin, 8);
-        annexeY = 35;
+           .text("ANNEXE: PHOTOS (suite)", margin, 9);
       }
 
-      const px = margin + col * (photoW + margin);
-      const py = annexeY + row * (photoH + 10);
+      const px = margin + col * (photoW + gap);
+      const py = startY + row * (photoH + gap);
 
-      // Photo container
-      doc.roundedRect(px, py, photoW, photoH, 6).fillAndStroke(c.white, c.border);
+      // Photo container with shadow effect
+      doc.roundedRect(px, py, photoW, photoH, 4).fillAndStroke(c.white, c.border);
 
-      // Step number badge
-      doc.circle(px + 15, py + 15, 12).fill(c.primary);
-      doc.font("Helvetica-Bold").fontSize(10).fillColor(c.white)
-         .text(String(step.step_number), px + 6, py + 10, { width: 18, align: "center" });
+      // Step number badge (smaller)
+      doc.circle(px + 12, py + 12, 9).fill(c.primary);
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white)
+         .text(String(step.step_number), px + 5, py + 8, { width: 14, align: "center" });
 
-      // Step title
-      doc.font("Helvetica-Bold").fontSize(9).fillColor(c.text)
-         .text(step.title || `Étape ${step.step_number}`, px + 35, py + 10, { width: photoW - 45, lineBreak: false, ellipsis: true });
+      // Step title (compact)
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(c.text)
+         .text(step.title || `Étape ${step.step_number}`, px + 26, py + 8, { width: photoW - 32, lineBreak: false, ellipsis: true });
 
-      // Photo area
-      const imgX = px + 5, imgY = py + 30, imgW = photoW - 10, imgH = photoH - 55;
-      let photoOk = false;
+      // Photo area (maximized)
+      const imgX = px + 3, imgY = py + 22, imgW = photoW - 6, imgH = photoH - 28;
 
       if (step.photo_content) {
         try {
           doc.image(step.photo_content, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
-          photoOk = true;
         } catch (e) {
-          console.log(`[RAMS] Failed to render photo_content for step ${step.step_number}:`, e.message);
+          console.log(`[RAMS] Photo render error step ${step.step_number}:`, e.message);
         }
-      }
-
-      if (!photoOk && step.photo_path) {
+      } else if (step.photo_path) {
         try {
           const imgPath = path.join(PHOTOS_DIR, path.basename(step.photo_path));
-          if (fs.existsSync(imgPath)) {
-            doc.image(imgPath, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
-            photoOk = true;
-          }
+          doc.image(imgPath, imgX, imgY, { fit: [imgW, imgH], align: "center", valign: "center" });
         } catch (e) {
-          console.log(`[RAMS] Failed to render photo_path for step ${step.step_number}:`, e.message);
+          console.log(`[RAMS] Photo file error step ${step.step_number}:`, e.message);
         }
-      }
-
-      if (!photoOk) {
-        doc.rect(imgX, imgY, imgW, imgH).fill(c.lightBg);
-        doc.fontSize(10).fillColor(c.lightText)
-           .text("Photo non disponible", imgX, imgY + imgH/2 - 5, { width: imgW, align: "center" });
-      }
-
-      // Instructions preview (truncated)
-      if (step.instructions) {
-        const truncatedInstr = step.instructions.length > 80
-          ? step.instructions.substring(0, 80) + '...'
-          : step.instructions;
-        doc.font("Helvetica").fontSize(7).fillColor(c.lightText)
-           .text(truncatedInstr, px + 5, py + photoH - 18, { width: photoW - 10, lineBreak: false, ellipsis: true });
       }
 
       photoIndex++;
     }
 
     // Final page footer
-    doc.rect(0, pageHeight - 18, pageWidth, 18).fill(c.headerBg);
+    doc.rect(0, pageHeight - 20, pageWidth, 20).fill(c.headerBg);
     doc.font("Helvetica-Bold").fontSize(6).fillColor(c.headerText)
-       .text(`RAMS - ${procedure.title} - Annexe Photos`, margin, pageHeight - 13);
-    doc.text(`Page ${Math.ceil(stepsWithPhotos.length / photosPerPage)}`, pageWidth - margin - 50, pageHeight - 13, { width: 50, align: "right" });
+       .text(`RAMS - ${procedure.title} - Annexe Photos - Page ${pageNum}`, margin, pageHeight - 14);
   }
 
   doc.end();
