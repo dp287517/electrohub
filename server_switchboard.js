@@ -248,7 +248,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 let openai = null;
 let gemini = null;
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-2.5-pro'; // Meilleur modèle pour analyse visuelle détaillée
 
 if (process.env.OPENAI_API_KEY) {
   try {
@@ -3035,8 +3035,9 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
     if (gemini) {
       const geminiStartTime = Date.now();
       try {
+        // Utiliser Gemini 2.5 Pro pour la meilleure analyse visuelle
         const geminiModel = gemini.getGenerativeModel({
-          model: 'gemini-2.0-flash',
+          model: 'gemini-2.5-pro',
           generationConfig: {
             temperature: 0.1,
             maxOutputTokens: 16000,
@@ -3503,8 +3504,9 @@ Réponds UNIQUEMENT en JSON:
 
 IMPORTANT: Si tu vois le MÊME calibre partout, vérifie que tu n'as pas copié-collé !`;
 
+          // Utiliser Gemini 2.5 Pro pour la ré-analyse précise des calibres
           const geminiReanalysisModel = gemini.getGenerativeModel({
-            model: 'gemini-2.0-flash',
+            model: 'gemini-2.5-pro',
             generationConfig: {
               temperature: 0.2,
               maxOutputTokens: 4000,
