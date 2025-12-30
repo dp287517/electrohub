@@ -3356,12 +3356,25 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
     // FIX: If draft has a title, go to "steps" phase even if no steps yet
     // Only ask for title (init phase) if there's no title
     const resumePhase = draft.steps?.length > 0 ? "steps" : (draft.title ? "steps" : "init");
+
+    // FIX: Convert existing steps to raw_steps so stepNumber calculation works correctly
+    // When resuming, we need to know how many steps already exist
+    const existingSteps = draft.steps || [];
+    const rawStepsFromDraft = existingSteps.map((step, index) => ({
+      step_number: index + 1,
+      raw_text: step.title || step.instructions || `Étape ${index + 1}`,
+      photo: step.photo_url || step.photo || null,
+      has_photo: !!(step.photo_url || step.photo),
+      from_draft: true // Mark as coming from draft, already processed
+    }));
+
     const resumeCollectedData = {
       title: draft.title,
       description: draft.description,
       category: draft.category,
       risk_level: draft.risk_level,
       steps: draft.steps || [],
+      raw_steps: rawStepsFromDraft, // FIX: Include raw_steps for stepNumber calculation
       ppe: draft.ppe || [],
       ppe_required: draft.ppe || [],
       equipment_links: draft.equipment_links || []
