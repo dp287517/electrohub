@@ -5409,6 +5409,50 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
   return procedure;
 }
 
+// EMERGENCY: Check session status and recover data
+app.get("/api/procedures/ai/session/:sessionId/status", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    const { rows } = await pool.query(
+      `SELECT id, procedure_id, current_step, collected_data, created_at, updated_at
+       FROM procedure_ai_sessions WHERE id = $1`,
+      [sessionId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ ok: false, error: "Session not found" });
+    }
+
+    const session = rows[0];
+    const data = session.collected_data || {};
+
+    res.json({
+      ok: true,
+      session: {
+        id: session.id,
+        procedureId: session.procedure_id,
+        currentStep: session.current_step,
+        hasBeenFinalized: !!session.procedure_id,
+        title: data.title,
+        stepsCount: data.steps?.length || data.raw_steps?.length || 0,
+        rawStepsCount: data.raw_steps?.length || 0,
+        hasDescription: !!data.description,
+        riskLevel: data.risk_level,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at
+      },
+      canFinalize: !session.procedure_id && (data.steps?.length > 0 || data.raw_steps?.length > 0),
+      message: session.procedure_id
+        ? `✅ Déjà finalisée! Procedure ID: ${session.procedure_id}`
+        : `📋 Session prête avec ${data.steps?.length || data.raw_steps?.length || 0} étapes. Appelez POST /api/procedures/ai/finalize/${sessionId} pour créer la procédure.`
+    });
+  } catch (err) {
+    console.error("Error checking session:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Create procedure from AI session
 // Supports two modes:
 // - Synchronous (default): waits and returns result
