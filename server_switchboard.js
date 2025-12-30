@@ -4153,6 +4153,52 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
       return res.status(503).json({ error: 'OpenAI non disponible' });
     }
 
+    // ============================================================
+    // PROTECTION: Check if there's already an active job for this switchboard
+    // ============================================================
+    for (const [existingJobId, existingJob] of panelScanJobs) {
+      if (existingJob.switchboard_id === switchboard_id &&
+          existingJob.site === site &&
+          (existingJob.status === 'pending' || existingJob.status === 'analyzing')) {
+        // Job already in progress for this switchboard - return it instead of creating a new one
+        console.log(`[PANEL SCAN] Active job ${existingJobId} already exists for switchboard ${switchboard_id}, returning existing job`);
+        return res.json({
+          job_id: existingJobId,
+          status: existingJob.status,
+          progress: existingJob.progress,
+          message: existingJob.message || 'Analyse en cours...',
+          poll_url: `/api/switchboard/panel-scan-job/${existingJobId}`,
+          reused: true
+        });
+      }
+    }
+
+    // Also check database for recent jobs (in case server restarted)
+    try {
+      const recentJob = await pool.query(`
+        SELECT id, status, progress, message FROM panel_scan_jobs
+        WHERE switchboard_id = $1 AND site = $2
+          AND status IN ('pending', 'analyzing')
+          AND created_at > NOW() - INTERVAL '30 minutes'
+        ORDER BY created_at DESC LIMIT 1
+      `, [switchboard_id, site]);
+
+      if (recentJob.rows.length > 0) {
+        const job = recentJob.rows[0];
+        console.log(`[PANEL SCAN] Found active job ${job.id} in database for switchboard ${switchboard_id}`);
+        return res.json({
+          job_id: job.id,
+          status: job.status,
+          progress: job.progress,
+          message: job.message || 'Analyse en cours...',
+          poll_url: `/api/switchboard/panel-scan-job/${job.id}`,
+          reused: true
+        });
+      }
+    } catch (dbErr) {
+      console.warn('[PANEL SCAN] Could not check for existing jobs in DB:', dbErr.message);
+    }
+
     // Create job ID
     const jobId = `ps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
