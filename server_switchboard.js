@@ -3084,6 +3084,21 @@ AUTRES ÉQUIPEMENTS:
 - La POSITION précise de ce texte (face avant, côté, étiquette...)
 - Si tu ne peux pas lire clairement, écris "ILLISIBLE - [raison]"
 
+📊 CARACTÉRISTIQUES TECHNIQUES À RENSEIGNER:
+
+POUVOIR DE COUPURE (Icu/Ics):
+- Icu = Pouvoir de coupure ultime (en kA) - marqué sur l'appareil (ex: "6000" = 6kA)
+- Ics = Pouvoir de coupure de service - généralement égal à Icu pour les modulaires
+- Pour les modulaires: Ics = Icu (100%)
+- Pour les industriels: Ics peut être 25%, 50%, 75% ou 100% de Icu
+
+TYPE DE DÉCLENCHEUR (trip_unit) - OBLIGATOIRE:
+- Disjoncteurs modulaires (C60, iC60, DX³...): "thermique-magnétique"
+- Disjoncteurs industriels avec TM-D ou TM-G: "thermique-magnétique réglable"
+- Disjoncteurs avec Micrologic (écran digital): "électronique"
+- Interrupteurs différentiels (ID, iID): null (pas de déclencheur, juste différentiel)
+- Contacteurs, télérupteurs: null
+
 POUR CHAQUE APPAREIL:
 {
   "position_label": "11F3" ou null,
@@ -3096,14 +3111,14 @@ POUR CHAQUE APPAREIL:
   "in_amps": "LIRE sur l'appareil - ne pas deviner",
   "curve_type": "C",
   "icu_ka": 6,
-  "ics_ka": null,
+  "ics_ka": 6,
   "voltage_v": 230,
   "poles": 2,
   "width_modules": 2,
   "is_differential": false,
   "differential_sensitivity_ma": null,
   "differential_type": null,
-  "trip_unit": "TM ou Micrologic si industriel",
+  "trip_unit": "thermique-magnétique",
   "confidence": "high/medium/low",
   "visual_evidence": {
     "caliber_text_seen": "C16 - lu sur face avant en gros caractères",
@@ -4390,15 +4405,52 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         // ============================================================
         // PARSING PRÉALABLE - Convertir toutes les valeurs AI en types corrects
         // ============================================================
+        const parsedIcu = parseIcuKa(device.icu_ka);
+        const parsedIcs = parseIcuKa(device.ics_ka);
+
+        // Déterminer le type de déclencheur automatiquement si non fourni
+        const inferTripUnit = (dev) => {
+          if (dev.trip_unit) return dev.trip_unit;
+          const deviceType = (dev.device_type || '').toLowerCase();
+          const reference = (dev.reference || '').toLowerCase();
+
+          // Interrupteurs différentiels n'ont pas de déclencheur
+          if (deviceType.includes('interrupteur différentiel') ||
+              deviceType.includes('inter diff') ||
+              reference.match(/^i?id/i)) {
+            return null;
+          }
+          // Contacteurs, télérupteurs n'ont pas de déclencheur
+          if (deviceType.includes('contacteur') || deviceType.includes('télérupteur')) {
+            return null;
+          }
+          // Disjoncteurs industriels avec Micrologic
+          if (reference.includes('micrologic') || deviceType.includes('micrologic')) {
+            return 'électronique';
+          }
+          // Disjoncteurs industriels NSX, Masterpact, etc.
+          if (reference.match(/nsx|masterpact|tmax|nzm|dpx/i)) {
+            return 'thermique-magnétique réglable';
+          }
+          // Disjoncteurs modulaires par défaut
+          if (deviceType.includes('disjoncteur')) {
+            return 'thermique-magnétique';
+          }
+          return null;
+        };
+
         const parsedDevice = {
           ...device,
           in_amps: parseInAmps(device.in_amps),
-          icu_ka: parseIcuKa(device.icu_ka),
-          ics_ka: parseIcuKa(device.ics_ka),
+          icu_ka: parsedIcu,
+          // Ics = Icu pour les modulaires (100%), sinon utiliser la valeur fournie
+          ics_ka: parsedIcs || parsedIcu,
           poles: typeof device.poles === 'number' ? device.poles :
                  typeof device.poles === 'string' ? parseInt(device.poles) || null : null,
           voltage_v: typeof device.voltage_v === 'number' ? device.voltage_v :
                      typeof device.voltage_v === 'string' ? parseInt(device.voltage_v) || null : null,
+          // Type de déclencheur - inférer si non fourni
+          trip_unit: inferTripUnit(device),
         };
 
         // Log pour debug
@@ -4456,11 +4508,12 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               curve_type = COALESCE($14, curve_type),
               differential_sensitivity_ma = COALESCE($15, differential_sensitivity_ma),
               differential_type = COALESCE($16, differential_type),
-              is_complete = $17,
+              trip_unit = COALESCE($17, trip_unit),
+              is_complete = $18,
               settings = jsonb_set(
                 COALESCE(settings, '{}'::jsonb),
                 '{last_scan}',
-                $18::jsonb
+                $19::jsonb
               ),
               updated_at = NOW()
             WHERE id = $1 AND site = $2
@@ -4482,6 +4535,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             parsedDevice.curve_type,
             parsedDevice.differential_sensitivity_ma,
             parsedDevice.differential_type,
+            parsedDevice.trip_unit,
             deviceIsComplete,
             JSON.stringify({
               width_modules: parsedDevice.width_modules,
@@ -4499,8 +4553,8 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
               site, switchboard_id, name, device_type, manufacturer, reference,
               in_amps, icu_ka, ics_ka, poles, voltage_v,
               is_differential, position_number, is_complete,
-              curve_type, differential_sensitivity_ma, differential_type, settings
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+              curve_type, differential_sensitivity_ma, differential_type, trip_unit, settings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             RETURNING *
           `, [
             site,
@@ -4520,6 +4574,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             parsedDevice.curve_type || null,
             parsedDevice.differential_sensitivity_ma || null,
             parsedDevice.differential_type || null,
+            parsedDevice.trip_unit || null,
             JSON.stringify({
               width_modules: parsedDevice.width_modules,
               scanned_at: new Date().toISOString(),
