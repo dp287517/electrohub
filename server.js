@@ -8556,6 +8556,81 @@ app.get("/api/dashboard/activities", async (req, res) => {
 });
 
 /* ================================================================
+   🗑️ Delete specific activity / Clear all activities
+   ================================================================ */
+
+// Delete a specific activity (mainly for pending_reports and panel_scan_jobs)
+app.delete("/api/dashboard/activities/:id", async (req, res) => {
+  const { id } = req.params;
+  console.log(`[DASHBOARD ACTIVITIES] 🗑️ Delete request for: ${id}`);
+
+  try {
+    // Parse the ID to determine source
+    if (id.startsWith('report-pending-') || id.startsWith('report-')) {
+      // It's a pending_reports entry
+      const reportId = id.replace('report-pending-', '').replace('report-error-', '').replace('report-', '');
+      await atexPool.query('DELETE FROM pending_reports WHERE id = $1', [reportId]);
+      console.log(`[DASHBOARD ACTIVITIES] ✅ Deleted pending_report ${reportId}`);
+    } else if (id.startsWith('scan-progress-') || id.startsWith('scan-')) {
+      // It's a panel_scan_jobs entry
+      const scanId = id.replace('scan-progress-', '').replace('scan-', '');
+      await pool.query('DELETE FROM panel_scan_jobs WHERE id = $1', [scanId]);
+      console.log(`[DASHBOARD ACTIVITIES] ✅ Deleted panel_scan_job ${scanId}`);
+    } else {
+      // For audit log entries, we don't delete (permanent records)
+      // But we acknowledge the request
+      console.log(`[DASHBOARD ACTIVITIES] ⚠️ Activity ${id} is from audit log, not deletable`);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[dashboard/activities] Delete error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear all activities (cleanup old entries)
+app.delete("/api/dashboard/activities", async (req, res) => {
+  console.log(`[DASHBOARD ACTIVITIES] 🗑️ Clear all activities request`);
+
+  try {
+    let deletedReports = 0;
+    let deletedScans = 0;
+
+    // Clean up old pending_reports (completed/error > 24h, pending > 48h)
+    try {
+      const result1 = await atexPool.query(`
+        DELETE FROM pending_reports
+        WHERE (status IN ('completed', 'error') AND created_at < NOW() - INTERVAL '24 hours')
+           OR (status = 'pending' AND created_at < NOW() - INTERVAL '48 hours')
+      `);
+      deletedReports = result1.rowCount || 0;
+    } catch (e) {
+      console.log('[DASHBOARD ACTIVITIES] pending_reports cleanup skipped:', e.message);
+    }
+
+    // Clean up old panel_scan_jobs (completed > 7 days, failed > 3 days)
+    try {
+      const result2 = await pool.query(`
+        DELETE FROM panel_scan_jobs
+        WHERE (status = 'completed' AND completed_at < NOW() - INTERVAL '7 days')
+           OR (status = 'failed' AND completed_at < NOW() - INTERVAL '3 days')
+           OR (status IN ('pending', 'processing') AND created_at < NOW() - INTERVAL '24 hours')
+      `);
+      deletedScans = result2.rowCount || 0;
+    } catch (e) {
+      console.log('[DASHBOARD ACTIVITIES] panel_scan_jobs cleanup skipped:', e.message);
+    }
+
+    console.log(`[DASHBOARD ACTIVITIES] ✅ Cleanup done: ${deletedReports} reports, ${deletedScans} scans`);
+    res.json({ success: true, deleted: { reports: deletedReports, scans: deletedScans } });
+  } catch (err) {
+    console.error("[dashboard/activities] Clear error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================================================================
    🔵 Save User Profile (department, site)
    ================================================================ */
 app.put("/api/user/profile", express.json(), async (req, res) => {
