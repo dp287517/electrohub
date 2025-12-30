@@ -72,8 +72,9 @@ export function ProcedureCaptureProvider({ children }) {
     return current;
   }, [captures]);
 
-  // Navigate back to procedure
+  // Navigate back to procedure and close capture mode (keep captures)
   const returnToProcedure = useCallback(() => {
+    setIsCapturing(false);
     navigate(returnPath);
   }, [navigate, returnPath]);
 
