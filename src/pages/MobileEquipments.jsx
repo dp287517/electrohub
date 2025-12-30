@@ -797,7 +797,7 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img src={api.mobileEquipment.photoUrl(equipment.id)} alt="" className="w-full h-full object-cover" />
+              <img src={api.mobileEquipment.photoUrl(equipment.id)} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <Camera size={24} />
             )}
@@ -1554,11 +1554,14 @@ export default function MobileEquipments() {
   }, []);
 
   useEffect(() => {
-    loadEquipments();
-    loadCategories();
-    loadSettings();
-    loadPlacements();
-    loadControlStatuses();
+    // 🚀 PERF: Parallelize API calls for faster initial load
+    Promise.all([
+      loadEquipments(),
+      loadCategories(),
+      loadSettings(),
+      loadPlacements(),
+      loadControlStatuses()
+    ]).catch(console.warn);
   }, [loadEquipments, loadCategories, loadSettings, loadPlacements, loadControlStatuses]);
 
   // Load calendar when modal opens

@@ -685,7 +685,7 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
               {pendingPhotoPreview ? (
                 <img src={pendingPhotoPreview} alt="Preview" className="w-full h-full object-cover" />
               ) : item?.id && item?.photo_path ? (
-                <img src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`} alt="" className="w-full h-full object-cover" />
+                <img src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`} alt="" loading="lazy" className="w-full h-full object-cover" />
               ) : (
                 <div className="text-center text-gray-400">
                   <Camera size={32} className="mx-auto mb-2" />

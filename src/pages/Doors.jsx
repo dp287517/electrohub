@@ -654,7 +654,7 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(door.id, e.target.files[0])}
             />
             {door.photo_url ? (
-              <img src={api.doors.photoUrl(door.id)} alt="" className="w-full h-full object-cover" />
+              <img src={api.doors.photoUrl(door.id)} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <Camera size={24} />
             )}
@@ -1374,9 +1374,12 @@ export default function Doors() {
   }, []);
 
   useEffect(() => {
-    loadDoors();
-    loadSettings();
-    loadPlacements();
+    // 🚀 PERF: Parallelize API calls for faster initial load
+    Promise.all([
+      loadDoors(),
+      loadSettings(),
+      loadPlacements()
+    ]).catch(console.warn);
   }, [loadDoors, loadSettings, loadPlacements]);
 
   // Load calendar when modal opens

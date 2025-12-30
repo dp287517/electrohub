@@ -388,7 +388,7 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img src={api.glo.photoUrl(equipment.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+              <img src={api.glo.photoUrl(equipment.id, { bust: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <Camera size={24} />
             )}
@@ -1675,10 +1675,13 @@ export default function Glo() {
   }, []);
 
   useEffect(() => {
-    loadEquipments();
-    loadPlacements();
-    loadCategories();
-    loadControlStatuses();
+    // 🚀 PERF: Parallelize API calls for faster initial load
+    Promise.all([
+      loadEquipments(),
+      loadPlacements(),
+      loadCategories(),
+      loadControlStatuses()
+    ]).catch(console.warn);
   }, [loadEquipments, loadPlacements, loadCategories, loadControlStatuses]);
 
   useEffect(() => {

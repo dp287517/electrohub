@@ -538,7 +538,7 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img src={api.vsd.photoUrl(equipment.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+              <img src={api.vsd.photoUrl(equipment.id, { bust: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <Camera size={24} />
             )}
@@ -1379,9 +1379,12 @@ export default function Vsd() {
   }, []);
 
   useEffect(() => {
-    loadEquipments();
-    loadPlacements();
-    loadControlStatuses();
+    // 🚀 PERF: Parallelize API calls for faster initial load
+    Promise.all([
+      loadEquipments(),
+      loadPlacements(),
+      loadControlStatuses()
+    ]).catch(console.warn);
   }, [loadEquipments, loadPlacements, loadControlStatuses]);
 
   // Refresh placements on visibility change

@@ -1317,11 +1317,14 @@ export default function HighVoltage() {
   }, []);
 
   useEffect(() => {
-    loadEquipments();
-    loadSwitchboards();
-    loadLvDevices();
-    loadPlacements();
-    loadControlStatuses();
+    // 🚀 PERF: Parallelize API calls for faster initial load
+    Promise.all([
+      loadEquipments(),
+      loadSwitchboards(),
+      loadLvDevices(),
+      loadPlacements(),
+      loadControlStatuses()
+    ]).catch(console.warn);
   }, [loadEquipments, loadSwitchboards, loadLvDevices, loadPlacements, loadControlStatuses]);
 
   // URL params handling
