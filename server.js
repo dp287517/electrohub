@@ -20,9 +20,12 @@ const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
 // Pool séparé pour la base ATEX (si différente) - utilisé pour pending_reports
-const atexPool = new Pool({
-  connectionString: process.env.ATEX_DATABASE_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL
-});
+const atexDbUrl = process.env.ATEX_DATABASE_URL || process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
+const atexPool = new Pool({ connectionString: atexDbUrl });
+
+// Log database connections at startup
+console.log(`[DB] Main pool: ${process.env.NEON_DATABASE_URL ? 'NEON_DATABASE_URL ✅' : '❌ NOT SET'}`);
+console.log(`[DB] ATEX pool: ${process.env.ATEX_DATABASE_URL ? 'ATEX_DATABASE_URL' : process.env.DATABASE_URL ? 'DATABASE_URL' : 'NEON_DATABASE_URL (fallback)'} ✅`);
 
 // ============================================================
 // AI SETUP - OpenAI + Gemini (fallback)
@@ -8285,6 +8288,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
     // NOTE: Utilise atexPool car pending_reports est dans la base ATEX
     const actionRequired = [];
     try {
+      console.log('[DASHBOARD ACTIVITIES] 🔍 Querying pending_reports from atexPool...');
       const { rows: pendingReports } = await atexPool.query(`
         SELECT id, report_type, status, user_email, created_at, completed_at, total_items, error_message
         FROM pending_reports
@@ -8293,6 +8297,10 @@ app.get("/api/dashboard/activities", async (req, res) => {
         ORDER BY created_at DESC
         LIMIT 10
       `);
+      console.log(`[DASHBOARD ACTIVITIES] 📋 pending_reports: ${pendingReports.length} rows found`);
+      if (pendingReports.length > 0) {
+        console.log(`[DASHBOARD ACTIVITIES]   First report: id=${pendingReports[0].id}, status=${pendingReports[0].status}, type=${pendingReports[0].report_type}`);
+      }
 
       for (const report of pendingReports) {
         // Map report types to friendly names
