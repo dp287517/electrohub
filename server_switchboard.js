@@ -2847,13 +2847,27 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
 MISSION CRITIQUE: Analyser la/les photo(s) d'un tableau électrique et identifier ABSOLUMENT TOUS les appareils modulaires visibles.
 ⚠️ NE MANQUER AUCUN APPAREIL - Compte chaque module visible sur chaque rangée. Si tu vois 35 appareils, tu dois en lister 35.
 
-🔴 RÈGLE FONDAMENTALE - ANALYSE INDIVIDUELLE 🔴
-CHAQUE DISJONCTEUR DOIT ÊTRE ANALYSÉ SÉPARÉMENT !
-- Même si 10 disjoncteurs ont la MÊME RÉFÉRENCE (ex: tous des "C60N"), ils peuvent avoir des CALIBRES DIFFÉRENTS
-- Tu DOIS lire le texte imprimé sur CHAQUE disjoncteur individuellement
-- NE PAS supposer que "même référence = même calibre" - C'EST FAUX !
-- Exemple: sur une rangée de C60N identiques, tu peux avoir: C16, C16, C13, C20, C10, C16, C32...
-- Exemple: sur une rangée, certains peuvent être 2P (monophasé) et d'autres 4P (triphasé)
+🚨🚨🚨 RÈGLE CRITIQUE - ANALYSE INDIVIDUELLE OBLIGATOIRE 🚨🚨🚨
+
+⛔ INTERDICTION ABSOLUE DE COPIER-COLLER ⛔
+Si tu mets le MÊME calibre (ex: "C16") pour plusieurs disjoncteurs de même référence (ex: C60N),
+c'est une ERREUR GRAVE. Sur un tableau réel, les calibres VARIENT TOUJOURS !
+
+OBLIGATION:
+1. Regarde CHAQUE disjoncteur UN PAR UN dans l'image
+2. Lis le CALIBRE IMPRIMÉ sur SA face avant (C10, C13, C16, C20, C32...)
+3. Si tu ne peux pas lire clairement, mets confidence="low" et note "calibre illisible"
+4. Le visual_evidence DOIT ÊTRE UNIQUE pour chaque appareil - jamais identique !
+
+RÉALITÉ TERRAIN (très important):
+- Sur 10 disjoncteurs C60N, tu auras typiquement: C16, C10, C13, C16, C20, C13, C16, C32, C10, C16
+- JAMAIS 10x C16 ! Si tu vois ça, tu as fait du copier-coller = ERREUR
+- Les calibres 13A et 6A sont COURANTS (éclairage), pas seulement 16A ou 20A
+
+TEST DE QUALITÉ:
+- Si tous tes disjoncteurs de même référence ont le même calibre → Tu as échoué
+- Si tous tes visual_evidence sont identiques → Tu as échoué
+- Chaque appareil doit avoir une description UNIQUE de ce que tu as lu dessus
 
 ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
 - Lis les ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur (ex: "1", "Q1", "11F1", "FI 11F1.A")
@@ -2953,13 +2967,20 @@ Réponds en JSON:
 
     const userPrompt = `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique.
 
+🚨 RÈGLE #1 - ANALYSE INDIVIDUELLE:
+Pour CHAQUE disjoncteur, tu DOIS lire son calibre PROPRE sur sa face avant.
+NE COPIE PAS le même calibre pour tous ! Les calibres VARIENT sur un tableau réel.
+Exemple typique: C16, C10, C13, C20, C13, C32... pas "C16" partout !
+
 ⚠️ INSTRUCTIONS CRITIQUES:
 1. Compte TOUS les appareils modulaires visibles sur CHAQUE rangée - N'EN OUBLIE AUCUN
-2. Pour chaque appareil, lis le CALIBRE imprimé (C16, C13, C10, C20...) - pas seulement la référence
-3. Compte la LARGEUR EN MODULES pour déterminer mono (1-2 modules) vs triphasé (3-4 modules)
-4. N'oublie pas les interrupteurs différentiels EN AMONT des groupes
+2. Pour CHAQUE appareil individuellement, lis le CALIBRE imprimé (C6, C10, C13, C16, C20, C25, C32, C40...)
+3. Si tu ne peux pas lire le calibre clairement, note "ILLISIBLE" dans visual_evidence
+4. Le visual_evidence DOIT être DIFFÉRENT pour chaque appareil
+5. Compte la LARGEUR EN MODULES pour déterminer mono (1-2 modules) vs triphasé (3-4 modules)
+6. N'oublie pas les interrupteurs différentiels EN AMONT des groupes
 
-Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques PRÉCISES.`;
+Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques PRÉCISES et INDIVIDUELLES.`;
 
     // ============================================================
     // PHASE 1: Analyse principale avec GPT-4o
@@ -3044,23 +3065,66 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
         console.log(`[PANEL SCAN] Gemini completed in ${geminiDuration}ms`);
         console.log(`[PANEL SCAN] Gemini response length: ${geminiText.length} chars`);
 
-        // Parse Gemini JSON
+        // Parse Gemini JSON with repair for truncated responses
         let cleanedGemini = geminiText.trim();
         if (cleanedGemini.startsWith('```json')) cleanedGemini = cleanedGemini.slice(7);
         if (cleanedGemini.startsWith('```')) cleanedGemini = cleanedGemini.slice(3);
         if (cleanedGemini.endsWith('```')) cleanedGemini = cleanedGemini.slice(0, -3);
 
-        geminiResult = JSON.parse(cleanedGemini.trim());
-        console.log(`[PANEL SCAN] Gemini detected: ${geminiResult.devices?.length || 0} devices`);
+        try {
+          geminiResult = JSON.parse(cleanedGemini.trim());
+        } catch (jsonError) {
+          console.log(`[PANEL SCAN] Gemini JSON truncated, attempting repair...`);
+          // Try to repair truncated JSON by finding last complete device
+          let repairedGemini = cleanedGemini.trim();
 
-        // Log device types detected by Gemini
-        if (geminiResult.devices?.length) {
-          const geminiTypes = {};
-          geminiResult.devices.forEach(d => {
-            const type = d.device_type || 'Unknown';
-            geminiTypes[type] = (geminiTypes[type] || 0) + 1;
-          });
-          console.log(`[PANEL SCAN] Gemini device types:`, JSON.stringify(geminiTypes));
+          // Find the last complete "}" that could close a device object
+          const lastDeviceEnd = repairedGemini.lastIndexOf('}');
+          if (lastDeviceEnd > 0) {
+            // Try to find the devices array and close it properly
+            const devicesStart = repairedGemini.indexOf('"devices"');
+            if (devicesStart > 0) {
+              // Find where devices array starts
+              const arrayStart = repairedGemini.indexOf('[', devicesStart);
+              if (arrayStart > 0) {
+                // Count brackets to find last complete device
+                let bracketCount = 0;
+                let lastCompleteDevice = -1;
+                for (let i = arrayStart; i < repairedGemini.length; i++) {
+                  if (repairedGemini[i] === '{') bracketCount++;
+                  if (repairedGemini[i] === '}') {
+                    bracketCount--;
+                    if (bracketCount === 0) lastCompleteDevice = i;
+                  }
+                }
+
+                if (lastCompleteDevice > 0) {
+                  // Truncate at last complete device and close JSON
+                  repairedGemini = repairedGemini.substring(0, lastCompleteDevice + 1) + ']}';
+                  try {
+                    geminiResult = JSON.parse(repairedGemini);
+                    console.log(`[PANEL SCAN] ✓ Gemini JSON repaired successfully, found ${geminiResult.devices?.length || 0} devices`);
+                  } catch (repairError) {
+                    console.error(`[PANEL SCAN] Gemini JSON repair failed:`, repairError.message);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (geminiResult) {
+          console.log(`[PANEL SCAN] Gemini detected: ${geminiResult.devices?.length || 0} devices`);
+
+          // Log device types detected by Gemini
+          if (geminiResult.devices?.length) {
+            const geminiTypes = {};
+            geminiResult.devices.forEach(d => {
+              const type = d.device_type || 'Unknown';
+              geminiTypes[type] = (geminiTypes[type] || 0) + 1;
+            });
+            console.log(`[PANEL SCAN] Gemini device types:`, JSON.stringify(geminiTypes));
+          }
         }
       } catch (geminiError) {
         const geminiDuration = Date.now() - geminiStartTime;
@@ -3444,11 +3508,13 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
       });
     }
 
-    // Score de qualité global
-    const qualityScore = Math.round(100 * (1 - (missingEvidenceCount + duplicateEvidenceCount + suspiciousCount) / Math.max(1, result.devices.length)));
+    // Score de qualité global (0-100, clamped)
+    const problemCount = missingEvidenceCount + duplicateEvidenceCount + suspiciousCount;
+    const rawScore = 100 * (1 - problemCount / Math.max(1, result.devices.length));
+    const qualityScore = Math.max(0, Math.min(100, Math.round(rawScore)));
     result.analysis_quality_score = qualityScore;
     result.analysis_quality = qualityScore >= 80 ? 'high' : qualityScore >= 50 ? 'medium' : 'low';
-    console.log(`[PANEL SCAN] ✓ Score qualité analyse: ${qualityScore}% (${result.analysis_quality})`);
+    console.log(`[PANEL SCAN] ✓ Score qualité analyse: ${qualityScore}% (${result.analysis_quality}) - ${problemCount} problèmes sur ${result.devices.length} appareils`);
 
     const warningCount = (result.warnings || []).length;
     job.progress = 50;
