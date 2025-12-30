@@ -3038,21 +3038,38 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
 Un LISTING/NOMENCLATURE est un document papier/tableau imprimé qui liste les circuits avec:
 - Numéro de position/repère (11F1, Q1, 1, 2...)
 - Désignation du circuit (Éclairage, Prises, Chauffage...)
-- Caractéristiques (calibre, pôles: 1P, 2P, 3P, 4P...)
+- Caractéristiques (calibre, pôles)
+
+🚨 RÈGLE CRITIQUE - FORMAT DES PÔLES DANS LA COLONNE PROTECTION:
+Le nombre de pôles est SOUVENT encodé dans le calibre avec le format "NxAA" où N = nombre de pôles:
+- "16A" ou "C16" = 1 pôle (monophasé)
+- "2x16A" = 2 pôles
+- "3x16A" ou "3x32A" = 3 pôles (triphasé)
+- "4x25A" ou "4x63A" = 4 pôles (tétrapolaire)
+
+Exemples de lecture:
+| Protection | → poles | → in_amps |
+|------------|---------|-----------|
+| 16A        | 1       | 16        |
+| C16        | 1       | 16        |
+| 3x16A      | 3       | 16        |
+| 4x32A      | 4       | 32        |
+| 3x63A      | 3       | 63        |
+| 2x20A      | 2       | 20        |
 
 IMPORTANT: Si tu détectes un listing, EXTRAIT les données de CHAQUE ligne:
 - position: le repère/numéro (ex: "11F1", "Q1", "1")
 - designation: le nom du circuit
-- poles: le nombre de pôles (1, 2, 3 ou 4)
-- in_amps: le calibre en ampères si visible
+- poles: le nombre de pôles (1, 2, 3 ou 4) - DÉDUIT du format NxAA !
+- in_amps: le calibre en ampères (le nombre après le x)
 
 Réponds en JSON:
 {
   "has_listing_photos": true/false,
   "listing_indices": [0, 2],
   "listing_data": [
-    {"position": "11F1", "designation": "Éclairage bureau", "poles": 1, "in_amps": 10},
-    {"position": "11F2", "designation": "Prises RDC", "poles": 1, "in_amps": 16}
+    {"position": "11F1", "designation": "Éclairage bureau", "poles": 1, "in_amps": 16},
+    {"position": "11F2", "designation": "Four", "poles": 3, "in_amps": 32}
   ],
   "panel_photo_indices": [1, 3]
 }`;
@@ -4295,20 +4312,37 @@ OBJECTIF: Extraire la liste des équipements avec leurs caractéristiques depuis
 COLONNES TYPIQUES D'UN LISTING:
 - Repère départ / Position / N° (ex: "11F1", "11F2", "Q1", "1", "2"...)
 - Désignation / Circuit / Nom (ex: "Éclairage bureau", "Prises RDC", "Chauffage"...)
-- Protection / Type (ex: "1P", "2P", "3P", "4P", "1P+N", "3P+N"...)
-- Intensité / Calibre / In (ex: "10A", "16A", "20A", "32A"...)
-- Parfois: Icu, courbe, différentiel
+- Protection / Calibre (ex: "16A", "3x16A", "4x32A", "C16"...)
+
+🚨 RÈGLE CRITIQUE - FORMAT DES PÔLES DANS LA COLONNE PROTECTION:
+Le nombre de pôles est SOUVENT encodé dans le calibre avec le format "NxAA" où N = nombre de pôles:
+- "16A" ou "C16" = 1 pôle (monophasé)
+- "2x16A" = 2 pôles
+- "3x16A" ou "3x32A" = 3 pôles (triphasé)
+- "4x25A" ou "4x63A" = 4 pôles (tétrapolaire)
+
+Exemples de lecture:
+| Protection | → poles | → in_amps |
+|------------|---------|-----------|
+| 16A        | 1       | 16        |
+| C16        | 1       | 16        |
+| 3x16A      | 3       | 16        |
+| 4x32A      | 4       | 32        |
+| 3x63A      | 3       | 63        |
+| 2x20A      | 2       | 20        |
+| 1P 16A     | 1       | 16        |
+| 3P 32A     | 3       | 32        |
 
 INSTRUCTIONS:
 1. Lis CHAQUE ligne du tableau/listing visible
 2. Extrait les informations de CHAQUE équipement
-3. Si une colonne n'existe pas ou n'est pas lisible, mets null
-4. Attention aux formats variés: "1P 16A", "C16", "16A 1P", etc.
+3. DÉDUIS le nombre de pôles depuis le format NxAA ou NP !
+4. Si une colonne n'existe pas ou n'est pas lisible, mets null
 
 IMPORTANT:
 - Le repère/position est CRUCIAL - c'est ce qui permet de faire le lien avec le tableau physique
 - La désignation aide à comprendre l'usage du circuit
-- Le nombre de pôles (1P, 2P, 3P, 4P, 1P+N, 3P+N) est très important
+- Le nombre de pôles est DÉDUIT du format "NxAA" (ex: 3x16A = 3 pôles)
 
 Réponds en JSON:
 {
@@ -4319,9 +4353,21 @@ Réponds en JSON:
       "position": "11F1",
       "designation": "Éclairage bureau 1",
       "poles": 1,
-      "poles_text": "1P",
-      "in_amps": 10,
-      "protection_text": "C10 1P",
+      "poles_text": "16A",
+      "in_amps": 16,
+      "protection_text": "16A",
+      "icu_ka": null,
+      "curve_type": "C",
+      "is_differential": false,
+      "notes": ""
+    },
+    {
+      "position": "11F5",
+      "designation": "Four",
+      "poles": 3,
+      "poles_text": "3x32A",
+      "in_amps": 32,
+      "protection_text": "3x32A",
       "icu_ka": null,
       "curve_type": "C",
       "is_differential": false,
