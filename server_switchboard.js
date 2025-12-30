@@ -4159,6 +4159,207 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
   }
 }
 
+// ============================================================
+// POST /api/switchboard/analyze-listing - Analyze switchboard listing photos
+// Extract reference data (position, designation, protection, poles, amps)
+// ============================================================
+app.post('/api/switchboard/analyze-listing', upload.array('photos', 10), async (req, res) => {
+  try {
+    const site = req.headers['x-site'] || 'default';
+    const { switchboard_id } = req.body;
+    const user = getUser(req);
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Aucune photo de listing fournie' });
+    }
+    if (!openai) {
+      return res.status(503).json({ error: 'OpenAI non disponible' });
+    }
+    if (!switchboard_id) {
+      return res.status(400).json({ error: 'switchboard_id requis' });
+    }
+
+    console.log(`[LISTING SCAN] Analyzing ${req.files.length} listing photo(s) for switchboard ${switchboard_id}`);
+
+    // Prepare images
+    const images = req.files.map(file => ({
+      type: 'image_url',
+      image_url: {
+        url: `data:${file.mimetype || 'image/jpeg'};base64,${file.buffer.toString('base64')}`,
+        detail: 'high'
+      }
+    }));
+
+    // Prompt spécialisé pour les listings
+    const listingPrompt = `Tu es un expert en lecture de tableaux électriques et de leurs listings/nomenclatures.
+
+Analyse cette/ces photo(s) de LISTING (document papier/tableau de nomenclature) d'un tableau électrique.
+
+OBJECTIF: Extraire la liste des équipements avec leurs caractéristiques depuis ce document écrit.
+
+COLONNES TYPIQUES D'UN LISTING:
+- Repère départ / Position / N° (ex: "11F1", "11F2", "Q1", "1", "2"...)
+- Désignation / Circuit / Nom (ex: "Éclairage bureau", "Prises RDC", "Chauffage"...)
+- Protection / Type (ex: "1P", "2P", "3P", "4P", "1P+N", "3P+N"...)
+- Intensité / Calibre / In (ex: "10A", "16A", "20A", "32A"...)
+- Parfois: Icu, courbe, différentiel
+
+INSTRUCTIONS:
+1. Lis CHAQUE ligne du tableau/listing visible
+2. Extrait les informations de CHAQUE équipement
+3. Si une colonne n'existe pas ou n'est pas lisible, mets null
+4. Attention aux formats variés: "1P 16A", "C16", "16A 1P", etc.
+
+IMPORTANT:
+- Le repère/position est CRUCIAL - c'est ce qui permet de faire le lien avec le tableau physique
+- La désignation aide à comprendre l'usage du circuit
+- Le nombre de pôles (1P, 2P, 3P, 4P, 1P+N, 3P+N) est très important
+
+Réponds en JSON:
+{
+  "listing_type": "nomenclature/tableau/étiquettes/autre",
+  "total_entries": number,
+  "entries": [
+    {
+      "position": "11F1",
+      "designation": "Éclairage bureau 1",
+      "poles": 1,
+      "poles_text": "1P",
+      "in_amps": 10,
+      "protection_text": "C10 1P",
+      "icu_ka": null,
+      "curve_type": "C",
+      "is_differential": false,
+      "notes": ""
+    }
+  ],
+  "reading_confidence": "high/medium/low",
+  "notes": "Observations sur le document"
+}`;
+
+    // Call OpenAI
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: listingPrompt },
+        { role: 'user', content: images }
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 4000,
+      temperature: 0.1
+    });
+
+    const result = JSON.parse(response.choices[0].message.content);
+    console.log(`[LISTING SCAN] Extracted ${result.entries?.length || 0} entries from listing`);
+
+    // Normalize and validate entries
+    const normalizedEntries = (result.entries || []).map(entry => ({
+      position: entry.position?.toString().trim() || null,
+      designation: entry.designation?.trim() || null,
+      poles: parseInt(entry.poles) || null,
+      poles_text: entry.poles_text || null,
+      in_amps: parseInt(entry.in_amps) || null,
+      icu_ka: parseFloat(entry.icu_ka) || null,
+      curve_type: entry.curve_type || null,
+      is_differential: !!entry.is_differential,
+      notes: entry.notes || null
+    })).filter(e => e.position); // Only keep entries with position
+
+    // Store listing data in switchboard settings for later use
+    try {
+      await quickQuery(`
+        UPDATE switchboards
+        SET settings = jsonb_set(
+          COALESCE(settings, '{}'::jsonb),
+          '{listing_data}',
+          $2::jsonb
+        ),
+        updated_at = NOW()
+        WHERE id = $1 AND site = $3
+      `, [
+        switchboard_id,
+        JSON.stringify({
+          entries: normalizedEntries,
+          scanned_at: new Date().toISOString(),
+          photos_count: req.files.length,
+          confidence: result.reading_confidence,
+          scanned_by: user.email
+        }),
+        site
+      ]);
+      console.log(`[LISTING SCAN] Saved ${normalizedEntries.length} entries to switchboard ${switchboard_id}`);
+    } catch (dbErr) {
+      console.warn('[LISTING SCAN] Failed to save listing data:', dbErr.message);
+    }
+
+    // Also pre-fill devices if they don't exist yet
+    let devicesCreated = 0;
+    let devicesUpdated = 0;
+    for (const entry of normalizedEntries) {
+      if (!entry.position) continue;
+      try {
+        const result = await quickQuery(`
+          INSERT INTO devices (
+            site, switchboard_id, name, device_type,
+            in_amps, poles, voltage_v, curve_type, is_differential,
+            position_number, is_complete, settings
+          ) VALUES ($1, $2, $3, 'Disjoncteur modulaire', $4, $5, $6, $7, $8, $9, false, $10)
+          ON CONFLICT (switchboard_id, position_number) DO UPDATE SET
+            name = COALESCE(devices.name, EXCLUDED.name),
+            in_amps = COALESCE(devices.in_amps, EXCLUDED.in_amps),
+            poles = COALESCE(devices.poles, EXCLUDED.poles),
+            voltage_v = COALESCE(devices.voltage_v, EXCLUDED.voltage_v),
+            curve_type = COALESCE(devices.curve_type, EXCLUDED.curve_type),
+            is_differential = COALESCE(devices.is_differential, EXCLUDED.is_differential),
+            settings = jsonb_set(
+              COALESCE(devices.settings, '{}'::jsonb),
+              '{listing_data}',
+              EXCLUDED.settings->'listing_data'
+            ),
+            updated_at = NOW()
+          RETURNING (xmax = 0) AS inserted
+        `, [
+          site,
+          switchboard_id,
+          entry.designation || `Circuit ${entry.position}`,
+          entry.in_amps,
+          entry.poles || 1,
+          entry.poles && entry.poles >= 3 ? 400 : 230,
+          entry.curve_type,
+          entry.is_differential,
+          entry.position,
+          JSON.stringify({ listing_data: entry, from_listing: true })
+        ]);
+        if (result.rows[0]?.inserted) {
+          devicesCreated++;
+        } else {
+          devicesUpdated++;
+        }
+      } catch (e) {
+        console.warn(`[LISTING SCAN] Failed to create/update device ${entry.position}:`, e.message);
+      }
+    }
+
+    console.log(`[LISTING SCAN] Created ${devicesCreated}, updated ${devicesUpdated} devices from listing`);
+
+    res.json({
+      success: true,
+      listing_type: result.listing_type,
+      total_entries: normalizedEntries.length,
+      entries: normalizedEntries,
+      devices_created: devicesCreated,
+      devices_updated: devicesUpdated,
+      confidence: result.reading_confidence,
+      notes: result.notes,
+      message: `${normalizedEntries.length} équipements extraits du listing`
+    });
+
+  } catch (e) {
+    console.error('[LISTING SCAN] Error:', e.message);
+    res.status(500).json({ error: 'Erreur analyse listing: ' + e.message });
+  }
+});
+
 // POST /api/switchboard/analyze-panel - Start async analysis
 app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (req, res) => {
   try {
@@ -4444,12 +4645,24 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
       return null;
     };
 
-    // Vérifier que le tableau existe
+    // Vérifier que le tableau existe et charger les données du listing si disponibles
     const { rows: [board] } = await quickQuery(
-      'SELECT id, name FROM switchboards WHERE id = $1 AND site = $2',
+      'SELECT id, name, settings FROM switchboards WHERE id = $1 AND site = $2',
       [switchboard_id, site]
     );
     if (!board) return res.status(404).json({ error: 'Tableau non trouvé' });
+
+    // Extraire les données du listing (si photo listing scannée avant)
+    const listingData = board.settings?.listing_data?.entries || [];
+    const listingByPosition = {};
+    for (const entry of listingData) {
+      if (entry.position) {
+        listingByPosition[entry.position] = entry;
+      }
+    }
+    if (listingData.length > 0) {
+      console.log(`[BULK CREATE] Listing data available: ${listingData.length} entries`);
+    }
 
     // Charger les appareils existants pour ce tableau (pour éviter les doublons)
     const { rows: existingDevices } = await quickQuery(
@@ -4475,17 +4688,24 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         const parsedIcs = parseIcuKa(device.ics_ka);
 
         // ============================================================
-        // INFÉRENCE DES PÔLES - Basée sur width_modules et référence
+        // INFÉRENCE DES PÔLES - Basée sur listing, width_modules et référence
         // ============================================================
-        const inferPoles = (dev) => {
-          // Si déjà renseigné et valide
+        const inferPoles = (dev, position) => {
+          // PRIORITÉ 1: Données du listing (document papier scanné)
+          const listingEntry = listingByPosition[position];
+          if (listingEntry?.poles && listingEntry.poles >= 1 && listingEntry.poles <= 4) {
+            console.log(`[BULK CREATE] Poles from listing for ${position}: ${listingEntry.poles}P`);
+            return listingEntry.poles;
+          }
+
+          // PRIORITÉ 2: Valeur AI si valide
           const rawPoles = typeof dev.poles === 'number' ? dev.poles :
                           typeof dev.poles === 'string' ? parseInt(dev.poles) : null;
           if (rawPoles && rawPoles >= 1 && rawPoles <= 4) {
             return rawPoles;
           }
 
-          // Inférer depuis width_modules (méthode la plus fiable)
+          // PRIORITÉ 3: Inférer depuis width_modules (très fiable)
           const width = dev.width_modules;
           if (width) {
             // 1 module = 1P, 2 modules = 1P+N ou 2P, 3 modules = 3P, 4 modules = 3P+N ou 4P
@@ -4495,7 +4715,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
             if (width >= 4) return 4;
           }
 
-          // Inférer depuis la référence du produit
+          // PRIORITÉ 4: Inférer depuis la référence du produit
           const ref = (dev.reference || '').toUpperCase();
           // Références Schneider avec indication de pôles
           if (ref.match(/3P\+N|4P|3PN/)) return 4;
@@ -4503,12 +4723,12 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           if (ref.match(/2P|1P\+N|1PN/)) return 2;
           if (ref.match(/1P(?!N)/)) return 1;
 
-          // Inférer depuis la tension
+          // PRIORITÉ 5: Inférer depuis la tension
           const voltage = dev.voltage_v;
           if (voltage === 400 || voltage === '400' || voltage === '400V') return 3; // Triphasé = minimum 3P
           if (voltage === 230 || voltage === '230' || voltage === '230V') return 1; // Monophasé = 1P par défaut
 
-          // Défaut pour disjoncteurs modulaires: 1P (le plus courant)
+          // PRIORITÉ 6: Défaut basé sur le type d'appareil
           const deviceType = (dev.device_type || '').toLowerCase();
           if (deviceType.includes('disjoncteur') && !deviceType.includes('différentiel')) {
             return 1;
@@ -4519,6 +4739,25 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           }
 
           return 1; // Défaut ultime
+        };
+
+        // Fonction pour enrichir depuis le listing
+        const enrichFromListing = (dev, position) => {
+          const listingEntry = listingByPosition[position];
+          if (!listingEntry) return dev;
+
+          return {
+            ...dev,
+            // Priorité aux données AI, fallback sur listing
+            circuit_name: dev.circuit_name || listingEntry.designation,
+            name: dev.name || listingEntry.designation,
+            in_amps: dev.in_amps || listingEntry.in_amps,
+            curve_type: dev.curve_type || listingEntry.curve_type,
+            is_differential: dev.is_differential || listingEntry.is_differential,
+            icu_ka: dev.icu_ka || listingEntry.icu_ka,
+            // Flag pour traçabilité
+            _enriched_from_listing: true
+          };
         };
 
         // ============================================================
@@ -4567,22 +4806,25 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           return null;
         };
 
-        // Inférer les pôles d'abord (nécessaire pour la tension)
-        const inferredPoles = inferPoles(device);
-        const inferredVoltage = inferVoltage(device, inferredPoles);
+        // Enrichir depuis le listing si disponible (nom circuit, intensité, etc.)
+        const enrichedDevice = enrichFromListing(device, positionNumber);
+
+        // Inférer les pôles (avec priorité au listing)
+        const inferredPoles = inferPoles(enrichedDevice, positionNumber);
+        const inferredVoltage = inferVoltage(enrichedDevice, inferredPoles);
 
         const parsedDevice = {
-          ...device,
-          in_amps: parseInAmps(device.in_amps),
-          icu_ka: parsedIcu,
+          ...enrichedDevice,
+          in_amps: parseInAmps(enrichedDevice.in_amps),
+          icu_ka: parsedIcu || parseIcuKa(enrichedDevice.icu_ka),
           // Ics = Icu pour tous les disjoncteurs (100% pour modulaires)
-          ics_ka: parsedIcs || parsedIcu,
-          // Pôles inférés intelligemment
+          ics_ka: parsedIcs || parsedIcu || parseIcuKa(enrichedDevice.icu_ka),
+          // Pôles inférés intelligemment (listing > AI > width > référence > tension)
           poles: inferredPoles,
           // Tension basée sur les pôles
           voltage_v: inferredVoltage,
           // Type de déclencheur inféré
-          trip_unit: inferTripUnit(device),
+          trip_unit: inferTripUnit(enrichedDevice),
         };
 
         // ============================================================
