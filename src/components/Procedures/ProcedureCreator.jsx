@@ -476,6 +476,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
       // Clear active session from localStorage since procedure is being finalized
       clearActiveSession();
 
+      // Delete the draft since procedure is being created
+      if (draftId) {
+        try {
+          await deleteDraft(draftId);
+          console.log('[ProcedureCreator] Deleted draft after finalization:', draftId);
+        } catch (e) {
+          console.error('Error deleting draft:', e);
+        }
+      }
+
       if (result.processing) {
         // Background mode: close immediately, user will get notification
         setMessages(prev => [

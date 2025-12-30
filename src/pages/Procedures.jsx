@@ -255,7 +255,7 @@ export default function Procedures() {
   const [aiGuidedMode, setAiGuidedMode] = useState(false);
 
   // FIX: Get capture context to reopen modal after photo capture
-  const { shouldReopenModal, clearReopenSignal, captureCount, procedureInfo } = useProcedureCapture();
+  const { shouldReopenModal, clearReopenSignal, shouldMinimizeModal, clearMinimizeSignal, captureCount, procedureInfo } = useProcedureCapture();
 
   // FIX: Reopen the creator modal when returning from photo capture
   useEffect(() => {
@@ -265,6 +265,15 @@ export default function Procedures() {
       clearReopenSignal();
     }
   }, [shouldReopenModal, clearReopenSignal, captureCount]);
+
+  // FIX: Close the modal when user clicks "minimize" to navigate freely
+  useEffect(() => {
+    if (shouldMinimizeModal) {
+      console.log('[Procedures] Minimizing modal to allow free navigation');
+      setShowCreator(false);
+      clearMinimizeSignal();
+    }
+  }, [shouldMinimizeModal, clearMinimizeSignal]);
 
   // CRITICAL: Auto-reopen modal if there's an active session in localStorage
   // This handles the case where user minimizes the app and comes back

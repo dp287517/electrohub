@@ -14,7 +14,9 @@ export default function ProcedureCaptureWidget() {
     addCapture,
     removeCapture,
     returnToProcedure,
-    endCaptureSession
+    endCaptureSession,
+    minimizeModal,
+    shouldReopenModal
   } = useProcedureCapture();
 
   const [isMinimized, setIsMinimized] = useState(false);
@@ -136,9 +138,12 @@ export default function ProcedureCaptureWidget() {
             </div>
           )}
 
-          {/* Main floating button */}
+          {/* Main floating button - Reopen modal */}
           <button
-            onClick={() => setIsMinimized(false)}
+            onClick={() => {
+              setIsMinimized(false);
+              returnToProcedure(); // This will set shouldReopenModal and trigger modal reopen
+            }}
             className="w-16 h-16 bg-gradient-to-br from-violet-600 to-purple-700 rounded-full shadow-2xl flex items-center justify-center text-white active:scale-95 transition-transform"
           >
             <Maximize2 className="w-7 h-7" />
@@ -214,9 +219,12 @@ export default function ProcedureCaptureWidget() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setIsMinimized(true)}
+              onClick={() => {
+                setIsMinimized(true);
+                minimizeModal(); // Signal to close the ProcedureCreator modal
+              }}
               className="p-2 bg-gray-700 rounded-lg text-gray-300"
-              title="Minimiser"
+              title="Naviguer librement"
             >
               <Minimize2 className="w-5 h-5" />
             </button>
