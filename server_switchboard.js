@@ -5600,8 +5600,48 @@ app.delete('/api/switchboard/scanned-products/:id', async (req, res) => {
 });
 
 // ============================================================
-// PDF EXPORT - Professional Design
+// PDF EXPORT - Professional Design v2
 // ============================================================
+
+// Electrical calculation helpers for PDF
+const PDF_CABLE_PARAMS = { copper: { resistivity: 0.0178, tempCoeff: 0.00393 }, aluminum: { resistivity: 0.0287, tempCoeff: 0.00403 } };
+const PDF_CABLE_SECTIONS = { 16: 1.5, 20: 2.5, 25: 4, 32: 6, 40: 10, 50: 16, 63: 25, 80: 35, 100: 50, 125: 70, 160: 95, 200: 120, 250: 150, 315: 185, 400: 240 };
+
+function pdfGetCableSection(amps) {
+  for (const [rating, section] of Object.entries(PDF_CABLE_SECTIONS)) { if (amps <= Number(rating)) return section; }
+  return 240;
+}
+
+function pdfCalculateFaultLevel(voltage_v, source_fault_ka, cable_length_m, cable_section_mm2) {
+  const c = 1.0, Un = voltage_v;
+  const Zs = (c * Un) / (Math.sqrt(3) * source_fault_ka * 1000);
+  const rhoT = PDF_CABLE_PARAMS.copper.resistivity * (1 + PDF_CABLE_PARAMS.copper.tempCoeff * 50);
+  const Rc = (rhoT * cable_length_m * 2) / cable_section_mm2;
+  const Xc = 0.08 * cable_length_m / 1000;
+  const Rtotal = Zs * 0.3 + Rc, Xtotal = Zs * 0.95 + Xc;
+  const Ztotal = Math.sqrt(Rtotal * Rtotal + Xtotal * Xtotal);
+  const Ik_3ph = (c * Un) / (Math.sqrt(3) * Ztotal);
+  const RX_ratio = Xtotal > 0 ? Rtotal / Xtotal : 0;
+  const kappa = 1.02 + 0.98 * Math.exp(-3 * RX_ratio);
+  const Ip = kappa * Math.sqrt(2) * Ik_3ph;
+  const mu = 0.84 + 0.26 * Math.exp(-0.26 * RX_ratio);
+  const Ib = mu * Ik_3ph;
+  const Ith = Ik_3ph * Math.sqrt(0.99);
+  return { Ik_kA: Ik_3ph / 1000, Ip_kA: Ip / 1000, Ib_kA: Ib / 1000, Ith_kA: Ith / 1000, RX_ratio, kappa, Ztotal_mohm: Ztotal * 1000 };
+}
+
+function pdfCalculateArcFlash(bolted_fault_ka, arc_duration_s, working_distance_mm) {
+  const coef = { k1: -0.04287, k2: 1.035, k3: -0.083, k5: 0.0016, k6: 1.035, k7: -0.0631 };
+  const lgIarc = coef.k1 + coef.k2 * Math.log10(bolted_fault_ka) + coef.k3 * Math.log10(32);
+  const Iarc = Math.pow(10, lgIarc);
+  const lgE = coef.k5 + coef.k6 * Math.log10(Iarc) + coef.k7 * Math.log10(working_distance_mm);
+  const E = Math.pow(10, lgE) * (arc_duration_s / 0.2);
+  const E_cal = E / 4.184;
+  const AFB = working_distance_mm * Math.pow(Math.max(E / 1.2, 0.01), 0.5);
+  const cats = [{ l: 0, m: 1.2, n: 'Aucun PPE requis' }, { l: 1, m: 4, n: 'PPE Cat. 1' }, { l: 2, m: 8, n: 'PPE Cat. 2' }, { l: 3, m: 25, n: 'PPE Cat. 3' }, { l: 4, m: 40, n: 'PPE Cat. 4' }, { l: 5, m: 9999, n: 'DANGER' }];
+  const ppe = cats.find(p => E_cal <= p.m) || cats[5];
+  return { incident_energy_cal: E_cal, arc_current_ka: Iarc, arc_flash_boundary_mm: AFB, ppe_category: ppe.l, ppe_name: ppe.n, arc_duration_ms: arc_duration_s * 1000 };
+}
 
 app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   try {
@@ -5642,15 +5682,24 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     doc.pipe(res);
 
     // ═══════════════════════════════════════════════════════════════════
-    // COLORS
+    // COLORS - Green theme as requested
     // ═══════════════════════════════════════════════════════════════════
     const colors = {
-      primary: '#1e40af',
-      primaryLight: '#3b82f6',
+      primary: '#30EA03',      // Main green
+      primaryDark: '#22c55e',  // Darker green for accent
+      blue: '#3b82f6',
+      blueDark: '#1e40af',
+      blueBg: '#eff6ff',
       secondary: '#0f766e',
-      success: '#059669',
-      warning: '#d97706',
+      success: '#10b981',
+      successBg: '#ecfdf5',
+      warning: '#f59e0b',
+      warningBg: '#fef3c7',
+      warningText: '#92400e',
       danger: '#dc2626',
+      dangerBg: '#fee2e2',
+      orange: '#f97316',
+      orangeBg: '#fff7ed',
       purple: '#7c3aed',
       gray: '#6b7280',
       grayLight: '#f3f4f6',
@@ -5662,92 +5711,83 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════
     // HELPER FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════
+    const safeNum = (v, d = 2) => { const n = Number(v); return isNaN(n) ? '-' : n.toFixed(d); };
+
     const drawRoundedRect = (x, y, w, h, r, fillColor, strokeColor = null) => {
       doc.save();
       doc.roundedRect(x, y, w, h, r);
       if (fillColor) doc.fillColor(fillColor).fill();
-      if (strokeColor) doc.strokeColor(strokeColor).stroke();
       doc.restore();
-    };
-
-    const drawBadge = (text, x, y, bgColor, textColor = '#ffffff', minWidth = 50) => {
-      doc.font('Helvetica-Bold').fontSize(7);
-      const textWidth = doc.widthOfString(text);
-      const badgeWidth = Math.max(textWidth + 10, minWidth);
-      drawRoundedRect(x, y, badgeWidth, 14, 3, bgColor);
-      doc.fillColor(textColor).text(text, x, y + 3, { width: badgeWidth, align: 'center' });
-      return badgeWidth;
+      if (strokeColor) { doc.save(); doc.roundedRect(x, y, w, h, r).strokeColor(strokeColor).stroke(); doc.restore(); }
     };
 
     const drawStatCard = (x, y, w, h, value, label, color) => {
       drawRoundedRect(x, y, w, h, 6, '#ffffff', colors.grayBorder);
-      doc.moveTo(x, y + 4).lineTo(x, y + h - 4).lineWidth(3).strokeColor(color).stroke();
-      doc.lineWidth(1);
-      doc.font('Helvetica-Bold').fontSize(18).fillColor(color).text(value, x + 10, y + 10, { width: w - 20 });
-      doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted).text(label, x + 10, y + 32, { width: w - 20 });
+      doc.rect(x, y + 4, 3, h - 8).fillColor(color).fill();
+      doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted).text(label, x + 12, y + 6, { width: w - 20 });
+      doc.font('Helvetica-Bold').fontSize(16).fillColor(color).text(value, x + 12, y + 18, { width: w - 20 });
+    };
+
+    const drawMetricBox = (x, y, w, h, label, value, unit, highlight = false) => {
+      drawRoundedRect(x, y, w, h, 4, colors.grayLight);
+      doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted).text(label, x + 8, y + 5, { width: w - 16 });
+      doc.font('Helvetica-Bold').fontSize(13).fillColor(highlight ? colors.success : colors.text);
+      doc.text(value, x + 8, y + 17, { width: w - 40, continued: false });
+      doc.font('Helvetica').fontSize(9).fillColor(colors.textMuted).text(unit, x + 8 + doc.widthOfString(value) + 2, y + 19);
     };
 
     // ═══════════════════════════════════════════════════════════════════
-    // HEADER
+    // HEADER - Green theme #30EA03
     // ═══════════════════════════════════════════════════════════════════
-    // Blue gradient header
-    doc.rect(0, 0, 595, 85).fillColor(colors.primary).fill();
-    doc.rect(0, 75, 595, 10).fillColor(colors.primaryLight).fill();
+    doc.rect(0, 0, 595, 75).fillColor(colors.primary).fill();
+    doc.rect(0, 68, 595, 7).fillColor(colors.primaryDark).fill();
 
-    let logoWidth = 0;
+    // Logo with proper spacing
+    let textStartX = 50;
     if (settings.logo) {
       try {
-        doc.image(settings.logo, 40, 15, { width: 55, height: 55 });
-        logoWidth = 70;
+        doc.image(settings.logo, 45, 10, { fit: [55, 55], align: 'center', valign: 'center' });
+        textStartX = 115;
       } catch (e) {}
     }
 
     // Title
-    doc.font('Helvetica-Bold').fontSize(22).fillColor('#ffffff');
-    doc.text(board.name, 40 + logoWidth, 18, { width: 350 });
+    doc.font('Helvetica-Bold').fontSize(20).fillColor('#ffffff');
+    doc.text(board.name, textStartX, 12, { width: 300 });
 
-    // Code badge
-    doc.font('Helvetica-Bold').fontSize(10);
-    const codeText = board.code || '-';
-    const codeWidth = doc.widthOfString(codeText) + 16;
-    drawRoundedRect(40 + logoWidth, 48, codeWidth, 20, 4, 'rgba(255,255,255,0.2)');
-    doc.fillColor('#ffffff').text(codeText, 40 + logoWidth + 8, 53);
+    // Code
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('rgba(255,255,255,0.9)');
+    doc.text(board.code || '', textStartX, 38);
 
-    // Right side info
-    doc.font('Helvetica').fontSize(9).fillColor('rgba(255,255,255,0.9)');
-    doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 400, 20, { width: 155, align: 'right' });
-    if (settings.company_name) {
-      doc.fontSize(8).text(settings.company_name, 400, 35, { width: 155, align: 'right' });
-    }
+    // Location
+    const location = [board.building_code, board.floor ? `Etage ${board.floor}` : null, board.room].filter(Boolean).join(' - ');
+    if (location) doc.font('Helvetica').fontSize(8).fillColor('rgba(255,255,255,0.8)').text(location, textStartX, 52);
 
-    // Location info
-    const location = [board.building_code, board.floor ? `Étage ${board.floor}` : null, board.room].filter(Boolean).join(' • ');
-    if (location) {
-      doc.fontSize(8).fillColor('rgba(255,255,255,0.8)').text(location, 400, 50, { width: 155, align: 'right' });
-    }
+    // Right side
+    doc.font('Helvetica').fontSize(9).fillColor('rgba(255,255,255,0.95)');
+    doc.text(new Date().toLocaleDateString('fr-FR'), 420, 12, { width: 135, align: 'right' });
+    if (settings.company_name) doc.font('Helvetica-Bold').fontSize(10).text(settings.company_name, 420, 27, { width: 135, align: 'right' });
 
-    // Principal badge
+    // TGBT badge
     if (board.is_principal) {
-      drawRoundedRect(480, 62, 75, 16, 3, colors.success);
-      doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff').text('TGBT', 480, 66, { width: 75, align: 'center' });
+      drawRoundedRect(495, 48, 55, 18, 4, '#ffffff');
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(colors.primary).text('TGBT', 495, 52, { width: 55, align: 'center' });
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // UPSTREAM SOURCE
-    // ═══════════════════════════════════════════════════════════════════
-    let currentY = 95;
+    let currentY = 85;
 
+    // ═══════════════════════════════════════════════════════════════════
+    // UPSTREAM SOURCE BANNER (no emoji)
+    // ═══════════════════════════════════════════════════════════════════
     if (upstreamDevices.length > 0) {
       const upText = upstreamDevices.map(d => {
-        const breakerInfo = d.reference || d.manufacturer || '';
-        const ampsInfo = d.in_amps ? `${d.in_amps}A` : '';
-        return `${d.source_board_code} via ${[breakerInfo, ampsInfo].filter(Boolean).join(' ') || 'départ'}`;
+        const info = [d.source_board_code, 'via', d.reference || d.manufacturer || '', d.in_amps ? `${d.in_amps}A` : ''].filter(Boolean).join(' ');
+        return info;
       }).join(', ');
-
-      drawRoundedRect(40, currentY, 515, 22, 4, '#fef3c7');
-      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.warning).text('⚡ ALIMENTÉ PAR', 50, currentY + 6);
-      doc.font('Helvetica').fontSize(8).fillColor('#92400e').text(upText, 145, currentY + 6, { width: 400 });
-      currentY += 30;
+      drawRoundedRect(40, currentY, 515, 20, 5, colors.warningBg, colors.warning);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.warning).text('ALIMENTE PAR', 52, currentY + 5);
+      doc.font('Helvetica').fontSize(8).fillColor(colors.warningText).text(upText, 130, currentY + 5, { width: 415 });
+      currentY += 28;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -5760,131 +5800,179 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     const downstreamCount = devices.filter(d => d.downstream_switchboard_id).length;
     const completionPct = totalDevices > 0 ? Math.round((completeDevices / totalDevices) * 100) : 0;
 
-    const cardWidth = 118;
-    const cardHeight = 48;
-    const cardGap = 10;
-    const cardsY = currentY + 5;
+    const cardW = 122, cardH = 38, cardGap = 8;
+    drawStatCard(40, currentY, cardW, cardH, String(totalDevices), 'Equipements', colors.blueDark);
+    drawStatCard(40 + cardW + cardGap, currentY, cardW, cardH, `${completionPct}%`, 'Completion', completionPct === 100 ? colors.success : colors.warning);
+    drawStatCard(40 + (cardW + cardGap) * 2, currentY, cardW, cardH, String(differentialDevices), 'DDR', colors.purple);
+    drawStatCard(40 + (cardW + cardGap) * 3, currentY, cardW, cardH, String(downstreamCount), 'Departs', colors.secondary);
+    currentY += cardH + 10;
 
-    drawStatCard(40, cardsY, cardWidth, cardHeight, String(totalDevices), 'Équipements', colors.primary);
-    drawStatCard(40 + cardWidth + cardGap, cardsY, cardWidth, cardHeight, `${completionPct}%`, 'Complétion', completionPct === 100 ? colors.success : colors.warning);
-    drawStatCard(40 + (cardWidth + cardGap) * 2, cardsY, cardWidth, cardHeight, String(differentialDevices), 'Différentiels (DDR)', colors.purple);
-    drawStatCard(40 + (cardWidth + cardGap) * 3, cardsY, cardWidth, cardHeight, String(downstreamCount), 'Départs tableaux', colors.secondary);
+    // ═══════════════════════════════════════════════════════════════════
+    // FAULT LEVEL ASSESSMENT (like screenshot)
+    // ═══════════════════════════════════════════════════════════════════
+    const mainDev = mainIncoming || upstreamDevices[0] || {};
+    if (mainDev.in_amps || upstreamDevices.length > 0) {
+      const cableSection = pdfGetCableSection(mainDev.in_amps || 100);
+      const fla = pdfCalculateFaultLevel(400, 50, 20, cableSection);
+      const icuOk = !mainDev.icu_ka || fla.Ik_kA <= mainDev.icu_ka;
 
-    currentY = cardsY + cardHeight + 15;
+      // Card container
+      drawRoundedRect(40, currentY, 515, 105, 8, '#ffffff', colors.grayBorder);
 
-    // Main breaker info
+      // Header bar
+      doc.rect(40, currentY, 515, 26).fillColor(icuOk ? colors.blueBg : colors.dangerBg).fill();
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(icuOk ? colors.blueDark : colors.danger);
+      doc.text('Fault Level Assessment', 55, currentY + 8);
+
+      // OK/DANGER badge
+      drawRoundedRect(485, currentY + 4, 60, 18, 9, icuOk ? colors.success : colors.danger);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff').text(icuOk ? 'OK' : 'DANGER', 485, currentY + 9, { width: 60, align: 'center' });
+
+      // Metrics row 1
+      const mY = currentY + 32, mW = 118, mH = 30, mG = 6;
+      drawMetricBox(50, mY, mW, mH, 'Ik" (Initial)', safeNum(fla.Ik_kA), 'kA', true);
+      drawMetricBox(50 + mW + mG, mY, mW, mH, 'Ip (Crete)', safeNum(fla.Ip_kA), 'kA');
+      drawMetricBox(50 + (mW + mG) * 2, mY, mW, mH, 'Ib (Coupure)', safeNum(fla.Ib_kA), 'kA');
+      drawMetricBox(50 + (mW + mG) * 3, mY, mW, mH, 'Ith (1s)', safeNum(fla.Ith_kA), 'kA');
+
+      // Metrics row 2
+      const m2Y = mY + mH + 5, m2W = 158;
+      drawMetricBox(50, m2Y, m2W, mH, 'R/X', safeNum(fla.RX_ratio, 3), '');
+      drawMetricBox(50 + m2W + mG, m2Y, m2W, mH, 'Kappa', safeNum(fla.kappa, 3), '');
+      drawMetricBox(50 + (m2W + mG) * 2, m2Y, m2W, mH, 'Z total', safeNum(fla.Ztotal_mohm), 'mohm');
+
+      // Footer
+      doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted);
+      doc.text(`Icu disjoncteur: ${mainDev.icu_ka || '-'} kA`, 50, currentY + 95);
+      doc.text('Calcule selon IEC 60909-0', 250, currentY + 95);
+
+      currentY += 115;
+
+      // ═══════════════════════════════════════════════════════════════════
+      // ARC FLASH ANALYSIS (like screenshot)
+      // ═══════════════════════════════════════════════════════════════════
+      const tripTime = (mainDev.in_amps || 100) > 63 ? 0.05 : 0.02;
+      const af = pdfCalculateArcFlash(fla.Ik_kA, tripTime, 455);
+      const ppeColor = af.ppe_category === 0 ? colors.success : af.ppe_category <= 2 ? colors.warning : colors.danger;
+
+      drawRoundedRect(40, currentY, 515, 95, 8, '#ffffff', colors.grayBorder);
+
+      // Header bar orange
+      doc.rect(40, currentY, 515, 26).fillColor(colors.orangeBg).fill();
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(colors.orange);
+      doc.text('Arc Flash Analysis', 55, currentY + 8);
+
+      // PPE badge
+      drawRoundedRect(440, currentY + 4, 105, 18, 9, ppeColor);
+      doc.font('Helvetica-Bold').fontSize(7).fillColor('#ffffff').text(af.ppe_name, 440, currentY + 9, { width: 105, align: 'center' });
+
+      // Metrics
+      const afY = currentY + 32;
+      drawMetricBox(50, afY, mW, mH, 'Energie incidente', safeNum(af.incident_energy_cal), 'cal/cm2');
+      drawMetricBox(50 + mW + mG, afY, mW, mH, 'Arc Flash Boundary', safeNum(af.arc_flash_boundary_mm, 0), 'mm');
+      drawMetricBox(50 + (mW + mG) * 2, afY, mW, mH, 'Courant d\'arc', safeNum(af.arc_current_ka), 'kA');
+      drawMetricBox(50 + (mW + mG) * 3, afY, mW, mH, 'Duree arc', safeNum(af.arc_duration_ms, 0), 'ms');
+
+      // Warning banner
+      if (af.ppe_category > 0) {
+        drawRoundedRect(50, afY + mH + 5, 495, 18, 4, colors.warningBg, colors.warning);
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.warning).text('WARNING', 60, afY + mH + 10);
+        doc.font('Helvetica').text('Arc Flash Hazard', 115, afY + mH + 10);
+      }
+
+      doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted);
+      doc.text('Calcule selon IEEE 1584-2018 | Distance: 455mm', 50, currentY + 85);
+
+      currentY += 105;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MAIN BREAKER INFO
+    // ═══════════════════════════════════════════════════════════════════
     if (mainIncoming) {
-      drawRoundedRect(40, currentY, 515, 24, 4, '#ecfdf5', colors.success);
-      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.success).text('DISJONCTEUR D\'ARRIVÉE', 50, currentY + 7);
-      const mainInfo = [mainIncoming.manufacturer, mainIncoming.reference, mainIncoming.in_amps ? `${mainIncoming.in_amps}A` : null, mainIncoming.icu_ka ? `${mainIncoming.icu_ka}kA` : null].filter(Boolean).join(' • ');
-      doc.font('Helvetica').fontSize(9).fillColor('#065f46').text(mainInfo, 180, currentY + 7, { width: 365 });
-      currentY += 32;
+      drawRoundedRect(40, currentY, 515, 22, 5, colors.successBg, colors.success);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.success).text('DISJONCTEUR D\'ARRIVEE', 52, currentY + 6);
+      const mainInfo = [mainIncoming.manufacturer, mainIncoming.reference, mainIncoming.in_amps ? `${mainIncoming.in_amps}A` : null, mainIncoming.icu_ka ? `${mainIncoming.icu_ka}kA` : null].filter(Boolean).join(' - ');
+      doc.font('Helvetica').fontSize(9).fillColor('#065f46').text(mainInfo, 185, currentY + 6, { width: 360 });
+      currentY += 28;
     }
 
     // ═══════════════════════════════════════════════════════════════════
     // DEVICES TABLE
     // ═══════════════════════════════════════════════════════════════════
     currentY += 5;
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.text).text('Liste des équipements', 40, currentY);
-    currentY += 18;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.text).text('Liste des equipements', 40, currentY);
+    currentY += 16;
 
-    const colWidths = [32, 145, 90, 70, 42, 42, 32, 62];
-    const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
+    const colWidths = [30, 150, 90, 68, 40, 40, 30, 62];
+    const headers = ['N', 'Designation', 'Reference', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
     const totalWidth = colWidths.reduce((a, b) => a + b, 0);
     const tableX = 40;
 
     const drawTableHeader = (y) => {
-      drawRoundedRect(tableX, y, totalWidth, 22, 4, colors.primary);
+      drawRoundedRect(tableX, y, totalWidth, 20, 4, colors.primary);
       doc.font('Helvetica-Bold').fontSize(8).fillColor('#ffffff');
       let x = tableX;
-      headers.forEach((h, i) => {
-        doc.text(h, x + 5, y + 7, { width: colWidths[i] - 10 });
-        x += colWidths[i];
-      });
-      return y + 22;
+      headers.forEach((h, i) => { doc.text(h, x + 4, y + 6, { width: colWidths[i] - 8 }); x += colWidths[i]; });
+      return y + 20;
     };
 
-    const measureRowHeight = (device, idx) => {
+    const measureRowHeight = (device) => {
       doc.font('Helvetica').fontSize(8);
-      const name = device.name || '-';
-      const nameHeight = doc.heightOfString(name, { width: colWidths[1] - 10 });
-      return Math.max(22, nameHeight + 10);
+      const nameH = doc.heightOfString(device.name || '-', { width: colWidths[1] - 10 });
+      return Math.max(20, nameH + 8);
     };
 
     const getTypeInfo = (d) => {
-      if (d.downstream_code) return { text: `→ ${d.downstream_code}`, color: colors.success, bg: '#d1fae5' };
-      if (d.is_main_incoming) return { text: 'Arrivée', color: colors.warning, bg: '#fef3c7' };
+      if (d.downstream_code) return { text: '> ' + d.downstream_code, color: colors.success, bg: '#d1fae5' };
+      if (d.is_main_incoming) return { text: 'Arrivee', color: colors.warning, bg: colors.warningBg };
       if (d.is_differential) return { text: 'DDR', color: colors.purple, bg: '#ede9fe' };
-      if (!d.is_complete) return { text: 'Incomplet', color: colors.danger, bg: '#fee2e2' };
+      if (!d.is_complete) return { text: 'Incomplet', color: colors.danger, bg: colors.dangerBg };
       return { text: '-', color: colors.gray, bg: null };
     };
 
     currentY = drawTableHeader(currentY);
 
     devices.forEach((d, idx) => {
-      const rowHeight = measureRowHeight(d, idx);
+      const rowH = measureRowHeight(d);
+      if (currentY + rowH > 780) { doc.addPage(); currentY = 40; currentY = drawTableHeader(currentY); }
 
-      // Check for page break
-      if (currentY + rowHeight > 780) {
-        doc.addPage();
-        currentY = 40;
-        currentY = drawTableHeader(currentY);
-      }
+      if (idx % 2 === 0) doc.rect(tableX, currentY, totalWidth, rowH).fillColor(colors.grayLight).fill();
+      doc.rect(tableX, currentY, totalWidth, rowH).strokeColor(colors.grayBorder).stroke();
 
-      // Alternating row background
-      if (idx % 2 === 0) {
-        doc.rect(tableX, currentY, totalWidth, rowHeight).fillColor(colors.grayLight).fill();
-      }
-
-      // Row border
-      doc.rect(tableX, currentY, totalWidth, rowHeight).strokeColor(colors.grayBorder).stroke();
-
-      // Draw cells
-      doc.font('Helvetica').fontSize(8).fillColor(colors.text);
       let x = tableX;
-
-      // Position number
-      doc.font('Helvetica-Bold').fillColor(colors.primary);
-      doc.text(d.position_number || String(idx + 1), x + 5, currentY + 6, { width: colWidths[0] - 10 });
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.primary);
+      doc.text(d.position_number || String(idx + 1), x + 4, currentY + 5, { width: colWidths[0] - 8 });
       x += colWidths[0];
 
-      // Name (with word wrap)
       doc.font('Helvetica').fillColor(colors.text);
-      doc.text(d.name || '-', x + 5, currentY + 6, { width: colWidths[1] - 10 });
+      doc.text(d.name || '-', x + 4, currentY + 5, { width: colWidths[1] - 8 });
       x += colWidths[1];
 
-      // Reference
       doc.fillColor(colors.textMuted);
-      doc.text(d.reference || '-', x + 5, currentY + 6, { width: colWidths[2] - 10, lineBreak: false, ellipsis: true });
+      doc.text(d.reference || '-', x + 4, currentY + 5, { width: colWidths[2] - 8, lineBreak: false, ellipsis: true });
       x += colWidths[2];
 
-      // Manufacturer
-      doc.text(d.manufacturer || '-', x + 5, currentY + 6, { width: colWidths[3] - 10, lineBreak: false, ellipsis: true });
+      doc.text(d.manufacturer || '-', x + 4, currentY + 5, { width: colWidths[3] - 8, lineBreak: false, ellipsis: true });
       x += colWidths[3];
 
-      // In (Amps) - highlighted
       doc.font('Helvetica-Bold').fillColor(colors.text);
-      doc.text(d.in_amps ? `${d.in_amps}A` : '-', x + 5, currentY + 6, { width: colWidths[4] - 10 });
+      doc.text(d.in_amps ? `${d.in_amps}A` : '-', x + 4, currentY + 5, { width: colWidths[4] - 8 });
       x += colWidths[4];
 
-      // Icu
       doc.font('Helvetica').fillColor(colors.textMuted);
-      doc.text(d.icu_ka ? `${d.icu_ka}kA` : '-', x + 5, currentY + 6, { width: colWidths[5] - 10 });
+      doc.text(d.icu_ka ? `${d.icu_ka}kA` : '-', x + 4, currentY + 5, { width: colWidths[5] - 8 });
       x += colWidths[5];
 
-      // Poles
-      doc.text(d.poles ? `${d.poles}P` : '-', x + 5, currentY + 6, { width: colWidths[6] - 10 });
+      doc.text(d.poles ? `${d.poles}P` : '-', x + 4, currentY + 5, { width: colWidths[6] - 8 });
       x += colWidths[6];
 
-      // Type badge
-      const typeInfo = getTypeInfo(d);
-      if (typeInfo.bg) {
-        drawRoundedRect(x + 3, currentY + 4, colWidths[7] - 6, 14, 3, typeInfo.bg);
-      }
-      doc.font('Helvetica-Bold').fontSize(7).fillColor(typeInfo.color);
-      doc.text(typeInfo.text, x + 5, currentY + 7, { width: colWidths[7] - 10, align: 'center', lineBreak: false, ellipsis: true });
+      const ti = getTypeInfo(d);
+      if (ti.bg) drawRoundedRect(x + 2, currentY + 3, colWidths[7] - 4, 14, 3, ti.bg);
+      doc.font('Helvetica-Bold').fontSize(7).fillColor(ti.color);
+      doc.text(ti.text, x + 4, currentY + 6, { width: colWidths[7] - 8, align: 'center', lineBreak: false, ellipsis: true });
 
-      currentY += rowHeight;
+      currentY += rowH;
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -5894,7 +5982,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
       doc.font('Helvetica').fontSize(8).fillColor(colors.gray);
-      doc.text(`${board.code || board.name} — Page ${i + 1} / ${range.count}`, 40, 815, { width: 515, align: 'center' });
+      doc.text(`${board.code || board.name} - Page ${i + 1}/${range.count}`, 40, 815, { width: 515, align: 'center' });
     }
 
     doc.end();
