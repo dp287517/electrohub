@@ -1011,9 +1011,16 @@ app.get("/api/atex/equipments", async (req, res) => {
 app.get("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
+    // 🚀 PERF: Exclude photo_content from response (can be 6-8MB!)
+    // Use (photo_content IS NOT NULL AND length(photo_content) > 0) to check for photo without returning it
     const { rows } = await pool.query(
       `
-      SELECT e.*,
+      SELECT e.id, e.name, e.building, e.zone, e.equipment, e.sub_equipment, e.type,
+             e.manufacturer, e.manufacturer_ref, e.atex_mark_gas, e.atex_mark_dust,
+             e.zoning_gas, e.zoning_dust, e.comment, e.status, e.installed_at,
+             e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+             e.company_id, e.site_id,
+             (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
              (SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id) AS last_check_date,
              (SELECT result FROM atex_checks c
                WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
@@ -1034,7 +1041,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
         ? "non_conforme"
         : "na";
     eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
+      eq.has_photo || eq.photo_path
         ? `/api/atex/equipments/${id}/photo`
         : null;
     res.json({ equipment: eq });
@@ -1137,12 +1144,19 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
     if (!set.length) return res.json({ ok: true });
     values.push(id);
     await pool.query(`UPDATE atex_equipments SET ${set.join(", ")}, updated_at=now() WHERE id=$${i}`, values);
-    const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
+    // 🚀 PERF: Exclude photo_content from response (can be 6-8MB!)
+    const { rows } = await pool.query(`
+      SELECT id, name, building, zone, equipment, sub_equipment, type,
+             manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
+             zoning_gas, zoning_dust, comment, status, installed_at,
+             next_check_date, photo_path, created_at, updated_at, company_id, site_id,
+             (photo_content IS NOT NULL AND length(photo_content) > 0) AS has_photo
+      FROM atex_equipments WHERE id=$1`, [id]);
     const eq = rows?.[0] || null;
     if (eq) {
       eq.status = eqStatusFromDue(eq.next_check_date);
       eq.photo_url =
-        (eq.photo_content && eq.photo_content.length) || eq.photo_path
+        eq.has_photo || eq.photo_path
           ? `/api/atex/equipments/${id}/photo`
           : null;
 
@@ -1203,15 +1217,21 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
     const sourceId = String(req.params.id);
     const { copy_position = false, target_plan = null } = req.body || {};
 
-    // 1. Récupérer l'équipement source
+    // 1. Récupérer l'équipement source (sans photo_content pour perf, on le copie séparément)
     const { rows: srcRows } = await pool.query(
-      `SELECT * FROM atex_equipments WHERE id=$1`,
+      `SELECT id, name, building, zone, equipment, sub_equipment, type,
+              manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
+              zoning_gas, zoning_dust, comment, status, installed_at,
+              next_check_date, photo_path, company_id, site_id,
+              (photo_content IS NOT NULL AND length(photo_content) > 0) AS has_photo
+       FROM atex_equipments WHERE id=$1`,
       [sourceId]
     );
     const source = srcRows[0];
     if (!source) return res.status(404).json({ ok: false, error: "Équipement non trouvé" });
 
-    // 2. Créer la copie (nouveau UUID, nom avec suffixe)
+    // 2. Créer la copie (nouveau UUID, nom avec suffixe) - marquer comme dupliqué
+    // 🚀 PERF: RETURNING explicit columns without photo_content
     const { rows: newRows } = await pool.query(
       `INSERT INTO atex_equipments (
         name, building, zone, equipment, sub_equipment, type,
@@ -1221,7 +1241,10 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
         $11, $12, $13, 'a_faire', $14, $15, $16, $17, now(), now()
-      ) RETURNING *`,
+      ) RETURNING id, name, building, zone, equipment, sub_equipment, type,
+                  manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
+                  zoning_gas, zoning_dust, comment, status, installed_at,
+                  next_check_date, photo_path, created_at, updated_at, company_id, site_id`,
       [
         source.name + " (copie)",
         source.building,
@@ -1243,22 +1266,27 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
       ]
     );
     const newEquipment = newRows[0];
+    // 🟣 Marquer comme récemment dupliqué (pour affichage violet côté client)
+    newEquipment.is_duplicate = true;
 
-    // 3. Copier la photo si elle existe
-    if (source.photo_content && source.photo_content.length) {
+    // 3. Copier la photo si elle existe (copie directe en DB sans charger en mémoire)
+    if (source.has_photo) {
       await pool.query(
-        `UPDATE atex_equipments SET photo_content=$1, photo_path=$2 WHERE id=$3`,
-        [source.photo_content, source.photo_path, newEquipment.id]
+        `UPDATE atex_equipments SET photo_content=(SELECT photo_content FROM atex_equipments WHERE id=$1), photo_path=$2 WHERE id=$3`,
+        [sourceId, source.photo_path, newEquipment.id]
       );
       newEquipment.photo_url = `/api/atex/equipments/${newEquipment.id}/photo`;
+      newEquipment.has_photo = true;
     }
 
-    // 4. Optionnel: copier la position vers le plan cible ou le même plan
-    if (copy_position) {
-      const { rows: posRows } = await pool.query(
-        `SELECT * FROM atex_positions WHERE equipment_id=$1`,
-        [sourceId]
-      );
+    // 4. Gérer la position sur le plan
+    const { rows: posRows } = await pool.query(
+      `SELECT * FROM atex_positions WHERE equipment_id=$1 ORDER BY created_at DESC LIMIT 1`,
+      [sourceId]
+    );
+
+    if (copy_position && posRows.length > 0) {
+      // Copier la position exacte
       for (const pos of posRows) {
         const targetLogical = target_plan || pos.logical_name;
         await pool.query(
@@ -1268,6 +1296,15 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
           [newEquipment.id, targetLogical, pos.plan_id, pos.page_index, pos.x_frac, pos.y_frac]
         );
       }
+    } else if (posRows.length > 0) {
+      // 🆕 Même si copy_position=false, placer le duplicata au centre du même plan
+      const pos = posRows[0];
+      await pool.query(
+        `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
+         VALUES ($1, $2, $3, $4, 0.5, 0.5)
+         ON CONFLICT (equipment_id, logical_name, page_index) DO NOTHING`,
+        [newEquipment.id, pos.logical_name, pos.plan_id, pos.page_index]
+      );
     }
 
     // 📝 AUDIT: Log duplication équipement ATEX
