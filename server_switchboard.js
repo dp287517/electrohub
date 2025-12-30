@@ -871,7 +871,11 @@ async function ensureSchema() {
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'complete_count') THEN
         ALTER TABLE switchboards ADD COLUMN complete_count INTEGER DEFAULT 0;
       END IF;
-      
+      -- Settings column for listing data and other metadata
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'settings') THEN
+        ALTER TABLE switchboards ADD COLUMN settings JSONB DEFAULT '{}'::jsonb;
+      END IF;
+
       -- Devices columns
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'name') THEN
         ALTER TABLE devices ADD COLUMN name TEXT;
@@ -1071,6 +1075,12 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'in_amps') THEN
         ALTER TABLE devices ADD COLUMN in_amps NUMERIC;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'trip_unit') THEN
+        ALTER TABLE devices ADD COLUMN trip_unit TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'settings') THEN
+        ALTER TABLE devices ADD COLUMN settings JSONB DEFAULT '{}'::jsonb;
       END IF;
 
       -- =====================================================
@@ -3012,6 +3022,91 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
       const imgSize = images[i]?.url?.length || 0;
       console.log(`[PANEL SCAN] Image ${i + 1}: ${Math.round(imgSize / 1024)}KB base64`);
     }
+
+    // ============================================================
+    // PHASE 0: Detect and process listing photos separately
+    // ============================================================
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 0: Detecting Listing Photos`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+
+    let listingData = [];
+    try {
+      // Quick detection prompt
+      const listingDetectPrompt = `Analyse ces images et identifie si certaines sont des DOCUMENTS PAPIER (listing/nomenclature de tableau électrique) vs des PHOTOS DU TABLEAU lui-même.
+
+Un LISTING/NOMENCLATURE est un document papier/tableau imprimé qui liste les circuits avec:
+- Numéro de position/repère (11F1, Q1, 1, 2...)
+- Désignation du circuit (Éclairage, Prises, Chauffage...)
+- Caractéristiques (calibre, pôles: 1P, 2P, 3P, 4P...)
+
+IMPORTANT: Si tu détectes un listing, EXTRAIT les données de CHAQUE ligne:
+- position: le repère/numéro (ex: "11F1", "Q1", "1")
+- designation: le nom du circuit
+- poles: le nombre de pôles (1, 2, 3 ou 4)
+- in_amps: le calibre en ampères si visible
+
+Réponds en JSON:
+{
+  "has_listing_photos": true/false,
+  "listing_indices": [0, 2],
+  "listing_data": [
+    {"position": "11F1", "designation": "Éclairage bureau", "poles": 1, "in_amps": 10},
+    {"position": "11F2", "designation": "Prises RDC", "poles": 1, "in_amps": 16}
+  ],
+  "panel_photo_indices": [1, 3]
+}`;
+
+      const listingResponse = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: listingDetectPrompt },
+          { role: 'user', content: imageContents }
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 4000,
+        temperature: 0.1
+      });
+
+      const listingResult = JSON.parse(listingResponse.choices[0].message.content);
+      console.log(`[PANEL SCAN] Listing detection: has_listing=${listingResult.has_listing_photos}, entries=${listingResult.listing_data?.length || 0}`);
+
+      if (listingResult.has_listing_photos && listingResult.listing_data?.length > 0) {
+        listingData = listingResult.listing_data.filter(e => e.position);
+        console.log(`[PANEL SCAN] Extracted ${listingData.length} entries from listing photos:`);
+        listingData.forEach(e => console.log(`[PANEL SCAN]   - ${e.position}: ${e.designation || '?'} (${e.poles || '?'}P, ${e.in_amps || '?'}A)`));
+
+        // Save listing data to switchboard settings for future use
+        try {
+          await quickQuery(`
+            UPDATE switchboards
+            SET settings = jsonb_set(
+              COALESCE(settings, '{}'::jsonb),
+              '{listing_data}',
+              $2::jsonb
+            )
+            WHERE id = $1 AND site = $3
+          `, [
+            switchboardId,
+            JSON.stringify({
+              entries: listingData,
+              scanned_at: new Date().toISOString(),
+              from_panel_scan: true
+            }),
+            site
+          ]);
+          console.log(`[PANEL SCAN] Saved listing data to switchboard settings`);
+        } catch (dbErr) {
+          console.warn(`[PANEL SCAN] Failed to save listing data: ${dbErr.message}`);
+        }
+      }
+    } catch (listingErr) {
+      console.warn(`[PANEL SCAN] Listing detection failed (non-blocking): ${listingErr.message}`);
+    }
+
+    job.progress = 10;
+    job.message = 'Analyse IA GPT-4o en cours...';
+    await saveProgress();
 
     const systemPrompt = `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
 
