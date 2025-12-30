@@ -452,6 +452,20 @@ export const api = {
     },
     attachmentUrl: (id, thumbnail = false) =>
       `${API_BASE}/api/switchboard/controls/attachments/${id}/file?site=${currentSite()}${thumbnail ? "&thumbnail=true" : ""}`,
+
+    // Drafts (brouillons) - sauvegarde automatique photos illimitées
+    getDraft: (scheduleId) => get(`/api/switchboard/controls/drafts/${scheduleId}`),
+    saveDraft: (scheduleId, data) => put(`/api/switchboard/controls/drafts/${scheduleId}`, data),
+    deleteDraft: (scheduleId) => del(`/api/switchboard/controls/drafts/${scheduleId}`),
+    uploadDraftAttachment: (scheduleId, file, extra = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (extra.file_type) fd.append("file_type", extra.file_type);
+      return upload(`/api/switchboard/controls/drafts/${scheduleId}/attachments`, fd);
+    },
+    deleteDraftAttachment: (id) => del(`/api/switchboard/controls/drafts/attachments/${id}`),
+    draftAttachmentUrl: (id, thumbnail = false) =>
+      `${API_BASE}/api/switchboard/controls/drafts/attachments/${id}/file?site=${currentSite()}${thumbnail ? "&thumbnail=true" : ""}`,
   },
 
   switchboardMaps: {
