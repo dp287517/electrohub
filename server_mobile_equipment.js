@@ -298,6 +298,10 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_me_checks_equipment_closed
       ON me_checks(equipment_id, closed_at DESC) WHERE closed_at IS NOT NULL;
   `);
+
+  // 🚀 PERF: Add indexes for me_equipment_positions to speed up placed-ids queries
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_me_positions_equipment ON me_equipment_positions(equipment_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_me_positions_plan ON me_equipment_positions(plan_logical_name, page_index);`);
 }
 
 // ------------------------------

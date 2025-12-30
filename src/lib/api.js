@@ -2351,27 +2351,42 @@ export const api = {
           }
         };
 
+        // 🚀 PERF: Run plan position queries in parallel instead of sequentially
         const buildFromPlans = async () => {
           const placed_ids = [];
           const placed_details = {};
           try {
             const plansRes = await get("/api/mobile-equipment/maps/plans").catch(() => null);
             const plans = plansRes?.plans || plansRes || [];
-            for (const plan of plans) {
-              try {
-                const posRes = await get("/api/mobile-equipment/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
-                for (const pos of (posRes?.positions || [])) {
-                  if (pos.equipment_id) {
-                    const eqId = String(pos.equipment_id);
-                    if (!placed_ids.includes(eqId)) {
-                      placed_ids.push(eqId);
-                      placed_details[eqId] = { plans: [plan.logical_name] };
-                    } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
-                      placed_details[eqId].plans.push(plan.logical_name);
+
+            // Fetch all positions in parallel (max 10 concurrent to avoid overload)
+            const batchSize = 10;
+            for (let i = 0; i < plans.length; i += batchSize) {
+              const batch = plans.slice(i, i + batchSize);
+              const results = await Promise.allSettled(
+                batch.map(plan =>
+                  get("/api/mobile-equipment/maps/positions", { logical_name: plan.logical_name, page_index: 0 })
+                    .then(posRes => ({ plan, positions: posRes?.positions || [] }))
+                    .catch(() => ({ plan, positions: [] }))
+                )
+              );
+
+              for (const result of results) {
+                if (result.status === 'fulfilled') {
+                  const { plan, positions } = result.value;
+                  for (const pos of positions) {
+                    if (pos.equipment_id) {
+                      const eqId = String(pos.equipment_id);
+                      if (!placed_ids.includes(eqId)) {
+                        placed_ids.push(eqId);
+                        placed_details[eqId] = { plans: [plan.logical_name] };
+                      } else if (placed_details[eqId] && !placed_details[eqId].plans.includes(plan.logical_name)) {
+                        placed_details[eqId].plans.push(plan.logical_name);
+                      }
                     }
                   }
                 }
-              } catch {}
+              }
             }
           } catch {}
           return { placed_ids, placed_details };
