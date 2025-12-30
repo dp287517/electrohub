@@ -1643,6 +1643,45 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   const hasPhoto = uploadedPhoto || userMessage.includes('[Photo:');
   const isFinished = /^(termin|fini|c'est tout|stop|fin)/i.test(userMessage.trim());
 
+  // Check if user wants to see summary/status of existing steps
+  const wantsSummary = /^(continu|résumé|resume|voir|status|état|où j'en suis|ou j'en suis|recap|récap)/i.test(userMessage.trim());
+
+  // If user asks for summary/continue, show current status
+  if (wantsSummary && existingTitle && !hasPhoto) {
+    let statusMessage;
+
+    if (rawSteps.length > 0) {
+      // Case 1: Has steps - show full summary
+      const stepsList = rawSteps.map((s, i) => {
+        const description = s.raw_text || s.title || `Étape ${i + 1}`;
+        const truncated = description.length > 50 ? description.substring(0, 50) + '...' : description;
+        return `${i + 1}. ${truncated}`;
+      }).join('\n');
+
+      statusMessage = `📋 **"${existingTitle}"** - ${rawSteps.length} étape(s) enregistrée(s):\n\n${stepsList}\n\n➡️ Ajoutez une étape (📸 + description) ou dites "terminé" pour finaliser.`;
+      console.log(`[PROC] User requested summary, showing ${rawSteps.length} steps`);
+    } else {
+      // Case 2: Has title but no steps yet
+      statusMessage = `📋 **"${existingTitle}"** - Aucune étape pour l'instant.\n\n📸 Décrivez la première étape et ajoutez une photo pour commencer.`;
+      console.log(`[PROC] User requested summary, no steps yet for "${existingTitle}"`);
+    }
+
+    // Add to conversation
+    conversation.push({ role: "assistant", content: statusMessage });
+    await pool.query(
+      `UPDATE procedure_ai_sessions SET conversation = $1, updated_at = now() WHERE id = $2`,
+      [JSON.stringify(conversation), sessionId]
+    );
+
+    return {
+      message: statusMessage,
+      currentStep: 'steps',
+      expectsPhoto: true,
+      procedureReady: false,
+      collectedData: session.collected_data
+    };
+  }
+
   // If in steps phase and has photo, store the raw step immediately
   if (session.current_step === 'steps' && hasPhoto && !isFinished) {
     const stepNumber = rawSteps.length + 1;
