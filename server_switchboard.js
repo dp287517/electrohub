@@ -5732,8 +5732,12 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       drawRoundedRect(x, y, w, h, 4, colors.grayLight);
       doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted).text(label, x + 8, y + 5, { width: w - 16 });
       doc.font('Helvetica-Bold').fontSize(13).fillColor(highlight ? colors.success : colors.text);
-      doc.text(value, x + 8, y + 17, { width: w - 40, continued: false });
-      doc.font('Helvetica').fontSize(9).fillColor(colors.textMuted).text(unit, x + 8 + doc.widthOfString(value) + 2, y + 19);
+      doc.text(value, x + 8, y + 17, { width: w - 35 });
+      // Unit positioned at fixed right side of box
+      if (unit) {
+        doc.font('Helvetica').fontSize(9).fillColor(colors.textMuted);
+        doc.text(unit, x + w - 35, y + 19, { width: 30, align: 'left' });
+      }
     };
 
     // ═══════════════════════════════════════════════════════════════════
@@ -5781,8 +5785,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════
     if (upstreamDevices.length > 0) {
       const upText = upstreamDevices.map(d => {
-        const info = [d.source_board_code, 'via', d.reference || d.manufacturer || '', d.in_amps ? `${d.in_amps}A` : ''].filter(Boolean).join(' ');
-        return info;
+        // Build breaker description: name or reference or manufacturer + amps
+        const breakerName = d.name || d.reference || d.manufacturer || 'Depart';
+        const breakerAmps = d.in_amps ? `${d.in_amps}A` : '';
+        const breakerDesc = [breakerName, breakerAmps].filter(Boolean).join(' ');
+        return `${d.source_board_code} via ${breakerDesc}`;
       }).join(', ');
       drawRoundedRect(40, currentY, 515, 20, 5, colors.warningBg, colors.warning);
       doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.warning).text('ALIMENTE PAR', 52, currentY + 5);
