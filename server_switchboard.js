@@ -5785,10 +5785,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════
     if (upstreamDevices.length > 0) {
       const upText = upstreamDevices.map(d => {
-        // Build breaker description: name or reference or manufacturer + amps
+        // Build breaker description: position + name + amps
+        const position = d.position_number ? `[${d.position_number}]` : '';
         const breakerName = d.name || d.reference || d.manufacturer || 'Depart';
         const breakerAmps = d.in_amps ? `${d.in_amps}A` : '';
-        const breakerDesc = [breakerName, breakerAmps].filter(Boolean).join(' ');
+        const breakerDesc = [position, breakerName, breakerAmps].filter(Boolean).join(' ');
         return `${d.source_board_code} via ${breakerDesc}`;
       }).join(', ');
       drawRoundedRect(40, currentY, 515, 20, 5, colors.warningBg, colors.warning);
