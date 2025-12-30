@@ -1360,8 +1360,11 @@ export default function Switchboards() {
     try {
       const res = await api.switchboard.listBoards({ pageSize: 500 });
       setBoards(res.data || []);
-      loadPlacements().catch(console.warn);
-      loadControlStatuses().catch(console.warn);
+      // 🚀 PERF: Parallelize secondary data loading
+      Promise.all([
+        loadPlacements(),
+        loadControlStatuses()
+      ]).catch(console.warn);
     } catch (err) {
       console.error('Load boards error:', err);
       showToast('Erreur lors du chargement', 'error');

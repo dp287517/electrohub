@@ -1219,7 +1219,7 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
                     rel="noopener noreferrer"
                     className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 hover:border-rose-400 transition-colors"
                   >
-                    <img src={photo} alt="" className="w-full h-full object-cover" />
+                    <img src={photo} alt="" loading="lazy" className="w-full h-full object-cover" />
                   </a>
                 ))}
               </div>
