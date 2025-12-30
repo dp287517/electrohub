@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
-import MiniSwitchboardPreview from './MiniSwitchboardPreview';
+import MiniEquipmentPreview from './MiniEquipmentPreview';
 import {
   X, Send, Mic, MicOff, Sparkles,
   AlertTriangle, Calendar, Search, FileText,
@@ -48,7 +48,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-green-50',
     textColor: 'text-green-600',
     borderColor: 'border-green-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve ce variateur sur le plan.', isMapAction: true },
       { icon: Wrench, label: 'Diagnostic', prompt: 'Fais un diagnostic complet de ce variateur et identifie les points d\'attention.' },
       { icon: AlertTriangle, label: 'Problèmes courants', prompt: 'Quels sont les problèmes courants pour ce type de variateur et comment les prévenir ?' },
       { icon: Calendar, label: 'Maintenance', prompt: 'Propose un plan de maintenance préventive adapté à ce variateur.' },
@@ -82,7 +84,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-orange-50',
     textColor: 'text-orange-600',
     borderColor: 'border-orange-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve cet équipement mécanique sur le plan.', isMapAction: true },
       { icon: Wrench, label: 'Diagnostic', prompt: 'Fais un diagnostic mécanique de cet équipement et identifie les usures potentielles.' },
       { icon: AlertTriangle, label: 'Points critiques', prompt: 'Quels sont les points critiques à surveiller sur cet équipement mécanique ?' },
       { icon: Calendar, label: 'Maintenance', prompt: 'Propose un plan de maintenance préventive adapté à cet équipement.' },
@@ -98,7 +102,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-emerald-50',
     textColor: 'text-emerald-600',
     borderColor: 'border-emerald-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve cet équipement GLO sur le plan.', isMapAction: true },
       { icon: Battery, label: 'État batteries', prompt: 'Analyse l\'état des batteries de cet équipement et estime leur durée de vie.' },
       { icon: Activity, label: 'Performance', prompt: 'Évalue les performances de cet équipement et identifie les améliorations possibles.' },
       { icon: Calendar, label: 'Tests', prompt: 'Quels tests périodiques sont requis ? Propose un planning de tests.' },
@@ -114,7 +120,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-amber-50',
     textColor: 'text-amber-600',
     borderColor: 'border-amber-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve cet équipement haute tension sur le plan.', isMapAction: true },
       { icon: Shield, label: 'Sécurité HT', prompt: 'Analyse les risques haute tension de cet équipement et les mesures de sécurité requises.' },
       { icon: AlertTriangle, label: 'Points critiques', prompt: 'Quels sont les points critiques à surveiller sur cet équipement HT ?' },
       { icon: Calendar, label: 'Contrôles réglementaires', prompt: 'Quels contrôles réglementaires sont requis ? Vérifie les échéances.' },
@@ -130,7 +138,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-blue-50',
     textColor: 'text-blue-600',
     borderColor: 'border-blue-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve cet équipement mobile sur le plan.', isMapAction: true },
       { icon: ClipboardCheck, label: 'Vérifications', prompt: 'Liste les vérifications à effectuer avant utilisation de cet équipement.' },
       { icon: Calendar, label: 'Planning', prompt: 'Propose un planning de contrôles périodiques pour cet équipement mobile.' },
       { icon: Shield, label: 'Conformité', prompt: 'Vérifie la conformité réglementaire de cet équipement mobile.' },
@@ -146,7 +156,9 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'bg-purple-50',
     textColor: 'text-purple-600',
     borderColor: 'border-purple-200',
+    showMapPreview: true,
     actions: [
+      { icon: Map, label: 'Localisation', prompt: 'Montre-moi où se trouve cet équipement ATEX sur le plan.', isMapAction: true },
       { icon: Shield, label: 'Conformité ATEX', prompt: 'Vérifie la conformité ATEX de cet équipement et identifie les écarts.' },
       { icon: AlertTriangle, label: 'Zones à risque', prompt: 'Analyse les zones à risque d\'explosion autour de cet équipement.' },
       { icon: Calendar, label: 'Inspections', prompt: 'Quelles inspections ATEX sont requises ? Propose un planning.' },
@@ -684,17 +696,14 @@ Comment puis-je vous aider avec cet équipement ?`,
                 {/* Chart */}
                 {message.chart && <AIChart chart={message.chart} />}
 
-                {/* Mini Switchboard Map Preview */}
-                {message.showMap && equipmentType === 'switchboard' && (
+                {/* Mini Equipment Map Preview - Works for all equipment types */}
+                {message.showMap && config.showMapPreview && (
                   <div className="mt-3">
-                    <MiniSwitchboardPreview
+                    <MiniEquipmentPreview
                       equipment={equipment}
-                      switchboardId={equipment?.id}
+                      equipmentType={equipmentType}
                       controlStatus={controlStatus}
-                      onNavigate={(sbId, planData) => {
-                        onClose();
-                        // Navigate will be handled by the component
-                      }}
+                      onClose={onClose}
                     />
                   </div>
                 )}
