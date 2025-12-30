@@ -99,6 +99,57 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
 
+  // CRITICAL: Persist active session to localStorage to survive app minimize/refresh
+  useEffect(() => {
+    if (sessionId && mode === 'guided') {
+      const activeSession = {
+        sessionId,
+        draftId,
+        mode,
+        collectedData,
+        currentStep,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('activeProcedureSession', JSON.stringify(activeSession));
+      console.log('[ProcedureCreator] Saved active session to localStorage:', sessionId);
+    }
+  }, [sessionId, draftId, mode, collectedData, currentStep]);
+
+  // CRITICAL: Restore active session from localStorage on mount
+  useEffect(() => {
+    const savedSession = localStorage.getItem('activeProcedureSession');
+    if (savedSession && mode === 'choose') {
+      try {
+        const session = JSON.parse(savedSession);
+        // Only restore if session is less than 24 hours old
+        if (session.sessionId && (Date.now() - session.timestamp) < 24 * 60 * 60 * 1000) {
+          console.log('[ProcedureCreator] Restoring session from localStorage:', session.sessionId);
+          setSessionId(session.sessionId);
+          setDraftId(session.draftId);
+          setMode(session.mode || 'guided');
+          setCollectedData(session.collectedData || {});
+          setCurrentStep(session.currentStep || 'steps');
+
+          // Show message about restored session
+          const stepsCount = session.collectedData?.raw_steps?.length || 0;
+          setMessages([{
+            role: 'assistant',
+            content: `📋 Session restaurée automatiquement!\n\n"${session.collectedData?.title || 'Procédure en cours'}" - ${stepsCount} étape(s).\n\nContinuez à ajouter des étapes ou dites "terminé".`
+          }]);
+        }
+      } catch (e) {
+        console.error('Error restoring session:', e);
+        localStorage.removeItem('activeProcedureSession');
+      }
+    }
+  }, []);
+
+  // Clear localStorage when procedure is completed or modal closed
+  const clearActiveSession = useCallback(() => {
+    localStorage.removeItem('activeProcedureSession');
+    console.log('[ProcedureCreator] Cleared active session from localStorage');
+  }, []);
+
   // FIX: Restore state when modal is reopened after photo capture
   useEffect(() => {
     if (shouldReopenModal && procedureInfo) {
@@ -421,6 +472,9 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     try {
       // Use background mode - returns immediately, sends push notification when done
       const result = await finalizeAISession(sessionId, { background: true });
+
+      // Clear active session from localStorage since procedure is being finalized
+      clearActiveSession();
 
       if (result.processing) {
         // Background mode: close immediately, user will get notification
