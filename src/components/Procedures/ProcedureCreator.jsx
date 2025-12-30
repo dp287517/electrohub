@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
 import {
   Send, Camera, Upload, X, Sparkles, AlertTriangle,
   Shield, HardHat, Phone, Link2, CheckCircle, Loader2,
   FileText, ChevronRight, Image, Plus, Trash2, Save, Clock,
-  Scan, LayoutGrid
+  LayoutGrid
 } from 'lucide-react';
 import { useProcedureCapture } from '../../contexts/ProcedureCaptureContext';
 import {
@@ -65,10 +64,8 @@ function OptionButton({ label, onClick, selected }) {
 }
 
 export default function ProcedureCreator({ onProcedureCreated, onClose, initialContext }) {
-  const location = useLocation();
   const {
     isCapturing,
-    captures,
     captureCount,
     startCapture,
     consumeCaptures
@@ -115,13 +112,12 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     }
   }, [isCapturing, captureCount, mode, consumeCaptures]);
 
-  // Start capture mode for this procedure
-  const handleStartCapture = () => {
+  // Open multi-photo capture mode
+  const handleOpenMultiCapture = () => {
     startCapture({
       id: sessionId || draftId,
       title: collectedData?.title || 'Nouvelle procédure',
-      sessionId,
-      returnPath: location.pathname + location.search
+      returnPath: '/app/procedures'
     });
   };
 
@@ -1041,50 +1037,32 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 </div>
               </div>
             )}
-            {/* Photo requirement hint when in steps mode and no photo pending */}
+            {/* Photo actions when in steps mode */}
             {currentStep === 'steps' && !pendingPhoto && pendingCaptures.length === 0 && (
-              <div className="flex items-center justify-between gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-xl">
-                <div className="flex items-center gap-2">
-                  <Camera className="w-4 h-4 flex-shrink-0" />
-                  <span><strong>Photo obligatoire</strong> pour chaque étape</span>
-                </div>
+              <div className="space-y-2">
+                {/* Multi-photo button - prominent */}
                 <button
-                  onClick={handleStartCapture}
-                  className="flex items-center gap-1 px-2 py-1 bg-violet-600 text-white rounded-lg text-[10px] font-medium hover:bg-violet-700 transition-colors"
+                  onClick={handleOpenMultiCapture}
+                  className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl flex items-center justify-center gap-2 font-medium active:scale-[0.98] transition-transform"
                 >
-                  <Scan className="w-3 h-3" />
-                  Mode Capture
+                  <Camera className="w-5 h-5" />
+                  <span>Prendre des photos</span>
                 </button>
+                <p className="text-xs text-gray-500 text-center">
+                  Prenez toutes les photos nécessaires, puis décrivez l'étape
+                </p>
               </div>
             )}
             <div className="flex gap-2">
-              {/* Capture mode button */}
-              {currentStep === 'steps' && (
-                <button
-                  onClick={handleStartCapture}
-                  className="p-3 rounded-xl bg-violet-100 text-violet-600 active:bg-violet-200 transition-all relative flex-shrink-0"
-                  title="Mode capture - Naviguez et capturez des photos"
-                >
-                  <Scan className="w-5 h-5" />
-                </button>
-              )}
-              {/* Camera button - changes style based on whether photo is pending */}
-              {(expectsPhoto || currentStep === 'steps') && (
+              {/* Camera button - for single photo or when photo already taken */}
+              {(expectsPhoto || currentStep === 'steps') && (pendingPhoto || pendingCaptures.length > 0) && (
                 <button
                   onClick={() => photoInputRef.current?.click()}
-                  className={`p-3 sm:p-3 rounded-xl transition-all relative flex-shrink-0 ${
-                    pendingPhoto
-                      ? 'bg-green-100 text-green-600 active:bg-green-200'
-                      : 'bg-amber-100 text-amber-600 active:bg-amber-200 animate-pulse'
-                  }`}
-                  title={pendingPhoto ? "Changer la photo" : "Ajouter une photo (obligatoire)"}
+                  className="p-3 rounded-xl bg-green-100 text-green-600 active:bg-green-200 transition-all relative flex-shrink-0"
+                  title="Changer la photo"
                 >
                   <Camera className="w-5 h-5" />
-                  {pendingPhoto ? (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] rounded-full flex items-center justify-center">✓</span>
-                  ) : (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 text-white text-[10px] rounded-full flex items-center justify-center font-bold">!</span>
-                  )}
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] rounded-full flex items-center justify-center">✓</span>
                 </button>
               )}
               <input
