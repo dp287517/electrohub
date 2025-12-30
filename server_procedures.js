@@ -1152,6 +1152,98 @@ function generateFallbackRiskAnalysis(procedure, steps) {
   };
 }
 
+// Detect required training based on procedure content
+function detectRequiredTraining(procedure, steps) {
+  const combined = [
+    procedure.title || '',
+    procedure.description || '',
+    ...(steps || []).map(s => `${s.title || ''} ${s.description || ''} ${s.instructions || ''} ${s.warning || ''}`).join(' ')
+  ].join(' ').toLowerCase();
+
+  const training = [];
+
+  // Electrical qualifications
+  const isElectricalWork = /électr|tension|consign|déconsign|armoire|coffret|câbl|disjoncteur|variateur|moteur|condensateur|transfo|génératrice/.test(combined);
+  const isLowVoltage = /basse tension|bt|230v|400v|24v/.test(combined);
+  const isHighVoltage = /haute tension|ht|15kv|20kv|moyenne tension|mt/.test(combined);
+
+  if (isElectricalWork) {
+    if (isHighVoltage) {
+      training.push({ key: 'ba5', label: 'BA5 - Personne qualifiée', required: true, reason: 'Travaux électriques haute/moyenne tension' });
+    } else if (/consign|loto|déconsign|vat/.test(combined)) {
+      training.push({ key: 'ba5', label: 'BA5 - Personne qualifiée', required: true, reason: 'Travaux de consignation électrique' });
+    } else if (isLowVoltage || isElectricalWork) {
+      training.push({ key: 'ba4', label: 'BA4 - Personne avertie', required: true, reason: 'Travaux électriques basse tension' });
+    }
+  }
+
+  // LOTO/Consignation
+  if (/consign|loto|verrouill|étiquet|lockout|tagout|déconsign/.test(combined)) {
+    training.push({ key: 'loto', label: 'LOTO - Consignation', required: true, reason: 'Procédures de consignation/déconsignation' });
+  }
+
+  // Height work
+  const isHeightWork = /hauteur|échafaud|nacelle|élévat|échelle|harnais|toit|toiture|plateforme|pirl|escabeau/.test(combined);
+  if (isHeightWork) {
+    training.push({ key: 'height_work', label: 'Travail en hauteur', required: true, reason: 'Travaux en hauteur détectés' });
+    if (/nacelle|élévat|pemp/.test(combined)) {
+      training.push({ key: 'nacelle', label: 'Nacelle élévatrice (PEMP)', required: true, reason: 'Utilisation de nacelle élévatrice' });
+    }
+    if (/échafaud/.test(combined)) {
+      training.push({ key: 'scaffold', label: 'Montage échafaudage', required: false, reason: 'Travaux sur échafaudage' });
+    }
+  }
+
+  // Confined space
+  if (/confiné|cuve|réservoir|fosse|regard|puit|égout|silo|citerne/.test(combined)) {
+    training.push({ key: 'confined_space', label: 'Espace confiné', required: true, reason: 'Travaux en espace confiné' });
+  }
+
+  // ATEX zones
+  if (/atex|zone.*20|zone.*21|zone.*22|zone.*0|zone.*1|zone.*2|explosif|explosive|explosive/.test(combined)) {
+    training.push({ key: 'atex', label: 'ATEX - Zones explosives', required: true, reason: 'Zone ATEX ou atmosphère explosive' });
+  }
+
+  // Equipment operation
+  if (/chariot|élévateur|transpalette|manitou|fenwick/.test(combined)) {
+    training.push({ key: 'forklift', label: 'Chariot élévateur', required: true, reason: 'Utilisation de chariot élévateur' });
+  }
+  if (/pont.*roulant|palan|grue|potence|levage|élingue/.test(combined)) {
+    training.push({ key: 'crane', label: 'Pont roulant', required: true, reason: 'Utilisation d\'équipement de levage' });
+  }
+
+  // Technical systems
+  if (/hydraulique|huile|pression.*bar|vérin|pompe.*hydraul/.test(combined)) {
+    training.push({ key: 'hydraulic', label: 'Systèmes hydrauliques', required: false, reason: 'Systèmes hydrauliques haute pression' });
+  }
+  if (/pneumatique|air.*comprimé|vérin.*pneumat/.test(combined)) {
+    training.push({ key: 'pneumatic', label: 'Systèmes pneumatiques', required: false, reason: 'Systèmes pneumatiques' });
+  }
+  if (/soudure|souder|soudage|brasure|chalumeau|arc|mig|tig/.test(combined)) {
+    training.push({ key: 'welding', label: 'Soudage', required: true, reason: 'Travaux de soudage' });
+  }
+
+  // Emergency/Safety
+  if (/secours|blessure|accident|urgence|évacuation/.test(combined)) {
+    training.push({ key: 'first_aid', label: 'Premiers secours', required: false, reason: 'Situations d\'urgence possibles' });
+  }
+
+  // Always add site induction for any procedure
+  training.push({ key: 'safety_induction', label: 'Induction sécurité site', required: true, reason: 'Obligatoire pour tout intervenant' });
+
+  // Deduplicate by key
+  const uniqueTraining = [];
+  const seenKeys = new Set();
+  for (const t of training) {
+    if (!seenKeys.has(t.key)) {
+      seenKeys.add(t.key);
+      uniqueTraining.push(t);
+    }
+  }
+
+  return uniqueTraining;
+}
+
 // Analyze photos with AI for additional risk detection
 async function analyzePhotoForRisks(photoBuffer) {
   try {
@@ -1246,6 +1338,7 @@ async function ensureSchema() {
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS approved_by TEXT",
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ",
     "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS ai_rams_analysis JSONB",  // Pre-generated AI risk analysis
+    "ALTER TABLE procedures ADD COLUMN IF NOT EXISTS required_training JSONB DEFAULT '[]'::jsonb",  // Required training/certifications
   ];
   for (const sql of alterColumns) {
     try { await pool.query(sql); } catch {}
@@ -1577,6 +1670,22 @@ Génère aussi les métadonnées de la procédure:
   INDUSTRIEL: ["Consignation électrique", "Permis de travail", "Permis feu", "Autorisation espace confiné"]
   DÉVELOPPEMENT: ["Tests passants", "Code review approuvé", "Backup effectué", "Rollback testé", "Staging validé", "Communication équipe"]
 
+- required_training: Array des formations/habilitations requises. Déduis du contexte:
+  INDUSTRIEL:
+  - Travaux électriques basse tension → ["BA4 - Personne avertie"]
+  - Travaux électriques consignation/haute tension → ["BA5 - Personne qualifiée", "LOTO - Consignation"]
+  - Travaux en hauteur → ["Travail en hauteur"]
+  - Nacelle/PEMP → ["Travail en hauteur", "Nacelle élévatrice (PEMP)"]
+  - Espace confiné → ["Espace confiné"]
+  - Zone ATEX → ["ATEX - Zones explosives"]
+  - Chariot élévateur → ["Chariot élévateur"]
+  - Pont roulant/levage → ["Pont roulant"]
+  - Soudure → ["Soudage"]
+  - Systèmes hydrauliques → ["Systèmes hydrauliques"]
+  - Standard → ["Induction sécurité site"]
+  DÉVELOPPEMENT:
+  - Standard → [] (pas de formation spécifique requise)
+
 - emergency_contacts: Array vide [] (sera rempli par le site)
 
 Format JSON attendu:
@@ -1586,6 +1695,7 @@ Format JSON attendu:
   "ppe_required": ["..."],
   "risk_level": "medium",
   "safety_codes": ["..."],
+  "required_training": ["..."],
   "emergency_contacts": [],
   "steps": [
     {"step_number": 1, "title": "...", "instructions": "...", "warning": "...", "duration_minutes": 5}
@@ -2527,9 +2637,9 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     leftContentEnd = margin + 105;
   }
 
-  // Method Statement badge - positioned after logo/company
-  doc.roundedRect(leftContentEnd + 5, 8, 115, 20, 3).fill(c.primary);
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(c.white).text("METHOD STATEMENT", leftContentEnd + 12, 13);
+  // RAMS badge - positioned after logo/company
+  doc.roundedRect(leftContentEnd + 5, 8, 60, 20, 3).fill(c.primary);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(c.white).text("RAMS", leftContentEnd + 18, 12);
 
   // RIGHT SECTION: Risk badge + QR (140px total)
   const rightSectionX = pageWidth - margin - 140;
@@ -2879,6 +2989,29 @@ async function generateMethodStatementA3PDF(procedureId, baseUrl = 'https://elec
     });
 
     ry += permitH + 3;
+  }
+
+  // Required Training Section - Auto-detected based on procedure content
+  const requiredTraining = detectRequiredTraining(procedure, steps);
+  const mandatoryTraining = requiredTraining.filter(t => t.required);
+  if (mandatoryTraining.length > 0) {
+    doc.rect(col2X, ry, col2W, 15).fill("#0891b2"); // Cyan color
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(c.white).text("FORMATIONS REQUISES", col2X + 6, ry + 3);
+    ry += 15;
+
+    const trainingH = Math.min(mandatoryTraining.length * 14 + 8, 80);
+    doc.rect(col2X, ry, col2W, trainingH).fillAndStroke("#ecfeff", "#0891b2");
+
+    mandatoryTraining.slice(0, 5).forEach((training, i) => {
+      const ty = ry + 5 + i * 13;
+      // Training badge with icon
+      doc.font("Helvetica-Bold").fontSize(6).fillColor("#0891b2")
+         .text("✓ " + training.label, col2X + 6, ty, { width: col2W - 12 });
+      doc.font("Helvetica").fontSize(5).fillColor("#64748b")
+         .text(training.reason, col2X + 14, ty + 6, { width: col2W - 20, lineBreak: false, ellipsis: true });
+    });
+
+    ry += trainingH + 3;
   }
 
   // Risk Summary
@@ -7009,6 +7142,42 @@ async function generateMethodeWord(procedure, steps, aiAnalysis, siteSettings = 
     );
   }
 
+  // 8.2.1 Formations requises
+  const requiredTraining = detectRequiredTraining(procedure, steps);
+  const mandatoryTraining = requiredTraining.filter(t => t.required);
+
+  if (mandatoryTraining.length > 0) {
+    controlParagraphs.push(
+      new Paragraph({
+        children: [new TextRun({ text: "", size: 20 })],
+        spacing: { after: 60 },
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: "8.2.1 Formations et habilitations requises", bold: true, size: 20, color: "0891B2" })],
+        spacing: { after: 60 },
+      }),
+      new Paragraph({
+        children: [new TextRun({
+          text: "Les intervenants doivent posséder les formations/habilitations suivantes :",
+          size: 20, bold: true,
+        })],
+        spacing: { after: 60 },
+      })
+    );
+
+    mandatoryTraining.forEach(training => {
+      controlParagraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({ text: `☑ ${training.label}`, size: 20, bold: true }),
+            new TextRun({ text: ` — ${training.reason}`, size: 18, italics: true, color: "666666" })
+          ],
+          spacing: { after: 40 },
+        })
+      );
+    });
+  }
+
   // 8.3 Consignation
   controlParagraphs.push(
     new Paragraph({
@@ -7798,14 +7967,20 @@ app.post("/api/procedures/ai/assist/start", async (req, res) => {
 
     const sessionId = sessions[0].id;
 
-    // Build context for AI
+    // Build context for AI with required training
+    const detectedTraining = detectRequiredTraining(procedure, steps);
+    const trainingList = detectedTraining.filter(t => t.required).map(t => t.label);
+
     const procedureContext = `
 PROCÉDURE: ${procedure.title}
 DESCRIPTION: ${procedure.description || 'N/A'}
 NIVEAU DE RISQUE: ${procedure.risk_level}
 EPI REQUIS: ${JSON.stringify(procedure.ppe_required || [])}
+FORMATIONS REQUISES: ${JSON.stringify(trainingList)}
 CODES SÉCURITÉ: ${JSON.stringify(procedure.safety_codes || [])}
 CONTACTS URGENCE: ${JSON.stringify(procedure.emergency_contacts || [])}
+
+IMPORTANT: Avant de commencer, vérifier que l'intervenant possède les formations requises listées ci-dessus.
 
 ÉTAPES:
 ${steps.map(s => `
@@ -8949,6 +9124,29 @@ async function generateWorkMethodPDF(procedureData, steps, baseUrl = 'https://el
     y += wmIconSize + 30;
   }
 
+  // === FORMATIONS REQUISES ===
+  const requiredTrainingWM = detectRequiredTraining(data, steps);
+  const mandatoryTrainingWM = requiredTrainingWM.filter(t => t.required);
+
+  if (mandatoryTrainingWM.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0891b2")
+       .text("FORMATIONS REQUISES", margin, y);
+    y += 18;
+
+    const trainingH = Math.min(mandatoryTrainingWM.length * 14 + 10, 80);
+    doc.rect(margin, y, contentW, trainingH).fillAndStroke("#ecfeff", "#0891b2");
+
+    mandatoryTrainingWM.slice(0, 5).forEach((training, i) => {
+      const ty = y + 6 + i * 13;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("#0891b2")
+         .text("✓ " + training.label, margin + 8, ty);
+      doc.font("Helvetica").fontSize(7).fillColor(c.lightText)
+         .text(" — " + training.reason, margin + 130, ty);
+    });
+
+    y += trainingH + 15;
+  }
+
   // === STEPS WITH PHOTOS ===
   doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
      .text("METHODOLOGIE DETAILLEE", margin, y);
@@ -9248,6 +9446,29 @@ async function generateProcedureDocPDF(procedureData, steps, baseUrl = 'https://
   }
 
   y += 70;
+
+  // === FORMATIONS REQUISES ===
+  const requiredTrainingProc = detectRequiredTraining(data, steps);
+  const mandatoryTrainingProc = requiredTrainingProc.filter(t => t.required);
+
+  if (mandatoryTrainingProc.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0891b2")
+       .text("FORMATIONS REQUISES", margin, y);
+    y += 15;
+
+    const trainingH = Math.min(mandatoryTrainingProc.length * 12 + 8, 60);
+    doc.rect(margin, y, contentW, trainingH).fillAndStroke("#ecfeff", "#0891b2");
+
+    mandatoryTrainingProc.slice(0, 4).forEach((training, i) => {
+      const ty = y + 5 + i * 11;
+      doc.font("Helvetica-Bold").fontSize(7).fillColor("#0891b2")
+         .text("✓ " + training.label, margin + 8, ty);
+      doc.font("Helvetica").fontSize(6).fillColor(c.lightText)
+         .text(training.reason, margin + 150, ty);
+    });
+
+    y += trainingH + 10;
+  }
 
   // === STEPS CHECKLIST ===
   doc.font("Helvetica-Bold").fontSize(11).fillColor(c.primary)
