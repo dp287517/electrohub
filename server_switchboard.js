@@ -2961,42 +2961,107 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
     console.log(`[PANEL SCAN] Job ${jobId}: GPT-4o detected ${result.devices.length} devices`);
 
     // ============================================================
-    // PHASE 3: Fusion des résultats GPT-4o + Gemini
+    // PHASE 3: Fusion intelligente des résultats GPT-4o + Gemini
     // ============================================================
     if (geminiResult?.devices?.length) {
       const gptDeviceCount = result.devices.length;
       const geminiDeviceCount = geminiResult.devices.length;
 
-      console.log(`[PANEL SCAN] Job ${jobId}: Merging GPT-4o (${gptDeviceCount}) + Gemini (${geminiDeviceCount}) results`);
+      console.log(`[PANEL SCAN] Job ${jobId}: Smart merge GPT-4o (${gptDeviceCount}) + Gemini (${geminiDeviceCount})`);
 
-      // Si Gemini a trouvé plus d'appareils, utiliser Gemini comme base
-      if (geminiDeviceCount > gptDeviceCount) {
-        console.log(`[PANEL SCAN] Job ${jobId}: Using Gemini as base (more devices detected)`);
-        result.devices = geminiResult.devices;
-        result.panel_description = geminiResult.panel_description || result.panel_description;
-        result.analysis_notes = `Analyse combinée GPT-4o + Gemini. ${geminiResult.analysis_notes || ''}`;
-      } else {
-        // Sinon, chercher les appareils manquants dans GPT-4o
-        const gptPositions = new Set(result.devices.map(d => d.position_label || `R${d.row}-P${d.position_in_row}`));
+      // Créer une map des devices Gemini par position pour lookup rapide
+      const geminiByPosition = new Map();
+      for (const gd of geminiResult.devices) {
+        const key = gd.position_label || `R${gd.row}-P${gd.position_in_row}`;
+        geminiByPosition.set(key, gd);
+      }
 
-        let addedCount = 0;
-        for (const geminiDevice of geminiResult.devices) {
-          const geminiKey = geminiDevice.position_label || `R${geminiDevice.row}-P${geminiDevice.position_in_row}`;
+      // Fonction pour fusionner intelligemment deux devices
+      const mergeDevices = (gptDevice, geminiDevice) => {
+        if (!geminiDevice) return gptDevice;
 
-          if (!gptPositions.has(geminiKey)) {
-            // Appareil manquant dans GPT-4o, l'ajouter
-            result.devices.push({
-              ...geminiDevice,
-              notes: (geminiDevice.notes || '') + ' [ajouté par Gemini]'
-            });
-            addedCount++;
-            console.log(`[PANEL SCAN] Job ${jobId}: Added device ${geminiKey} from Gemini`);
+        const merged = { ...gptDevice };
+
+        // Prendre le type d'appareil le plus spécifique (celui avec le plus de mots)
+        if (geminiDevice.device_type && (!gptDevice.device_type ||
+            geminiDevice.device_type.length > gptDevice.device_type.length)) {
+          merged.device_type = geminiDevice.device_type;
+          merged.notes = (merged.notes || '') + ' [type Gemini]';
+        }
+
+        // Si les calibres diffèrent, préférer celui qui n'est pas 16 (valeur par défaut courante)
+        if (geminiDevice.in_amps && gptDevice.in_amps &&
+            geminiDevice.in_amps !== gptDevice.in_amps) {
+          // Si l'un est 16 et l'autre non, prendre le non-16 (plus probablement correct)
+          if (gptDevice.in_amps === 16 && geminiDevice.in_amps !== 16) {
+            merged.in_amps = geminiDevice.in_amps;
+            merged.notes = (merged.notes || '') + ` [calibre Gemini: ${geminiDevice.in_amps}A]`;
           }
+          console.log(`[PANEL SCAN] Caliber conflict at ${gptDevice.position_label}: GPT=${gptDevice.in_amps}A vs Gemini=${geminiDevice.in_amps}A`);
+        } else if (!gptDevice.in_amps && geminiDevice.in_amps) {
+          merged.in_amps = geminiDevice.in_amps;
         }
 
-        if (addedCount > 0) {
-          result.analysis_notes = `Analyse combinée: ${gptDeviceCount} (GPT-4o) + ${addedCount} ajoutés par Gemini. ${result.analysis_notes || ''}`;
+        // Courbe: prendre si manquante
+        if (!gptDevice.curve_type && geminiDevice.curve_type) {
+          merged.curve_type = geminiDevice.curve_type;
         }
+
+        // Référence: prendre la plus longue/détaillée
+        if (geminiDevice.reference && (!gptDevice.reference ||
+            geminiDevice.reference.length > gptDevice.reference.length)) {
+          merged.reference = geminiDevice.reference;
+        }
+
+        // Fabricant: prendre si manquant ou si Gemini est plus précis
+        if (!gptDevice.manufacturer && geminiDevice.manufacturer) {
+          merged.manufacturer = geminiDevice.manufacturer;
+        }
+
+        // Pôles: si différent, prendre le plus grand (plus prudent pour triphasé)
+        if (geminiDevice.poles && gptDevice.poles && geminiDevice.poles !== gptDevice.poles) {
+          const maxPoles = Math.max(geminiDevice.poles, gptDevice.poles);
+          if (maxPoles !== gptDevice.poles) {
+            merged.poles = maxPoles;
+            merged.notes = (merged.notes || '') + ` [pôles Gemini: ${geminiDevice.poles}]`;
+          }
+          console.log(`[PANEL SCAN] Poles conflict at ${gptDevice.position_label}: GPT=${gptDevice.poles} vs Gemini=${geminiDevice.poles}`);
+        } else if (!gptDevice.poles && geminiDevice.poles) {
+          merged.poles = geminiDevice.poles;
+        }
+
+        // Différentiel: si Gemini dit que c'est différentiel et pas GPT, faire confiance à Gemini
+        if (geminiDevice.is_differential && !gptDevice.is_differential) {
+          merged.is_differential = true;
+          merged.differential_sensitivity_ma = geminiDevice.differential_sensitivity_ma;
+          merged.differential_type = geminiDevice.differential_type;
+          merged.notes = (merged.notes || '') + ' [diff Gemini]';
+        }
+
+        return merged;
+      };
+
+      // Fusionner les devices existants avec les infos Gemini
+      result.devices = result.devices.map(gptDevice => {
+        const key = gptDevice.position_label || `R${gptDevice.row}-P${gptDevice.position_in_row}`;
+        const geminiDevice = geminiByPosition.get(key);
+        geminiByPosition.delete(key); // Marquer comme traité
+        return mergeDevices(gptDevice, geminiDevice);
+      });
+
+      // Ajouter les devices que Gemini a trouvé mais pas GPT
+      let addedCount = 0;
+      for (const [key, geminiDevice] of geminiByPosition) {
+        result.devices.push({
+          ...geminiDevice,
+          notes: (geminiDevice.notes || '') + ' [ajouté par Gemini]'
+        });
+        addedCount++;
+        console.log(`[PANEL SCAN] Job ${jobId}: Added device ${key} from Gemini (${geminiDevice.device_type})`);
+      }
+
+      if (addedCount > 0 || geminiDeviceCount > 0) {
+        result.analysis_notes = `Analyse combinée GPT-4o + Gemini (${addedCount} ajoutés, infos croisées). ${result.analysis_notes || ''}`;
       }
 
       // Corriger voltage basé sur poles/width_modules
