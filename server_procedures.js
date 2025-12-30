@@ -1701,7 +1701,7 @@ Format JSON attendu:
     {"step_number": 1, "title": "...", "instructions": "...", "warning": "...", "duration_minutes": 5}
   ]
 }`;
-async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
+async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, uploadedPhotoContent = null) {
   // Get or create session
   let session;
   const { rows } = await pool.query(
@@ -1795,10 +1795,15 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   // If in steps phase and has photo, store the raw step immediately
   if (session.current_step === 'steps' && hasPhoto && !isFinished) {
     const stepNumber = rawSteps.length + 1;
+
+    // CRITICAL: Store photo content as base64 in DB (Render filesystem is ephemeral)
+    const photoBase64 = uploadedPhotoContent ? uploadedPhotoContent.toString('base64') : null;
+
     rawSteps.push({
       step_number: stepNumber,
       raw_text: userMessage.replace(/\[Photo:[^\]]+\]\n?/g, '').trim(),
       photo: uploadedPhoto || userMessage.match(/\[Photo:\s*([^\]]+)\]/)?.[1],
+      photo_base64: photoBase64, // Store photo content in DB
       has_photo: true
     });
 
@@ -1815,7 +1820,7 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
       [JSON.stringify(conversation), JSON.stringify(newCollectedData), sessionId]
     );
 
-    console.log(`[PROC] Fast mode: stored raw step ${stepNumber}`);
+    console.log(`[PROC] Fast mode: stored raw step ${stepNumber}${photoBase64 ? ` with photo (${photoBase64.length} chars base64)` : ''}`);
 
     return {
       message: `✓ Étape ${stepNumber} enregistrée. Décrivez l'étape suivante + 📸 photo, ou dites "terminé".`,
@@ -5222,11 +5227,21 @@ app.post("/api/procedures/ai/chat/:sessionId", uploadPhoto.single("photo"), asyn
     const { message } = req.body;
 
     let photoPath = null;
+    let photoContent = null;
+
     if (req.file) {
       photoPath = req.file.filename;
+      // CRITICAL: Read photo content and store in DB (Render filesystem is ephemeral)
+      try {
+        const fullPath = path.join(PHOTOS_DIR, req.file.filename);
+        photoContent = await fsp.readFile(fullPath);
+        console.log(`[PROC] Photo uploaded and read: ${photoPath} (${photoContent.length} bytes)`);
+      } catch (e) {
+        console.log(`[PROC] Warning: Could not read uploaded photo: ${e.message}`);
+      }
     }
 
-    const response = await aiGuidedChat(sessionId, message, photoPath);
+    const response = await aiGuidedChat(sessionId, message, photoPath, photoContent);
 
     res.json(response);
   } catch (err) {
@@ -5428,26 +5443,37 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
       let photoPath = null;
 
       // Try to link a photo to this step
-      // Priority: step.photo > raw_steps[i].photo > conversation photo
-      const rawStepPhoto = data.raw_steps?.[i]?.photo;
-      console.log(`[Procedures] Step ${i + 1}: step.photo=${step.photo}, raw_steps.photo=${rawStepPhoto}, conversation.photo=${conversationPhotos[i]}`);
+      // Priority: raw_steps[i].photo_base64 (DB) > filesystem fallback
+      const rawStep = data.raw_steps?.[i];
+      const rawStepPhoto = rawStep?.photo;
+      const rawStepPhotoBase64 = rawStep?.photo_base64;
 
-      if (step.photo) {
-        photoPath = step.photo;
-      } else if (rawStepPhoto) {
-        photoPath = rawStepPhoto;
-      } else if (conversationPhotos[i]) {
-        photoPath = conversationPhotos[i];
+      console.log(`[Procedures] Step ${i + 1}: raw_steps.photo=${rawStepPhoto}, has_base64=${!!rawStepPhotoBase64}, step.photo=${step.photo}`);
+
+      // First try to get photo from base64 stored in DB (survives Render redeploys)
+      if (rawStepPhotoBase64) {
+        photoContent = Buffer.from(rawStepPhotoBase64, 'base64');
+        photoPath = rawStepPhoto || `step_${i + 1}.jpg`;
+        console.log(`[Procedures] Step ${i + 1}: Using photo from DB (${photoContent.length} bytes)`);
+      } else {
+        // Fallback: try to read from filesystem
+        if (step.photo) {
+          photoPath = step.photo;
+        } else if (rawStepPhoto) {
+          photoPath = rawStepPhoto;
+        } else if (conversationPhotos[i]) {
+          photoPath = conversationPhotos[i];
+        }
       }
 
-      // Read photo content if we have a path
-      if (photoPath) {
+      // Read photo content from filesystem if not already loaded from DB
+      if (photoPath && !photoContent) {
         try {
           const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
-          console.log(`[Procedures] Step ${i + 1}: Trying to load photo from ${fullPath}`);
+          console.log(`[Procedures] Step ${i + 1}: Trying to load photo from filesystem ${fullPath}`);
           if (fs.existsSync(fullPath)) {
             photoContent = await fsp.readFile(fullPath);
-            console.log(`[Procedures] Step ${i + 1}: Loaded photo ${photoPath} (${photoContent.length} bytes)`);
+            console.log(`[Procedures] Step ${i + 1}: Loaded photo from filesystem (${photoContent.length} bytes)`);
           } else {
             console.log(`[Procedures] Step ${i + 1}: Photo file not found at ${fullPath}`);
           }
@@ -5756,43 +5782,67 @@ app.post("/api/procedures/:id/recover-photos", async (req, res) => {
       const step = steps[i];
       const rawStep = rawSteps[i];
 
-      // Skip if step already has a photo
-      if (step.photo_content || step.photo_path) {
-        console.log(`[RECOVER] Step ${i + 1}: Already has photo, skipping`);
+      // Check if step actually has working photo content
+      const hasValidPhotoContent = step.photo_content && step.photo_content.length > 100;
+
+      if (hasValidPhotoContent) {
+        console.log(`[RECOVER] Step ${i + 1}: Already has valid photo_content (${step.photo_content.length} bytes), skipping`);
         continue;
       }
 
-      // Get photo from raw_step
-      const photoPath = rawStep?.photo;
-      if (!photoPath) {
-        console.log(`[RECOVER] Step ${i + 1}: No photo in raw_steps`);
-        continue;
-      }
-
-      console.log(`[RECOVER] Step ${i + 1}: Found photo ${photoPath}`);
-
-      // Try to read photo file
+      // Try to reload from existing photo_path first
       let photoContent = null;
-      try {
-        const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
-        if (fs.existsSync(fullPath)) {
-          photoContent = await fsp.readFile(fullPath);
-          console.log(`[RECOVER] Step ${i + 1}: Loaded photo (${photoContent.length} bytes)`);
-        } else {
-          console.log(`[RECOVER] Step ${i + 1}: Photo file not found at ${fullPath}`);
+      let photoPath = step.photo_path;
+
+      if (photoPath) {
+        try {
+          const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+          if (fs.existsSync(fullPath)) {
+            photoContent = await fsp.readFile(fullPath);
+            console.log(`[RECOVER] Step ${i + 1}: Reloaded from existing path ${photoPath} (${photoContent.length} bytes)`);
+          } else {
+            console.log(`[RECOVER] Step ${i + 1}: File not found at ${fullPath}`);
+          }
+        } catch (e) {
+          console.log(`[RECOVER] Step ${i + 1}: Error reading existing path: ${e.message}`);
         }
-      } catch (e) {
-        console.log(`[RECOVER] Step ${i + 1}: Error reading photo: ${e.message}`);
       }
 
-      // Update step with photo
-      if (photoContent) {
+      // If still no content, try from raw_steps (first base64, then filesystem)
+      if (!photoContent && rawStep) {
+        // First try base64 from DB
+        if (rawStep.photo_base64) {
+          photoContent = Buffer.from(rawStep.photo_base64, 'base64');
+          photoPath = rawStep.photo || `step_${i + 1}.jpg`;
+          console.log(`[RECOVER] Step ${i + 1}: Loaded from raw_steps base64 (${photoContent.length} bytes)`);
+        }
+        // Fallback to filesystem
+        else if (rawStep.photo) {
+          photoPath = rawStep.photo;
+          try {
+            const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+            if (fs.existsSync(fullPath)) {
+              photoContent = await fsp.readFile(fullPath);
+              console.log(`[RECOVER] Step ${i + 1}: Loaded from filesystem ${photoPath} (${photoContent.length} bytes)`);
+            } else {
+              console.log(`[RECOVER] Step ${i + 1}: raw_steps photo file not found at ${fullPath}`);
+            }
+          } catch (e) {
+            console.log(`[RECOVER] Step ${i + 1}: Error reading raw_steps photo: ${e.message}`);
+          }
+        }
+      }
+
+      // Update step with photo if we got content
+      if (photoContent && photoContent.length > 100) {
         await pool.query(
           `UPDATE procedure_steps SET photo_path = $1, photo_content = $2 WHERE id = $3`,
           [photoPath, photoContent, step.id]
         );
         recoveredCount++;
         console.log(`[RECOVER] Step ${i + 1}: Photo recovered successfully`);
+      } else {
+        console.log(`[RECOVER] Step ${i + 1}: No valid photo found`);
       }
     }
 
