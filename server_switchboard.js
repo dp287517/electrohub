@@ -4903,9 +4903,19 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
       [switchboard_id, site]
     );
     console.log(`[BULK CREATE] Found ${existingDevices.length} existing devices`);
+
+    // Build a Map of existing devices by normalized position for O(1) lookup
+    const existingByPosition = new Map();
+    for (const dev of existingDevices) {
+      if (dev.position_number != null) {
+        const normalizedPos = String(dev.position_number).trim();
+        existingByPosition.set(normalizedPos, dev);
+      }
+    }
+
     // Debug: log existing positions for troubleshooting
     if (existingDevices.length > 0) {
-      const existingPositions = existingDevices.map(d => d.position_number).join(', ');
+      const existingPositions = Array.from(existingByPosition.keys()).join(', ');
       console.log(`[BULK CREATE] Existing positions: [${existingPositions}]`);
     }
 
@@ -5080,31 +5090,38 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           console.log(`[BULK CREATE] Device ${positionNumber}: in_amps="${device.in_amps}" → ${parsedDevice.in_amps}, poles=${parsedDevice.poles}, icu=${parsedDevice.icu_ka}`);
         }
 
-        // Chercher si un appareil existe déjà à cette position ou avec la même référence
-        const deviceRefNorm = normalizeRef(device.reference);
+        // Chercher si un appareil existe déjà à cette position
         const positionStr = String(positionNumber).trim();
-        const existingDevice = existingDevices.find(e => {
-          // Match par position exacte (convert both to string for comparison)
-          const existingPosStr = String(e.position_number || '').trim();
-          if (existingPosStr && positionStr && existingPosStr === positionStr) return true;
 
-          // Match par référence normalisée + ampérage (utiliser parsedDevice.in_amps)
-          const existingRefNorm = normalizeRef(e.reference);
-          if (existingRefNorm && deviceRefNorm &&
-              existingRefNorm === deviceRefNorm &&
-              Number(e.in_amps) === parsedDevice.in_amps) {
-            return true;
+        // PRIORITY 1: Exact position match using the Map (most reliable)
+        let existingDevice = existingByPosition.get(positionStr);
+        if (existingDevice) {
+          console.log(`[BULK CREATE] Position ${positionStr}: found existing device ${existingDevice.id} by position`);
+        }
+
+        // PRIORITY 2: Match by reference + amperage (only if not found by position)
+        if (!existingDevice) {
+          const deviceRefNorm = normalizeRef(device.reference);
+          existingDevice = existingDevices.find(e => {
+            const existingRefNorm = normalizeRef(e.reference);
+            // Match par référence normalisée + ampérage
+            if (existingRefNorm && deviceRefNorm &&
+                existingRefNorm === deviceRefNorm &&
+                Number(e.in_amps) === parsedDevice.in_amps) {
+              return true;
+            }
+            // Match partiel sur référence (ex: "ic60n" contient dans "a9f74216ic60n")
+            if (existingRefNorm && deviceRefNorm &&
+                (existingRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(existingRefNorm)) &&
+                Number(e.in_amps) === parsedDevice.in_amps) {
+              return true;
+            }
+            return false;
+          });
+          if (existingDevice) {
+            console.log(`[BULK CREATE] Position ${positionStr}: found existing device ${existingDevice.id} by reference match`);
           }
-
-          // Match partiel sur référence (ex: "ic60n" contient dans "a9f74216ic60n")
-          if (existingRefNorm && deviceRefNorm &&
-              (existingRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(existingRefNorm)) &&
-              Number(e.in_amps) === parsedDevice.in_amps) {
-            return true;
-          }
-
-          return false;
-        });
+        }
 
         if (existingDevice) {
           // Mettre à jour l'appareil existant avec les nouvelles infos
