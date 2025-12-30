@@ -3290,7 +3290,9 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
     const draft = rows[0];
 
     // Create new AI session with draft data
-    const resumePhase = draft.steps?.length > 0 ? "steps" : "init";
+    // FIX: If draft has a title, go to "steps" phase even if no steps yet
+    // Only ask for title (init phase) if there's no title
+    const resumePhase = draft.steps?.length > 0 ? "steps" : (draft.title ? "steps" : "init");
     const resumeCollectedData = {
       title: draft.title,
       description: draft.description,
@@ -3328,6 +3330,7 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
       sessionId,
       resumedFrom: draft.id,
       phase: resumePhase,
+      currentStep: resumePhase, // FIX: Add currentStep for frontend compatibility
       collectedData: resumeCollectedData,
       message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${draft.steps?.length || 0} étape(s) existante(s). Continuons !`
     });
