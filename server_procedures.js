@@ -1519,6 +1519,11 @@ PHASES:
 - steps: Avec photo → "✓ Étape N enregistrée. Suivante? (ou 'terminé')" | Sans photo → "📸 Photo SVP"
 - review: procedureReady:true, message récap
 
+RÈGLE CRITIQUE - NE JAMAIS REDEMANDER LE TITRE:
+- Si l'état indique un titre existant (titre="..."), tu es OBLIGATOIREMENT en phase steps
+- Ne JAMAIS demander "📋 Titre de la procédure?" si un titre existe déjà
+- Même si l'utilisateur dit "continuer" ou autre chose, si le titre existe → demander photo pour étape
+
 IMPORTANT: Quand tu passes de init à steps, tu DOIS inclure le titre que l'utilisateur a donné.
 
 JSON: {"message":"...","currentStep":"init|steps|review","expectsPhoto":true,"procedureReady":false,"collectedData":{"title":"le titre si donné"}}`;
@@ -1622,6 +1627,17 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
   const rawSteps = session.collected_data?.raw_steps || [];
   const existingTitle = session.collected_data?.title;
 
+  // FIX: Force phase to "steps" if title already exists (prevents asking for title again)
+  if (existingTitle && session.current_step === 'init') {
+    console.log(`[PROC] Title exists ("${existingTitle}"), forcing phase from init to steps`);
+    session.current_step = 'steps';
+    // Update session in DB to persist the fix
+    await pool.query(
+      `UPDATE procedure_ai_sessions SET current_step = 'steps' WHERE id = $1`,
+      [sessionId]
+    );
+  }
+
   // FAST MODE: During step creation, store raw data and use minimal AI
   // Check if this is a step with photo - store it directly
   const hasPhoto = uploadedPhoto || userMessage.includes('[Photo:');
@@ -1711,6 +1727,14 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null) {
 
   // Determine new phase
   let newPhase = aiResponse.currentStep || session.current_step;
+
+  // FIX: Never go back to init if title already exists
+  if (newPhase === 'init' && existingTitle) {
+    console.log(`[PROC] AI tried to return to init but title exists, forcing steps`);
+    newPhase = 'steps';
+    // Override AI message to ask for photo instead of title
+    aiResponse.message = `📸 Décrivez la première étape et ajoutez une photo.`;
+  }
 
   // TITLE EXTRACTION: If transitioning from init to steps, capture the title from user message
   let extractedTitle = newData.title || existingData.title || existingTitle;
