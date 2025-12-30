@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
-import MiniSwitchboardPreview from './MiniSwitchboardPreview';
+import MiniEquipmentPreview from './MiniEquipmentPreview';
 import {
   X, Send, Mic, MicOff, Settings,
   AlertTriangle, Calendar, Search, FileText,
@@ -505,6 +505,7 @@ Demande-moi n'importe quoi !`,
         // ===============================
         showMap: response.showMap,
         locationEquipment: response.locationEquipment,
+        locationEquipmentType: response.locationEquipmentType,
         locationControlStatus: response.locationControlStatus,
         // ===============================
         // PROCEDURE INTEGRATION (v2.0)
@@ -792,17 +793,14 @@ Demande-moi n'importe quoi !`,
                   </div>
                 )}
 
-                {/* Map Location Preview - Shows equipment on floor plan */}
+                {/* Map Location Preview - Shows equipment on floor plan (works for all equipment types) */}
                 {message.showMap && message.locationEquipment && (
                   <div className="mt-3">
-                    <MiniSwitchboardPreview
+                    <MiniEquipmentPreview
                       equipment={message.locationEquipment}
-                      switchboardId={message.locationEquipment?.id}
+                      equipmentType={message.locationEquipmentType || 'switchboard'}
                       controlStatus={message.locationControlStatus}
-                      onNavigate={(sbId, planData) => {
-                        onClose?.();
-                        navigate(`/switchboard-map?switchboard=${sbId}&plan=${encodeURIComponent(planData?.logical_name || '')}`);
-                      }}
+                      onClose={onClose}
                     />
                   </div>
                 )}
