@@ -711,6 +711,41 @@ export const DEFAULT_PPE = [
   'Harnais de sécurité',
 ];
 
+// Training levels/certifications required for specific work types
+export const TRAINING_TYPES = {
+  // Electrical qualifications (Belgium/EU standard)
+  ba4: { label: 'BA4 - Personne avertie', category: 'electrical', description: 'Formation de base pour travaux électriques sous surveillance' },
+  ba5: { label: 'BA5 - Personne qualifiée', category: 'electrical', description: 'Qualification complète pour travaux électriques autonomes' },
+
+  // Height work
+  height_work: { label: 'Travail en hauteur', category: 'height', description: 'Formation travaux en hauteur et utilisation de harnais' },
+  scaffold: { label: 'Montage échafaudage', category: 'height', description: 'Certification montage/démontage échafaudages' },
+  nacelle: { label: 'Nacelle élévatrice (PEMP)', category: 'height', description: 'Conduite de plateformes élévatrices mobiles' },
+
+  // Confined spaces
+  confined_space: { label: 'Espace confiné', category: 'confined', description: 'Travaux en espaces confinés et atmosphères contrôlées' },
+
+  // Equipment operation
+  forklift: { label: 'Chariot élévateur', category: 'equipment', description: 'Conduite de chariots élévateurs' },
+  crane: { label: 'Pont roulant', category: 'equipment', description: 'Utilisation de ponts roulants et palans' },
+
+  // Safety procedures
+  loto: { label: 'LOTO - Consignation', category: 'safety', description: 'Procédures de consignation/déconsignation' },
+  atex: { label: 'ATEX - Zones explosives', category: 'safety', description: 'Travaux en atmosphères explosives' },
+
+  // Emergency
+  first_aid: { label: 'Premiers secours', category: 'emergency', description: 'Secourisme et premiers soins' },
+  fire_safety: { label: 'Sécurité incendie', category: 'emergency', description: 'Équipier de première intervention' },
+
+  // Specific equipment
+  hydraulic: { label: 'Systèmes hydrauliques', category: 'technical', description: 'Maintenance systèmes hydrauliques haute pression' },
+  pneumatic: { label: 'Systèmes pneumatiques', category: 'technical', description: 'Maintenance systèmes pneumatiques' },
+  welding: { label: 'Soudage', category: 'technical', description: 'Certification soudage (MIG/TIG/Arc)' },
+
+  // General
+  safety_induction: { label: 'Induction sécurité site', category: 'general', description: 'Formation d\'accueil sécurité obligatoire' },
+};
+
 export const CATEGORY_ICONS = {
   general: 'FileText',
   maintenance: 'Wrench',
