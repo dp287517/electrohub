@@ -3455,6 +3455,135 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
         count: suspiciousCount
       });
       console.log(`[PANEL SCAN] ⚠️ WARNING: ${suspiciousCount} devices with suspicious uniform calibers`);
+
+      // ============================================================
+      // PHASE 4.5: RÉ-ANALYSE CIBLÉE des calibres suspects avec Gemini
+      // ============================================================
+      if (gemini && suspiciousCount > 0 && suspiciousCount <= 60) {
+        console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+        console.log(`[PANEL SCAN] PHASE 4.5: Re-analysis of ${suspiciousCount} suspicious calibers`);
+        console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+
+        try {
+          // Collecter les positions suspectes
+          const suspiciousPositions = result.devices
+            .filter(d => d.caliber_suspect)
+            .map(d => d.position_label || `R${d.row}-P${d.position_in_row}`)
+            .slice(0, 30); // Limiter à 30 positions
+
+          const reanalysisPrompt = `MISSION CRITIQUE: Ré-analyse des CALIBRES uniquement.
+
+Je te donne la MÊME photo qu'avant. Tu as identifié ${suspiciousCount} disjoncteurs de même référence avec TOUS le même calibre.
+C'est STATISTIQUEMENT IMPROBABLE sur un vrai tableau électrique !
+
+POSITIONS À VÉRIFIER (regarde CHAQUE position individuellement):
+${suspiciousPositions.join(', ')}
+
+Pour CHAQUE position listée, regarde la FACE AVANT du disjoncteur et lis le CALIBRE imprimé:
+- Format typique: "C16", "C13", "C10", "C20", "C32", "B10", etc.
+- Le calibre est souvent en GROS caractères sur la face avant
+- Regarde ATTENTIVEMENT chaque appareil, les calibres VARIENT !
+
+Réponds UNIQUEMENT en JSON:
+{
+  "calibers": {
+    "11F1": {"caliber": "C16", "confidence": "high/low", "readable": true},
+    "11F2": {"caliber": "C13", "confidence": "high", "readable": true},
+    "11F3": {"caliber": "ILLISIBLE", "confidence": "low", "readable": false}
+  },
+  "notes": "Observations sur la lisibilité"
+}
+
+IMPORTANT: Si tu vois le MÊME calibre partout, vérifie que tu n'as pas copié-collé !`;
+
+          const geminiReanalysisModel = gemini.getGenerativeModel({
+            model: 'gemini-2.0-flash',
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 4000,
+            },
+          });
+
+          // Préparer les images pour Gemini
+          const reanalysisParts = [{ text: reanalysisPrompt }];
+          for (const img of images) {
+            const url = img.url || '';
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              reanalysisParts.push({
+                inlineData: { mimeType: match[1], data: match[2] },
+              });
+            }
+          }
+
+          const reanalysisStart = Date.now();
+          const reanalysisResponse = await geminiReanalysisModel.generateContent({
+            contents: [{ role: 'user', parts: reanalysisParts }]
+          });
+          const reanalysisText = reanalysisResponse.response.text();
+          const reanalysisDuration = Date.now() - reanalysisStart;
+
+          console.log(`[PANEL SCAN] Gemini re-analysis completed in ${reanalysisDuration}ms`);
+
+          // Parse le JSON de ré-analyse
+          let cleanedReanalysis = reanalysisText.trim();
+          if (cleanedReanalysis.startsWith('```json')) cleanedReanalysis = cleanedReanalysis.slice(7);
+          if (cleanedReanalysis.startsWith('```')) cleanedReanalysis = cleanedReanalysis.slice(3);
+          if (cleanedReanalysis.endsWith('```')) cleanedReanalysis = cleanedReanalysis.slice(0, -3);
+
+          try {
+            const reanalysisResult = JSON.parse(cleanedReanalysis.trim());
+
+            if (reanalysisResult.calibers) {
+              let updatedCount = 0;
+              for (const device of result.devices) {
+                if (!device.caliber_suspect) continue;
+
+                const posKey = device.position_label || `R${device.row}-P${device.position_in_row}`;
+                const newCaliberData = reanalysisResult.calibers[posKey];
+
+                if (newCaliberData && newCaliberData.readable && newCaliberData.caliber !== 'ILLISIBLE') {
+                  // Extraire le nombre du calibre (C16 -> 16)
+                  const caliberMatch = newCaliberData.caliber.match(/[CBDKZ]?(\d+)/i);
+                  if (caliberMatch) {
+                    const newAmps = parseInt(caliberMatch[1]);
+                    if (newAmps !== device.in_amps) {
+                      console.log(`[PANEL SCAN] ✓ RE-ANALYSIS: ${posKey}: ${device.in_amps}A → ${newAmps}A`);
+                      device.in_amps = newAmps;
+                      device.notes = (device.notes || '').replace(/\[⚠️ SUSPECT.*?\]/, '') +
+                        ` [✓ Calibre corrigé par ré-analyse: ${newAmps}A]`;
+                      device.caliber_suspect = false;
+                      updatedCount++;
+                    }
+                  }
+                }
+              }
+
+              if (updatedCount > 0) {
+                console.log(`[PANEL SCAN] ✓ RE-ANALYSIS: ${updatedCount} calibres corrigés`);
+                suspiciousCount -= updatedCount;
+
+                // Mettre à jour le warning
+                const warningIndex = result.warnings.findIndex(w => w.type === 'CALIBER_UNIFORMITY_SUSPECT');
+                if (warningIndex >= 0) {
+                  if (suspiciousCount <= 0) {
+                    result.warnings.splice(warningIndex, 1);
+                  } else {
+                    result.warnings[warningIndex].count = suspiciousCount;
+                    result.warnings[warningIndex].message = `${suspiciousCount} disjoncteurs restants à vérifier après ré-analyse.`;
+                  }
+                }
+              } else {
+                console.log(`[PANEL SCAN] ⚠️ RE-ANALYSIS: Aucun calibre corrigé (peut-être illisibles sur les photos)`);
+              }
+            }
+          } catch (parseErr) {
+            console.error(`[PANEL SCAN] ❌ RE-ANALYSIS parse error:`, parseErr.message);
+          }
+        } catch (reanalysisError) {
+          console.error(`[PANEL SCAN] ❌ RE-ANALYSIS error:`, reanalysisError.message);
+        }
+      }
     }
 
     // ============================================================
