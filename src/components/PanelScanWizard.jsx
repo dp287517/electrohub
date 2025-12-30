@@ -182,6 +182,17 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('Envoi des photos...');
   const [jobId, setJobId] = useState(null);
+  const [phase, setPhase] = useState('upload'); // upload, gpt, gemini, merge, cache, done
+
+  // Determine phase from progress
+  const getPhaseFromProgress = (p) => {
+    if (p < 5) return 'upload';
+    if (p < 25) return 'gpt';
+    if (p < 40) return 'gemini';
+    if (p < 50) return 'merge';
+    if (p < 80) return 'cache';
+    return 'done';
+  };
 
   React.useEffect(() => {
     let cancelled = false;
@@ -189,8 +200,9 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
 
     const startAnalysis = async () => {
       try {
-        setProgress(5);
+        setProgress(2);
         setMessage('Envoi des photos...');
+        setPhase('upload');
 
         // Start the async job
         const response = await api.switchboard.analyzePanel(photos, switchboardId);
@@ -201,8 +213,9 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
           // Async mode - start polling
           setJobId(response.job_id);
           setStatus('analyzing');
-          setProgress(10);
-          setMessage('Analyse IA démarrée...');
+          setProgress(5);
+          setPhase('gpt');
+          setMessage('Analyse GPT-4o en cours...');
 
           // Poll for job status
           pollInterval = setInterval(async () => {
@@ -211,13 +224,16 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
 
               if (cancelled) return;
 
-              setProgress(job.progress || 0);
+              const newProgress = job.progress || 0;
+              setProgress(newProgress);
+              setPhase(getPhaseFromProgress(newProgress));
               setMessage(job.message || 'Analyse en cours...');
 
               if (job.status === 'completed') {
                 clearInterval(pollInterval);
                 setStatus('complete');
                 setProgress(100);
+                setPhase('done');
                 const deviceCount = job.result?.total_devices_detected || job.result?.devices?.length || 0;
                 setMessage(`${deviceCount} appareils détectés !`);
 
@@ -237,6 +253,7 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
         } else {
           // Sync mode fallback (if result is returned directly)
           setProgress(100);
+          setPhase('done');
           setMessage(`${response.total_devices_detected || response.devices?.length || 0} appareils détectés !`);
           setStatus('complete');
           setTimeout(() => {
@@ -260,8 +277,20 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
     };
   }, [photos, switchboardId, onComplete, onError]);
 
+  // Phase labels for display
+  const phases = [
+    { id: 'upload', label: 'Envoi', icon: '📤' },
+    { id: 'gpt', label: 'GPT-4o', icon: '🤖' },
+    { id: 'gemini', label: 'Gemini', icon: '✨' },
+    { id: 'merge', label: 'Fusion', icon: '🔀' },
+    { id: 'cache', label: 'Enrichissement', icon: '📦' },
+    { id: 'done', label: 'Terminé', icon: '✅' }
+  ];
+
+  const currentPhaseIndex = phases.findIndex(p => p.id === phase);
+
   return (
-    <div className="py-12 text-center">
+    <div className="py-8 text-center">
       <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-100 rounded-full mb-6">
         {(status === 'uploading' || status === 'analyzing') && <Loader2 size={40} className="text-indigo-600 animate-spin" />}
         {status === 'complete' && <CheckCircle size={40} className="text-green-600" />}
@@ -275,23 +304,48 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
         {status === 'error' && 'Erreur d\'analyse'}
       </h3>
 
-      <p className="text-gray-600 mb-6">{message}</p>
+      <p className="text-gray-600 mb-4">{message}</p>
+
+      {/* Phase indicators */}
+      {status !== 'error' && (
+        <div className="flex justify-center items-center gap-1 mb-6 px-4 flex-wrap">
+          {phases.map((p, idx) => (
+            <div key={p.id} className="flex items-center">
+              <div
+                className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all ${
+                  idx < currentPhaseIndex
+                    ? 'bg-green-100 text-green-700'
+                    : idx === currentPhaseIndex
+                    ? 'bg-indigo-100 text-indigo-700 ring-2 ring-indigo-300'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
+              >
+                <span>{p.icon}</span>
+                <span className="hidden sm:inline">{p.label}</span>
+              </div>
+              {idx < phases.length - 1 && (
+                <div className={`w-4 h-0.5 mx-0.5 ${idx < currentPhaseIndex ? 'bg-green-300' : 'bg-gray-200'}`} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Progress bar */}
-      <div className="max-w-xs mx-auto">
-        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div className="max-w-sm mx-auto px-4">
+        <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
           <div
-            className={`h-full transition-all duration-300 ${
-              status === 'error' ? 'bg-red-500' : 'bg-indigo-600'
+            className={`h-full transition-all duration-500 ${
+              status === 'error' ? 'bg-red-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'
             }`}
             style={{ width: `${progress}%` }}
           />
         </div>
-        <div className="mt-2 text-sm text-gray-500">{progress}%</div>
+        <div className="mt-2 text-lg font-semibold text-gray-700">{progress}%</div>
       </div>
 
       {/* Info about photos being analyzed */}
-      <div className="mt-8 flex justify-center gap-2">
+      <div className="mt-6 flex justify-center gap-2">
         {photos.map((_, idx) => (
           <div key={idx} className="w-3 h-3 rounded-full bg-indigo-200" />
         ))}
@@ -303,7 +357,7 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
       {/* Notification hint */}
       {status === 'analyzing' && (
         <div className="mt-6 p-3 bg-blue-50 rounded-xl text-sm text-blue-700 max-w-sm mx-auto">
-          <p>Vous recevrez une notification quand l'analyse sera terminée.</p>
+          <p>L'analyse continue même si vous quittez l'application. Vous recevrez une notification quand ce sera terminé.</p>
         </div>
       )}
     </div>
