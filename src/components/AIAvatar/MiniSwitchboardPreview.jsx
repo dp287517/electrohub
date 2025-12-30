@@ -1,18 +1,357 @@
 // src/components/AIAvatar/MiniSwitchboardPreview.jsx
 // Mini preview of switchboard/equipment location for AI chat responses
+// Uses Leaflet for interactive map display (like the main floor plan viewer)
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   MapPin, Zap, Building2, Layers, ExternalLink,
   Maximize2, ChevronRight, X, Calendar, AlertTriangle,
-  CheckCircle, Clock
+  CheckCircle, Clock, ZoomIn, ZoomOut, Crosshair
 } from 'lucide-react';
 import { api, API_BASE } from '../../lib/api.js';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 // PDF.js config
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+// Get user identity for API calls
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  }
+  return { email, name };
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+
+function pdfDocOpts(url) {
+  return {
+    url,
+    withCredentials: true,
+    httpHeaders: userHeaders(),
+    standardFontDataUrl: "/standard_fonts/",
+  };
+}
+
+// Clamp utility
+const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+
+/**
+ * MiniLeafletMap - Internal component that renders the Leaflet map
+ */
+function MiniLeafletMap({
+  planData,
+  position,
+  switchboard,
+  controlStatus,
+  isExpanded,
+  onExpand,
+  onNavigate
+}) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const MARKER_SIZE = isExpanded ? 28 : 18;
+
+  // Create switchboard marker icon
+  const createMarkerIcon = useCallback((isOverdue) => {
+    const s = MARKER_SIZE;
+    let bg;
+    let animClass = "";
+
+    if (isOverdue) {
+      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);";
+      animClass = "mini-marker-pulse";
+    } else {
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #ea580c);";
+    }
+
+    const html = `
+      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2.5px solid white;border-radius:9999px;box-shadow:0 4px 12px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
+        <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
+        </svg>
+      </div>`;
+
+    return L.divIcon({
+      className: "mini-sb-marker",
+      html,
+      iconSize: [s, s],
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+    });
+  }, [MARKER_SIZE]);
+
+  // Load and render the map
+  useEffect(() => {
+    if (!planData || !position || !containerRef.current) return;
+
+    let cancelled = false;
+    let map = null;
+    let pdfDoc = null;
+
+    const initMap = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        // Clean up previous map
+        if (mapRef.current) {
+          try {
+            mapRef.current.remove();
+          } catch {}
+          mapRef.current = null;
+        }
+
+        const pdfUrl = `${API_BASE}/api/switchboard/maps/planFile?logical_name=${encodeURIComponent(planData.logical_name)}`;
+
+        // Load PDF
+        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(pdfUrl));
+        pdfDoc = await loadingTask.promise;
+
+        if (cancelled) return;
+
+        const page = await pdfDoc.getPage((planData.page_index || 0) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
+
+        // Calculate render size based on container
+        const containerWidth = containerRef.current.clientWidth || (isExpanded ? 580 : 260);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const targetWidth = Math.min(2048, containerWidth * dpr * 1.5);
+        const scale = clamp(targetWidth / baseVp.width, 0.5, 2.5);
+        const viewport = page.getViewport({ scale });
+
+        // Render to canvas
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext("2d", { alpha: true });
+
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        if (cancelled) return;
+
+        // Convert to image
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const imgW = canvas.width;
+        const imgH = canvas.height;
+
+        // Create Leaflet map
+        map = L.map(containerRef.current, {
+          crs: L.CRS.Simple,
+          zoomControl: false,
+          zoomAnimation: true,
+          fadeAnimation: false,
+          scrollWheelZoom: true,
+          touchZoom: true,
+          doubleClickZoom: true,
+          dragging: true,
+          attributionControl: false,
+          preferCanvas: true,
+        });
+
+        mapRef.current = map;
+
+        // Add zoom control in mini version only if expanded
+        if (isExpanded) {
+          L.control.zoom({ position: "topright" }).addTo(map);
+        }
+
+        // Set bounds
+        const bounds = L.latLngBounds([
+          [0, 0],
+          [imgH, imgW],
+        ]);
+
+        // Add image layer
+        L.imageOverlay(dataUrl, bounds, {
+          interactive: true,
+          opacity: 1,
+        }).addTo(map);
+
+        // Fit to bounds with padding
+        const fitZoom = map.getBoundsZoom(bounds, true);
+        map.setMinZoom(fitZoom - 1);
+        map.setMaxZoom(fitZoom + 5);
+        map.setMaxBounds(bounds.pad(0.3));
+
+        // Calculate marker position and center the view on it
+        const markerX = position.x_frac * imgW;
+        const markerY = position.y_frac * imgH;
+        const markerLatLng = L.latLng(markerY, markerX);
+
+        // Center on marker with appropriate zoom
+        const initialZoom = isExpanded ? fitZoom + 1.5 : fitZoom + 0.5;
+        map.setView(markerLatLng, initialZoom);
+
+        // Add marker
+        const isOverdue = controlStatus?.hasOverdue;
+        const marker = L.marker(markerLatLng, {
+          icon: createMarkerIcon(isOverdue),
+          interactive: true,
+        });
+
+        marker.addTo(map);
+        markerRef.current = marker;
+
+        // Add popup on click
+        marker.on('click', () => {
+          if (!isExpanded && onExpand) {
+            onExpand();
+          }
+        });
+
+        // Cleanup PDF
+        try {
+          await pdfDoc.cleanup();
+        } catch {}
+
+        setLoading(false);
+
+      } catch (err) {
+        console.error('[MiniLeaflet] Error:', err);
+        if (!cancelled) {
+          setError('render_error');
+          setLoading(false);
+        }
+      }
+    };
+
+    initMap();
+
+    return () => {
+      cancelled = true;
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch {}
+        mapRef.current = null;
+      }
+    };
+  }, [planData, position, isExpanded, controlStatus, createMarkerIcon, onExpand]);
+
+  // Update marker icon when controlStatus changes
+  useEffect(() => {
+    if (markerRef.current) {
+      const isOverdue = controlStatus?.hasOverdue;
+      markerRef.current.setIcon(createMarkerIcon(isOverdue));
+    }
+  }, [controlStatus, createMarkerIcon]);
+
+  // Center on marker handler
+  const handleCenterOnMarker = useCallback(() => {
+    if (mapRef.current && markerRef.current) {
+      const ll = markerRef.current.getLatLng();
+      mapRef.current.setView(ll, mapRef.current.getZoom() + 0.5, { animate: true });
+    }
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full bg-red-50 rounded-lg">
+        <div className="text-center p-4">
+          <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-2" />
+          <p className="text-sm text-red-600">Erreur de chargement du plan</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative w-full h-full">
+      {/* Map container */}
+      <div
+        ref={containerRef}
+        className="w-full h-full rounded-lg"
+        style={{
+          minHeight: isExpanded ? 350 : 140,
+          background: '#f8fafc'
+        }}
+      />
+
+      {/* Loading overlay */}
+      {loading && (
+        <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-lg">
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-8 h-8 border-3 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-slate-500">Chargement du plan...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Center button (expanded mode) */}
+      {isExpanded && !loading && (
+        <button
+          onClick={handleCenterOnMarker}
+          className="absolute bottom-3 right-3 p-2 bg-white rounded-lg shadow-lg hover:bg-slate-50 transition-colors z-[1000]"
+          title="Centrer sur le tableau"
+        >
+          <Crosshair className="w-4 h-4 text-slate-600" />
+        </button>
+      )}
+
+      {/* Expand hint (mini mode) */}
+      {!isExpanded && !loading && (
+        <div
+          className="absolute inset-0 bg-transparent cursor-pointer group"
+          onClick={onExpand}
+        >
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+            <div className="px-3 py-1.5 bg-white/95 backdrop-blur-sm rounded-full shadow-lg flex items-center gap-2">
+              <Maximize2 className="w-4 h-4 text-slate-600" />
+              <span className="text-sm font-medium text-slate-700">Agrandir</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Plan name badge */}
+      {!loading && (
+        <div className="absolute bottom-2 left-2 px-2 py-1 bg-white/90 backdrop-blur-sm rounded-lg text-xs text-slate-600 shadow-sm z-[1000]">
+          📍 {planData?.display_name || planData?.logical_name}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * MiniSwitchboardPreview - Shows a mini floor plan preview with switchboard location
@@ -30,7 +369,6 @@ export default function MiniSwitchboardPreview({
   className = ''
 }) {
   const navigate = useNavigate();
-  const canvasRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [planData, setPlanData] = useState(null);
@@ -102,92 +440,6 @@ export default function MiniSwitchboardPreview({
     fetchData();
   }, [sbId]);
 
-  // Render PDF preview with marker
-  const renderPreview = useCallback(async () => {
-    if (!planData || !position || !canvasRef.current) return;
-
-    try {
-      const pdfUrl = `${API_BASE}/api/switchboard/maps/planFile?logical_name=${encodeURIComponent(planData.logical_name)}`;
-      const pdf = await pdfjsLib.getDocument({
-        url: pdfUrl,
-        withCredentials: true
-      }).promise;
-
-      const page = await pdf.getPage((planData.page_index || 0) + 1);
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-
-      // Small preview size
-      const targetWidth = isExpanded ? 600 : 280;
-      const viewport = page.getViewport({ scale: 1 });
-      const scale = targetWidth / viewport.width;
-      const scaledViewport = page.getViewport({ scale });
-
-      canvas.width = scaledViewport.width;
-      canvas.height = scaledViewport.height;
-
-      // Render PDF
-      await page.render({
-        canvasContext: ctx,
-        viewport: scaledViewport
-      }).promise;
-
-      // Draw marker at position
-      const markerX = position.x_frac * canvas.width;
-      const markerY = position.y_frac * canvas.height;
-      const markerSize = isExpanded ? 20 : 12;
-
-      // Marker shadow
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetY = 2;
-
-      // Marker circle with pulsing effect
-      const isOverdue = controlStatus?.hasOverdue;
-      const gradient = ctx.createRadialGradient(
-        markerX, markerY, 0,
-        markerX, markerY, markerSize
-      );
-
-      if (isOverdue) {
-        gradient.addColorStop(0, '#ef4444');
-        gradient.addColorStop(1, '#dc2626');
-      } else {
-        gradient.addColorStop(0, '#f59e0b');
-        gradient.addColorStop(1, '#d97706');
-      }
-
-      ctx.beginPath();
-      ctx.arc(markerX, markerY, markerSize, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
-      ctx.fill();
-
-      // White border
-      ctx.shadowColor = 'transparent';
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Lightning icon in center
-      ctx.fillStyle = 'white';
-      ctx.font = `bold ${isExpanded ? 14 : 8}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('⚡', markerX, markerY);
-
-    } catch (err) {
-      console.error('[MiniPreview] Render error:', err);
-      setError('render_error');
-    }
-  }, [planData, position, isExpanded, controlStatus]);
-
-  // Render when data is ready
-  useEffect(() => {
-    if (planData && position) {
-      renderPreview();
-    }
-  }, [planData, position, renderPreview]);
-
   // Handle navigation to full map
   const handleViewFullMap = () => {
     if (onNavigate) {
@@ -252,7 +504,7 @@ export default function MiniSwitchboardPreview({
     );
   }
 
-  // Success - render mini map preview
+  // Success - render mini map preview with Leaflet
   return (
     <>
       <div className={`bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow ${className}`}>
@@ -314,26 +566,17 @@ export default function MiniSwitchboardPreview({
           </div>
         </div>
 
-        {/* Mini map canvas */}
-        <div className="relative bg-white cursor-pointer group" onClick={() => setIsExpanded(true)}>
-          <canvas
-            ref={canvasRef}
-            className="w-full h-auto max-h-40 object-contain"
-            style={{ display: 'block' }}
+        {/* Mini Leaflet map */}
+        <div className="relative bg-white" style={{ height: 160 }}>
+          <MiniLeafletMap
+            planData={planData}
+            position={position}
+            switchboard={switchboard}
+            controlStatus={controlStatus}
+            isExpanded={false}
+            onExpand={() => setIsExpanded(true)}
+            onNavigate={handleViewFullMap}
           />
-
-          {/* Overlay with expand hint */}
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <div className="px-3 py-1.5 bg-white/90 backdrop-blur-sm rounded-full shadow-lg flex items-center gap-2">
-              <Maximize2 className="w-4 h-4 text-slate-600" />
-              <span className="text-sm font-medium text-slate-700">Agrandir</span>
-            </div>
-          </div>
-
-          {/* Plan name badge */}
-          <div className="absolute bottom-2 left-2 px-2 py-1 bg-white/90 backdrop-blur-sm rounded-lg text-xs text-slate-600 shadow-sm">
-            📍 {planData?.display_name || planData?.logical_name}
-          </div>
         </div>
 
         {/* Action footer */}
@@ -349,7 +592,7 @@ export default function MiniSwitchboardPreview({
         </div>
       </div>
 
-      {/* Expanded Modal */}
+      {/* Expanded Modal with full Leaflet map */}
       {isExpanded && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden">
@@ -376,18 +619,22 @@ export default function MiniSwitchboardPreview({
               </button>
             </div>
 
-            {/* Modal Content - Large Map */}
+            {/* Modal Content - Full Leaflet Map */}
             <div className="p-4 bg-slate-50">
-              <canvas
-                ref={(el) => {
-                  if (el && canvasRef.current !== el) {
-                    canvasRef.current = el;
-                    renderPreview();
-                  }
-                }}
-                className="w-full h-auto max-h-[60vh] object-contain rounded-xl border border-slate-200 shadow-inner"
-                style={{ display: 'block' }}
-              />
+              <div
+                className="w-full rounded-xl border border-slate-200 shadow-inner overflow-hidden"
+                style={{ height: '55vh', maxHeight: 500 }}
+              >
+                <MiniLeafletMap
+                  planData={planData}
+                  position={position}
+                  switchboard={switchboard}
+                  controlStatus={controlStatus}
+                  isExpanded={true}
+                  onExpand={() => {}}
+                  onNavigate={handleViewFullMap}
+                />
+              </div>
             </div>
 
             {/* Modal Footer */}
@@ -423,6 +670,21 @@ export default function MiniSwitchboardPreview({
           </div>
         </div>
       )}
+
+      {/* CSS for marker animations */}
+      <style>{`
+        .mini-sb-marker {
+          background: transparent !important;
+          border: none !important;
+        }
+        .mini-marker-pulse {
+          animation: mini-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes mini-pulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.15); opacity: 0.9; }
+        }
+      `}</style>
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import MiniSwitchboardPreview from './MiniSwitchboardPreview';
 import {
   X, Send, Mic, MicOff, Settings,
   AlertTriangle, Calendar, Search, FileText,
@@ -8,7 +9,8 @@ import {
   ExternalLink, CheckCircle, Clock, TrendingUp,
   Volume2, VolumeX, BarChart3, Play, Loader2,
   ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
-  ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown
+  ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown,
+  MapPin
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator, ProcedureViewer } from '../Procedures';
@@ -499,6 +501,12 @@ Demande-moi n'importe quoi !`,
         floor: response.floor,
         equipmentList: response.equipmentList,
         // ===============================
+        // MAP LOCATION INTEGRATION
+        // ===============================
+        showMap: response.showMap,
+        locationEquipment: response.locationEquipment,
+        locationControlStatus: response.locationControlStatus,
+        // ===============================
         // PROCEDURE INTEGRATION (v2.0)
         // ===============================
         proceduresFound: response.proceduresFound,
@@ -781,6 +789,21 @@ Demande-moi n'importe quoi !`,
                         Voir
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {/* Map Location Preview - Shows equipment on floor plan */}
+                {message.showMap && message.locationEquipment && (
+                  <div className="mt-3">
+                    <MiniSwitchboardPreview
+                      equipment={message.locationEquipment}
+                      switchboardId={message.locationEquipment?.id}
+                      controlStatus={message.locationControlStatus}
+                      onNavigate={(sbId, planData) => {
+                        onClose?.();
+                        navigate(`/switchboard-map?switchboard=${sbId}&plan=${encodeURIComponent(planData?.logical_name || '')}`);
+                      }}
+                    />
                   </div>
                 )}
 
