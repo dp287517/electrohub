@@ -4903,6 +4903,11 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
       [switchboard_id, site]
     );
     console.log(`[BULK CREATE] Found ${existingDevices.length} existing devices`);
+    // Debug: log existing positions for troubleshooting
+    if (existingDevices.length > 0) {
+      const existingPositions = existingDevices.map(d => d.position_number).join(', ');
+      console.log(`[BULK CREATE] Existing positions: [${existingPositions}]`);
+    }
 
     const createdDevices = [];
     const updatedDevices = [];
@@ -5077,9 +5082,11 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
 
         // Chercher si un appareil existe déjà à cette position ou avec la même référence
         const deviceRefNorm = normalizeRef(device.reference);
+        const positionStr = String(positionNumber).trim();
         const existingDevice = existingDevices.find(e => {
-          // Match par position exacte
-          if (e.position_number === positionNumber) return true;
+          // Match par position exacte (convert both to string for comparison)
+          const existingPosStr = String(e.position_number || '').trim();
+          if (existingPosStr && positionStr && existingPosStr === positionStr) return true;
 
           // Match par référence normalisée + ampérage (utiliser parsedDevice.in_amps)
           const existingRefNorm = normalizeRef(e.reference);
