@@ -1324,11 +1324,14 @@ export default function Vsd() {
       const res = await api.switchboardControls.listSchedules({ equipment_type: 'vsd' });
       const schedules = res.schedules || [];
       const statuses = {};
+      // Use date-only comparison to fix "today" items being marked as overdue
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
 
       schedules.forEach(s => {
         if (s.vsd_equipment_id) {
           const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          if (nextDue) nextDue.setHours(0, 0, 0, 0);
           const isOverdue = nextDue && nextDue < now;
 
           // Initialize if not exists
