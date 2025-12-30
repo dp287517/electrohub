@@ -8289,6 +8289,14 @@ app.get("/api/dashboard/activities", async (req, res) => {
       `);
 
       for (const report of pendingReports) {
+        // Map report types to friendly names
+        const reportTypeLabels = {
+          'drpce': 'Management Monitoring ATEX',
+          'atex': 'Rapport ATEX',
+          'management_monitoring': 'Management Monitoring ATEX'
+        };
+        const reportLabel = reportTypeLabels[report.report_type] || report.report_type || 'Management Monitoring';
+
         if (report.status === 'completed') {
           // Completed report - show in recent activities with download link
           activities.push({
@@ -8296,7 +8304,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
             type: 'report_ready',
             module: 'atex',
             title: '📄 Rapport prêt à télécharger',
-            description: `${report.report_type || 'Management Monitoring'} - ${report.total_items || 0} équipements`,
+            description: `${reportLabel} - ${report.total_items || 0} équipements`,
             actor: report.user_email,
             timestamp: report.completed_at || report.created_at,
             url: `/app/atex?downloadReport=${report.id}`,
@@ -8311,7 +8319,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
             type: 'report_pending',
             module: 'atex',
             title: '⏳ Rapport en cours de génération',
-            description: `${report.report_type || 'Management Monitoring'} - Veuillez patienter...`,
+            description: `${reportLabel} - Veuillez patienter...`,
             actor: report.user_email,
             timestamp: report.created_at,
             url: '/app/atex?tab=drpce',
