@@ -1944,11 +1944,12 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
               d.in_amps, d.icu_ka, d.ics_ka, d.poles, d.voltage_v, d.trip_unit,
               d.position_number, d.is_differential, d.is_complete, d.settings,
               d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
+              d.curve_type, d.differential_sensitivity_ma, d.differential_type,
               sb_down.name as downstream_switchboard_name,
               sb_down.code as downstream_switchboard_code
        FROM devices d
        LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
-       WHERE d.switchboard_id = $1 
+       WHERE d.switchboard_id = $1
        ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`,
       [switchboard_id], { label: 'LIST_DEVICES', timeout: 8000 }
     );
