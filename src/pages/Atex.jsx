@@ -2506,26 +2506,26 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDupli
   }
 
   // 🆕 Composant carte équipement compact
-  // 🟣 Violet pour équipements récemment dupliqués
+  // 🌸 Rose pour équipements récemment dupliqués
   const EquipmentCard = ({ eq }) => {
     const isDuplicate = recentDuplicates.has(eq.id);
-    // 🟣 Handler qui supprime le highlight violet au clic
+    // 🌸 Handler qui supprime le highlight rose au clic
     const handleClick = () => {
       if (isDuplicate && onRemoveDuplicate) onRemoveDuplicate(eq.id);
       onOpenEquipment(eq);
     };
     return (
-    <div className={`border rounded-xl p-3 shadow-sm hover:shadow-md transition-all ${isDuplicate ? "bg-violet-50 border-violet-300 ring-2 ring-violet-400" : "bg-white"}`}>
+    <div className={`border rounded-xl p-3 shadow-sm hover:shadow-md transition-all ${isDuplicate ? "bg-pink-50 border-pink-300 ring-2 ring-pink-400" : "bg-white"}`}>
       <div className="flex items-start gap-3">
-        <div className={`w-12 h-12 rounded-lg border overflow-hidden flex items-center justify-center shrink-0 ${isDuplicate ? "bg-violet-100 border-violet-300" : "bg-gray-100"}`}>
+        <div className={`w-12 h-12 rounded-lg border overflow-hidden flex items-center justify-center shrink-0 ${isDuplicate ? "bg-pink-100 border-pink-300" : "bg-gray-100"}`}>
           {eq.photo_url ? (
             <img src={api.atex.photoUrl(eq.id, { thumb: true, bust: false })} alt="" loading="lazy" className="w-full h-full object-cover" />
           ) : (
-            <span className={`text-xl ${isDuplicate ? "text-violet-500" : "text-gray-400"}`}>{isDuplicate ? "✨" : "🔥"}</span>
+            <span className={`text-xl ${isDuplicate ? "text-pink-500" : "text-gray-400"}`}>{isDuplicate ? "✨" : "🔥"}</span>
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <button className={`font-semibold hover:underline text-left truncate w-full text-sm ${isDuplicate ? "text-violet-700" : "text-blue-600"}`} onClick={handleClick}>
+          <button className={`font-semibold hover:underline text-left truncate w-full text-sm ${isDuplicate ? "text-pink-700" : "text-blue-600"}`} onClick={handleClick}>
             {eq.name || eq.type || "Équipement"} {isDuplicate && <span className="text-xs font-normal">(dupliqué)</span>}
           </button>
           <div className="flex flex-wrap gap-1 mt-1">
