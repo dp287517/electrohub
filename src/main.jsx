@@ -7,6 +7,7 @@ import App from './App.jsx';
 import NotificationProvider from './components/Notifications/NotificationProvider';
 import { ProcedureCaptureProvider } from './contexts/ProcedureCaptureContext';
 import ProcedureCaptureWidget from './components/Procedures/ProcedureCaptureWidget';
+import GlobalProcedureModal from './components/Procedures/GlobalProcedureModal';
 
 // Styles globaux de l'app
 import './styles.css';
@@ -27,6 +28,7 @@ createRoot(document.getElementById('root')).render(
         <ProcedureCaptureProvider>
           <App />
           <ProcedureCaptureWidget />
+          <GlobalProcedureModal />
         </ProcedureCaptureProvider>
       </NotificationProvider>
     </BrowserRouter>

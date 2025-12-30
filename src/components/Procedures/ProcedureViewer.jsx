@@ -4,7 +4,7 @@ import {
   HardHat, Phone, Link2, CheckCircle, Clock, User,
   ChevronDown, ChevronUp, Camera, Plus, Save, Building,
   FileText, Loader2, Play, Sparkles, QrCode, FileSpreadsheet,
-  BadgeCheck, FileEdit, Pen, Users
+  BadgeCheck, FileEdit, Pen, Users, RefreshCw
 } from 'lucide-react';
 import {
   getProcedure,
@@ -245,6 +245,8 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [showAssistant, setShowAssistant] = useState(aiGuidedMode); // Auto-open AI if from QR code
   const [showSignatures, setShowSignatures] = useState(false);
   const [signatureSummary, setSignatureSummary] = useState(null);
+  const [isRecoveringPhotos, setIsRecoveringPhotos] = useState(false);
+  const [photosRecovered, setPhotosRecovered] = useState(0);
 
   const loadSignatures = async () => {
     try {
@@ -252,6 +254,29 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
       setSignatureSummary(data.summary);
     } catch (error) {
       console.error('Error loading signatures:', error);
+    }
+  };
+
+  // Manual photo recovery function
+  const handleRecoverPhotos = async () => {
+    setIsRecoveringPhotos(true);
+    try {
+      console.log('[ProcedureViewer] Manual photo recovery for', procedureId);
+      const result = await recoverPhotos(procedureId);
+      console.log('[ProcedureViewer] Recovery result:', result);
+      if (result.recoveredCount > 0) {
+        setPhotosRecovered(result.recoveredCount);
+        // Reload procedure to get updated photos
+        const refreshedData = await getProcedure(procedureId);
+        setProcedure(refreshedData);
+      } else {
+        alert('Aucune photo à récupérer. Les fichiers peuvent avoir été supprimés.');
+      }
+    } catch (err) {
+      console.error('[ProcedureViewer] Manual recovery failed:', err);
+      alert(`Erreur: ${err.message}`);
+    } finally {
+      setIsRecoveringPhotos(false);
     }
   };
 
@@ -266,12 +291,13 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
         !sessionStorage.getItem(`photo_recovery_attempted_${procedureId}`);
 
       if (stepsNeedRecovery) {
-        console.log('[ProcedureViewer] Attempting photo recovery for', procedureId);
+        console.log('[ProcedureViewer] Attempting auto photo recovery for', procedureId);
         sessionStorage.setItem(`photo_recovery_attempted_${procedureId}`, 'true');
         try {
           const result = await recoverPhotos(procedureId);
           console.log('[ProcedureViewer] Photo recovery result:', result);
           if (result.recoveredCount > 0) {
+            setPhotosRecovered(result.recoveredCount);
             // Reload procedure to get updated photos
             const refreshedData = await getProcedure(procedureId);
             setProcedure(refreshedData);
@@ -819,6 +845,36 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
               </button>
             )}
           </div>
+
+          {/* Photo recovery alert */}
+          {procedure.steps?.length > 0 && procedure.steps.some(s => !s.photo_path) && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-800">
+                <Camera className="w-5 h-5" />
+                <span className="text-sm">Certaines étapes n'ont pas de photos</span>
+              </div>
+              <button
+                onClick={handleRecoverPhotos}
+                disabled={isRecoveringPhotos}
+                className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isRecoveringPhotos ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+                Récupérer
+              </button>
+            </div>
+          )}
+
+          {/* Photos recovered success message */}
+          {photosRecovered > 0 && (
+            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl flex items-center gap-2 text-green-800">
+              <CheckCircle className="w-5 h-5" />
+              <span className="text-sm">{photosRecovered} photo{photosRecovered > 1 ? 's' : ''} récupérée{photosRecovered > 1 ? 's' : ''} avec succès !</span>
+            </div>
+          )}
 
           {showAddStep && (
             <div className="mb-4 p-4 bg-gray-50 rounded-xl space-y-3">

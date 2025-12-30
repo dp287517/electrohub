@@ -14,6 +14,7 @@ export default function ProcedureCaptureWidget() {
     addCapture,
     removeCapture,
     returnToProcedure,
+    reopenModal,
     endCaptureSession,
     minimizeModal,
     shouldReopenModal
@@ -138,11 +139,11 @@ export default function ProcedureCaptureWidget() {
             </div>
           )}
 
-          {/* Main floating button - Reopen modal */}
+          {/* Main floating button - Reopen modal WITHOUT navigating */}
           <button
             onClick={() => {
               setIsMinimized(false);
-              returnToProcedure(); // This will set shouldReopenModal and trigger modal reopen
+              reopenModal(); // Reopen modal on current page - don't navigate away
             }}
             className="w-16 h-16 bg-gradient-to-br from-violet-600 to-purple-700 rounded-full shadow-2xl flex items-center justify-center text-white active:scale-95 transition-transform"
           >
