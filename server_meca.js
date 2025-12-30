@@ -376,18 +376,23 @@ app.get("/api/meca/equipments", async (req, res) => {
     const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
     const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
 
+    // 🚀 PERF: Exclude photo_content BYTEA from SELECT to avoid sending 3MB+ per request
     const { rows } = await pool.query(`
-      SELECT e.*
+      SELECT e.id, e.name, e.tag, e.category, e.category_id, e.subcategory_id, e.equipment_type,
+             e.manufacturer, e.model, e.serial_number, e.year, e.power_kw, e.voltage, e.current_a,
+             e.ip_rating, e.drive_type, e.coupling, e.mounting, e.fluid, e.flow_m3h, e.pressure_bar,
+             e.speed_rpm, e.building, e.floor, e.zone, e.location, e.panel, e.ui_status, e.status,
+             e.criticality, e.comments, e.company_id, e.site_id, e.created_at, e.updated_at,
+             e.photo_path,
+             (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo
         FROM meca_equipments e
        WHERE ${tenantFilter.where}
        ORDER BY e.building, e.zone, e.name
     `, tenantFilter.params);
 
     for (const r of rows) {
-      r.photo_url =
-        (r.photo_content && r.photo_content.length) || r.photo_path
-          ? `/api/meca/equipments/${r.id}/photo`
-          : null;
+      r.photo_url = (r.has_photo || r.photo_path) ? `/api/meca/equipments/${r.id}/photo` : null;
+      delete r.has_photo; // Clean up internal field
     }
 
     res.json({ ok: true, equipments: rows });
@@ -400,17 +405,23 @@ app.get("/api/meca/equipments", async (req, res) => {
 app.get("/api/meca/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
+    // 🚀 PERF: Exclude photo_content BYTEA from SELECT to avoid sending 3MB+ per request
     const { rows } = await pool.query(
-      `SELECT * FROM meca_equipments WHERE id=$1`,
+      `SELECT id, name, tag, category, category_id, subcategory_id, equipment_type,
+              manufacturer, model, serial_number, year, power_kw, voltage, current_a,
+              ip_rating, drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
+              speed_rpm, building, floor, zone, location, panel, ui_status, status,
+              criticality, comments, company_id, site_id, created_at, updated_at,
+              photo_path,
+              (photo_content IS NOT NULL AND length(photo_content) > 0) AS has_photo
+       FROM meca_equipments WHERE id=$1`,
       [id]
     );
     if (!rows[0])
       return res.status(404).json({ ok: false, error: "Not found" });
     const eq = rows[0];
-    eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/meca/equipments/${id}/photo`
-        : null;
+    eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/meca/equipments/${id}/photo` : null;
+    delete eq.has_photo; // Clean up internal field
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -638,16 +649,22 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
       vals
     );
 
+    // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
-      `SELECT * FROM meca_equipments WHERE id=$1`,
+      `SELECT id, name, tag, category, category_id, subcategory_id, equipment_type,
+              manufacturer, model, serial_number, year, power_kw, voltage, current_a,
+              ip_rating, drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
+              speed_rpm, building, floor, zone, location, panel, ui_status, status,
+              criticality, comments, company_id, site_id, created_at, updated_at,
+              photo_path,
+              (photo_content IS NOT NULL AND length(photo_content) > 0) AS has_photo
+       FROM meca_equipments WHERE id=$1`,
       [id]
     );
     const eq = rows[0];
     if (eq) {
-      eq.photo_url =
-        (eq.photo_content && eq.photo_content.length) || eq.photo_path
-          ? `/api/meca/equipments/${id}/photo`
-          : null;
+      eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/meca/equipments/${id}/photo` : null;
+      delete eq.has_photo;
     }
 
     await logEvent(

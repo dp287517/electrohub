@@ -459,8 +459,18 @@ app.get("/api/glo/equipments", async (req, res) => {
     const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
     const tenantFilter = getTenantFilter(tenant, { tableAlias: 'e' });
 
+    // 🚀 PERF: Exclude photo_content BYTEA to avoid sending MB+ per request
     const { rows } = await pool.query(`
-      SELECT e.*,
+      SELECT e.id, e.name, e.tag, e.equipment_type, e.function, e.building, e.floor, e.zone,
+             e.location, e.panel, e.power_kva, e.power_kw, e.voltage_input, e.voltage_output,
+             e.current_a, e.frequency_hz, e.phases, e.ip_rating, e.ups_type, e.ups_topology,
+             e.battery_type, e.battery_count, e.autonomy_minutes, e.efficiency_percent,
+             e.reactive_power_kvar, e.capacitor_type, e.steps, e.automatic_regulation, e.thd_filter,
+             e.lighting_type, e.lamp_type, e.lumen_output, e.autonomy_hours, e.test_button, e.self_test,
+             e.manufacturer, e.model, e.serial_number, e.year, e.status, e.criticality,
+             e.last_test_date, e.next_test_date, e.comments, e.photo_path, e.company_id, e.site_id,
+             e.category_id, e.subcategory_id, e.created_at, e.updated_at,
+             (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
              c.name as category_name,
              c.icon as category_icon,
              c.color as category_color,
@@ -473,10 +483,8 @@ app.get("/api/glo/equipments", async (req, res) => {
     `, tenantFilter.params);
 
     for (const r of rows) {
-      r.photo_url =
-        (r.photo_content && r.photo_content.length) || r.photo_path
-          ? `/api/glo/equipments/${r.id}/photo`
-          : null;
+      r.photo_url = (r.has_photo || r.photo_path) ? `/api/glo/equipments/${r.id}/photo` : null;
+      delete r.has_photo;
     }
 
     res.json({ ok: true, equipments: rows });
@@ -489,8 +497,18 @@ app.get("/api/glo/equipments", async (req, res) => {
 app.get("/api/glo/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
+    // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
-      `SELECT e.*,
+      `SELECT e.id, e.name, e.tag, e.equipment_type, e.function, e.building, e.floor, e.zone,
+              e.location, e.panel, e.power_kva, e.power_kw, e.voltage_input, e.voltage_output,
+              e.current_a, e.frequency_hz, e.phases, e.ip_rating, e.ups_type, e.ups_topology,
+              e.battery_type, e.battery_count, e.autonomy_minutes, e.efficiency_percent,
+              e.reactive_power_kvar, e.capacitor_type, e.steps, e.automatic_regulation, e.thd_filter,
+              e.lighting_type, e.lamp_type, e.lumen_output, e.autonomy_hours, e.test_button, e.self_test,
+              e.manufacturer, e.model, e.serial_number, e.year, e.status, e.criticality,
+              e.last_test_date, e.next_test_date, e.comments, e.photo_path, e.company_id, e.site_id,
+              e.category_id, e.subcategory_id, e.created_at, e.updated_at,
+              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
               c.name as category_name,
               c.icon as category_icon,
               c.color as category_color,
@@ -504,10 +522,8 @@ app.get("/api/glo/equipments/:id", async (req, res) => {
     if (!rows[0])
       return res.status(404).json({ ok: false, error: "Not found" });
     const eq = rows[0];
-    eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/glo/equipments/${id}/photo`
-        : null;
+    eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/glo/equipments/${id}/photo` : null;
+    delete eq.has_photo;
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -697,8 +713,18 @@ app.put("/api/glo/equipments/:id", async (req, res) => {
       vals
     );
 
+    // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
-      `SELECT e.*,
+      `SELECT e.id, e.name, e.tag, e.equipment_type, e.function, e.building, e.floor, e.zone,
+              e.location, e.panel, e.power_kva, e.power_kw, e.voltage_input, e.voltage_output,
+              e.current_a, e.frequency_hz, e.phases, e.ip_rating, e.ups_type, e.ups_topology,
+              e.battery_type, e.battery_count, e.autonomy_minutes, e.efficiency_percent,
+              e.reactive_power_kvar, e.capacitor_type, e.steps, e.automatic_regulation, e.thd_filter,
+              e.lighting_type, e.lamp_type, e.lumen_output, e.autonomy_hours, e.test_button, e.self_test,
+              e.manufacturer, e.model, e.serial_number, e.year, e.status, e.criticality,
+              e.last_test_date, e.next_test_date, e.comments, e.photo_path, e.company_id, e.site_id,
+              e.category_id, e.subcategory_id, e.created_at, e.updated_at,
+              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
               c.name as category_name,
               c.icon as category_icon,
               c.color as category_color,
@@ -711,10 +737,8 @@ app.put("/api/glo/equipments/:id", async (req, res) => {
     );
     const eq = rows[0];
     if (eq) {
-      eq.photo_url =
-        (eq.photo_content && eq.photo_content.length) || eq.photo_path
-          ? `/api/glo/equipments/${id}/photo`
-          : null;
+      eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/glo/equipments/${id}/photo` : null;
+      delete eq.has_photo;
     }
 
     await logEvent("glo_equipment_updated", { id, fields: Object.keys(body) }, u);
