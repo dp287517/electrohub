@@ -470,16 +470,44 @@ export default function Atex() {
 
   /* ----------------------------- Equipment Edit ----------------------------- */
   async function openEdit(eq) {
-    let fresh = eq;
+    // 🚀 PERF: Open drawer IMMEDIATELY with cached data, load fresh data in background
     if (eq?.id) {
-      try {
-        const res = await api.atex.getEquipment(eq.id);
-        fresh = mergeZones(res?.equipment || eq);
-      } catch {
-        fresh = mergeZones(eq);
-      }
+      // 1. Open drawer instantly with existing data
+      const initial = mergeZones(eq);
+      setEditing(initial);
+      initialRef.current = JSON.parse(JSON.stringify(initial));
+      setFiles([]);
+      setHistory([]);
+      setDrawerOpen(true);
+
+      // 2. Load fresh data, files, and history in parallel (non-blocking)
+      Promise.all([
+        api.atex.getEquipment(eq.id).catch(() => null),
+        api.atex.listFiles(eq.id).catch(() => ({})),
+        api.atex.getEquipmentHistory(eq.id).catch(() => ({})),
+      ]).then(([eqRes, filesRes, histRes]) => {
+        // Update with fresh equipment data if available
+        if (eqRes?.equipment) {
+          const fresh = mergeZones(eqRes.equipment);
+          setEditing(fresh);
+          initialRef.current = JSON.parse(JSON.stringify(fresh));
+        }
+        // Update files
+        const arr = Array.isArray(filesRes?.files)
+          ? filesRes.files.map((f) => ({
+              id: f.id,
+              name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
+              mime: f.mime,
+              url: f.download_url || f.inline_url || `${API_BASE}/api/atex/files/${encodeURIComponent(f.id)}/download`,
+            }))
+          : [];
+        setFiles(arr);
+        // Update history
+        setHistory(Array.isArray(histRes?.checks) ? histRes.checks : []);
+      });
     } else {
-      fresh = mergeZones({
+      // New equipment - no API calls needed
+      const fresh = mergeZones({
         name: "", building: "", zone: "", equipment: "", sub_equipment: "",
         type: "", manufacturer: "", manufacturer_ref: "",
         atex_mark_gas: null, atex_mark_dust: null, comment: "",
@@ -487,23 +515,12 @@ export default function Atex() {
         compliance_state: "na", installed_at: null,
         last_check_date: null, next_check_date: null, photo_url: null,
       });
-    }
-
-    setEditing(fresh);
-    initialRef.current = JSON.parse(JSON.stringify(fresh));
-
-    if (fresh?.id) {
-      // 🚀 PERF: Parallelize API calls for files and history
-      const [, histRes] = await Promise.all([
-        reloadFiles(fresh.id),
-        api.atex.getEquipmentHistory(fresh.id).catch(() => ({})),
-      ]);
-      setHistory(Array.isArray(histRes?.checks) ? histRes.checks : []);
-    } else {
+      setEditing(fresh);
+      initialRef.current = JSON.parse(JSON.stringify(fresh));
       setFiles([]);
       setHistory([]);
+      setDrawerOpen(true);
     }
-    setDrawerOpen(true);
   }
 
   function closeEdit() {
