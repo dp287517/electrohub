@@ -346,6 +346,13 @@ async function ensureSchema() {
       ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS category_id UUID REFERENCES meca_equipment_categories(id) ON DELETE SET NULL;
     EXCEPTION WHEN duplicate_column THEN NULL; END $$;
   `);
+
+  // Add ui_status column for frontend compatibility
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS ui_status TEXT DEFAULT '';
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 }
 
 // -------------------------------------------------
@@ -379,7 +386,7 @@ app.get("/api/meca/equipments", async (req, res) => {
     // 🚀 PERF: Exclude photo_content BYTEA from SELECT to avoid sending 3MB+ per request
     const { rows } = await pool.query(`
       SELECT e.id, e.name, e.tag, e.category, e.category_id, e.subcategory_id, e.equipment_type,
-             e.manufacturer, e.model, e.serial_number, e.year, e.power_kw, e.voltage, e.current_a,
+             e.function, e.manufacturer, e.model, e.serial_number, e.year, e.power_kw, e.voltage, e.current_a,
              e.ip_rating, e.drive_type, e.coupling, e.mounting, e.fluid, e.flow_m3h, e.pressure_bar,
              e.speed_rpm, e.building, e.floor, e.zone, e.location, e.panel, e.ui_status, e.status,
              e.criticality, e.comments, e.company_id, e.site_id, e.created_at, e.updated_at,
@@ -408,7 +415,7 @@ app.get("/api/meca/equipments/:id", async (req, res) => {
     // 🚀 PERF: Exclude photo_content BYTEA from SELECT to avoid sending 3MB+ per request
     const { rows } = await pool.query(
       `SELECT id, name, tag, category, category_id, subcategory_id, equipment_type,
-              manufacturer, model, serial_number, year, power_kw, voltage, current_a,
+              function, manufacturer, model, serial_number, year, power_kw, voltage, current_a,
               ip_rating, drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
               speed_rpm, building, floor, zone, location, panel, ui_status, status,
               criticality, comments, company_id, site_id, created_at, updated_at,
@@ -652,7 +659,7 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
     // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
       `SELECT id, name, tag, category, category_id, subcategory_id, equipment_type,
-              manufacturer, model, serial_number, year, power_kw, voltage, current_a,
+              function, manufacturer, model, serial_number, year, power_kw, voltage, current_a,
               ip_rating, drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
               speed_rpm, building, floor, zone, location, panel, ui_status, status,
               criticality, comments, company_id, site_id, created_at, updated_at,
