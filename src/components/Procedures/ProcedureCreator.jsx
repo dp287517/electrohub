@@ -18,6 +18,11 @@ import {
   resumeDraft,
   deleteDraft,
   cleanupOrphanDrafts,
+  uploadPendingPhoto,
+  getPendingPhotos,
+  deletePendingPhoto,
+  clearPendingPhotos,
+  getPendingPhotoUrl,
   DEFAULT_PPE,
   RISK_LEVELS,
 } from '../../lib/procedures-api';
@@ -86,9 +91,10 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const [procedureReady, setProcedureReady] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [pendingPhoto, setPendingPhoto] = useState(null); // Photo en attente d'envoi
+  const [serverPendingPhotos, setServerPendingPhotos] = useState([]); // Photos saved on server
+  const [uploadingPhoto, setUploadingPhoto] = useState(false); // Photo upload in progress
   const [isProcessing, setIsProcessing] = useState(false); // Quality processing in progress
-  const [pendingCaptures, setPendingCaptures] = useState([]); // Captures from widget
+  const [pendingCaptures, setPendingCaptures] = useState([]); // Captures from widget (will be uploaded)
 
   // Draft management
   const [draftId, setDraftId] = useState(null);
@@ -187,15 +193,21 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   // Check for captured photos when returning from capture mode
   useEffect(() => {
     if (!isCapturing && captureCount > 0 && (mode === 'guided' || procedureInfo?.mode === 'guided')) {
-      // User returned with captures - consume them
+      // User returned with captures - consume and upload them
       const newCaptures = consumeCaptures();
       if (newCaptures.length > 0) {
-        console.log('[ProcedureCreator] Consuming captures:', newCaptures.length);
+        console.log('[ProcedureCreator] Consuming and uploading captures:', newCaptures.length);
         setPendingCaptures(newCaptures);
-        // Set the first capture as pending photo
-        if (newCaptures[0]?.file) {
-          setPendingPhoto(newCaptures[0].file);
-        }
+        // Upload all captures to server immediately
+        (async () => {
+          for (const capture of newCaptures) {
+            if (capture.file) {
+              await uploadPhotoToServer(capture.file);
+            }
+          }
+          // Clear local captures after upload
+          setPendingCaptures([]);
+        })();
       }
     }
   }, [isCapturing, captureCount, mode, consumeCaptures, procedureInfo]);
@@ -219,6 +231,55 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   useEffect(() => {
     loadDrafts();
   }, []);
+
+  // Load pending photos from server when session starts
+  useEffect(() => {
+    if (sessionId || draftId) {
+      loadPendingPhotos();
+    }
+  }, [sessionId, draftId]);
+
+  const loadPendingPhotos = async () => {
+    try {
+      const result = await getPendingPhotos(sessionId, draftId);
+      if (result.ok !== false && result.photos) {
+        setServerPendingPhotos(result.photos);
+        console.log(`[ProcedureCreator] Loaded ${result.photos.length} pending photos from server`);
+      }
+    } catch (e) {
+      console.error('Error loading pending photos:', e);
+    }
+  };
+
+  // Upload photo immediately to server
+  const uploadPhotoToServer = async (file) => {
+    if (!file) return null;
+    setUploadingPhoto(true);
+    try {
+      const result = await uploadPendingPhoto(file, sessionId, draftId);
+      if (result.ok !== false && result.photo) {
+        setServerPendingPhotos(prev => [...prev, result.photo]);
+        console.log(`[ProcedureCreator] Photo uploaded to server: ${result.photo.id}`);
+        return result.photo;
+      }
+    } catch (e) {
+      console.error('Error uploading photo:', e);
+      alert('Erreur lors de l\'upload de la photo. Veuillez réessayer.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+    return null;
+  };
+
+  // Delete pending photo from server
+  const removeServerPhoto = async (photoId) => {
+    try {
+      await deletePendingPhoto(photoId);
+      setServerPendingPhotos(prev => prev.filter(p => p.id !== photoId));
+    } catch (e) {
+      console.error('Error deleting photo:', e);
+    }
+  };
 
   // Auto-save when collectedData changes (debounced)
   useEffect(() => {
@@ -395,35 +456,39 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
   // Send message in guided session
   const sendMessage = async (messageText = input, photoFile = null) => {
-    // Utiliser la photo en attente si pas de photo passée directement
-    const photoToSend = photoFile || pendingPhoto;
+    // Use server photo if available, otherwise use passed file
+    const serverPhoto = serverPendingPhotos.length > 0 ? serverPendingPhotos[0] : null;
+    const photoToSend = photoFile || (serverPhoto ? { id: serverPhoto.id, fromServer: true } : null);
 
     if (!messageText.trim() && !photoToSend) return;
     if (!sessionId) return;
 
     const userMessage = { role: 'user', content: messageText || '📸 Photo ajoutée' };
     if (photoToSend) {
-      userMessage.photo = URL.createObjectURL(photoToSend);
+      // Show thumbnail from server or create blob URL for local file
+      userMessage.photo = photoToSend.fromServer
+        ? getPendingPhotoUrl(photoToSend.id, true)
+        : URL.createObjectURL(photoToSend);
     }
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
 
-    // Clear current photo and load next one from captures if available
-    setPendingPhoto(null);
-    if (pendingCaptures.length > 0) {
-      // Remove the first capture (just used) and set next one as pending
-      const remainingCaptures = pendingCaptures.slice(1);
-      setPendingCaptures(remainingCaptures);
-      if (remainingCaptures.length > 0 && remainingCaptures[0]?.file) {
-        setPendingPhoto(remainingCaptures[0].file);
-      }
+    // Remove used photo from server list
+    if (serverPhoto) {
+      setServerPendingPhotos(prev => prev.slice(1));
     }
 
     setIsLoading(true);
 
     try {
-      const response = await continueAISession(sessionId, messageText || 'Photo de l\'étape', photoToSend);
+      // Pass pending_photo_id to backend if using server photo
+      const response = await continueAISession(
+        sessionId,
+        messageText || 'Photo de l\'étape',
+        photoToSend?.fromServer ? null : photoToSend, // Pass file only if not from server
+        photoToSend?.fromServer ? photoToSend.id : null // Pass photo ID if from server
+      );
 
       // If needs processing (user said "terminé"), show waiting message and process
       if (response.needsProcessing) {
@@ -504,13 +569,14 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     }
   };
 
-  // Handle photo upload - store photo for sending with next message
-  const handlePhotoUpload = (e) => {
+  // Handle photo upload - upload immediately to server
+  const handlePhotoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      setPendingPhoto(file);
       // Reset file input so same file can be selected again
       e.target.value = '';
+      // Upload immediately to server
+      await uploadPhotoToServer(file);
     }
   };
 
@@ -526,6 +592,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
       // Clear active session from localStorage since procedure is being finalized
       clearActiveSession();
+
+      // Clear any remaining pending photos from server
+      if (sessionId) {
+        try {
+          await clearPendingPhotos(sessionId);
+          setServerPendingPhotos([]);
+        } catch (e) {
+          console.error('Error clearing pending photos:', e);
+        }
+      }
 
       // Delete the draft since procedure is being created
       if (draftId) {
@@ -1142,20 +1218,34 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
           </button>
         ) : (
           <div className="space-y-2">
-            {/* Photo preview when pending */}
-            {pendingPhoto && (
+            {/* Upload in progress indicator */}
+            {uploadingPhoto && (
+              <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 px-3 py-2 rounded-xl">
+                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                <span className="text-sm text-blue-700 font-medium">Upload en cours...</span>
+              </div>
+            )}
+            {/* Server pending photos preview */}
+            {serverPendingPhotos.length > 0 && (
               <div className="flex items-center gap-2 bg-green-50 border border-green-200 px-3 py-2 rounded-xl">
-                <img
-                  src={URL.createObjectURL(pendingPhoto)}
-                  alt="Photo en attente"
-                  className="w-10 h-10 sm:w-12 sm:h-12 object-cover rounded-lg"
-                />
+                <div className="flex -space-x-2 flex-shrink-0">
+                  {serverPendingPhotos.slice(0, 3).map((photo) => (
+                    <img
+                      key={photo.id}
+                      src={getPendingPhotoUrl(photo.id, true)}
+                      alt=""
+                      className="w-10 h-10 rounded-lg border-2 border-white object-cover"
+                    />
+                  ))}
+                </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-green-700">Photo prête</p>
-                  <p className="text-xs text-green-600 truncate">{pendingPhoto.name}</p>
+                  <p className="text-sm font-medium text-green-700">
+                    {serverPendingPhotos.length} photo{serverPendingPhotos.length > 1 ? 's' : ''} prête{serverPendingPhotos.length > 1 ? 's' : ''}
+                  </p>
+                  <p className="text-xs text-green-600">Sauvegardée{serverPendingPhotos.length > 1 ? 's' : ''} sur le serveur</p>
                 </div>
                 <button
-                  onClick={() => setPendingPhoto(null)}
+                  onClick={() => removeServerPhoto(serverPendingPhotos[0].id)}
                   className="p-2 text-green-600 active:text-red-500 transition-colors"
                   title="Supprimer la photo"
                 >
@@ -1163,32 +1253,17 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 </button>
               </div>
             )}
-            {/* Pending captures from capture mode */}
-            {pendingCaptures.length > 1 && (
+            {/* Pending captures being uploaded */}
+            {pendingCaptures.length > 0 && (
               <div className="flex items-center gap-2 bg-violet-50 border border-violet-200 px-3 py-2 rounded-xl">
-                <LayoutGrid className="w-4 h-4 text-violet-600 flex-shrink-0" />
+                <Loader2 className="w-4 h-4 animate-spin text-violet-600 flex-shrink-0" />
                 <span className="text-xs text-violet-700 flex-1">
-                  <strong>{pendingCaptures.length} captures</strong> disponibles
+                  Upload de <strong>{pendingCaptures.length} capture{pendingCaptures.length > 1 ? 's' : ''}</strong>...
                 </span>
-                <div className="flex -space-x-2">
-                  {pendingCaptures.slice(0, 3).map((cap, i) => (
-                    <img
-                      key={cap.id}
-                      src={cap.preview}
-                      alt=""
-                      className="w-6 h-6 rounded-full border-2 border-white object-cover"
-                    />
-                  ))}
-                  {pendingCaptures.length > 3 && (
-                    <span className="w-6 h-6 rounded-full bg-violet-200 border-2 border-white flex items-center justify-center text-[10px] font-bold text-violet-700">
-                      +{pendingCaptures.length - 3}
-                    </span>
-                  )}
-                </div>
               </div>
             )}
             {/* Photo actions when in steps mode */}
-            {currentStep === 'steps' && !pendingPhoto && pendingCaptures.length === 0 && (
+            {currentStep === 'steps' && serverPendingPhotos.length === 0 && pendingCaptures.length === 0 && !uploadingPhoto && (
               <div className="space-y-2">
                 {/* Multi-photo button - prominent */}
                 <button
@@ -1204,15 +1279,15 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
               </div>
             )}
             <div className="flex gap-2">
-              {/* Camera button - for single photo or when photo already taken */}
-              {(expectsPhoto || currentStep === 'steps') && (pendingPhoto || pendingCaptures.length > 0) && (
+              {/* Camera button - for adding more photos */}
+              {(expectsPhoto || currentStep === 'steps') && serverPendingPhotos.length > 0 && (
                 <button
                   onClick={() => photoInputRef.current?.click()}
                   className="p-3 rounded-xl bg-green-100 text-green-600 active:bg-green-200 transition-all relative flex-shrink-0"
-                  title="Changer la photo"
+                  title="Ajouter une photo"
                 >
                   <Camera className="w-5 h-5" />
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] rounded-full flex items-center justify-center">✓</span>
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] rounded-full flex items-center justify-center">+</span>
                 </button>
               )}
               <input
@@ -1229,18 +1304,18 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder={
                   currentStep === 'init' ? "Ex: Remplacement disjoncteur..." :
-                  currentStep === 'steps' ? (pendingPhoto ? "Décrivez l'étape..." : "Photo + description") :
+                  currentStep === 'steps' ? (serverPendingPhotos.length > 0 ? "Décrivez l'étape..." : "Photo + description") :
                   currentStep === 'review' ? "'oui' pour créer" :
                   "Votre réponse..."
                 }
                 className="flex-1 min-w-0 px-3 sm:px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-gray-50 focus:bg-white text-base"
-                disabled={isLoading}
+                disabled={isLoading || uploadingPhoto}
               />
               <button
                 onClick={() => sendMessage()}
-                disabled={isLoading || (!input.trim() && !pendingPhoto)}
+                disabled={isLoading || uploadingPhoto || (!input.trim() && serverPendingPhotos.length === 0)}
                 className={`p-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 flex-shrink-0 ${
-                  pendingPhoto && input.trim()
+                  serverPendingPhotos.length > 0 && input.trim()
                     ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white'
                     : 'bg-gradient-to-r from-violet-600 to-purple-600 text-white'
                 }`}

@@ -2,6 +2,7 @@
 // Based on Doors.jsx pattern with VSD plans support
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useFormDraft } from '../hooks/useFormDraft';
 import {
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
@@ -1133,23 +1134,40 @@ const DetailPanel = ({
 
 const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
   const isNew = !equipment?.id;
-  const [form, setForm] = useState({
-    name: '',
-    code: '',
-    building: '',
-    floor: '',
-    location: '',
-    category_id: '',
-    serial_number: '',
-    brand: '',
-    model: '',
-    power_rating: '',
-  });
+  const initialFormData = {
+    name: '', code: '', building: '', floor: '', location: '',
+    category_id: '', serial_number: '', brand: '', model: '', power_rating: ''
+  };
+
+  // Auto-save draft for new items only
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft(isNew ? 'mobile_equipment_new' : 'mobile_equipment_disabled', initialFormData, { debounceMs: 500 });
+
+  const [form, setFormInternal] = useState(initialFormData);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Sync form with draft or equipment
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        if (isNew) setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      if (isNew) setDraftData(newData);
+    }
+  }, [isNew, setDraftData]);
+
   useEffect(() => {
-    if (equipment) {
-      setForm({
+    if (equipment?.id) {
+      // Editing existing equipment
+      setFormInternal({
         name: equipment.name || '',
         code: equipment.code || '',
         building: equipment.building || '',
@@ -1161,8 +1179,11 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
         model: equipment.model || '',
         power_rating: equipment.power_rating || ''
       });
+    } else if (isNew && hasDraft) {
+      // New equipment - restore from draft
+      setFormInternal(draftData);
     }
-  }, [equipment]);
+  }, [equipment, isNew, hasDraft, draftData]);
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -1173,6 +1194,8 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
     setIsSaving(true);
     try {
       await onSave(form);
+      // Clear draft after successful save
+      if (isNew) clearDraft();
     } catch (err) {
       showToast('Erreur lors de la sauvegarde', 'error');
     } finally {

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
+import { useFormDraft } from '../hooks/useFormDraft';
 
 // ─────────────────────────────────────────────────────────────
 // API Helpers
@@ -722,7 +723,7 @@ function generatePDF(form, result) {
 // Main Component
 // ─────────────────────────────────────────────────────────────
 export default function LoopCalc() {
-  const [form, setForm] = useState({
+  const initialFormData = {
     project: '',
     voltage: 24,
     cableType: 'Standard',
@@ -741,12 +742,43 @@ export default function LoopCalc() {
     Po: 0.65,
     Co: 0.83,
     Lo: 3.7,
-  });
+  };
+
+  // Auto-save form data to localStorage
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft('loopcalc_form', initialFormData, { debounceMs: 500 });
+
+  const [form, setFormInternal] = useState(initialFormData);
   const [result, setResult] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [calculating, setCalculating] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const labelRef = useRef(null);
+
+  // Sync form with draft
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      setDraftData(newData);
+    }
+  }, [setDraftData]);
+
+  // Restore from draft on mount
+  useEffect(() => {
+    if (hasDraft && !editingId) {
+      setFormInternal(draftData);
+    }
+  }, [hasDraft, draftData, editingId]);
 
   // List state
   const [q, setQ] = useState('');
@@ -759,20 +791,24 @@ export default function LoopCalc() {
   const [total, setTotal] = useState(0);
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
 
-  const cf = useCallback((k, v) => setForm(s => ({ ...s, [k]: v })), []);
+  const cf = useCallback((k, v) => setForm(s => ({ ...s, [k]: v })), [setForm]);
 
   // Auto-fill cable parameters when type changes
   useEffect(() => {
     const cable = CABLE_TYPES[form.cableType];
     if (cable) {
-      setForm(s => ({
-        ...s,
-        resistance: cable.resistance,
-        capacitance: cable.capacitance,
-        inductance: cable.inductance,
-      }));
+      setFormInternal(s => {
+        const updated = {
+          ...s,
+          resistance: cable.resistance,
+          capacitance: cable.capacitance,
+          inductance: cable.inductance,
+        };
+        setDraftData(updated);
+        return updated;
+      });
     }
-  }, [form.cableType]);
+  }, [form.cableType, setDraftData]);
 
   const loadList = useCallback(async () => {
     try {
@@ -804,6 +840,8 @@ export default function LoopCalc() {
       setResult({ ...localResult, id: r.id });
       setPage(1);
       await loadList();
+      // Clear draft after successful save
+      clearDraft();
     } catch (e) {
       console.error('Calculate failed:', e);
       // Show local result anyway
