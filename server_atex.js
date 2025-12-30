@@ -4739,37 +4739,62 @@ app.get("/api/atex/drpce", async (req, res) => {
 // GENERATION ASYNCHRONE DU DRPCE (pour les gros rapports)
 // ============================================================
 
-// Helper: Charger la photo d'un équipement à la demande (évite de tout garder en mémoire)
-async function loadEquipmentPhoto(equipmentId) {
+// Helper: Charger et COMPRESSER la photo d'un équipement (évite PDF trop gros)
+async function loadEquipmentPhoto(equipmentId, maxWidth = 300, quality = 60) {
   try {
     const { rows } = await pool.query(
       `SELECT photo_content FROM atex_equipments WHERE id = $1 AND photo_content IS NOT NULL`,
       [equipmentId]
     );
-    return rows[0]?.photo_content || null;
+    const photo = rows[0]?.photo_content;
+    if (!photo) return null;
+
+    // Compresser l'image avec sharp pour réduire la taille du PDF
+    try {
+      const compressed = await sharp(photo)
+        .resize(maxWidth, maxWidth, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality, progressive: true })
+        .toBuffer();
+      return compressed;
+    } catch (compressErr) {
+      // Si compression échoue, retourner l'original
+      return photo;
+    }
   } catch (e) {
     return null;
   }
 }
 
-// Helper: Charger le thumbnail d'un plan à la demande
-async function loadPlanThumbnail(logicalName, planId) {
+// Helper: Charger et COMPRESSER le thumbnail d'un plan
+async function loadPlanThumbnail(logicalName, planId, maxWidth = 200, quality = 50) {
   try {
+    let thumbnail = null;
     if (logicalName) {
       const { rows } = await pool.query(
         `SELECT thumbnail FROM atex_plans WHERE logical_name = $1 ORDER BY version DESC LIMIT 1`,
         [logicalName]
       );
-      if (rows[0]?.thumbnail) return rows[0].thumbnail;
+      thumbnail = rows[0]?.thumbnail;
     }
-    if (planId) {
+    if (!thumbnail && planId) {
       const { rows } = await pool.query(
         `SELECT thumbnail FROM atex_plans WHERE id = $1`,
         [planId]
       );
-      return rows[0]?.thumbnail || null;
+      thumbnail = rows[0]?.thumbnail;
     }
-    return null;
+    if (!thumbnail) return null;
+
+    // Compresser le thumbnail
+    try {
+      const compressed = await sharp(thumbnail)
+        .resize(maxWidth, maxWidth, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality, progressive: true })
+        .toBuffer();
+      return compressed;
+    } catch (e) {
+      return thumbnail;
+    }
   } catch (e) {
     return null;
   }
@@ -5542,11 +5567,23 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       doc.end();
     });
 
-    // Lire le PDF depuis le fichier temporaire
-    const pdfBuffer = await fsp.readFile(tempPdfPath);
+    // Vérifier la taille du fichier avant de le lire
+    const fileStats = await fsp.stat(tempPdfPath);
+    const fileSizeMB = Math.round(fileStats.size / 1024 / 1024);
+    console.log(`[DRPCE-Async] PDF file size: ${fileSizeMB} MB, ${totalPages} pages`);
+
     const pdfFilename = `Management_Monitoring_${(siteInfo.site_name || 'site').replace(/[^a-zA-Z0-9-_]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
 
-    console.log(`[DRPCE-Async] PDF generated: ${pdfBuffer.length} bytes, ${totalPages} pages`);
+    // Limite de 500 MB pour éviter les problèmes de mémoire
+    if (fileStats.size > 500 * 1024 * 1024) {
+      console.error(`[DRPCE-Async] PDF too large (${fileSizeMB} MB), cannot save to database`);
+      throw new Error(`Le PDF est trop volumineux (${fileSizeMB} MB). Veuillez réduire le nombre d'équipements ou contacter le support.`);
+    }
+
+    // Lire le PDF depuis le fichier temporaire
+    const pdfBuffer = await fsp.readFile(tempPdfPath);
+
+    console.log(`[DRPCE-Async] PDF loaded: ${pdfBuffer.length} bytes`);
 
     // Sauvegarder le PDF dans la base
     await pool.query(`

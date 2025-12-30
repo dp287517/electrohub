@@ -8288,7 +8288,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
       const { rows: pendingReports } = await atexPool.query(`
         SELECT id, report_type, status, user_email, created_at, completed_at, total_items, error_message
         FROM pending_reports
-        WHERE status IN ('pending', 'completed')
+        WHERE status IN ('pending', 'completed', 'error')
         AND created_at > NOW() - INTERVAL '7 days'
         ORDER BY created_at DESC
         LIMIT 10
@@ -8333,10 +8333,26 @@ app.get("/api/dashboard/activities", async (req, res) => {
             color: 'amber',
             actionRequired: true
           });
+        } else if (report.status === 'error') {
+          // Failed report - show in recent activities
+          activities.push({
+            id: `report-error-${report.id}`,
+            type: 'report_error',
+            module: 'atex',
+            title: '❌ Erreur de génération',
+            description: `${reportLabel} - ${report.error_message || 'Échec'}`.substring(0, 100),
+            actor: report.user_email,
+            timestamp: report.completed_at || report.created_at,
+            url: '/app/atex?tab=drpce',
+            icon: '❌',
+            color: 'red',
+            actionRequired: false
+          });
         }
       }
     } catch (e) {
       // pending_reports table might not exist
+      console.warn('[DASHBOARD] pending_reports query error:', e.message);
     }
 
     // 8. Pending Signature Requests - for action_required
