@@ -2765,49 +2765,69 @@ MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS le
 
 ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
 - Sur les tableaux, il y a des ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur
-- Ces étiquettes indiquent la POSITION/NUMÉRO du circuit (ex: "1", "2", "3", "Q1", "Q2", "A1", "B3", etc.)
+- Ces étiquettes indiquent la POSITION/NUMÉRO du circuit (ex: "1", "2", "3", "Q1", "Q2", "A1", "B3", "11F1", "FI 11F1.A", etc.)
 - Tu DOIS lire et retranscrire ces positions EXACTEMENT dans le champ "position_label"
+- ATTENTION: Certains circuits ont un interrupteur différentiel EN AMONT avec une position comme "FI 11F1.A" - ne pas l'oublier !
 - Il peut AUSSI y avoir un nom/description du circuit - le mettre dans "circuit_name"
 - Si pas d'étiquette de position visible, mettre null
 - NE PAS inventer des positions type "R1-P1" - lire les VRAIES étiquettes !
 
+LECTURE DU TEXTE SUR LE DISJONCTEUR - TRÈS IMPORTANT:
+- Chaque disjoncteur a du TEXTE IMPRIMÉ sur sa face avant
+- LIS ATTENTIVEMENT le texte qui indique la courbe et l'intensité:
+  * "C16" = Courbe C, 16 Ampères
+  * "C13" = Courbe C, 13 Ampères
+  * "C10" = Courbe C, 10 Ampères
+  * "C20" = Courbe C, 20 Ampères
+  * "C32" = Courbe C, 32 Ampères
+  * "B16" = Courbe B, 16 Ampères
+  * "D10" = Courbe D, 10 Ampères
+- Ce texte est DIFFÉRENT pour chaque disjoncteur même s'ils ont la même référence (C60N)
+- Ne pas confondre la RÉFÉRENCE (ex: "C60N", "iC60N") avec le CALIBRE (ex: "C16", "C13")
+- Le calibre est généralement écrit en plus grand sur l'étiquette colorée (orange chez Schneider/Merlin Gerin)
+
 TYPES D'APPAREILS À IDENTIFIER (TOUS sans exception):
-- Disjoncteurs (magnéto-thermiques)
-- Disjoncteurs différentiels
-- Interrupteurs différentiels
-- Interrupteurs sectionneurs
-- Contacteurs (jour/nuit, heures creuses)
-- Télérupteurs
+- Disjoncteurs magnéto-thermiques (avec calibre C10, C13, C16, C20, C32, etc.)
+- Disjoncteurs différentiels (souvent plus larges, 2 ou 4 modules)
+- Interrupteurs différentiels (ID, iID) - ATTENTION: souvent en amont d'un groupe de disjoncteurs
+- Interrupteurs sectionneurs (Q1, Q2...)
+- Contacteurs (jour/nuit, heures creuses) - souvent étiquetés TL
+- Télérupteurs (TL, TLi)
 - Relais (temporisés, impulsionnels)
 - Minuteries
 - Parafoudres
 - Horloges/programmateurs
 - Délesteurs
+- Borniers (MGTB)
 - Transformateurs modulaires
 
+COMPTAGE DES PÔLES - MÉTHODE VISUELLE PRÉCISE:
+Regarde PHYSIQUEMENT le nombre de MANETTES/LEVIERS liés ensemble sur chaque disjoncteur:
+- 1 MANETTE seule = 1P (1 pôle), typiquement monophasé phase seule → poles=1
+- 2 MANETTES liées ensemble = 1P+N ou 2P (2 pôles), monophasé avec neutre → poles=2
+- 3 MANETTES liées ensemble = 3P (3 pôles), triphasé sans neutre → poles=3
+- 4 MANETTES liées ensemble = 3P+N ou 4P (4 pôles), triphasé avec neutre → poles=4
+
+INDICES POUR COMPTER LES PÔLES:
+- Compte les petites manettes noires basculantes sur le disjoncteur
+- Sur les photos, regarde combien de "barrettes" ou "commutateurs" sont visibles
+- Les disjoncteurs standards résidentiels français sont généralement 1P+N = 2 pôles
+- Un disjoncteur plus large = plus de pôles (largeur proportionnelle)
+- 1 module = ~18mm = généralement 1 pôle visible
+
 POUR CHAQUE APPAREIL, extraire TOUTES ces données:
-1. POSITION (étiquette) - Le numéro/code sur l'étiquette (PRIMORDIAL: "1", "Q3", "A2", etc.)
+1. POSITION (étiquette) - Le numéro/code sur l'étiquette (ex: "11F1", "FI 11F1.A", "Q3")
 2. Nom du circuit si visible (ex: "Éclairage Cuisine", "VMC", "PAC")
 3. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, Merlin Gerin, etc.)
 4. Type d'appareil
 5. Référence visible sur l'appareil (ex: iC60N, C60N, DX3, etc.)
-6. Intensité nominale (In) en ampères
-7. Courbe de déclenchement (B, C, D, K, Z) si visible
-8. Pouvoir de coupure ultime (Icu) en kA - souvent marqué "6kA", "10kA", "15kA"
-9. Pouvoir de coupure en service (Ics) en kA si visible (souvent Ics=Icu ou Ics=75%Icu)
-10. Tension assignée (voltage_v): 230V pour mono, 400V pour tri, ou valeur visible
-11. Nombre de pôles - CRITIQUE pour distinguer mono/triphasé:
-   MÉTHODE VISUELLE (compte les MANETTES liées ensemble ou la LARGEUR en modules):
-   - 1P = 1 manette seule, 1 module de large (18mm), MONOPHASÉ sans neutre → poles=1, voltage=230V
-   - 1P+N ou 2P = 2 manettes liées, 2 modules de large (36mm), MONOPHASÉ avec neutre → poles=2, voltage=230V
-   - 3P = 3 manettes liées, 3 modules de large (54mm), TRIPHASÉ sans neutre → poles=3, voltage=400V
-   - 3P+N ou 4P = 4 manettes liées, 4 modules de large (72mm), TRIPHASÉ avec neutre → poles=4, voltage=400V
-   INDICES VISUELS:
-   - Regarde si les manettes sont physiquement reliées par une barrette
-   - Un disjoncteur large (2-4 modules) = plusieurs pôles
-   - Les interrupteurs différentiels sont souvent 2P (2 modules) ou 4P (4 modules)
-   - Les disjoncteurs standards résidentiels sont généralement 1P+N (2 modules = poles=2)
-12. Largeur en modules (width_modules): Compte le nombre de modules de large (1 module = 17.5mm-18mm)
+6. Intensité nominale (In) en ampères - LIS LE CHIFFRE APRÈS LA LETTRE (C16=16A, C13=13A)
+7. Courbe de déclenchement (B, C, D, K, Z) - LA LETTRE AVANT LE CHIFFRE
+8. Pouvoir de coupure ultime (Icu) en kA - souvent marqué "6000" ou "10000" (6kA ou 10kA)
+9. Pouvoir de coupure en service (Ics) en kA si visible
+10. Tension assignée: 230V pour mono, 400V pour tri
+11. Nombre de pôles - COMPTE LES MANETTES liées ensemble sur la photo
+12. Largeur en modules - Compte le nombre de modules de large
 13. Si différentiel: sensibilité en mA (30, 300, 500) et type (AC, A, B, F, Hpi, Si)
 
 Réponds en JSON:
@@ -2816,20 +2836,20 @@ Réponds en JSON:
   "total_devices_detected": number,
   "devices": [
     {
-      "position_label": "Q3" ou "1" ou "A2" ou null,
+      "position_label": "11F3" ou "FI 11F1.A" ou null,
       "circuit_name": "Éclairage Cuisine" ou null,
       "row": 1,
       "position_in_row": 3,
       "device_type": "Disjoncteur modulaire",
-      "manufacturer": "Schneider Electric",
-      "reference": "iC60N" ou null,
+      "manufacturer": "Merlin Gerin",
+      "reference": "C60N",
       "in_amps": 16,
-      "curve_type": "C" ou null,
-      "icu_ka": 6 ou null,
-      "ics_ka": 6 ou null,
+      "curve_type": "C",
+      "icu_ka": 6,
+      "ics_ka": null,
       "voltage_v": 230,
-      "poles": 2,  // 1=mono 1P, 2=mono 1P+N, 3=tri 3P, 4=tri 3P+N (compte les manettes liées!)
-      "width_modules": 2,  // Largeur en modules (1 module = 18mm)
+      "poles": 2,
+      "width_modules": 2,
       "is_differential": false,
       "differential_sensitivity_ma": null,
       "differential_type": null,
@@ -2845,9 +2865,13 @@ Réponds en JSON:
           content: [
             { type: 'text', text: `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique.
 
-TRÈS IMPORTANT: Lis les ÉTIQUETTES DE POSITION sur chaque disjoncteur (au-dessus ou en-dessous). Ces étiquettes indiquent le numéro/code du circuit (ex: "1", "2", "Q1", "A3"). Lis aussi le nom du circuit si visible.
+TRÈS IMPORTANT - LECTURE PRÉCISE:
+1. Lis les ÉTIQUETTES DE POSITION sur chaque disjoncteur (au-dessus ou en-dessous). Ex: "11F1", "11F2", "FI 11F1.A"
+2. Lis le TEXTE IMPRIMÉ sur chaque disjoncteur pour le calibre (ex: "C16" = courbe C 16A, "C13" = courbe C 13A)
+3. COMPTE les MANETTES/LEVIERS liés ensemble pour déterminer le nombre de pôles
+4. N'oublie pas les interrupteurs différentiels en amont des groupes de disjoncteurs
 
-Identifie TOUS les appareils modulaires avec leurs positions et caractéristiques techniques.` },
+Identifie TOUS les appareils modulaires avec leurs positions et caractéristiques techniques EXACTES.` },
             ...imageContents
           ]
         }
