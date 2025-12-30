@@ -81,6 +81,14 @@ export async function deleteProcedure(id) {
   return response.json();
 }
 
+// Recover photos from AI session raw_steps
+export async function recoverPhotos(id) {
+  const response = await fetchWithAuth(`${API_BASE}/${id}/recover-photos`, {
+    method: 'POST',
+  });
+  return response.json();
+}
+
 // ==================== STEPS ====================
 
 export async function addStep(procedureId, stepData) {
