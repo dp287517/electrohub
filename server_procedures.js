@@ -3222,6 +3222,7 @@ const initDraftsTable = async () => {
         category VARCHAR(100),
         risk_level VARCHAR(50) DEFAULT 'low',
         steps JSONB DEFAULT '[]',
+        raw_steps JSONB DEFAULT '[]',
         ppe JSONB DEFAULT '[]',
         equipment_links JSONB DEFAULT '[]',
         session_id VARCHAR(255),
@@ -3230,6 +3231,11 @@ const initDraftsTable = async () => {
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
+    `);
+    // Migration: add raw_steps column if it doesn't exist (for existing tables)
+    await pool.query(`
+      ALTER TABLE procedure_drafts
+      ADD COLUMN IF NOT EXISTS raw_steps JSONB DEFAULT '[]'
     `);
     console.log("✓ Procedure drafts table ready");
   } catch (error) {
@@ -3284,7 +3290,7 @@ app.get("/api/procedures/drafts/:id", async (req, res) => {
 // Save/update draft
 app.post("/api/procedures/drafts", async (req, res) => {
   try {
-    const { id, title, description, category, risk_level, steps, ppe, equipment_links, session_id } = req.body;
+    const { id, title, description, category, risk_level, steps, raw_steps, ppe, equipment_links, session_id } = req.body;
     const userEmail = req.headers["x-user-email"];
     const site = req.headers["x-site"];
 
@@ -3297,22 +3303,23 @@ app.post("/api/procedures/drafts", async (req, res) => {
           category = COALESCE($3, category),
           risk_level = COALESCE($4, risk_level),
           steps = COALESCE($5, steps),
-          ppe = COALESCE($6, ppe),
-          equipment_links = COALESCE($7, equipment_links),
+          raw_steps = COALESCE($6, raw_steps),
+          ppe = COALESCE($7, ppe),
+          equipment_links = COALESCE($8, equipment_links),
           updated_at = NOW()
-         WHERE id = $8
+         WHERE id = $9
          RETURNING *`,
-        [title, description, category, risk_level, JSON.stringify(steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), id]
+        [title, description, category, risk_level, JSON.stringify(steps || []), JSON.stringify(raw_steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), id]
       );
       res.json({ ok: true, draft: rows[0] });
     } else {
       // Create new draft
       const { rows } = await pool.query(
         `INSERT INTO procedure_drafts
-          (title, description, category, risk_level, steps, ppe, equipment_links, session_id, user_email, site)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          (title, description, category, risk_level, steps, raw_steps, ppe, equipment_links, session_id, user_email, site)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
-        [title || 'Brouillon', description, category, risk_level || 'low', JSON.stringify(steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), session_id, userEmail, site]
+        [title || 'Brouillon', description, category, risk_level || 'low', JSON.stringify(steps || []), JSON.stringify(raw_steps || []), JSON.stringify(ppe || []), JSON.stringify(equipment_links || []), session_id, userEmail, site]
       );
       res.json({ ok: true, draft: rows[0] });
     }
@@ -3352,21 +3359,34 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
 
     const draft = rows[0];
 
-    // Create new AI session with draft data
-    // FIX: If draft has a title, go to "steps" phase even if no steps yet
-    // Only ask for title (init phase) if there's no title
-    const resumePhase = draft.steps?.length > 0 ? "steps" : (draft.title ? "steps" : "init");
-
-    // FIX: Convert existing steps to raw_steps so stepNumber calculation works correctly
-    // When resuming, we need to know how many steps already exist
+    // Use raw_steps from draft if available, otherwise reconstruct from steps (backward compatibility)
+    const draftRawSteps = draft.raw_steps || [];
     const existingSteps = draft.steps || [];
-    const rawStepsFromDraft = existingSteps.map((step, index) => ({
-      step_number: index + 1,
-      raw_text: step.title || step.instructions || `Étape ${index + 1}`,
-      photo: step.photo_url || step.photo || null,
-      has_photo: !!(step.photo_url || step.photo),
-      from_draft: true // Mark as coming from draft, already processed
-    }));
+
+    // CRITICAL: Use persisted raw_steps if available, otherwise rebuild from final steps
+    let rawStepsFromDraft;
+    if (draftRawSteps.length > 0) {
+      // Use the saved raw_steps directly
+      rawStepsFromDraft = draftRawSteps;
+      console.log(`[PROC] Using ${draftRawSteps.length} persisted raw_steps from draft`);
+    } else if (existingSteps.length > 0) {
+      // Backward compatibility: reconstruct from final steps
+      rawStepsFromDraft = existingSteps.map((step, index) => ({
+        step_number: index + 1,
+        raw_text: step.title || step.instructions || `Étape ${index + 1}`,
+        photo: step.photo_url || step.photo || null,
+        has_photo: !!(step.photo_url || step.photo),
+        from_draft: true
+      }));
+      console.log(`[PROC] Reconstructed ${rawStepsFromDraft.length} raw_steps from final steps`);
+    } else {
+      rawStepsFromDraft = [];
+      console.log(`[PROC] No steps found in draft`);
+    }
+
+    // Determine phase based on raw_steps count (more accurate than steps)
+    const stepsCount = rawStepsFromDraft.length;
+    const resumePhase = stepsCount > 0 ? "steps" : (draft.title ? "steps" : "init");
 
     const resumeCollectedData = {
       title: draft.title,
@@ -3374,7 +3394,7 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
       category: draft.category,
       risk_level: draft.risk_level,
       steps: draft.steps || [],
-      raw_steps: rawStepsFromDraft, // FIX: Include raw_steps for stepNumber calculation
+      raw_steps: rawStepsFromDraft,
       ppe: draft.ppe || [],
       ppe_required: draft.ppe || [],
       equipment_links: draft.equipment_links || []
@@ -3389,7 +3409,7 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
       [
         JSON.stringify([{
           role: "assistant",
-          content: `Brouillon restauré avec ${draft.steps?.length || 0} étape(s). Continuons !`,
+          content: `Brouillon restauré avec ${stepsCount} étape(s). Continuons !`,
           data: { currentStep: resumePhase, collectedData: resumeCollectedData }
         }]),
         resumePhase,
@@ -3399,16 +3419,16 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
 
     const sessionId = sessionRows[0].id;
 
-    console.log(`[PROC] Resumed draft ${draftId} → session ${sessionId}, phase: ${resumePhase}, steps: ${draft.steps?.length || 0}`);
+    console.log(`[PROC] Resumed draft ${draftId} → session ${sessionId}, phase: ${resumePhase}, raw_steps: ${stepsCount}`);
 
     res.json({
       ok: true,
       sessionId,
       resumedFrom: draft.id,
       phase: resumePhase,
-      currentStep: resumePhase, // FIX: Add currentStep for frontend compatibility
+      currentStep: resumePhase,
       collectedData: resumeCollectedData,
-      message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${draft.steps?.length || 0} étape(s) existante(s). Continuons !`
+      message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${stepsCount} étape(s) existante(s). Continuons !`
     });
   } catch (err) {
     console.error("Error resuming draft:", err);

@@ -185,6 +185,7 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
         category: collectedData.category || 'general',
         risk_level: collectedData.risk_level || 'low',
         steps: collectedData.steps || [],
+        raw_steps: collectedData.raw_steps || [], // CRITICAL: Save raw_steps to persist user's work
         ppe: collectedData.ppe || [],
         equipment_links: collectedData.equipment_links || [],
         session_id: sessionId
