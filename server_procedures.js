@@ -5756,43 +5756,58 @@ app.post("/api/procedures/:id/recover-photos", async (req, res) => {
       const step = steps[i];
       const rawStep = rawSteps[i];
 
-      // Skip if step already has a photo
-      if (step.photo_content || step.photo_path) {
-        console.log(`[RECOVER] Step ${i + 1}: Already has photo, skipping`);
+      // Check if step actually has working photo content
+      const hasValidPhotoContent = step.photo_content && step.photo_content.length > 100;
+
+      if (hasValidPhotoContent) {
+        console.log(`[RECOVER] Step ${i + 1}: Already has valid photo_content (${step.photo_content.length} bytes), skipping`);
         continue;
       }
 
-      // Get photo from raw_step
-      const photoPath = rawStep?.photo;
-      if (!photoPath) {
-        console.log(`[RECOVER] Step ${i + 1}: No photo in raw_steps`);
-        continue;
-      }
-
-      console.log(`[RECOVER] Step ${i + 1}: Found photo ${photoPath}`);
-
-      // Try to read photo file
+      // Try to reload from existing photo_path first
       let photoContent = null;
-      try {
-        const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
-        if (fs.existsSync(fullPath)) {
-          photoContent = await fsp.readFile(fullPath);
-          console.log(`[RECOVER] Step ${i + 1}: Loaded photo (${photoContent.length} bytes)`);
-        } else {
-          console.log(`[RECOVER] Step ${i + 1}: Photo file not found at ${fullPath}`);
+      let photoPath = step.photo_path;
+
+      if (photoPath) {
+        try {
+          const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+          if (fs.existsSync(fullPath)) {
+            photoContent = await fsp.readFile(fullPath);
+            console.log(`[RECOVER] Step ${i + 1}: Reloaded from existing path ${photoPath} (${photoContent.length} bytes)`);
+          } else {
+            console.log(`[RECOVER] Step ${i + 1}: File not found at ${fullPath}`);
+          }
+        } catch (e) {
+          console.log(`[RECOVER] Step ${i + 1}: Error reading existing path: ${e.message}`);
         }
-      } catch (e) {
-        console.log(`[RECOVER] Step ${i + 1}: Error reading photo: ${e.message}`);
       }
 
-      // Update step with photo
-      if (photoContent) {
+      // If still no content, try from raw_steps
+      if (!photoContent && rawStep?.photo) {
+        photoPath = rawStep.photo;
+        try {
+          const fullPath = path.join(PHOTOS_DIR, path.basename(photoPath));
+          if (fs.existsSync(fullPath)) {
+            photoContent = await fsp.readFile(fullPath);
+            console.log(`[RECOVER] Step ${i + 1}: Loaded from raw_steps ${photoPath} (${photoContent.length} bytes)`);
+          } else {
+            console.log(`[RECOVER] Step ${i + 1}: raw_steps photo file not found at ${fullPath}`);
+          }
+        } catch (e) {
+          console.log(`[RECOVER] Step ${i + 1}: Error reading raw_steps photo: ${e.message}`);
+        }
+      }
+
+      // Update step with photo if we got content
+      if (photoContent && photoContent.length > 100) {
         await pool.query(
           `UPDATE procedure_steps SET photo_path = $1, photo_content = $2 WHERE id = $3`,
           [photoPath, photoContent, step.id]
         );
         recoveredCount++;
         console.log(`[RECOVER] Step ${i + 1}: Photo recovered successfully`);
+      } else {
+        console.log(`[RECOVER] Step ${i + 1}: No valid photo found`);
       }
     }
 
