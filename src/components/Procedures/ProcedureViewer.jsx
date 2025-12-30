@@ -247,6 +247,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [signatureSummary, setSignatureSummary] = useState(null);
   const [isRecoveringPhotos, setIsRecoveringPhotos] = useState(false);
   const [photosRecovered, setPhotosRecovered] = useState(0);
+  const [hasPhotoErrors, setHasPhotoErrors] = useState(false);
 
   const loadSignatures = async () => {
     try {
@@ -846,12 +847,16 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
             )}
           </div>
 
-          {/* Photo recovery alert */}
-          {procedure.steps?.length > 0 && procedure.steps.some(s => !s.photo_path) && (
+          {/* Photo recovery alert - show if any step is missing photo OR if there have been photo loading errors */}
+          {procedure.steps?.length > 0 && (
             <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2 text-amber-800">
                 <Camera className="w-5 h-5" />
-                <span className="text-sm">Certaines étapes n'ont pas de photos</span>
+                <span className="text-sm">
+                  {procedure.steps.some(s => !s.photo_path)
+                    ? "Certaines étapes n'ont pas de photos"
+                    : "Photos des étapes"}
+                </span>
               </div>
               <button
                 onClick={handleRecoverPhotos}
