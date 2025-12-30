@@ -27,6 +27,7 @@ import {
   downloadMethodeWord,
   getSignatures,
   invalidateSignatures,
+  recoverPhotos,
   RISK_LEVELS,
   STATUS_LABELS,
   DEFAULT_PPE,
@@ -257,6 +258,41 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const loadProcedure = async () => {
     try {
       const data = await getProcedure(procedureId);
+
+      // Auto-recover photos if any step is missing photo but should have one
+      // Check if steps exist and any has no photo_path (photos might not have been linked during creation)
+      const stepsNeedRecovery = data.steps?.length > 0 &&
+        data.steps.some(s => !s.photo_path) &&
+        !sessionStorage.getItem(`photo_recovery_attempted_${procedureId}`);
+
+      if (stepsNeedRecovery) {
+        console.log('[ProcedureViewer] Attempting photo recovery for', procedureId);
+        sessionStorage.setItem(`photo_recovery_attempted_${procedureId}`, 'true');
+        try {
+          const result = await recoverPhotos(procedureId);
+          console.log('[ProcedureViewer] Photo recovery result:', result);
+          if (result.recoveredCount > 0) {
+            // Reload procedure to get updated photos
+            const refreshedData = await getProcedure(procedureId);
+            setProcedure(refreshedData);
+            loadSignatures();
+            setEditForm({
+              title: refreshedData.title,
+              description: refreshedData.description,
+              category: refreshedData.category,
+              status: refreshedData.status,
+              risk_level: refreshedData.risk_level,
+              ppe_required: refreshedData.ppe_required || [],
+              emergency_contacts: refreshedData.emergency_contacts || [],
+            });
+            setLoading(false);
+            return;
+          }
+        } catch (recoverError) {
+          console.log('[ProcedureViewer] Photo recovery failed:', recoverError.message);
+        }
+      }
+
       setProcedure(data);
       loadSignatures();
       setEditForm({
