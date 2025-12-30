@@ -4217,25 +4217,43 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
         // Utiliser position_label comme position_number
         const positionNumber = device.position_label || device.position || String(i + 1);
 
+        // ============================================================
+        // PARSING PRÉALABLE - Convertir toutes les valeurs AI en types corrects
+        // ============================================================
+        const parsedDevice = {
+          ...device,
+          in_amps: parseInAmps(device.in_amps),
+          icu_ka: parseIcuKa(device.icu_ka),
+          ics_ka: parseIcuKa(device.ics_ka),
+          poles: typeof device.poles === 'number' ? device.poles :
+                 typeof device.poles === 'string' ? parseInt(device.poles) || null : null,
+          voltage_v: typeof device.voltage_v === 'number' ? device.voltage_v :
+                     typeof device.voltage_v === 'string' ? parseInt(device.voltage_v) || null : null,
+        };
+
+        // Log pour debug
+        if (i < 5 || parsedDevice.in_amps !== parseInAmps(device.in_amps)) {
+          console.log(`[BULK CREATE] Device ${positionNumber}: in_amps="${device.in_amps}" → ${parsedDevice.in_amps}, poles=${parsedDevice.poles}, icu=${parsedDevice.icu_ka}`);
+        }
+
         // Chercher si un appareil existe déjà à cette position ou avec la même référence
         const deviceRefNorm = normalizeRef(device.reference);
         const existingDevice = existingDevices.find(e => {
           // Match par position exacte
           if (e.position_number === positionNumber) return true;
 
-          // Match par référence normalisée + ampérage
+          // Match par référence normalisée + ampérage (utiliser parsedDevice.in_amps)
           const existingRefNorm = normalizeRef(e.reference);
-          const deviceAmps = parseInAmps(device.in_amps);
           if (existingRefNorm && deviceRefNorm &&
               existingRefNorm === deviceRefNorm &&
-              Number(e.in_amps) === deviceAmps) {
+              Number(e.in_amps) === parsedDevice.in_amps) {
             return true;
           }
 
           // Match partiel sur référence (ex: "ic60n" contient dans "a9f74216ic60n")
           if (existingRefNorm && deviceRefNorm &&
               (existingRefNorm.includes(deviceRefNorm) || deviceRefNorm.includes(existingRefNorm)) &&
-              Number(e.in_amps) === deviceAmps) {
+              Number(e.in_amps) === parsedDevice.in_amps) {
             return true;
           }
 
@@ -4244,11 +4262,11 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
 
         if (existingDevice) {
           // Mettre à jour l'appareil existant avec les nouvelles infos
-          // Compute is_complete for the merged device data
+          // Compute is_complete for the merged device data - utiliser parsedDevice !
           const mergedDevice = {
-            manufacturer: device.manufacturer || existingDevice.manufacturer,
-            reference: device.reference || existingDevice.reference,
-            in_amps: device.in_amps || existingDevice.in_amps
+            manufacturer: parsedDevice.manufacturer || existingDevice.manufacturer,
+            reference: parsedDevice.reference || existingDevice.reference,
+            in_amps: parsedDevice.in_amps || Number(existingDevice.in_amps) || null
           };
           const deviceIsComplete = checkDeviceComplete(mergedDevice);
 
@@ -4280,23 +4298,23 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           `, [
             existingDevice.id,
             site,
-            device.circuit_name || device.name,
-            device.device_type,
-            device.manufacturer,
-            device.reference,
-            parseInAmps(device.in_amps),
-            parseIcuKa(device.icu_ka),
-            parseIcuKa(device.ics_ka),
-            device.poles,
-            device.voltage_v,
-            device.is_differential,
+            parsedDevice.circuit_name || parsedDevice.name,
+            parsedDevice.device_type,
+            parsedDevice.manufacturer,
+            parsedDevice.reference,
+            parsedDevice.in_amps,
+            parsedDevice.icu_ka,
+            parsedDevice.ics_ka,
+            parsedDevice.poles,
+            parsedDevice.voltage_v,
+            parsedDevice.is_differential,
             positionNumber,
-            device.curve_type,
-            device.differential_sensitivity_ma,
-            device.differential_type,
+            parsedDevice.curve_type,
+            parsedDevice.differential_sensitivity_ma,
+            parsedDevice.differential_type,
             deviceIsComplete,
             JSON.stringify({
-              width_modules: device.width_modules,
+              width_modules: parsedDevice.width_modules,
               scanned_at: new Date().toISOString(),
               source: 'panel_scan'
             })
@@ -4304,8 +4322,8 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           console.log(`[BULK CREATE] Updated existing device ${existingDevice.id} at position ${positionNumber}`);
           updatedDevices.push(updated);
         } else {
-          // Créer un nouvel appareil
-          const newDeviceComplete = checkDeviceComplete(device);
+          // Créer un nouvel appareil - utiliser parsedDevice !
+          const newDeviceComplete = checkDeviceComplete(parsedDevice);
           const { rows: [created] } = await quickQuery(`
             INSERT INTO devices (
               site, switchboard_id, name, device_type, manufacturer, reference,
@@ -4317,35 +4335,35 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
           `, [
             site,
             switchboard_id,
-            device.circuit_name || device.name || `${device.device_type || 'Disjoncteur'} ${positionNumber}`,
-            device.device_type || 'Disjoncteur modulaire',
-            device.manufacturer,
-            device.reference,
-            parseInAmps(device.in_amps),
-            parseIcuKa(device.icu_ka),
-            parseIcuKa(device.ics_ka),
-            device.poles || 1,
-            device.voltage_v || 230,
-            device.is_differential || false,
+            parsedDevice.circuit_name || parsedDevice.name || `${parsedDevice.device_type || 'Disjoncteur'} ${positionNumber}`,
+            parsedDevice.device_type || 'Disjoncteur modulaire',
+            parsedDevice.manufacturer,
+            parsedDevice.reference,
+            parsedDevice.in_amps,
+            parsedDevice.icu_ka,
+            parsedDevice.ics_ka,
+            parsedDevice.poles || 1,
+            parsedDevice.voltage_v || 230,
+            parsedDevice.is_differential || false,
             positionNumber,
             newDeviceComplete,
-            device.curve_type || null,
-            device.differential_sensitivity_ma || null,
-            device.differential_type || null,
+            parsedDevice.curve_type || null,
+            parsedDevice.differential_sensitivity_ma || null,
+            parsedDevice.differential_type || null,
             JSON.stringify({
-              width_modules: device.width_modules,
+              width_modules: parsedDevice.width_modules,
               scanned_at: new Date().toISOString(),
               source: 'panel_scan'
             })
           ]);
-          console.log(`[BULK CREATE] Created new device at position ${positionNumber}`);
+          console.log(`[BULK CREATE] Created new device at position ${positionNumber} (complete: ${newDeviceComplete})`);
           createdDevices.push(created);
         }
 
         // Sauvegarder dans le cache des produits scannés si référence complète
-        if (device.manufacturer && device.reference && device.in_amps) {
+        if (parsedDevice.manufacturer && parsedDevice.reference && parsedDevice.in_amps) {
           try {
-            const normalizedRef = normalizeRef(device.reference);
+            const normalizedRef = normalizeRef(parsedDevice.reference);
             if (!normalizedRef) continue; // Skip if no valid reference
             await quickQuery(`
               INSERT INTO scanned_products (site, reference, manufacturer, in_amps, icu_ka, ics_ka, poles, voltage_v, curve_type, source, scan_count)
@@ -4356,7 +4374,7 @@ app.post('/api/switchboard/devices/bulk', async (req, res) => {
                 manufacturer = COALESCE(EXCLUDED.manufacturer, scanned_products.manufacturer),
                 scan_count = scanned_products.scan_count + 1,
                 last_scanned_at = NOW()
-            `, [site, normalizedRef, device.manufacturer, parseInAmps(device.in_amps), parseIcuKa(device.icu_ka), parseIcuKa(device.ics_ka), device.poles, device.voltage_v, device.curve_type]);
+            `, [site, normalizedRef, parsedDevice.manufacturer, parsedDevice.in_amps, parsedDevice.icu_ka, parsedDevice.ics_ka, parsedDevice.poles, parsedDevice.voltage_v, parsedDevice.curve_type]);
           } catch (e) {
             console.warn('[BULK CREATE] Cache error:', e.message);
           }
