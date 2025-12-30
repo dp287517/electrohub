@@ -3341,6 +3341,41 @@ app.delete("/api/procedures/drafts/:id", async (req, res) => {
   }
 });
 
+// Clean up orphan drafts (drafts whose title matches an existing approved procedure)
+app.post("/api/procedures/drafts/cleanup-orphans", async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    // Find and delete drafts whose title matches an approved procedure
+    const { rows: orphans } = await pool.query(`
+      SELECT d.id, d.title
+      FROM procedure_drafts d
+      INNER JOIN procedures p ON LOWER(TRIM(d.title)) = LOWER(TRIM(p.title))
+      WHERE p.status = 'approved'
+        AND (d.user_email = $1 OR d.site = $2)
+    `, [userEmail, site]);
+
+    if (orphans.length > 0) {
+      const orphanIds = orphans.map(o => o.id);
+      await pool.query(
+        `DELETE FROM procedure_drafts WHERE id = ANY($1)`,
+        [orphanIds]
+      );
+      console.log(`[Procedures] Cleaned up ${orphans.length} orphan drafts:`, orphans.map(o => o.title));
+    }
+
+    res.json({
+      ok: true,
+      cleaned: orphans.length,
+      drafts: orphans.map(o => o.title)
+    });
+  } catch (err) {
+    console.error("Error cleaning orphan drafts:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Resume AI session from draft
 app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
   try {
@@ -5224,6 +5259,20 @@ async function finalizeProcedureInternal(sessionId, userEmail, site) {
 
   // Add stepsCount to the returned procedure for notification
   procedure.stepsCount = stepsCount;
+
+  // Clean up the draft associated with this session
+  try {
+    const { rowCount } = await pool.query(
+      `DELETE FROM procedure_drafts WHERE session_id = $1`,
+      [sessionId]
+    );
+    if (rowCount > 0) {
+      console.log(`[Procedures] Cleaned up draft for session ${sessionId}`);
+    }
+  } catch (cleanupErr) {
+    console.error(`[Procedures] Draft cleanup error (non-blocking): ${cleanupErr.message}`);
+  }
+
   return procedure;
 }
 
