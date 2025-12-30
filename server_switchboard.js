@@ -22,6 +22,7 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import PDFDocument from 'pdfkit';
 import multer from 'multer';
+import sharp from 'sharp';
 import * as XLSX from 'xlsx';
 import { createAuditTrail, AUDIT_ACTIONS } from './lib/audit-trail.js';
 import { extractTenantFromRequest, getTenantFilter } from './lib/tenant-filter.js';
