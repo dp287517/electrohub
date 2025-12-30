@@ -5,7 +5,7 @@ import {
   PenTool, Play, ChevronRight, Loader2, RefreshCw,
   X, Filter
 } from 'lucide-react';
-import { api } from '../lib/api';
+import { get } from '../lib/api';
 
 // Color mapping for activity types
 const colorMap = {
@@ -102,15 +102,14 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     try {
       setLoading(true);
       // Use unified dashboard activities endpoint that aggregates from ALL modules
-      const response = await api.get('/api/dashboard/activities?limit=50');
-      if (response.ok) {
-        const data = await response.json();
+      const data = await get('/api/dashboard/activities', { limit: 50 });
+      if (data) {
         setActivities(data);
       } else {
         // Fallback to procedures if unified endpoint fails
-        const fallback = await api.get('/api/procedures/activities/recent?limit=50');
-        if (fallback.ok) {
-          setActivities(await fallback.json());
+        const fallback = await get('/api/procedures/activities/recent', { limit: 50 });
+        if (fallback) {
+          setActivities(fallback);
         }
       }
     } catch (err) {
@@ -268,9 +267,8 @@ export function NotificationBadge() {
   useEffect(() => {
     const fetchCount = async () => {
       try {
-        const response = await api.get('/api/dashboard/activities?limit=10');
-        if (response.ok) {
-          const data = await response.json();
+        const data = await get('/api/dashboard/activities', { limit: 10 });
+        if (data) {
           setCount(data.action_required?.length || 0);
         }
       } catch (err) {
