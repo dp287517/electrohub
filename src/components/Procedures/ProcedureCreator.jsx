@@ -433,13 +433,16 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
         if (stepsCount > 10) {
           setMessages(prev => [
             ...prev,
-            { role: 'assistant', content: `⏳ **Traitement de ${stepsCount} étapes en cours...**\n\nLe traitement va continuer en arrière-plan.\n\n📲 **Vous recevrez une notification** quand ce sera prêt.\n\n💡 Vous pouvez fermer cette fenêtre sans risque.` }
+            { role: 'assistant', content: `⏳ **Création de la procédure en cours...**\n\n📋 ${stepsCount} étapes à traiter\n\nLe traitement continue en arrière-plan.\n\n📲 **Vous recevrez une notification** quand la procédure sera créée.\n\n💡 Vous pouvez fermer cette fenêtre sans risque.` }
           ]);
 
-          // Start background processing
+          // Start background processing with auto-finalize
           await processAISession(sessionId, { background: true });
           setIsProcessing(false);
           setCurrentStep('processing_background');
+
+          // Clear localStorage session since it will be finalized in background
+          localStorage.removeItem('activeProcedureSession');
           return;
         }
 
