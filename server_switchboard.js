@@ -2743,10 +2743,10 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
 
   try {
     job.status = 'analyzing';
-    job.progress = 10;
-    job.message = 'Analyse IA en cours...';
+    job.progress = 5;
+    job.message = 'Analyse IA GPT-4o en cours...';
 
-    console.log(`[PANEL SCAN] Job ${jobId}: Starting AI analysis...`);
+    console.log(`[PANEL SCAN] Job ${jobId}: Starting dual AI analysis (GPT-4o + Gemini)...`);
 
     // Construire le message avec toutes les images
     const imageContents = images.map(img => ({
@@ -2754,124 +2754,102 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
       image_url: img
     }));
 
-    const visionResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
+    const systemPrompt = `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
 
-MISSION: Analyser la/les photo(s) d'un tableau électrique et identifier TOUS les appareils modulaires visibles AVEC leurs étiquettes de position.
+MISSION CRITIQUE: Analyser la/les photo(s) d'un tableau électrique et identifier ABSOLUMENT TOUS les appareils modulaires visibles.
+⚠️ NE MANQUER AUCUN APPAREIL - Compte chaque module visible sur chaque rangée. Si tu vois 35 appareils, tu dois en lister 35.
 
 ÉTIQUETTES DE POSITION - PRIORITÉ ABSOLUE:
-- Sur les tableaux, il y a des ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur
-- Ces étiquettes indiquent la POSITION/NUMÉRO du circuit (ex: "1", "2", "3", "Q1", "Q2", "A1", "B3", "11F1", "FI 11F1.A", etc.)
-- Tu DOIS lire et retranscrire ces positions EXACTEMENT dans le champ "position_label"
-- ATTENTION: Certains circuits ont un interrupteur différentiel EN AMONT avec une position comme "FI 11F1.A" - ne pas l'oublier !
-- Il peut AUSSI y avoir un nom/description du circuit - le mettre dans "circuit_name"
-- Si pas d'étiquette de position visible, mettre null
-- NE PAS inventer des positions type "R1-P1" - lire les VRAIES étiquettes !
+- Lis les ÉTIQUETTES au-dessus ou en-dessous de chaque disjoncteur (ex: "1", "Q1", "11F1", "FI 11F1.A")
+- Transcrire EXACTEMENT dans "position_label"
+- ATTENTION: Les interrupteurs différentiels EN AMONT ont aussi une position (ex: "FI 11F1.A") - NE PAS LES OUBLIER !
+- Si pas d'étiquette visible, mettre null (ne pas inventer)
 
-LECTURE DU TEXTE SUR LE DISJONCTEUR - TRÈS IMPORTANT:
-- Chaque disjoncteur a du TEXTE IMPRIMÉ sur sa face avant
-- LIS ATTENTIVEMENT le texte qui indique la courbe et l'intensité:
-  * "C16" = Courbe C, 16 Ampères
-  * "C13" = Courbe C, 13 Ampères
-  * "C10" = Courbe C, 10 Ampères
-  * "C20" = Courbe C, 20 Ampères
-  * "C32" = Courbe C, 32 Ampères
-  * "B16" = Courbe B, 16 Ampères
-  * "D10" = Courbe D, 10 Ampères
-- Ce texte est DIFFÉRENT pour chaque disjoncteur même s'ils ont la même référence (C60N)
-- Ne pas confondre la RÉFÉRENCE (ex: "C60N", "iC60N") avec le CALIBRE (ex: "C16", "C13")
-- Le calibre est généralement écrit en plus grand sur l'étiquette colorée (orange chez Schneider/Merlin Gerin)
+LECTURE DU CALIBRE - TRÈS IMPORTANT:
+Chaque disjoncteur a du TEXTE IMPRIMÉ indiquant son calibre:
+- "C16" = Courbe C, 16A | "C13" = Courbe C, 13A | "C10" = Courbe C, 10A
+- "C20" = Courbe C, 20A | "C32" = Courbe C, 32A | "C40" = Courbe C, 40A
+- "B16" = Courbe B, 16A | "D10" = Courbe D, 10A
+⚠️ Le CALIBRE (C16, C13...) est DIFFÉRENT de la RÉFÉRENCE (C60N, iC60N...)
+⚠️ Deux disjoncteurs identiques (même référence C60N) peuvent avoir des calibres différents (C16 vs C13)
 
-TYPES D'APPAREILS À IDENTIFIER (TOUS sans exception):
-- Disjoncteurs magnéto-thermiques (avec calibre C10, C13, C16, C20, C32, etc.)
-- Disjoncteurs différentiels (souvent plus larges, 2 ou 4 modules)
-- Interrupteurs différentiels (ID, iID) - ATTENTION: souvent en amont d'un groupe de disjoncteurs
+DISTINCTION MONOPHASÉ / TRIPHASÉ - MÉTHODE FIABLE:
+1. COMPTE LA LARGEUR EN MODULES (1 module = ~18mm):
+   - 1 module de large = 1P (1 pôle) = MONOPHASÉ phase seule → voltage=230V
+   - 2 modules de large = 1P+N ou 2P = MONOPHASÉ avec neutre → voltage=230V
+   - 3 modules de large = 3P = TRIPHASÉ sans neutre → voltage=400V
+   - 4 modules de large = 3P+N ou 4P = TRIPHASÉ avec neutre → voltage=400V
+
+2. VÉRIFIE LE NOMBRE DE MANETTES/LEVIERS liés ensemble:
+   - 1 manette = 1P | 2 manettes liées = 2P | 3 manettes liées = 3P | 4 manettes liées = 4P
+
+3. RÈGLE D'OR:
+   - poles = width_modules (le nombre de pôles égale généralement la largeur en modules)
+   - Si width_modules >= 3 → C'est TRIPHASÉ (voltage=400V)
+   - Si width_modules <= 2 → C'est MONOPHASÉ (voltage=230V)
+
+TOUS LES TYPES À IDENTIFIER (sans exception):
+- Disjoncteurs magnéto-thermiques (avec calibre C10, C13, C16, C20, C32...)
+- Disjoncteurs différentiels (2 ou 4 modules, souvent avec bouton test)
+- Interrupteurs différentiels (ID, iID) - EN AMONT des groupes de disjoncteurs
 - Interrupteurs sectionneurs (Q1, Q2...)
-- Contacteurs (jour/nuit, heures creuses) - souvent étiquetés TL
-- Télérupteurs (TL, TLi)
-- Relais (temporisés, impulsionnels)
-- Minuteries
-- Parafoudres
-- Horloges/programmateurs
-- Délesteurs
-- Borniers (MGTB)
-- Transformateurs modulaires
+- Contacteurs jour/nuit, Télérupteurs (TL, TLi)
+- Relais, Minuteries, Parafoudres, Horloges, Délesteurs
+- Borniers (MGTB), Transformateurs modulaires
 
-COMPTAGE DES PÔLES - MÉTHODE VISUELLE PRÉCISE:
-Regarde PHYSIQUEMENT le nombre de MANETTES/LEVIERS liés ensemble sur chaque disjoncteur:
-- 1 MANETTE seule = 1P (1 pôle), typiquement monophasé phase seule → poles=1
-- 2 MANETTES liées ensemble = 1P+N ou 2P (2 pôles), monophasé avec neutre → poles=2
-- 3 MANETTES liées ensemble = 3P (3 pôles), triphasé sans neutre → poles=3
-- 4 MANETTES liées ensemble = 3P+N ou 4P (4 pôles), triphasé avec neutre → poles=4
-
-INDICES POUR COMPTER LES PÔLES:
-- Compte les petites manettes noires basculantes sur le disjoncteur
-- Sur les photos, regarde combien de "barrettes" ou "commutateurs" sont visibles
-- Les disjoncteurs standards résidentiels français sont généralement 1P+N = 2 pôles
-- Un disjoncteur plus large = plus de pôles (largeur proportionnelle)
-- 1 module = ~18mm = généralement 1 pôle visible
-
-POUR CHAQUE APPAREIL, extraire TOUTES ces données:
-1. POSITION (étiquette) - Le numéro/code sur l'étiquette (ex: "11F1", "FI 11F1.A", "Q3")
-2. Nom du circuit si visible (ex: "Éclairage Cuisine", "VMC", "PAC")
-3. Fabricant (Schneider, Hager, Legrand, ABB, Siemens, Merlin Gerin, etc.)
-4. Type d'appareil
-5. Référence visible sur l'appareil (ex: iC60N, C60N, DX3, etc.)
-6. Intensité nominale (In) en ampères - LIS LE CHIFFRE APRÈS LA LETTRE (C16=16A, C13=13A)
-7. Courbe de déclenchement (B, C, D, K, Z) - LA LETTRE AVANT LE CHIFFRE
-8. Pouvoir de coupure ultime (Icu) en kA - souvent marqué "6000" ou "10000" (6kA ou 10kA)
-9. Pouvoir de coupure en service (Ics) en kA si visible
-10. Tension assignée: 230V pour mono, 400V pour tri
-11. Nombre de pôles - COMPTE LES MANETTES liées ensemble sur la photo
-12. Largeur en modules - Compte le nombre de modules de large
-13. Si différentiel: sensibilité en mA (30, 300, 500) et type (AC, A, B, F, Hpi, Si)
+POUR CHAQUE APPAREIL:
+{
+  "position_label": "11F3" ou null,
+  "circuit_name": "Éclairage" ou null,
+  "row": 1,
+  "position_in_row": 3,
+  "device_type": "Disjoncteur modulaire",
+  "manufacturer": "Merlin Gerin",
+  "reference": "C60N",
+  "in_amps": 16,
+  "curve_type": "C",
+  "icu_ka": 6,
+  "ics_ka": null,
+  "voltage_v": 230,
+  "poles": 2,
+  "width_modules": 2,
+  "is_differential": false,
+  "differential_sensitivity_ma": null,
+  "differential_type": null,
+  "confidence": "high/medium/low",
+  "notes": ""
+}
 
 Réponds en JSON:
 {
-  "panel_description": "Description générale du tableau",
+  "panel_description": "Description",
   "total_devices_detected": number,
-  "devices": [
-    {
-      "position_label": "11F3" ou "FI 11F1.A" ou null,
-      "circuit_name": "Éclairage Cuisine" ou null,
-      "row": 1,
-      "position_in_row": 3,
-      "device_type": "Disjoncteur modulaire",
-      "manufacturer": "Merlin Gerin",
-      "reference": "C60N",
-      "in_amps": 16,
-      "curve_type": "C",
-      "icu_ka": 6,
-      "ics_ka": null,
-      "voltage_v": 230,
-      "poles": 2,
-      "width_modules": 2,
-      "is_differential": false,
-      "differential_sensitivity_ma": null,
-      "differential_type": null,
-      "confidence": "high/medium/low",
-      "notes": "observations particulières"
-    }
-  ],
-  "analysis_notes": "observations générales"
-}`
-        },
+  "rows_count": number,
+  "devices": [...],
+  "analysis_notes": ""
+}`;
+
+    const userPrompt = `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique.
+
+⚠️ INSTRUCTIONS CRITIQUES:
+1. Compte TOUS les appareils modulaires visibles sur CHAQUE rangée - N'EN OUBLIE AUCUN
+2. Pour chaque appareil, lis le CALIBRE imprimé (C16, C13, C10, C20...) - pas seulement la référence
+3. Compte la LARGEUR EN MODULES pour déterminer mono (1-2 modules) vs triphasé (3-4 modules)
+4. N'oublie pas les interrupteurs différentiels EN AMONT des groupes
+
+Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques PRÉCISES.`;
+
+    // ============================================================
+    // PHASE 1: Analyse principale avec GPT-4o
+    // ============================================================
+    const visionResponse = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
         {
           role: 'user',
           content: [
-            { type: 'text', text: `Analyse ${images.length > 1 ? 'ces photos' : 'cette photo'} de tableau électrique.
-
-TRÈS IMPORTANT - LECTURE PRÉCISE:
-1. Lis les ÉTIQUETTES DE POSITION sur chaque disjoncteur (au-dessus ou en-dessous). Ex: "11F1", "11F2", "FI 11F1.A"
-2. Lis le TEXTE IMPRIMÉ sur chaque disjoncteur pour le calibre (ex: "C16" = courbe C 16A, "C13" = courbe C 13A)
-3. COMPTE les MANETTES/LEVIERS liés ensemble pour déterminer le nombre de pôles
-4. N'oublie pas les interrupteurs différentiels en amont des groupes de disjoncteurs
-
-Identifie TOUS les appareils modulaires avec leurs positions et caractéristiques techniques EXACTES.` },
+            { type: 'text', text: userPrompt },
             ...imageContents
           ]
         }
@@ -2880,6 +2858,62 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
       max_tokens: 16000,
       temperature: 0.1
     });
+
+    job.progress = 25;
+    job.message = 'GPT-4o terminé, vérification avec Gemini...';
+    console.log(`[PANEL SCAN] Job ${jobId}: GPT-4o analysis complete`);
+
+    // ============================================================
+    // PHASE 2: Vérification/Complément avec Gemini
+    // ============================================================
+    let geminiResult = null;
+    if (gemini) {
+      try {
+        const geminiModel = gemini.getGenerativeModel({
+          model: 'gemini-2.0-flash',
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 16000,
+          },
+        });
+
+        // Préparer les images pour Gemini
+        const geminiParts = [
+          { text: `${systemPrompt}\n\n---\n\n${userPrompt}` }
+        ];
+
+        // Ajouter les images à Gemini
+        for (const img of images) {
+          const url = img.url || '';
+          const match = url.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            geminiParts.push({
+              inlineData: {
+                mimeType: match[1],
+                data: match[2],
+              },
+            });
+          }
+        }
+
+        const geminiResponse = await geminiModel.generateContent({ contents: [{ role: 'user', parts: geminiParts }] });
+        const geminiText = geminiResponse.response.text();
+
+        // Parse Gemini JSON
+        let cleanedGemini = geminiText.trim();
+        if (cleanedGemini.startsWith('```json')) cleanedGemini = cleanedGemini.slice(7);
+        if (cleanedGemini.startsWith('```')) cleanedGemini = cleanedGemini.slice(3);
+        if (cleanedGemini.endsWith('```')) cleanedGemini = cleanedGemini.slice(0, -3);
+
+        geminiResult = JSON.parse(cleanedGemini.trim());
+        console.log(`[PANEL SCAN] Job ${jobId}: Gemini detected ${geminiResult.devices?.length || 0} devices`);
+      } catch (geminiError) {
+        console.warn(`[PANEL SCAN] Job ${jobId}: Gemini verification failed:`, geminiError.message);
+      }
+    }
+
+    job.progress = 40;
+    job.message = 'Fusion des résultats IA...';
 
     // Parse JSON with error recovery
     let result;
@@ -2924,12 +2958,80 @@ Identifie TOUS les appareils modulaires avec leurs positions et caractéristique
       result.devices = [];
     }
 
-    const deviceCount = result.total_devices_detected || result.devices.length || 0;
-    console.log(`[PANEL SCAN] Job ${jobId}: Detected ${deviceCount} devices`);
+    console.log(`[PANEL SCAN] Job ${jobId}: GPT-4o detected ${result.devices.length} devices`);
+
+    // ============================================================
+    // PHASE 3: Fusion des résultats GPT-4o + Gemini
+    // ============================================================
+    if (geminiResult?.devices?.length) {
+      const gptDeviceCount = result.devices.length;
+      const geminiDeviceCount = geminiResult.devices.length;
+
+      console.log(`[PANEL SCAN] Job ${jobId}: Merging GPT-4o (${gptDeviceCount}) + Gemini (${geminiDeviceCount}) results`);
+
+      // Si Gemini a trouvé plus d'appareils, utiliser Gemini comme base
+      if (geminiDeviceCount > gptDeviceCount) {
+        console.log(`[PANEL SCAN] Job ${jobId}: Using Gemini as base (more devices detected)`);
+        result.devices = geminiResult.devices;
+        result.panel_description = geminiResult.panel_description || result.panel_description;
+        result.analysis_notes = `Analyse combinée GPT-4o + Gemini. ${geminiResult.analysis_notes || ''}`;
+      } else {
+        // Sinon, chercher les appareils manquants dans GPT-4o
+        const gptPositions = new Set(result.devices.map(d => d.position_label || `R${d.row}-P${d.position_in_row}`));
+
+        let addedCount = 0;
+        for (const geminiDevice of geminiResult.devices) {
+          const geminiKey = geminiDevice.position_label || `R${geminiDevice.row}-P${geminiDevice.position_in_row}`;
+
+          if (!gptPositions.has(geminiKey)) {
+            // Appareil manquant dans GPT-4o, l'ajouter
+            result.devices.push({
+              ...geminiDevice,
+              notes: (geminiDevice.notes || '') + ' [ajouté par Gemini]'
+            });
+            addedCount++;
+            console.log(`[PANEL SCAN] Job ${jobId}: Added device ${geminiKey} from Gemini`);
+          }
+        }
+
+        if (addedCount > 0) {
+          result.analysis_notes = `Analyse combinée: ${gptDeviceCount} (GPT-4o) + ${addedCount} ajoutés par Gemini. ${result.analysis_notes || ''}`;
+        }
+      }
+
+      // Corriger voltage basé sur poles/width_modules
+      result.devices = result.devices.map(d => {
+        const poles = d.poles || d.width_modules || 2;
+        let voltage = d.voltage_v;
+
+        // Règle: 3+ pôles = triphasé = 400V
+        if (poles >= 3 && (!voltage || voltage === 230)) {
+          voltage = 400;
+        } else if (poles <= 2 && (!voltage || voltage === 400)) {
+          voltage = 230;
+        }
+
+        return {
+          ...d,
+          poles: poles,
+          voltage_v: voltage || (poles >= 3 ? 400 : 230)
+        };
+      });
+    }
+
+    // Tri par rangée et position
+    result.devices.sort((a, b) => {
+      if (a.row !== b.row) return (a.row || 1) - (b.row || 1);
+      return (a.position_in_row || 1) - (b.position_in_row || 1);
+    });
+
+    const deviceCount = result.devices.length;
+    result.total_devices_detected = deviceCount;
+    console.log(`[PANEL SCAN] Job ${jobId}: Final device count after merge: ${deviceCount}`);
 
     // Debug: Log icu_ka values from AI response
-    const icuValues = result.devices.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka }));
-    console.log(`[PANEL SCAN] Initial icu_ka values:`, JSON.stringify(icuValues));
+    const icuValues = result.devices.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka, poles: d.poles, v: d.voltage_v }));
+    console.log(`[PANEL SCAN] Initial values:`, JSON.stringify(icuValues.slice(0, 10)));
 
     job.progress = 50;
     job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
