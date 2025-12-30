@@ -12,6 +12,7 @@ export function ProcedureCaptureProvider({ children }) {
   const [captures, setCaptures] = useState([]); // [{ id, file, preview, timestamp, description }]
   const [returnPath, setReturnPath] = useState('/app/procedures');
   const [shouldReopenModal, setShouldReopenModal] = useState(false); // FIX: Signal to reopen modal after capture
+  const [shouldMinimizeModal, setShouldMinimizeModal] = useState(false); // Signal to close modal when minimizing
 
   // Start capture mode for a procedure
   // FIX: Store full session info (sessionId, mode, collectedData) to restore after capture
@@ -92,6 +93,16 @@ export function ProcedureCaptureProvider({ children }) {
     setShouldReopenModal(false);
   }, []);
 
+  // Signal to minimize/close the modal (when user wants to navigate freely)
+  const minimizeModal = useCallback(() => {
+    setShouldMinimizeModal(true);
+  }, []);
+
+  // Clear the minimize signal after it's been consumed
+  const clearMinimizeSignal = useCallback(() => {
+    setShouldMinimizeModal(false);
+  }, []);
+
   // End capture session completely
   const endCaptureSession = useCallback(() => {
     clearCaptures();
@@ -107,6 +118,7 @@ export function ProcedureCaptureProvider({ children }) {
     captures,
     captureCount: captures.length,
     shouldReopenModal, // FIX: Signal to reopen modal after capture
+    shouldMinimizeModal, // Signal to close modal when minimizing
 
     // Actions
     startCapture,
@@ -118,6 +130,8 @@ export function ProcedureCaptureProvider({ children }) {
     consumeCaptures,
     returnToProcedure,
     clearReopenSignal, // FIX: Clear the reopen signal after modal is reopened
+    minimizeModal, // Close the modal but keep session active
+    clearMinimizeSignal,
     endCaptureSession
   };
 
