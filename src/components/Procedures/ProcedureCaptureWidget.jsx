@@ -121,22 +121,25 @@ export default function ProcedureCaptureWidget() {
                 <Camera className="w-8 h-8 text-violet-600" />
               </div>
               <h2 className="text-xl font-bold text-gray-900 mb-2">
-                Comment ça marche ?
+                Capturez vos photos
               </h2>
               <ol className="text-left text-gray-600 space-y-3 mb-4">
                 <li className="flex items-start gap-3">
                   <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">1</span>
-                  <span>Appuyez sur <strong>"Prendre une photo"</strong> ci-dessous</span>
+                  <span><strong>Prenez une photo</strong> avec la caméra</span>
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">2</span>
-                  <span>Prenez autant de photos que nécessaire</span>
+                  <span>Ou <strong>importez depuis la galerie</strong> (screenshots d'autres apps, photos existantes...)</span>
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="w-6 h-6 bg-violet-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">3</span>
-                  <span>Appuyez sur <strong>"Terminer"</strong> pour revenir à la procédure</span>
+                  <span>Appuyez sur <strong>"Terminer"</strong> quand vous avez toutes les photos</span>
                 </li>
               </ol>
+              <p className="text-xs text-gray-400 mt-2">
+                💡 Chaque photo = une étape de la procédure
+              </p>
             </div>
           )}
 

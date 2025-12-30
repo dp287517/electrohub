@@ -302,7 +302,18 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
-    setPendingPhoto(null); // Clear pending photo after sending
+
+    // Clear current photo and load next one from captures if available
+    setPendingPhoto(null);
+    if (pendingCaptures.length > 0) {
+      // Remove the first capture (just used) and set next one as pending
+      const remainingCaptures = pendingCaptures.slice(1);
+      setPendingCaptures(remainingCaptures);
+      if (remainingCaptures.length > 0 && remainingCaptures[0]?.file) {
+        setPendingPhoto(remainingCaptures[0].file);
+      }
+    }
+
     setIsLoading(true);
 
     try {
