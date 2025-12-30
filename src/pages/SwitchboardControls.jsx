@@ -156,6 +156,19 @@ const getEquipmentDisplay = (item) => {
 };
 
 // ============================================================
+// HELPER: Format frequency display
+// ============================================================
+const formatFrequency = (months) => {
+  const m = Number(months) || 12;
+  if (m === 1) return "Mensuel";
+  if (m === 3) return "Trimestriel";
+  if (m === 6) return "Semestriel";
+  if (m === 12) return "Annuel";
+  if (m >= 12 && m % 12 === 0) return `Tous les ${m / 12} ans`;
+  return `Tous les ${m} mois`;
+};
+
+// ============================================================
 // ANIMATED CARD COMPONENT
 // ============================================================
 const AnimatedCard = ({ children, delay = 0, className = '' }) => (
@@ -1505,7 +1518,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
             }</span>
           </div>
           <p className="text-sm text-gray-500 mb-3">
-            📋 {(t.checklist_items || []).length} points de contrôle • 🔄 Tous les {t.frequency_months || 12} mois
+            📋 {(t.checklist_items || []).length} points de contrôle • 🔄 {formatFrequency(t.frequency_months)}
           </p>
           <div className="flex gap-2">
             <button
@@ -1639,7 +1652,15 @@ function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
                 <option value={3}>Trimestriel</option>
                 <option value={6}>Semestriel</option>
                 <option value={12}>Annuel</option>
-                <option value={24}>Bi-annuel</option>
+                <option value={24}>Tous les 2 ans</option>
+                <option value={36}>Tous les 3 ans</option>
+                <option value={48}>Tous les 4 ans</option>
+                <option value={60}>Tous les 5 ans</option>
+                <option value={72}>Tous les 6 ans</option>
+                <option value={84}>Tous les 7 ans</option>
+                <option value={96}>Tous les 8 ans</option>
+                <option value={108}>Tous les 9 ans</option>
+                <option value={120}>Tous les 10 ans</option>
               </select>
             </div>
           </div>
@@ -2452,6 +2473,33 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
 // ============================================================
 // CONTROL MODAL - Enhanced with visible file upload
 // ============================================================
+
+// Helper: Convert File to base64 for localStorage storage
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
+// Helper: Convert base64 back to File
+const base64ToFile = (base64, filename, mimeType) => {
+  try {
+    const arr = base64.split(',');
+    const mime = mimeType || (arr[0].match(/:(.*?);/) || [])[1] || 'application/octet-stream';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) u8arr[n] = bstr.charCodeAt(n);
+    return new File([u8arr], filename, { type: mime });
+  } catch (e) {
+    console.error('Error converting base64 to file:', e);
+    return null;
+  }
+};
+
 function ControlModal({ schedule, onClose, onComplete }) {
   const [template, setTemplate] = useState(null);
   const [results, setResults] = useState([]);
@@ -2459,27 +2507,157 @@ function ControlModal({ schedule, onClose, onComplete }) {
   const [status, setStatus] = useState("conform");
   const [saving, setSaving] = useState(false);
   const [pendingFiles, setPendingFiles] = useState([]);
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);
 
+  // Draft key for localStorage
+  const draftKey = `control_draft_${schedule.id}`;
+
+  // Load template and restore draft if exists
   useEffect(() => {
     if (schedule.template_id) {
-      api.switchboardControls.listTemplates().then((res) => {
+      api.switchboardControls.listTemplates().then(async (res) => {
         const t = (res.templates || []).find((x) => x.id === schedule.template_id);
         if (t) {
           setTemplate(t);
-          setResults(
-            (t.checklist_items || []).map((item) => ({
-              item_id: item.id,
-              status: "conform",
-              value: "",
-              comment: "",
-            }))
-          );
+
+          // Try to restore draft from localStorage
+          try {
+            const savedDraft = localStorage.getItem(draftKey);
+            if (savedDraft) {
+              const draft = JSON.parse(savedDraft);
+
+              // Restore results if they match the template
+              if (draft.results && draft.results.length === (t.checklist_items || []).length) {
+                setResults(draft.results);
+              } else {
+                setResults(
+                  (t.checklist_items || []).map((item) => ({
+                    item_id: item.id,
+                    status: "conform",
+                    value: "",
+                    comment: "",
+                  }))
+                );
+              }
+
+              // Restore notes
+              if (draft.globalNotes) setGlobalNotes(draft.globalNotes);
+              if (draft.status) setStatus(draft.status);
+
+              // Restore files from base64
+              if (draft.files && draft.files.length > 0) {
+                const restoredFiles = [];
+                for (const f of draft.files) {
+                  const file = base64ToFile(f.data, f.name, f.mimeType);
+                  if (file) {
+                    restoredFiles.push({
+                      file,
+                      type: f.type,
+                      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+                    });
+                  }
+                }
+                if (restoredFiles.length > 0) {
+                  setPendingFiles(restoredFiles);
+                }
+              }
+            } else {
+              setResults(
+                (t.checklist_items || []).map((item) => ({
+                  item_id: item.id,
+                  status: "conform",
+                  value: "",
+                  comment: "",
+                }))
+              );
+            }
+          } catch (e) {
+            console.error('Error loading draft:', e);
+            setResults(
+              (t.checklist_items || []).map((item) => ({
+                item_id: item.id,
+                status: "conform",
+                value: "",
+                comment: "",
+              }))
+            );
+          }
+          setDraftLoaded(true);
         }
       });
     }
-  }, [schedule.template_id]);
+  }, [schedule.template_id, draftKey]);
+
+  // Auto-save draft to localStorage whenever data changes
+  useEffect(() => {
+    if (!draftLoaded || !template) return;
+
+    const saveDraft = async () => {
+      try {
+        // Convert files to base64 for storage
+        const filesData = [];
+        for (const pf of pendingFiles) {
+          try {
+            const base64 = await fileToBase64(pf.file);
+            filesData.push({
+              data: base64,
+              name: pf.file.name,
+              mimeType: pf.file.type,
+              type: pf.type,
+            });
+          } catch (e) {
+            console.error('Error converting file to base64:', e);
+          }
+        }
+
+        const draft = {
+          results,
+          globalNotes,
+          status,
+          files: filesData,
+          savedAt: Date.now(),
+        };
+
+        localStorage.setItem(draftKey, JSON.stringify(draft));
+      } catch (e) {
+        console.error('Error saving draft:', e);
+        // If storage quota exceeded, try saving without files
+        if (e.name === 'QuotaExceededError') {
+          try {
+            const draft = {
+              results,
+              globalNotes,
+              status,
+              files: [],
+              savedAt: Date.now(),
+            };
+            localStorage.setItem(draftKey, JSON.stringify(draft));
+          } catch (e2) {
+            console.error('Error saving draft without files:', e2);
+          }
+        }
+      }
+    };
+
+    saveDraft();
+  }, [results, globalNotes, status, pendingFiles, draftLoaded, template, draftKey]);
+
+  // Clear draft on close (cleanup)
+  const handleClose = () => {
+    // Don't clear draft on close - user might want to resume later
+    onClose();
+  };
+
+  // Clear draft after successful completion
+  const clearDraft = () => {
+    try {
+      localStorage.removeItem(draftKey);
+    } catch (e) {
+      console.error('Error clearing draft:', e);
+    }
+  };
 
   const updateResult = (index, field, value) => {
     const updated = [...results];
@@ -2538,6 +2716,8 @@ function ControlModal({ schedule, onClose, onComplete }) {
         }
       }
 
+      // Clear draft after successful completion
+      clearDraft();
       await onComplete();
     } finally {
       setSaving(false);
@@ -2574,7 +2754,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
                 )}
               </p>
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-full">✕</button>
+            <button onClick={handleClose} className="p-2 hover:bg-white/20 rounded-full">✕</button>
           </div>
         </div>
 
@@ -2749,7 +2929,7 @@ function ControlModal({ schedule, onClose, onComplete }) {
 
         {/* Footer */}
         <div className="p-4 sm:p-6 border-t bg-gray-50 flex gap-3">
-          <button onClick={onClose} className="flex-1 px-4 py-3 bg-gray-200 rounded-xl hover:bg-gray-300 font-medium">
+          <button onClick={handleClose} className="flex-1 px-4 py-3 bg-gray-200 rounded-xl hover:bg-gray-300 font-medium">
             Annuler
           </button>
           <button
