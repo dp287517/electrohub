@@ -1010,6 +1010,13 @@ async function ensureSchema() {
         ALTER TABLE devices ADD COLUMN in_amps NUMERIC;
       END IF;
 
+      -- =====================================================
+      -- PANEL SCAN JOBS: Images storage for resume after restart
+      -- =====================================================
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'panel_scan_jobs' AND column_name = 'images_data') THEN
+        ALTER TABLE panel_scan_jobs ADD COLUMN images_data TEXT;
+      END IF;
+
     END $$;
 
     -- =======================================================
@@ -2722,11 +2729,17 @@ setInterval(() => {
 }, 300000);
 
 // Helper: Save job to database for persistence
-async function savePanelScanJob(job) {
+// images parameter is optional - only saved on initial creation for resume capability
+async function savePanelScanJob(job, images = null) {
   try {
+    // Only save images on initial creation (status = pending) to save bandwidth
+    // Clear images once job is completed/failed to free up space
+    const shouldSaveImages = images && job.status === 'pending';
+    const shouldClearImages = job.status === 'completed' || job.status === 'failed';
+
     await pool.query(`
-      INSERT INTO panel_scan_jobs (id, site, switchboard_id, user_email, status, progress, message, photos_count, result, error, created_at, completed_at, notified)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11::double precision / 1000), $12, $13)
+      INSERT INTO panel_scan_jobs (id, site, switchboard_id, user_email, status, progress, message, photos_count, result, error, created_at, completed_at, notified, images_data)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11::double precision / 1000), $12, $13, $14)
       ON CONFLICT (id) DO UPDATE SET
         status = $5,
         progress = $6,
@@ -2734,7 +2747,12 @@ async function savePanelScanJob(job) {
         result = $9,
         error = $10,
         completed_at = $12,
-        notified = $13
+        notified = $13,
+        images_data = CASE
+          WHEN $15 THEN NULL
+          WHEN $14 IS NOT NULL THEN $14
+          ELSE panel_scan_jobs.images_data
+        END
     `, [
       job.id,
       job.site || 'default',
@@ -2748,9 +2766,11 @@ async function savePanelScanJob(job) {
       job.error || null,
       job.created_at,
       job.completed_at ? new Date(job.completed_at) : null,
-      job.notified || false
+      job.notified || false,
+      shouldSaveImages ? JSON.stringify(images) : null,
+      shouldClearImages
     ]);
-    console.log(`[PANEL SCAN] Job ${job.id} saved to database (status: ${job.status})`);
+    console.log(`[PANEL SCAN] Job ${job.id} saved to database (status: ${job.status}${shouldSaveImages ? ', with images' : ''}${shouldClearImages ? ', images cleared' : ''})`);
   } catch (e) {
     console.error(`[PANEL SCAN] Failed to save job ${job.id} to DB:`, e.message);
   }
@@ -2764,7 +2784,7 @@ async function loadPanelScanJob(jobId) {
              photos_count, result, error,
              EXTRACT(EPOCH FROM created_at) * 1000 as created_at,
              EXTRACT(EPOCH FROM completed_at) * 1000 as completed_at,
-             notified
+             notified, images_data
       FROM panel_scan_jobs WHERE id = $1
     `, [jobId]);
 
@@ -2784,11 +2804,95 @@ async function loadPanelScanJob(jobId) {
       error: row.error,
       created_at: parseInt(row.created_at),
       completed_at: row.completed_at ? parseInt(row.completed_at) : null,
-      notified: row.notified
+      notified: row.notified,
+      images_data: row.images_data ? JSON.parse(row.images_data) : null
     };
   } catch (e) {
     console.error(`[PANEL SCAN] Failed to load job ${jobId} from DB:`, e.message);
     return null;
+  }
+}
+
+// ============================================================
+// RESUME PENDING JOBS - Called at server startup
+// ============================================================
+async function resumePendingJobs() {
+  try {
+    console.log('[PANEL SCAN] Checking for interrupted jobs to resume...');
+
+    // Find jobs that were in progress (pending or analyzing) with images saved
+    const result = await pool.query(`
+      SELECT id, site, switchboard_id, user_email, status, progress, message,
+             photos_count, images_data,
+             EXTRACT(EPOCH FROM created_at) * 1000 as created_at
+      FROM panel_scan_jobs
+      WHERE status IN ('pending', 'analyzing')
+        AND images_data IS NOT NULL
+        AND created_at > NOW() - INTERVAL '2 hours'
+      ORDER BY created_at DESC
+    `);
+
+    if (result.rows.length === 0) {
+      console.log('[PANEL SCAN] No interrupted jobs to resume');
+      return;
+    }
+
+    console.log(`[PANEL SCAN] Found ${result.rows.length} interrupted job(s) to resume`);
+
+    for (const row of result.rows) {
+      try {
+        const images = JSON.parse(row.images_data);
+        if (!images || images.length === 0) {
+          console.log(`[PANEL SCAN] Job ${row.id}: No images found, marking as failed`);
+          await pool.query(`UPDATE panel_scan_jobs SET status = 'failed', error = 'No images after restart', images_data = NULL WHERE id = $1`, [row.id]);
+          continue;
+        }
+
+        console.log(`[PANEL SCAN] Resuming job ${row.id} (was at ${row.progress}% - ${row.status})`);
+
+        // Recreate job in memory
+        const job = {
+          id: row.id,
+          site: row.site,
+          status: 'pending', // Reset to pending for re-processing
+          progress: 0,
+          message: 'Reprise après redémarrage serveur...',
+          switchboard_id: row.switchboard_id,
+          photos_count: row.photos_count,
+          created_at: parseInt(row.created_at),
+          user_email: row.user_email,
+          resumed: true
+        };
+        panelScanJobs.set(row.id, job);
+
+        // Start processing in background
+        setImmediate(async () => {
+          try {
+            console.log(`[PANEL SCAN] Background resume started for job ${row.id}`);
+            await processPanelScan(row.id, images, row.site, row.switchboard_id, row.user_email);
+            console.log(`[PANEL SCAN] Background resume finished for job ${row.id}`);
+          } catch (resumeError) {
+            console.error(`[PANEL SCAN] Resume error for job ${row.id}:`, resumeError.message);
+            const failedJob = panelScanJobs.get(row.id);
+            if (failedJob) {
+              failedJob.status = 'failed';
+              failedJob.error = 'Resume failed: ' + resumeError.message;
+              failedJob.completed_at = Date.now();
+              await savePanelScanJob(failedJob);
+            }
+          }
+        });
+
+        // Small delay between job resumes to avoid overwhelming the system
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+      } catch (jobError) {
+        console.error(`[PANEL SCAN] Error resuming job ${row.id}:`, jobError.message);
+        await pool.query(`UPDATE panel_scan_jobs SET status = 'failed', error = $2, images_data = NULL WHERE id = $1`, [row.id, 'Resume error: ' + jobError.message]);
+      }
+    }
+  } catch (e) {
+    console.error('[PANEL SCAN] Error checking for interrupted jobs:', e.message);
   }
 }
 
@@ -4017,8 +4121,8 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
     };
     panelScanJobs.set(jobId, job);
 
-    // Save to database for persistence
-    await savePanelScanJob(job);
+    // Save to database for persistence WITH IMAGES for resume capability
+    await savePanelScanJob(job, images);
 
     // Return immediately with job ID
     res.json({
@@ -6568,8 +6672,15 @@ app.listen(port, () => {
   startKeepalive();
 
   // ✅ Warm up la connexion DB au démarrage
-  pool.query('SELECT 1').then(() => {
+  pool.query('SELECT 1').then(async () => {
     console.log('[SWITCHBOARD] Database connection warmed up');
+
+    // ✅ Resume any interrupted panel scan jobs after restart
+    try {
+      await resumePendingJobs();
+    } catch (e) {
+      console.warn('[SWITCHBOARD] Failed to resume pending jobs:', e.message);
+    }
   }).catch(e => {
     console.warn('[SWITCHBOARD] Database warmup failed:', e.message);
   });
