@@ -2742,17 +2742,30 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
   job.processing = true;
 
   try {
+    const startTime = Date.now();
     job.status = 'analyzing';
     job.progress = 5;
     job.message = 'Analyse IA GPT-4o en cours...';
 
-    console.log(`[PANEL SCAN] Job ${jobId}: Starting dual AI analysis (GPT-4o + Gemini)...`);
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`[PANEL SCAN] Job ${jobId}: STARTING DUAL AI ANALYSIS`);
+    console.log(`${'='.repeat(70)}`);
+    console.log(`[PANEL SCAN] Images: ${images.length} photos`);
+    console.log(`[PANEL SCAN] Site: ${site}, Switchboard: ${switchboardId}`);
+    console.log(`[PANEL SCAN] User: ${userEmail}`);
+    console.log(`[PANEL SCAN] OpenAI available: ${!!openai}, Gemini available: ${!!gemini}`);
 
     // Construire le message avec toutes les images
     const imageContents = images.map(img => ({
       type: 'image_url',
       image_url: img
     }));
+
+    // Log image sizes
+    for (let i = 0; i < images.length; i++) {
+      const imgSize = images[i]?.url?.length || 0;
+      console.log(`[PANEL SCAN] Image ${i + 1}: ${Math.round(imgSize / 1024)}KB base64`);
+    }
 
     const systemPrompt = `Tu es un expert électricien spécialisé en identification d'appareillage électrique dans les tableaux.
 
@@ -2842,6 +2855,11 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
     // ============================================================
     // PHASE 1: Analyse principale avec GPT-4o
     // ============================================================
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 1: GPT-4o Analysis`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+    const gptStartTime = Date.now();
+
     const visionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -2859,15 +2877,25 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
       temperature: 0.1
     });
 
+    const gptDuration = Date.now() - gptStartTime;
+    const gptTokens = visionResponse.usage || {};
+    console.log(`[PANEL SCAN] GPT-4o completed in ${gptDuration}ms`);
+    console.log(`[PANEL SCAN] GPT-4o tokens: prompt=${gptTokens.prompt_tokens || '?'}, completion=${gptTokens.completion_tokens || '?'}, total=${gptTokens.total_tokens || '?'}`);
+    console.log(`[PANEL SCAN] GPT-4o response length: ${visionResponse.choices[0]?.message?.content?.length || 0} chars`);
+
     job.progress = 25;
     job.message = 'GPT-4o terminé, vérification avec Gemini...';
-    console.log(`[PANEL SCAN] Job ${jobId}: GPT-4o analysis complete`);
 
     // ============================================================
     // PHASE 2: Vérification/Complément avec Gemini
     // ============================================================
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 2: Gemini Verification`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+
     let geminiResult = null;
     if (gemini) {
+      const geminiStartTime = Date.now();
       try {
         const geminiModel = gemini.getGenerativeModel({
           model: 'gemini-2.0-flash',
@@ -2883,6 +2911,7 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
         ];
 
         // Ajouter les images à Gemini
+        let geminiImagesAdded = 0;
         for (const img of images) {
           const url = img.url || '';
           const match = url.match(/^data:([^;]+);base64,(.+)$/);
@@ -2893,11 +2922,17 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
                 data: match[2],
               },
             });
+            geminiImagesAdded++;
           }
         }
+        console.log(`[PANEL SCAN] Gemini: ${geminiImagesAdded}/${images.length} images prepared`);
 
         const geminiResponse = await geminiModel.generateContent({ contents: [{ role: 'user', parts: geminiParts }] });
         const geminiText = geminiResponse.response.text();
+        const geminiDuration = Date.now() - geminiStartTime;
+
+        console.log(`[PANEL SCAN] Gemini completed in ${geminiDuration}ms`);
+        console.log(`[PANEL SCAN] Gemini response length: ${geminiText.length} chars`);
 
         // Parse Gemini JSON
         let cleanedGemini = geminiText.trim();
@@ -2906,23 +2941,44 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
         if (cleanedGemini.endsWith('```')) cleanedGemini = cleanedGemini.slice(0, -3);
 
         geminiResult = JSON.parse(cleanedGemini.trim());
-        console.log(`[PANEL SCAN] Job ${jobId}: Gemini detected ${geminiResult.devices?.length || 0} devices`);
+        console.log(`[PANEL SCAN] Gemini detected: ${geminiResult.devices?.length || 0} devices`);
+
+        // Log device types detected by Gemini
+        if (geminiResult.devices?.length) {
+          const geminiTypes = {};
+          geminiResult.devices.forEach(d => {
+            const type = d.device_type || 'Unknown';
+            geminiTypes[type] = (geminiTypes[type] || 0) + 1;
+          });
+          console.log(`[PANEL SCAN] Gemini device types:`, JSON.stringify(geminiTypes));
+        }
       } catch (geminiError) {
-        console.warn(`[PANEL SCAN] Job ${jobId}: Gemini verification failed:`, geminiError.message);
+        const geminiDuration = Date.now() - geminiStartTime;
+        console.error(`[PANEL SCAN] ❌ Gemini FAILED after ${geminiDuration}ms:`, geminiError.message);
+        console.error(`[PANEL SCAN] Gemini error stack:`, geminiError.stack?.split('\n').slice(0, 3).join('\n'));
       }
+    } else {
+      console.log(`[PANEL SCAN] ⚠️ Gemini not available - skipping verification`);
     }
 
     job.progress = 40;
     job.message = 'Fusion des résultats IA...';
 
     // Parse JSON with error recovery
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 3: Parse GPT-4o Response`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+
     let result;
     const rawContent = visionResponse.choices[0].message.content;
     try {
       result = JSON.parse(rawContent);
+      console.log(`[PANEL SCAN] GPT-4o JSON parsed successfully`);
     } catch (parseError) {
-      console.warn(`[PANEL SCAN] Job ${jobId}: JSON parse error, attempting repair...`);
-      console.warn(`[PANEL SCAN] Raw content length: ${rawContent?.length}, error: ${parseError.message}`);
+      console.error(`[PANEL SCAN] ❌ GPT-4o JSON parse error: ${parseError.message}`);
+      console.error(`[PANEL SCAN] Raw content length: ${rawContent?.length}`);
+      console.error(`[PANEL SCAN] Raw content start: ${rawContent?.substring(0, 200)}...`);
+      console.error(`[PANEL SCAN] Raw content end: ...${rawContent?.substring(rawContent.length - 200)}`);
 
       // Try to repair truncated JSON
       let repairedContent = rawContent;
@@ -2958,11 +3014,30 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
       result.devices = [];
     }
 
-    console.log(`[PANEL SCAN] Job ${jobId}: GPT-4o detected ${result.devices.length} devices`);
+    // Log GPT-4o device types
+    const gptTypes = {};
+    result.devices.forEach(d => {
+      const type = d.device_type || 'Unknown';
+      gptTypes[type] = (gptTypes[type] || 0) + 1;
+    });
+    console.log(`[PANEL SCAN] GPT-4o detected: ${result.devices.length} devices`);
+    console.log(`[PANEL SCAN] GPT-4o device types:`, JSON.stringify(gptTypes));
+
+    // Log a sample of devices
+    console.log(`[PANEL SCAN] GPT-4o sample devices:`);
+    result.devices.slice(0, 5).forEach((d, i) => {
+      console.log(`[PANEL SCAN]   ${i + 1}. ${d.position_label || 'R' + d.row + '-P' + d.position_in_row}: ${d.device_type} ${d.reference || ''} ${d.in_amps || '?'}A ${d.poles || '?'}P`);
+    });
+    if (result.devices.length > 5) {
+      console.log(`[PANEL SCAN]   ... and ${result.devices.length - 5} more`);
+    }
 
     // ============================================================
-    // PHASE 3: Fusion intelligente des résultats GPT-4o + Gemini
+    // PHASE 4: Fusion intelligente des résultats GPT-4o + Gemini
     // ============================================================
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 4: Smart Merge GPT-4o + Gemini`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
     if (geminiResult?.devices?.length) {
       const gptDeviceCount = result.devices.length;
       const geminiDeviceCount = geminiResult.devices.length;
@@ -3092,14 +3167,43 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
 
     const deviceCount = result.devices.length;
     result.total_devices_detected = deviceCount;
-    console.log(`[PANEL SCAN] Job ${jobId}: Final device count after merge: ${deviceCount}`);
 
-    // Debug: Log icu_ka values from AI response
-    const icuValues = result.devices.map(d => ({ pos: d.position_label, ref: d.reference, icu: d.icu_ka, poles: d.poles, v: d.voltage_v }));
-    console.log(`[PANEL SCAN] Initial values:`, JSON.stringify(icuValues.slice(0, 10)));
+    // Final merge summary
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] MERGE SUMMARY`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] ✓ Final device count: ${deviceCount}`);
+
+    // Count by type after merge
+    const finalTypes = {};
+    const triphaseCounts = { mono: 0, tri: 0 };
+    result.devices.forEach(d => {
+      const type = d.device_type || 'Unknown';
+      finalTypes[type] = (finalTypes[type] || 0) + 1;
+      if ((d.poles || 2) >= 3) triphaseCounts.tri++;
+      else triphaseCounts.mono++;
+    });
+    console.log(`[PANEL SCAN] ✓ Device types:`, JSON.stringify(finalTypes));
+    console.log(`[PANEL SCAN] ✓ Mono/Tri: ${triphaseCounts.mono} monophasé, ${triphaseCounts.tri} triphasé`);
+
+    // Show devices with notes (from Gemini corrections)
+    const correctedDevices = result.devices.filter(d => d.notes?.includes('Gemini'));
+    if (correctedDevices.length > 0) {
+      console.log(`[PANEL SCAN] ✓ Corrections from Gemini: ${correctedDevices.length} devices`);
+      correctedDevices.forEach(d => {
+        console.log(`[PANEL SCAN]   - ${d.position_label || 'R' + d.row}: ${d.notes}`);
+      });
+    }
 
     job.progress = 50;
     job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
+
+    // ============================================================
+    // PHASE 5: Cache enrichment
+    // ============================================================
+    console.log(`\n[PANEL SCAN] ${'─'.repeat(50)}`);
+    console.log(`[PANEL SCAN] PHASE 5: Cache Enrichment`);
+    console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
 
     // Note: normalizeRef is defined globally for consistent reference matching
 
@@ -3112,8 +3216,10 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
         ORDER BY validated DESC, scan_count DESC
       `, [site]);
       cachedProducts = rows;
-      console.log(`[PANEL SCAN] Found ${cachedProducts.length} cached products for site ${site}`);
-    } catch (e) { console.warn('[PANEL SCAN] Cache lookup failed:', e.message); }
+      console.log(`[PANEL SCAN] Cache: ${cachedProducts.length} products found for site ${site}`);
+    } catch (e) {
+      console.error('[PANEL SCAN] ❌ Cache lookup failed:', e.message);
+    }
 
     job.progress = 60;
 
@@ -3302,9 +3408,6 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
       fromCache: d.from_cache,
       willUpdate: d.will_update
     })) || [];
-    console.log(`[PANEL SCAN] Final values:`, JSON.stringify(finalValues));
-    console.log(`[PANEL SCAN] Summary: ${willCreateCount} to create, ${willUpdateCount} to update`);
-
     // Job complete
     job.status = 'completed';
     job.progress = 100;
@@ -3321,8 +3424,19 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
       }
     };
     job.completed_at = Date.now();
+    const totalDuration = Date.now() - startTime;
 
-    console.log(`[PANEL SCAN] Job ${jobId}: Complete with ${deviceCount} devices`);
+    // Final summary log
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`[PANEL SCAN] JOB ${jobId} COMPLETED SUCCESSFULLY`);
+    console.log(`${'='.repeat(70)}`);
+    console.log(`[PANEL SCAN] ⏱️  Total duration: ${Math.round(totalDuration / 1000)}s`);
+    console.log(`[PANEL SCAN] 📷 Photos analyzed: ${images.length}`);
+    console.log(`[PANEL SCAN] 🔍 Devices detected: ${deviceCount}`);
+    console.log(`[PANEL SCAN]    ├─ To create: ${willCreateCount}`);
+    console.log(`[PANEL SCAN]    ├─ To update: ${willUpdateCount}`);
+    console.log(`[PANEL SCAN]    └─ Already exist: ${existingDevices.length}`);
+    console.log(`${'='.repeat(70)}\n`);
 
     // Send push notification (only once)
     if (userEmail && !job.notified) {
@@ -3352,7 +3466,16 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     await savePanelScanJob(job);
 
   } catch (error) {
-    console.error(`[PANEL SCAN] Job ${jobId} failed:`, error.message);
+    const errorDuration = Date.now() - (job.created_at || Date.now());
+    console.error(`\n${'='.repeat(70)}`);
+    console.error(`[PANEL SCAN] ❌ JOB ${jobId} FAILED`);
+    console.error(`${'='.repeat(70)}`);
+    console.error(`[PANEL SCAN] Error: ${error.message}`);
+    console.error(`[PANEL SCAN] Duration before failure: ${Math.round(errorDuration / 1000)}s`);
+    console.error(`[PANEL SCAN] Stack trace:`);
+    console.error(error.stack?.split('\n').slice(0, 5).join('\n'));
+    console.error(`${'='.repeat(70)}\n`);
+
     job.status = 'failed';
     job.progress = 0;
     job.message = error.message;
