@@ -8196,7 +8196,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
              row.action === 'deleted' ? 'Porte supprimée' : row.action,
       description: row.details?.name || row.entity_type,
       actor: row.actor_name || row.actor_email,
-      timestamp: row.ts,
+      timestamp: row.ts || row.created_at,
       url: '/app/doors',
       icon: '🚪',
       color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'amber'
@@ -8213,7 +8213,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
              row.action === 'deleted' ? 'Équipement supprimé' : row.action,
       description: row.details?.name || row.entity_type,
       actor: row.actor_name || row.actor_email,
-      timestamp: row.ts,
+      timestamp: row.ts || row.created_at,
       url: '/app/mobile-equipments',
       icon: '🔌',
       color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'blue'
@@ -8230,7 +8230,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
              row.action === 'deleted' ? 'Donnée supprimée' : row.action,
       description: row.details?.name || row.entity_type,
       actor: row.actor_name || row.actor_email,
-      timestamp: row.ts,
+      timestamp: row.ts || row.created_at,
       url: '/app/datahub',
       icon: '🗄️',
       color: row.action === 'deleted' ? 'red' : row.action === 'created' ? 'green' : 'violet'
@@ -8247,7 +8247,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
              row.action === 'deleted' ? 'Procédure supprimée' : row.action,
       description: row.details?.title || row.entity_type,
       actor: row.actor_name || row.actor_email,
-      timestamp: row.ts,
+      timestamp: row.ts || row.created_at,
       url: '/app/procedures',
       icon: '📋',
       color: 'violet'
@@ -8264,7 +8264,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
              row.action.includes('delete') ? 'Projet supprimé' : row.action,
       description: row.details?.name || row.action,
       actor: row.user_email,
-      timestamp: row.ts,
+      timestamp: row.ts || row.created_at,
       url: '/app/projects',
       icon: '💳',
       color: 'green'
@@ -8418,7 +8418,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
       `);
 
       for (const scan of panelScans) {
-        const isSuccess = scan.status === 'done';
+        const isSuccess = scan.status === 'completed';
         const deviceCount = scan.result?.devices?.length || scan.result?.length || 0;
 
         if (isSuccess) {
