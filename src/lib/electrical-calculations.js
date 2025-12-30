@@ -416,26 +416,43 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
     timestamp: new Date().toISOString(),
   };
 
-  // Get main incoming device - ONLY use if explicitly marked, don't fallback to first device
+  // Get main incoming device - check explicit marking first
   const explicitMainDevice = devices.find(d => d.is_main_incoming);
-  const mainDevice = explicitMainDevice || devices[0];
-  const hasExplicitMain = !!explicitMainDevice;
 
-  if (!mainDevice) {
-    results.warnings.push('Aucun disjoncteur principal trouvé');
+  // Check for upstream sources (fed from another board)
+  const upstreamSources = switchboard.upstream_sources || [];
+  const hasUpstreamSources = upstreamSources.length > 0;
+
+  // Build virtual upstream device from upstream source if available (for boards without local main breaker)
+  let upstreamSourceDevice = null;
+  if (hasUpstreamSources && !explicitMainDevice) {
+    const upSrc = upstreamSources[0]; // Use first upstream source
+    const upSettings = upSrc.settings || {};
+    upstreamSourceDevice = {
+      id: `upstream_${upSrc.id}`,
+      name: upSrc.name || `${upSrc.source_board_code} départ`,
+      in_amps: upSrc.in_amps || 100,
+      icu_ka: upSrc.icu_ka,
+      reference: upSrc.reference,
+      manufacturer: upSrc.manufacturer,
+      settings: upSettings,
+      isUpstreamSource: true, // Flag to identify this is from upstream board
+    };
+  }
+
+  // Determine the effective main device for analysis
+  const mainDevice = explicitMainDevice || upstreamSourceDevice || devices[0];
+  const hasExplicitMain = !!explicitMainDevice;
+  const hasUpstreamMain = !!upstreamSourceDevice;
+
+  if (!mainDevice && devices.length === 0) {
+    results.warnings.push('Aucun disjoncteur trouvé dans ce tableau');
     return results;
   }
 
-  // Check for upstream sources (fed from another board)
-  const hasUpstreamSources = switchboard.upstream_sources && switchboard.upstream_sources.length > 0;
-
-  if (!hasExplicitMain && devices.length > 0) {
-    if (hasUpstreamSources) {
-      const upstreamInfo = switchboard.upstream_sources.map(s => s.source_board_code).join(', ');
-      results.warnings.push(`Tableau alimenté par ${upstreamInfo} - cochez "Arrivée" sur le disjoncteur d'arrivée local pour une analyse de sélectivité complète`);
-    } else if (!switchboard.is_principal) {
-      results.warnings.push('Aucun disjoncteur d\'arrivée défini - cochez "Arrivée" sur le disjoncteur principal pour une analyse de sélectivité complète');
-    }
+  // Only warn if we have no main breaker info at all
+  if (!hasExplicitMain && !hasUpstreamMain && devices.length > 0 && !switchboard.is_principal) {
+    results.warnings.push('Aucun disjoncteur d\'arrivée défini - cochez "Arrivée" sur le disjoncteur principal pour une analyse de sélectivité complète');
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -501,10 +518,11 @@ export function runCascadeAnalysis(switchboard, devices, upstreamFaultKa = 50, t
     if (device.parent_id) {
       // Device has explicit parent - use it
       upstream = deviceMap.get(device.parent_id);
-    } else if (hasExplicitMain && !device.is_main_incoming && mainDevice.id !== device.id) {
-      // Only compare with main device if we have an explicit main (is_main_incoming)
-      // This prevents false selectivity warnings when no main breaker is defined
-      upstream = mainDevice;
+    } else if (!device.is_main_incoming && mainDevice && mainDevice.id !== device.id) {
+      // Compare with main device if we have one (either explicit local or from upstream board)
+      if (hasExplicitMain || hasUpstreamMain) {
+        upstream = mainDevice;
+      }
     }
 
     if (upstream) {

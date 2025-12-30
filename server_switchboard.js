@@ -1454,11 +1454,12 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     const sb = r.rows[0];
 
-    // Get upstream sources (what feeds this board)
+    // Get upstream sources (what feeds this board) - include full device info for selectivity analysis
     const upstream = await quickQuery(
-      `SELECT d.id, d.name, d.position_number, d.in_amps, 
+      `SELECT d.id, d.name, d.position_number, d.in_amps, d.icu_ka,
+              d.reference, d.manufacturer, d.settings,
               s.id as source_switchboard_id,
-              s.name as source_board_name, 
+              s.name as source_board_name,
               s.code as source_board_code
        FROM devices d
        JOIN switchboards s ON d.switchboard_id = s.id
