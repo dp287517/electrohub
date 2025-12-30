@@ -2385,6 +2385,36 @@ app.post("/api/atex/maps/reindexZones", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// 🚀 PERF: Get all equipment IDs that have map placements (simplified query for fast loading)
+app.get("/api/atex/maps/placed-ids", async (req, res) => {
+  try {
+    // Simple query without JOIN - much faster
+    const { rows } = await pool.query(`
+      SELECT DISTINCT equipment_id, logical_name
+        FROM atex_positions
+    `);
+
+    const placed_ids = [...new Set(rows.map(r => r.equipment_id))];
+
+    // Build placed_details
+    const placed_details = {};
+    rows.forEach(r => {
+      if (!placed_details[r.equipment_id]) {
+        placed_details[r.equipment_id] = { plans: [] };
+      }
+      if (!placed_details[r.equipment_id].plans.includes(r.logical_name)) {
+        placed_details[r.equipment_id].plans.push(r.logical_name);
+      }
+    });
+
+    res.json({ ok: true, placed_ids, placed_details });
+  } catch (e) {
+    console.error("[Atex Maps] placed-ids error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ✅ Positions — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/positions", async (req, res) => {
   try {

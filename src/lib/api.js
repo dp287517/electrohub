@@ -1015,6 +1015,8 @@ export const api = {
       return upload("/api/atex/maps/uploadPlan", fd);
     },
     listPlans: () => get(`/api/atex/maps/listPlans`),
+    // 🚀 PERF: Get placed equipment IDs only (fast query for map indicators)
+    placedIds: () => get(`/api/atex/maps/placed-ids`),
     listPlansCompat: () => get(`/api/atex/maps/plans`),
     listPlansWithoutThumbnails: () => get(`/api/atex/maps/plans-without-thumbnails`),
     updatePlanThumbnail: (logicalName, thumbnail) => {

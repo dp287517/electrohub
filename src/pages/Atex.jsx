@@ -493,13 +493,12 @@ export default function Atex() {
     initialRef.current = JSON.parse(JSON.stringify(fresh));
 
     if (fresh?.id) {
-      await reloadFiles(fresh.id);
-      try {
-        const hist = await api.atex.getEquipmentHistory(fresh.id);
-        setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
-      } catch {
-        setHistory([]);
-      }
+      // 🚀 PERF: Parallelize API calls for files and history
+      const [, histRes] = await Promise.all([
+        reloadFiles(fresh.id),
+        api.atex.getEquipmentHistory(fresh.id).catch(() => ({})),
+      ]);
+      setHistory(Array.isArray(histRes?.checks) ? histRes.checks : []);
     } else {
       setFiles([]);
       setHistory([]);
