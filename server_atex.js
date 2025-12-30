@@ -295,6 +295,7 @@ const { Pool } = pg;
 const pool = new Pool({
   connectionString:
     process.env.ATEX_DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
     process.env.DATABASE_URL ||
     "postgres://postgres:postgres@localhost:5432/postgres",
   max: 10,
