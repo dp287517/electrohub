@@ -8404,6 +8404,83 @@ app.get("/api/dashboard/activities", async (req, res) => {
       // procedures table might not exist
     }
 
+    // 10. Panel Scan Jobs - Completed AI scans
+    try {
+      const userEmail = req.headers['x-user-email'] || req.query.email;
+      const { rows: panelScans } = await pool.query(`
+        SELECT id, site, switchboard_id, user_email, status, progress, message,
+               photos_count, result, error, created_at, completed_at
+        FROM panel_scan_jobs
+        WHERE completed_at IS NOT NULL
+          AND completed_at > NOW() - INTERVAL '7 days'
+        ORDER BY completed_at DESC
+        LIMIT 15
+      `);
+
+      for (const scan of panelScans) {
+        const isSuccess = scan.status === 'done';
+        const deviceCount = scan.result?.devices?.length || scan.result?.length || 0;
+
+        if (isSuccess) {
+          activities.push({
+            id: `scan-${scan.id}`,
+            type: 'panel_scan_complete',
+            module: 'switchboard',
+            title: '📷 Scan IA terminé',
+            description: `${deviceCount} appareil${deviceCount > 1 ? 's' : ''} détecté${deviceCount > 1 ? 's' : ''}`,
+            actor: scan.user_email,
+            timestamp: scan.completed_at,
+            url: `/app/switchboards?scanJobId=${scan.id}&switchboardId=${scan.switchboard_id}`,
+            icon: '📷',
+            color: 'violet',
+            actionRequired: scan.user_email === userEmail // Only action required for the user who launched it
+          });
+        } else if (scan.status === 'failed') {
+          activities.push({
+            id: `scan-${scan.id}`,
+            type: 'panel_scan_failed',
+            module: 'switchboard',
+            title: '❌ Scan IA échoué',
+            description: scan.error || 'Erreur lors de l\'analyse',
+            actor: scan.user_email,
+            timestamp: scan.completed_at,
+            url: `/app/switchboards`,
+            icon: '❌',
+            color: 'red'
+          });
+        }
+      }
+
+      // Also check for in-progress scans for action_required
+      const { rows: inProgressScans } = await pool.query(`
+        SELECT id, site, switchboard_id, user_email, status, progress, message, created_at
+        FROM panel_scan_jobs
+        WHERE status IN ('processing', 'pending')
+          AND user_email = $1
+          AND created_at > NOW() - INTERVAL '1 day'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `, [userEmail || '']);
+
+      for (const scan of inProgressScans) {
+        actionRequired.push({
+          id: `scan-progress-${scan.id}`,
+          type: 'panel_scan_in_progress',
+          module: 'switchboard',
+          title: '⏳ Scan IA en cours',
+          description: `${scan.progress || 0}% - ${scan.message || 'Analyse en cours...'}`,
+          actor: scan.user_email,
+          timestamp: scan.created_at,
+          url: `/app/switchboards?scanJobId=${scan.id}&switchboardId=${scan.switchboard_id}`,
+          icon: '⏳',
+          color: 'amber',
+          actionRequired: true
+        });
+      }
+    } catch (e) {
+      console.log('[dashboard/activities] Panel scan query skipped:', e.message);
+    }
+
     // Sort by timestamp descending
     activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
