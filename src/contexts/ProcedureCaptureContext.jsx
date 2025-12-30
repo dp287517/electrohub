@@ -11,10 +11,18 @@ export function ProcedureCaptureProvider({ children }) {
   const [procedureInfo, setProcedureInfo] = useState(null); // { id, title, sessionId, returnPath }
   const [captures, setCaptures] = useState([]); // [{ id, file, preview, timestamp, description }]
   const [returnPath, setReturnPath] = useState('/app/procedures');
+  const [shouldReopenModal, setShouldReopenModal] = useState(false); // FIX: Signal to reopen modal after capture
 
   // Start capture mode for a procedure
+  // FIX: Store full session info (sessionId, mode, collectedData) to restore after capture
   const startCapture = useCallback((info) => {
-    setProcedureInfo(info);
+    setProcedureInfo({
+      ...info,
+      sessionId: info.sessionId || info.id,
+      mode: info.mode || 'guided',
+      collectedData: info.collectedData || {},
+      messages: info.messages || []
+    });
     setReturnPath(info.returnPath || '/app/procedures');
     setIsCapturing(true);
   }, []);
@@ -75,8 +83,14 @@ export function ProcedureCaptureProvider({ children }) {
   // Navigate back to procedure and close capture mode (keep captures)
   const returnToProcedure = useCallback(() => {
     setIsCapturing(false);
+    setShouldReopenModal(true); // FIX: Signal to reopen the modal
     navigate(returnPath);
   }, [navigate, returnPath]);
+
+  // Clear the reopen signal after it's been consumed
+  const clearReopenSignal = useCallback(() => {
+    setShouldReopenModal(false);
+  }, []);
 
   // End capture session completely
   const endCaptureSession = useCallback(() => {
@@ -92,6 +106,7 @@ export function ProcedureCaptureProvider({ children }) {
     procedureInfo,
     captures,
     captureCount: captures.length,
+    shouldReopenModal, // FIX: Signal to reopen modal after capture
 
     // Actions
     startCapture,
@@ -102,6 +117,7 @@ export function ProcedureCaptureProvider({ children }) {
     clearCaptures,
     consumeCaptures,
     returnToProcedure,
+    clearReopenSignal, // FIX: Clear the reopen signal after modal is reopened
     endCaptureSession
   };
 

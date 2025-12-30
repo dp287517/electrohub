@@ -8,6 +8,7 @@ import {
   ChevronRight, Eye, MoreVertical, ArrowRight, HardHat
 } from 'lucide-react';
 import { ProcedureCreator, ProcedureViewer, SafetyEquipmentManager } from '../components/Procedures';
+import { useProcedureCapture } from '../contexts/ProcedureCaptureContext';
 import {
   listProcedures,
   getCategories,
@@ -252,6 +253,18 @@ export default function Procedures() {
   const [generatingDoc, setGeneratingDoc] = useState(null);
   const [showEquipmentManager, setShowEquipmentManager] = useState(false);
   const [aiGuidedMode, setAiGuidedMode] = useState(false);
+
+  // FIX: Get capture context to reopen modal after photo capture
+  const { shouldReopenModal, clearReopenSignal, captureCount, procedureInfo } = useProcedureCapture();
+
+  // FIX: Reopen the creator modal when returning from photo capture
+  useEffect(() => {
+    if (shouldReopenModal) {
+      console.log('[Procedures] Reopening modal after capture, captureCount:', captureCount);
+      setShowCreator(true);
+      clearReopenSignal();
+    }
+  }, [shouldReopenModal, clearReopenSignal, captureCount]);
 
   // Handle URL parameters for deep linking from QR codes
   useEffect(() => {

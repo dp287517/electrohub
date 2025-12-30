@@ -68,7 +68,9 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     isCapturing,
     captureCount,
     startCapture,
-    consumeCaptures
+    consumeCaptures,
+    procedureInfo,
+    shouldReopenModal
   } = useProcedureCapture();
 
   const [mode, setMode] = useState('choose'); // choose, guided, import, report, drafts
@@ -97,12 +99,27 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
 
+  // FIX: Restore state when modal is reopened after photo capture
+  useEffect(() => {
+    if (shouldReopenModal && procedureInfo) {
+      console.log('[ProcedureCreator] Restoring state from capture session:', procedureInfo);
+      // Restore the session state
+      if (procedureInfo.sessionId) setSessionId(procedureInfo.sessionId);
+      if (procedureInfo.draftId) setDraftId(procedureInfo.draftId);
+      if (procedureInfo.mode) setMode(procedureInfo.mode);
+      if (procedureInfo.collectedData) setCollectedData(procedureInfo.collectedData);
+      if (procedureInfo.messages) setMessages(procedureInfo.messages);
+      if (procedureInfo.currentStep) setCurrentStep(procedureInfo.currentStep);
+    }
+  }, [shouldReopenModal, procedureInfo]);
+
   // Check for captured photos when returning from capture mode
   useEffect(() => {
-    if (!isCapturing && captureCount > 0 && mode === 'guided') {
+    if (!isCapturing && captureCount > 0 && (mode === 'guided' || procedureInfo?.mode === 'guided')) {
       // User returned with captures - consume them
       const newCaptures = consumeCaptures();
       if (newCaptures.length > 0) {
+        console.log('[ProcedureCreator] Consuming captures:', newCaptures.length);
         setPendingCaptures(newCaptures);
         // Set the first capture as pending photo
         if (newCaptures[0]?.file) {
@@ -110,13 +127,19 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
         }
       }
     }
-  }, [isCapturing, captureCount, mode, consumeCaptures]);
+  }, [isCapturing, captureCount, mode, consumeCaptures, procedureInfo]);
 
   // Open multi-photo capture mode
   const handleOpenMultiCapture = () => {
     startCapture({
       id: sessionId || draftId,
+      sessionId: sessionId,
+      draftId: draftId,
       title: collectedData?.title || 'Nouvelle procédure',
+      mode: mode,
+      collectedData: collectedData,
+      messages: messages,
+      currentStep: currentStep,
       returnPath: '/app/procedures'
     });
   };
