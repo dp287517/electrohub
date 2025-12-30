@@ -472,8 +472,14 @@ app.get("/api/vsd/equipments", async (req, res) => {
     const { where: siteWhere, params: siteParams, siteName, role } = getSiteFilter(req, { tableAlias: 'e' });
     if (role === 'site' && !siteName) return res.status(400).json({ ok: false, error: 'Missing site (X-Site header)' });
 
+    // 🚀 PERF: Exclude photo_content BYTEA to avoid sending MB+ per request
     const { rows } = await pool.query(`
-      SELECT e.*,
+      SELECT e.id, e.site, e.name, e.building, e.zone, e.equipment, e.sub_equipment,
+             e.type, e.manufacturer, e.manufacturer_ref, e.power_kw, e.voltage,
+             e.current_nominal, e.ip_rating, e.comment, e.status, e.installed_at,
+             e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+             e.tag, e.model, e.serial_number, e.ip_address, e.protocol, e.floor,
+             (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
              (SELECT result FROM vsd_checks c
               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
               ORDER BY c.date DESC NULLS LAST
@@ -484,10 +490,8 @@ app.get("/api/vsd/equipments", async (req, res) => {
     `, siteParams);
     console.log(`[VSD] Loaded ${rows.length} equipments for role=${role}, site=${siteName || 'all'}`);
     for (const r of rows) {
-      r.photo_url =
-        (r.photo_content && r.photo_content.length) || r.photo_path
-          ? `/api/vsd/equipments/${r.id}/photo`
-          : null;
+      r.photo_url = (r.has_photo || r.photo_path) ? `/api/vsd/equipments/${r.id}/photo` : null;
+      delete r.has_photo;
       r.status = eqStatusFromDue(r.next_check_date);
       r.compliance_state =
         r.last_result === "conforme"
@@ -505,8 +509,14 @@ app.get("/api/vsd/equipments", async (req, res) => {
 app.get("/api/vsd/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
+    // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
-      `SELECT e.*,
+      `SELECT e.id, e.site, e.name, e.building, e.zone, e.equipment, e.sub_equipment,
+              e.type, e.manufacturer, e.manufacturer_ref, e.power_kw, e.voltage,
+              e.current_nominal, e.ip_rating, e.comment, e.status, e.installed_at,
+              e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+              e.tag, e.model, e.serial_number, e.ip_address, e.protocol, e.floor,
+              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
               (SELECT result FROM vsd_checks c
                WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
                ORDER BY c.date DESC NULLS LAST
@@ -516,10 +526,8 @@ app.get("/api/vsd/equipments/:id", async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ ok: false, error: "Not found" });
     const eq = rows[0];
-    eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/vsd/equipments/${id}/photo`
-        : null;
+    eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/vsd/equipments/${id}/photo` : null;
+    delete eq.has_photo;
     eq.status = eqStatusFromDue(eq.next_check_date);
     eq.compliance_state =
       eq.last_result === "conforme"
@@ -657,8 +665,14 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
       `UPDATE vsd_equipments SET ${fields.join(", ")} WHERE id=$${idx}`,
       vals
     );
+    // 🚀 PERF: Exclude photo_content BYTEA
     const { rows } = await pool.query(
-      `SELECT e.*,
+      `SELECT e.id, e.site, e.name, e.building, e.zone, e.equipment, e.sub_equipment,
+              e.type, e.manufacturer, e.manufacturer_ref, e.power_kw, e.voltage,
+              e.current_nominal, e.ip_rating, e.comment, e.status, e.installed_at,
+              e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+              e.tag, e.model, e.serial_number, e.ip_address, e.protocol, e.floor,
+              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
               (SELECT result FROM vsd_checks c
                WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
                ORDER BY c.date DESC NULLS LAST
@@ -668,10 +682,8 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
     );
     const eq = rows[0];
     if (eq) {
-      eq.photo_url =
-        (eq.photo_content && eq.photo_content.length) || eq.photo_path
-          ? `/api/vsd/equipments/${id}/photo`
-          : null;
+      eq.photo_url = (eq.has_photo || eq.photo_path) ? `/api/vsd/equipments/${id}/photo` : null;
+      delete eq.has_photo;
       eq.status = eqStatusFromDue(eq.next_check_date);
       eq.compliance_state =
         eq.last_result === "conforme"

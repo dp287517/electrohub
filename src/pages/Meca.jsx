@@ -1991,10 +1991,12 @@ export default function Meca() {
     };
   }, [loadPlacements]);
 
-  // URL params handling
+  // URL params handling - load equipment from URL on initial page load only
   useEffect(() => {
     const mecaId = searchParams.get('meca');
-    if (mecaId && (!selectedEquipment || selectedEquipment.id !== Number(mecaId))) {
+    // Only fetch if we have a mecaId and no equipment is currently selected
+    // Compare as strings since IDs are UUIDs, not numbers
+    if (mecaId && (!selectedEquipment || String(selectedEquipment.id) !== mecaId)) {
       api.meca.getEquipment(mecaId)
         .then(res => {
           const eq = res?.equipment || res;
@@ -2006,7 +2008,7 @@ export default function Meca() {
         })
         .catch(() => showToast('Équipement non trouvé', 'error'));
     }
-  }, [searchParams, showToast]);
+  }, [searchParams, showToast, selectedEquipment]);
 
   const handleSelectEquipment = async (eq) => {
     setSearchParams({ meca: eq.id.toString() });

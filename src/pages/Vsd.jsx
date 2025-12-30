@@ -1394,10 +1394,11 @@ export default function Vsd() {
     };
   }, [loadPlacements]);
 
-  // URL params handling
+  // URL params handling - load equipment from URL on initial page load only
   useEffect(() => {
     const vsdId = searchParams.get('vsd');
-    if (vsdId && (!selectedEquipment || selectedEquipment.id !== Number(vsdId))) {
+    // Compare as strings since IDs are UUIDs, not numbers
+    if (vsdId && (!selectedEquipment || String(selectedEquipment.id) !== vsdId)) {
       api.vsd.getEquipment(vsdId)
         .then(res => {
           const eq = res?.equipment || res;
@@ -1409,7 +1410,7 @@ export default function Vsd() {
         })
         .catch(() => showToast('Variateur non trouvé', 'error'));
     }
-  }, [searchParams, showToast]);
+  }, [searchParams, showToast, selectedEquipment]);
 
   const handleSelectEquipment = async (eq) => {
     setSearchParams({ vsd: eq.id.toString() });
