@@ -744,6 +744,42 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_control_attachments_site ON control_attachments(site);
 
     -- =======================================================
+    -- TABLE: Control Drafts (Brouillons de contrôle en cours)
+    -- Permet de sauvegarder les contrôles non validés
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_drafts (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      schedule_id INTEGER NOT NULL REFERENCES control_schedules(id) ON DELETE CASCADE,
+      checklist_results JSONB DEFAULT '[]'::jsonb,
+      global_notes TEXT,
+      status TEXT DEFAULT 'conform',
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(site, schedule_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_drafts_schedule ON control_drafts(schedule_id);
+    CREATE INDEX IF NOT EXISTS idx_control_drafts_site ON control_drafts(site);
+
+    -- =======================================================
+    -- TABLE: Control Draft Attachments (Photos en brouillon)
+    -- Stocke les photos avant validation du contrôle
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS control_draft_attachments (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      draft_id INTEGER REFERENCES control_drafts(id) ON DELETE CASCADE,
+      schedule_id INTEGER NOT NULL,
+      file_type TEXT DEFAULT 'photo',
+      file_name TEXT,
+      file_mime TEXT,
+      file_data BYTEA,
+      thumbnail BYTEA,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_draft_attachments_draft ON control_draft_attachments(draft_id);
+    CREATE INDEX IF NOT EXISTS idx_control_draft_attachments_schedule ON control_draft_attachments(schedule_id);
+
+    -- =======================================================
     -- VIEW: control_reports (compatibility alias for control_records)
     -- Maps old column names to new column names for legacy code
     -- =======================================================
@@ -6411,7 +6447,7 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
     const { schedule_id, template_id, switchboard_id, device_id, vsd_equipment_id, meca_equipment_id, mobile_equipment_id, hv_equipment_id, glo_equipment_id, datahub_equipment_id, equipment_type,
-            checklist_results, global_notes, signature_base64, status } = req.body;
+            checklist_results, global_notes, signature_base64, status, draft_attachment_ids } = req.body;
 
     const performedBy = req.headers['x-user-name'] || 'unknown';
     const performedByEmail = req.headers['x-user-email'] || null;
@@ -6439,6 +6475,23 @@ app.post('/api/switchboard/controls/records', async (req, res) => {
         global_notes || null, signature_base64 || null, status || 'conform']);
 
     const record = rows[0];
+
+    // Move draft attachments to final record (if any)
+    if (draft_attachment_ids && draft_attachment_ids.length > 0) {
+      for (const draftAttId of draft_attachment_ids) {
+        try {
+          // Copy from draft_attachments to control_attachments
+          await quickQuery(`
+            INSERT INTO control_attachments (site, control_record_id, file_type, file_name, file_mime, file_data, thumbnail, created_at)
+            SELECT site, $1, file_type, file_name, file_mime, file_data, thumbnail, created_at
+            FROM control_draft_attachments
+            WHERE id = $2 AND site = $3
+          `, [record.id, draftAttId, site]);
+        } catch (attErr) {
+          console.warn('[CONTROLS] Failed to move draft attachment:', draftAttId, attErr.message);
+        }
+      }
+    }
 
     // Update schedule if provided
     if (schedule_id) {
@@ -6560,6 +6613,187 @@ app.get('/api/switchboard/controls/attachments/:id/file', async (req, res) => {
     res.send(rows[0].data);
   } catch (e) {
     console.error('[CONTROLS] Get attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- CONTROL DRAFTS (Brouillons) ---
+
+// Get draft for a schedule
+app.get('/api/switchboard/controls/drafts/:scheduleId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { scheduleId } = req.params;
+
+    // Get draft data
+    const { rows: drafts } = await quickQuery(`
+      SELECT * FROM control_drafts WHERE schedule_id = $1 AND site = $2
+    `, [scheduleId, site]);
+
+    if (!drafts.length) {
+      return res.json({ draft: null, attachments: [] });
+    }
+
+    // Get draft attachments
+    const { rows: attachments } = await quickQuery(`
+      SELECT id, file_type, file_name, file_mime, created_at
+      FROM control_draft_attachments
+      WHERE schedule_id = $1 AND site = $2
+      ORDER BY created_at ASC
+    `, [scheduleId, site]);
+
+    res.json({ draft: drafts[0], attachments });
+  } catch (e) {
+    console.error('[CONTROLS] Get draft error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create or update draft (upsert)
+app.put('/api/switchboard/controls/drafts/:scheduleId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { scheduleId } = req.params;
+    const { checklist_results, global_notes, status } = req.body;
+
+    const { rows } = await quickQuery(`
+      INSERT INTO control_drafts (site, schedule_id, checklist_results, global_notes, status, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (site, schedule_id)
+      DO UPDATE SET
+        checklist_results = COALESCE($3, control_drafts.checklist_results),
+        global_notes = COALESCE($4, control_drafts.global_notes),
+        status = COALESCE($5, control_drafts.status),
+        updated_at = NOW()
+      RETURNING *
+    `, [site, scheduleId, JSON.stringify(checklist_results || []), global_notes || '', status || 'conform']);
+
+    res.json({ draft: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Save draft error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Upload attachment to draft
+app.post('/api/switchboard/controls/drafts/:scheduleId/attachments', upload.single('file'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { scheduleId } = req.params;
+    const file = req.file;
+    const file_type = req.body.file_type || 'photo';
+
+    if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+    // Ensure draft exists
+    const { rows: drafts } = await quickQuery(`
+      INSERT INTO control_drafts (site, schedule_id, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (site, schedule_id) DO UPDATE SET updated_at = NOW()
+      RETURNING id
+    `, [site, scheduleId]);
+
+    const draftId = drafts[0].id;
+
+    // Generate thumbnail for images
+    let thumbnail = null;
+    if (file.mimetype.startsWith('image/')) {
+      try {
+        thumbnail = await sharp(file.buffer)
+          .resize(200, 200, { fit: 'cover' })
+          .jpeg({ quality: 70 })
+          .toBuffer();
+      } catch (e) {
+        console.warn('[CONTROLS] Thumbnail generation failed:', e.message);
+      }
+    }
+
+    // Insert attachment
+    const { rows } = await quickQuery(`
+      INSERT INTO control_draft_attachments
+        (site, draft_id, schedule_id, file_type, file_name, file_mime, file_data, thumbnail)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id, file_type, file_name, file_mime, created_at
+    `, [site, draftId, scheduleId, file_type, file.originalname, file.mimetype, file.buffer, thumbnail]);
+
+    res.json({ attachment: rows[0] });
+  } catch (e) {
+    console.error('[CONTROLS] Upload draft attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get draft attachment file
+app.get('/api/switchboard/controls/drafts/attachments/:id/file', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    const { thumbnail } = req.query;
+
+    const column = thumbnail === 'true' ? 'thumbnail' : 'file_data';
+    const { rows } = await quickQuery(`
+      SELECT ${column} as data, file_mime, file_name FROM control_draft_attachments WHERE id = $1 AND site = $2
+    `, [id, site]);
+
+    if (!rows.length || !rows[0].data) return res.status(404).json({ error: 'Attachment not found' });
+
+    res.set('Content-Type', rows[0].file_mime || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${rows[0].file_name}"`);
+    res.send(rows[0].data);
+  } catch (e) {
+    console.error('[CONTROLS] Get draft attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete single draft attachment
+app.delete('/api/switchboard/controls/drafts/attachments/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+
+    await quickQuery(`
+      DELETE FROM control_draft_attachments WHERE id = $1 AND site = $2
+    `, [id, site]);
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[CONTROLS] Delete draft attachment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete entire draft (with all attachments - CASCADE)
+app.delete('/api/switchboard/controls/drafts/:scheduleId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { scheduleId } = req.params;
+
+    // Delete attachments first (in case CASCADE doesn't work)
+    await quickQuery(`
+      DELETE FROM control_draft_attachments WHERE schedule_id = $1 AND site = $2
+    `, [scheduleId, site]);
+
+    // Delete draft
+    await quickQuery(`
+      DELETE FROM control_drafts WHERE schedule_id = $1 AND site = $2
+    `, [scheduleId, site]);
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[CONTROLS] Delete draft error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

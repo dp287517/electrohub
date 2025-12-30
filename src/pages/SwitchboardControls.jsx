@@ -2472,33 +2472,8 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
 
 // ============================================================
 // CONTROL MODAL - Enhanced with visible file upload
+// Photos are saved immediately to Neon DB (no size limit)
 // ============================================================
-
-// Helper: Convert File to base64 for localStorage storage
-const fileToBase64 = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-};
-
-// Helper: Convert base64 back to File
-const base64ToFile = (base64, filename, mimeType) => {
-  try {
-    const arr = base64.split(',');
-    const mime = mimeType || (arr[0].match(/:(.*?);/) || [])[1] || 'application/octet-stream';
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) u8arr[n] = bstr.charCodeAt(n);
-    return new File([u8arr], filename, { type: mime });
-  } catch (e) {
-    console.error('Error converting base64 to file:', e);
-    return null;
-  }
-};
 
 function ControlModal({ schedule, onClose, onComplete }) {
   const [template, setTemplate] = useState(null);
@@ -2506,63 +2481,33 @@ function ControlModal({ schedule, onClose, onComplete }) {
   const [globalNotes, setGlobalNotes] = useState("");
   const [status, setStatus] = useState("conform");
   const [saving, setSaving] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState([]);
+  // serverAttachments: attachments already saved to server {id, file_type, file_name, file_mime}
+  const [serverAttachments, setServerAttachments] = useState([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [draftLoaded, setDraftLoaded] = useState(false);
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
 
-  // Draft key for localStorage
-  const draftKey = `control_draft_${schedule.id}`;
-
-  // Load template and restore draft if exists
+  // Load template and restore draft from server
   useEffect(() => {
     if (schedule.template_id) {
-      api.switchboardControls.listTemplates().then(async (res) => {
-        const t = (res.templates || []).find((x) => x.id === schedule.template_id);
+      Promise.all([
+        api.switchboardControls.listTemplates(),
+        api.switchboardControls.getDraft(schedule.id)
+      ]).then(([templatesRes, draftRes]) => {
+        const t = (templatesRes.templates || []).find((x) => x.id === schedule.template_id);
         if (t) {
           setTemplate(t);
 
-          // Try to restore draft from localStorage
-          try {
-            const savedDraft = localStorage.getItem(draftKey);
-            if (savedDraft) {
-              const draft = JSON.parse(savedDraft);
+          // Restore draft from server if exists
+          if (draftRes.draft) {
+            const draft = draftRes.draft;
+            const savedResults = draft.checklist_results || [];
 
-              // Restore results if they match the template
-              if (draft.results && draft.results.length === (t.checklist_items || []).length) {
-                setResults(draft.results);
-              } else {
-                setResults(
-                  (t.checklist_items || []).map((item) => ({
-                    item_id: item.id,
-                    status: "conform",
-                    value: "",
-                    comment: "",
-                  }))
-                );
-              }
-
-              // Restore notes
-              if (draft.globalNotes) setGlobalNotes(draft.globalNotes);
-              if (draft.status) setStatus(draft.status);
-
-              // Restore files from base64
-              if (draft.files && draft.files.length > 0) {
-                const restoredFiles = [];
-                for (const f of draft.files) {
-                  const file = base64ToFile(f.data, f.name, f.mimeType);
-                  if (file) {
-                    restoredFiles.push({
-                      file,
-                      type: f.type,
-                      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
-                    });
-                  }
-                }
-                if (restoredFiles.length > 0) {
-                  setPendingFiles(restoredFiles);
-                }
-              }
+            // Restore results if they match the template
+            if (savedResults.length === (t.checklist_items || []).length) {
+              setResults(savedResults);
             } else {
               setResults(
                 (t.checklist_items || []).map((item) => ({
@@ -2573,8 +2518,17 @@ function ControlModal({ schedule, onClose, onComplete }) {
                 }))
               );
             }
-          } catch (e) {
-            console.error('Error loading draft:', e);
+
+            // Restore notes and status
+            if (draft.global_notes) setGlobalNotes(draft.global_notes);
+            if (draft.status) setStatus(draft.status);
+
+            // Restore attachments list (already on server)
+            if (draftRes.attachments && draftRes.attachments.length > 0) {
+              setServerAttachments(draftRes.attachments);
+            }
+          } else {
+            // No draft - initialize fresh
             setResults(
               (t.checklist_items || []).map((item) => ({
                 item_id: item.id,
@@ -2586,74 +2540,40 @@ function ControlModal({ schedule, onClose, onComplete }) {
           }
           setDraftLoaded(true);
         }
+      }).catch(e => {
+        console.error('Error loading template/draft:', e);
       });
     }
-  }, [schedule.template_id, draftKey]);
+  }, [schedule.template_id, schedule.id]);
 
-  // Auto-save draft to localStorage whenever data changes
+  // Auto-save draft to server (debounced) whenever results/notes change
   useEffect(() => {
     if (!draftLoaded || !template) return;
 
-    const saveDraft = async () => {
-      try {
-        // Convert files to base64 for storage
-        const filesData = [];
-        for (const pf of pendingFiles) {
-          try {
-            const base64 = await fileToBase64(pf.file);
-            filesData.push({
-              data: base64,
-              name: pf.file.name,
-              mimeType: pf.file.type,
-              type: pf.type,
-            });
-          } catch (e) {
-            console.error('Error converting file to base64:', e);
-          }
-        }
+    // Debounce save to avoid too many requests
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      api.switchboardControls.saveDraft(schedule.id, {
+        checklist_results: results,
+        global_notes: globalNotes,
+        status,
+      }).catch(e => console.error('Error auto-saving draft:', e));
+    }, 1000);
 
-        const draft = {
-          results,
-          globalNotes,
-          status,
-          files: filesData,
-          savedAt: Date.now(),
-        };
-
-        localStorage.setItem(draftKey, JSON.stringify(draft));
-      } catch (e) {
-        console.error('Error saving draft:', e);
-        // If storage quota exceeded, try saving without files
-        if (e.name === 'QuotaExceededError') {
-          try {
-            const draft = {
-              results,
-              globalNotes,
-              status,
-              files: [],
-              savedAt: Date.now(),
-            };
-            localStorage.setItem(draftKey, JSON.stringify(draft));
-          } catch (e2) {
-            console.error('Error saving draft without files:', e2);
-          }
-        }
-      }
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
+  }, [results, globalNotes, status, draftLoaded, template, schedule.id]);
 
-    saveDraft();
-  }, [results, globalNotes, status, pendingFiles, draftLoaded, template, draftKey]);
-
-  // Clear draft on close (cleanup)
+  // Handle close - draft remains on server for later
   const handleClose = () => {
-    // Don't clear draft on close - user might want to resume later
     onClose();
   };
 
-  // Clear draft after successful completion
-  const clearDraft = () => {
+  // Delete draft from server after successful completion
+  const clearDraft = async () => {
     try {
-      localStorage.removeItem(draftKey);
+      await api.switchboardControls.deleteDraft(schedule.id);
     } catch (e) {
       console.error('Error clearing draft:', e);
     }
@@ -2669,24 +2589,39 @@ function ControlModal({ schedule, onClose, onComplete }) {
     setStatus(hasNonConform ? "non_conform" : allConform ? "conform" : "partial");
   };
 
-  const handleFileAdd = (e, fileType) => {
+  // Upload file immediately to server (no size limit!)
+  const handleFileAdd = async (e, fileType) => {
     const files = Array.from(e.target.files || []);
-    const newFiles = files.map((file) => ({
-      file,
-      type: fileType,
-      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
-    }));
-    setPendingFiles((prev) => [...prev, ...newFiles]);
+    if (files.length === 0) return;
+
     e.target.value = "";
+    setUploadingFile(true);
+
+    try {
+      for (const file of files) {
+        const res = await api.switchboardControls.uploadDraftAttachment(schedule.id, file, {
+          file_type: fileType,
+        });
+        if (res.attachment) {
+          setServerAttachments((prev) => [...prev, res.attachment]);
+        }
+      }
+    } catch (err) {
+      console.error('Error uploading file:', err);
+      alert('Erreur lors de l\'upload du fichier. Veuillez réessayer.');
+    } finally {
+      setUploadingFile(false);
+    }
   };
 
-  const removeFile = (index) => {
-    setPendingFiles((prev) => {
-      const updated = [...prev];
-      if (updated[index].preview) URL.revokeObjectURL(updated[index].preview);
-      updated.splice(index, 1);
-      return updated;
-    });
+  // Remove file from server
+  const removeFile = async (attachmentId) => {
+    try {
+      await api.switchboardControls.deleteDraftAttachment(attachmentId);
+      setServerAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+    } catch (err) {
+      console.error('Error removing file:', err);
+    }
   };
 
   const handleComplete = async () => {
@@ -2705,19 +2640,12 @@ function ControlModal({ schedule, onClose, onComplete }) {
         checklist_results: results,
         global_notes: globalNotes,
         status,
+        // Pass draft attachment IDs to be moved to the final record
+        draft_attachment_ids: serverAttachments.map((a) => a.id),
       });
 
-      const recordId = recordRes?.record?.id;
-      if (recordId && pendingFiles.length > 0) {
-        for (const pf of pendingFiles) {
-          await api.switchboardControls.uploadAttachment(recordId, pf.file, {
-            file_type: pf.type,
-          });
-        }
-      }
-
       // Clear draft after successful completion
-      clearDraft();
+      await clearDraft();
       await onComplete();
     } finally {
       setSaving(false);
@@ -2896,21 +2824,31 @@ function ControlModal({ schedule, onClose, onComplete }) {
               </button>
             </div>
 
-            {/* Files Preview */}
-            {pendingFiles.length > 0 ? (
+            {/* Files Preview - from server */}
+            {uploadingFile && (
+              <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl text-blue-700 mb-3">
+                <div className="w-5 h-5 border-2 border-blue-300 rounded-full animate-spin border-t-blue-600" />
+                <span className="text-sm font-medium">Upload en cours...</span>
+              </div>
+            )}
+            {serverAttachments.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {pendingFiles.map((pf, idx) => (
-                  <div key={idx} className="relative group bg-white rounded-lg p-2 border">
-                    {pf.preview ? (
-                      <img src={pf.preview} alt="" className="w-full h-20 object-cover rounded" />
+                {serverAttachments.map((att) => (
+                  <div key={att.id} className="relative group bg-white rounded-lg p-2 border">
+                    {att.file_mime?.startsWith('image/') ? (
+                      <img
+                        src={api.switchboardControls.draftAttachmentUrl(att.id, true)}
+                        alt=""
+                        className="w-full h-20 object-cover rounded"
+                      />
                     ) : (
                       <div className="w-full h-20 bg-gray-100 rounded flex items-center justify-center">
                         <span className="text-3xl">📄</span>
                       </div>
                     )}
-                    <p className="text-xs text-gray-500 mt-1 truncate">{pf.file.name}</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{att.file_name}</p>
                     <button
-                      onClick={() => removeFile(idx)}
+                      onClick={() => removeFile(att.id)}
                       className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs hover:bg-red-600"
                     >
                       ✕
@@ -2918,12 +2856,13 @@ function ControlModal({ schedule, onClose, onComplete }) {
                   </div>
                 ))}
               </div>
-            ) : (
+            ) : !uploadingFile ? (
               <div className="text-center py-4 text-gray-400">
                 <span className="text-4xl block mb-2">📷</span>
                 <p className="text-sm">Ajoutez des photos ou documents</p>
+                <p className="text-xs mt-1">Sauvegardées automatiquement sur le serveur</p>
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
