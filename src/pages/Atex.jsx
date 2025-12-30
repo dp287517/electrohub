@@ -192,7 +192,65 @@ export default function Atex() {
   const [selectedEquipmentId, setSelectedEquipmentId] = useState(null);
 
   // 🟣 Équipements récemment dupliqués (pour affichage violet)
-  const [recentDuplicates, setRecentDuplicates] = useState(new Set());
+  // Stockés dans localStorage avec timestamp pour expiration 1 heure
+  const [recentDuplicates, setRecentDuplicates] = useState(() => {
+    try {
+      const stored = localStorage.getItem("atex_recent_duplicates");
+      if (!stored) return new Set();
+      const data = JSON.parse(stored);
+      const now = Date.now();
+      const ONE_HOUR = 60 * 60 * 1000;
+      // Filtrer les entrées expirées
+      const valid = Object.entries(data).filter(([, ts]) => now - ts < ONE_HOUR);
+      return new Set(valid.map(([id]) => id));
+    } catch {
+      return new Set();
+    }
+  });
+
+  // 🟣 Sauvegarder et nettoyer les duplicatas dans localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("atex_recent_duplicates");
+      const data = stored ? JSON.parse(stored) : {};
+      const now = Date.now();
+      const ONE_HOUR = 60 * 60 * 1000;
+      // Nettoyer les expirés et synchroniser avec le state
+      const updated = {};
+      for (const id of recentDuplicates) {
+        updated[id] = data[id] || now;
+      }
+      // Supprimer les expirés
+      for (const [id, ts] of Object.entries(updated)) {
+        if (now - ts >= ONE_HOUR) {
+          delete updated[id];
+          setRecentDuplicates(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        }
+      }
+      localStorage.setItem("atex_recent_duplicates", JSON.stringify(updated));
+    } catch {}
+  }, [recentDuplicates]);
+
+  // 🟣 Fonction pour supprimer un duplicata (après clic ou manuellement)
+  const removeDuplicate = useCallback((id) => {
+    setRecentDuplicates(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    try {
+      const stored = localStorage.getItem("atex_recent_duplicates");
+      if (stored) {
+        const data = JSON.parse(stored);
+        delete data[id];
+        localStorage.setItem("atex_recent_duplicates", JSON.stringify(data));
+      }
+    } catch {}
+  }, []);
 
   // Toast
   const [toast, setToast] = useState("");
@@ -640,17 +698,16 @@ export default function Atex() {
     try {
       const result = await api.atex.duplicateEquipment(editing.id, { copy_position: false });
       if (result?.equipment) {
-        // 🟣 Marquer comme récemment dupliqué pour affichage violet
+        // 🟣 Marquer comme récemment dupliqué pour affichage violet (persiste 1h dans localStorage)
         const newId = result.equipment.id;
         setRecentDuplicates(prev => new Set([...prev, newId]));
-        // Auto-effacer le highlight violet après 30 secondes
-        setTimeout(() => {
-          setRecentDuplicates(prev => {
-            const next = new Set(prev);
-            next.delete(newId);
-            return next;
-          });
-        }, 30000);
+        // Sauvegarder avec timestamp dans localStorage
+        try {
+          const stored = localStorage.getItem("atex_recent_duplicates");
+          const data = stored ? JSON.parse(stored) : {};
+          data[newId] = Date.now();
+          localStorage.setItem("atex_recent_duplicates", JSON.stringify(data));
+        } catch {}
 
         // Fermer le drawer actuel et ouvrir le nouvel équipement
         closeEdit();
@@ -1335,6 +1392,7 @@ export default function Atex() {
             onOpenEquipment={openEdit}
             onGoToMap={goToEquipmentOnMap}
             recentDuplicates={recentDuplicates}
+            onRemoveDuplicate={removeDuplicate}
           />
         )}
 
@@ -2382,7 +2440,7 @@ function AnalyticsTab({ items, stats, loading }) {
 // EQUIPMENTS TAB - Avec arborescence Bâtiment > Zone > Équipement
 // ============================================================
 
-function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDuplicates = new Set() }) {
+function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDuplicates = new Set(), onRemoveDuplicate = null }) {
   const statusLabel = (st) => {
     if (st === "a_faire") return "À faire";
     if (st === "en_cours_30") return "En cours";
@@ -2449,6 +2507,11 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDupli
   // 🟣 Violet pour équipements récemment dupliqués
   const EquipmentCard = ({ eq }) => {
     const isDuplicate = recentDuplicates.has(eq.id);
+    // 🟣 Handler qui supprime le highlight violet au clic
+    const handleClick = () => {
+      if (isDuplicate && onRemoveDuplicate) onRemoveDuplicate(eq.id);
+      onOpenEquipment(eq);
+    };
     return (
     <div className={`border rounded-xl p-3 shadow-sm hover:shadow-md transition-all ${isDuplicate ? "bg-violet-50 border-violet-300 ring-2 ring-violet-400" : "bg-white"}`}>
       <div className="flex items-start gap-3">
@@ -2460,7 +2523,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDupli
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <button className={`font-semibold hover:underline text-left truncate w-full text-sm ${isDuplicate ? "text-violet-700" : "text-blue-600"}`} onClick={() => onOpenEquipment(eq)}>
+          <button className={`font-semibold hover:underline text-left truncate w-full text-sm ${isDuplicate ? "text-violet-700" : "text-blue-600"}`} onClick={handleClick}>
             {eq.name || eq.type || "Équipement"} {isDuplicate && <span className="text-xs font-normal">(dupliqué)</span>}
           </button>
           <div className="flex flex-wrap gap-1 mt-1">
@@ -2475,7 +2538,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap, recentDupli
           )}
         </div>
         <div className="flex flex-col gap-1 shrink-0">
-          <button onClick={() => onOpenEquipment(eq)} className="p-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs" title="Modifier">
+          <button onClick={handleClick} className="p-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs" title="Modifier">
             ✏️
           </button>
           {onGoToMap && (
@@ -2933,6 +2996,8 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             plan={selectedPlan}
             pageIndex={selectedPlan._targetPageIndex || 0}
             selectedEquipmentId={selectedEquipmentId}
+            recentDuplicates={recentDuplicates}
+            onDuplicateClicked={removeDuplicate}
             onOpenEquipment={(eq) => {
               setSelectedEquipmentId(eq?.id || null);
               openEdit(eq);

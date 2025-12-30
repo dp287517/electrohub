@@ -243,6 +243,7 @@ const STATUS_GRADIENT = {
   fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
   selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
   non_conforme: { from: "#ef4444", to: "#b91c1c" }, // Rouge vif pour non conforme
+  duplicate: { from: "#c4b5fd", to: "#8b5cf6" },    // 🟣 Violet clair pour duplicatas
 };
 
 // Icône SVG flamme ATEX
@@ -250,8 +251,8 @@ const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.
   <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
 </svg>`;
 
-function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na") {
-  const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
+  const s = isSelected || isDuplicate ? ICON_PX_SELECTED : ICON_PX;
 
   // Marqueur non sauvegardé (nouveau)
   if (isUnsaved) {
@@ -275,9 +276,11 @@ function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = 
     });
   }
 
-  // Priorité: 1) Sélectionné = violet, 2) Non conforme = rouge, 3) Statut normal
+  // 🟣 Priorité: 1) Dupliqué = violet clair pulsant, 2) Sélectionné = violet, 3) Non conforme = rouge, 4) Statut normal
   let grad;
-  if (isSelected) {
+  if (isDuplicate) {
+    grad = STATUS_GRADIENT.duplicate;
+  } else if (isSelected) {
     grad = STATUS_GRADIENT.selected;
   } else if (complianceState === "non_conforme") {
     grad = STATUS_GRADIENT.non_conforme;
@@ -285,9 +288,11 @@ function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = 
     grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
   }
 
-  // Classes d'animation - non conforme = pulsation rouge prioritaire
+  // Classes d'animation - duplicata = pulsation violette prioritaire
   let animClass = "";
-  if (isSelected) {
+  if (isDuplicate) {
+    animClass = "atex-marker-pulse-violet"; // 🟣 Violet pulsant pour duplicata
+  } else if (isSelected) {
     animClass = "atex-marker-selected";
   } else if (complianceState === "non_conforme") {
     animClass = "atex-marker-pulse-red"; // Rouge pulsant pour non conforme
@@ -297,10 +302,15 @@ function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = 
     animClass = "atex-marker-pulse-orange";
   }
 
-  // 🆕 Bordure plus visible pour sélection
-  const borderStyle = isSelected
-    ? "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);"
-    : "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
+  // 🆕 Bordure plus visible pour sélection ou duplicata
+  let borderStyle;
+  if (isDuplicate) {
+    borderStyle = "border:3px solid #8b5cf6;box-shadow:0 0 0 4px rgba(139,92,246,0.5),0 6px 15px rgba(0,0,0,.35);";
+  } else if (isSelected) {
+    borderStyle = "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);";
+  } else {
+    borderStyle = "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
+  }
 
   const html = `
     <div class="${animClass}" style="
@@ -555,6 +565,8 @@ export default function AtexMap({
   onZonesApplied,
   onMetaChanged,
   selectedEquipmentId = null,  // 🆕 Pour highlight équipement depuis liste
+  recentDuplicates = new Set(), // 🟣 IDs des équipements récemment dupliqués (affichage violet)
+  onDuplicateClicked = null,    // 🟣 Callback quand on clique sur un duplicata (pour effacer le highlight)
   inModal = true,
   autoOpenModal = true,
   title = "Plan ATEX",
@@ -588,6 +600,8 @@ export default function AtexMap({
   const editHandlesLayerRef = useRef(null);
   const positionsRef = useRef([]);  // 🆕 Ref pour garder les positions localement
   const selectedEquipmentIdRef = useRef(selectedEquipmentId);  // 🆕 Ref pour highlight
+  const recentDuplicatesRef = useRef(recentDuplicates);  // 🟣 Ref pour duplicatas
+  const onDuplicateClickedRef = useRef(onDuplicateClicked);  // 🟣 Callback pour clic sur duplicata
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
   const [drawMenu, setDrawMenu] = useState(false);
   const drawMenuRef = useRef(null);
@@ -618,8 +632,11 @@ export default function AtexMap({
   }, [plan]);
 
   // 🆕 Mise à jour selectedEquipmentId et re-dessin des marqueurs
+  // 🟣 + Mise à jour recentDuplicates pour affichage violet
   useEffect(() => {
     selectedEquipmentIdRef.current = selectedEquipmentId;
+    recentDuplicatesRef.current = recentDuplicates;
+    onDuplicateClickedRef.current = onDuplicateClicked;
     // Re-dessiner les marqueurs avec le nouveau highlight
     if (baseReadyRef.current && positionsRef.current?.length > 0) {
       drawMarkers(positionsRef.current);
@@ -633,7 +650,7 @@ export default function AtexMap({
         }
       }
     }
-  }, [selectedEquipmentId]);
+  }, [selectedEquipmentId, recentDuplicates]);
 
   /* ------------------------------- Outside click menu ------------------------------- */
   useEffect(() => {
@@ -1145,8 +1162,10 @@ export default function AtexMap({
       (list || []).forEach((p) => {
         const latlng = toLatLngFrac(p.x, p.y, base);
         // Passer isSelected pour highlight violet, compliance_state pour rouge si non conforme
+        // 🟣 isDuplicate pour affichage violet des duplicatas
         const isSelected = p.id === selectedEquipmentIdRef.current;
-        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state);
+        const isDuplicate = recentDuplicatesRef.current?.has?.(p.id) || false;
+        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state, isDuplicate);
         const mk = L.marker(latlng, {
           icon,
           draggable: true,
@@ -1222,12 +1241,16 @@ export default function AtexMap({
           }
         });
         mk.on("click", () => {
+          // 🟣 Si c'est un duplicata, notifier le parent pour effacer le highlight violet
+          if (recentDuplicatesRef.current?.has?.(p.id)) {
+            onDuplicateClickedRef.current?.(p.id);
+          }
           onOpenEquipment?.({
             id: p.id,
             name: p.name,
-            zones: { 
-              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null, 
-              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null 
+            zones: {
+              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null,
+              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null
             },
             // AJOUT : passe la fonction reload du parent
             reload: () => {
