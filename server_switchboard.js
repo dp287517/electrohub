@@ -2891,7 +2891,7 @@ TOUS LES TYPES À IDENTIFIER (sans exception):
 - Relais, Minuteries, Parafoudres, Horloges, Délesteurs
 - Borniers (MGTB), Transformateurs modulaires
 
-POUR CHAQUE APPAREIL:
+POUR CHAQUE APPAREIL (exemple avec calibre variable - LIS le calibre sur CHAQUE appareil!):
 {
   "position_label": "11F3" ou null,
   "circuit_name": "Éclairage" ou null,
@@ -2900,7 +2900,7 @@ POUR CHAQUE APPAREIL:
   "device_type": "Disjoncteur modulaire",
   "manufacturer": "Merlin Gerin",
   "reference": "C60N",
-  "in_amps": 16,
+  "in_amps": "⚠️ LIRE SUR L'APPAREIL: 10, 13, 16, 20, 25, 32, 40... NE PAS DEVINER!",
   "curve_type": "C",
   "icu_ka": 6,
   "ics_ka": null,
@@ -2910,8 +2910,8 @@ POUR CHAQUE APPAREIL:
   "is_differential": false,
   "differential_sensitivity_ma": null,
   "differential_type": null,
-  "confidence": "high/medium/low",
-  "notes": ""
+  "confidence": "high si calibre lisible, low si deviné",
+  "notes": "Si calibre illisible, mettre confidence=low et noter 'calibre non lisible'"
 }
 
 Réponds en JSON:
@@ -3147,13 +3147,28 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
           merged.notes = (merged.notes || '') + ' [type Gemini]';
         }
 
-        // Si les calibres diffèrent, préférer celui qui n'est pas 16 (valeur par défaut courante)
+        // Si les calibres diffèrent, préférer Gemini (étape de vérification)
+        // IMPORTANT: Ne pas supposer que GPT ou Gemini a raison par défaut
         if (geminiDevice.in_amps && gptDevice.in_amps &&
             geminiDevice.in_amps !== gptDevice.in_amps) {
-          // Si l'un est 16 et l'autre non, prendre le non-16 (plus probablement correct)
-          if (gptDevice.in_amps === 16 && geminiDevice.in_amps !== 16) {
+          // Logique améliorée: préférer Gemini sauf si c'est 16A (valeur par défaut courante)
+          // ET que GPT a une valeur plus spécifique
+          const commonDefaults = [16, 20, 10]; // Valeurs souvent devinées par défaut
+          const gptIsCommon = commonDefaults.includes(gptDevice.in_amps);
+          const geminiIsCommon = commonDefaults.includes(geminiDevice.in_amps);
+
+          // Si Gemini a une valeur spécifique (13, 6, 25, 32, 40...) et GPT a une valeur commune, préférer Gemini
+          if (gptIsCommon && !geminiIsCommon) {
             merged.in_amps = geminiDevice.in_amps;
-            merged.notes = (merged.notes || '') + ` [calibre Gemini: ${geminiDevice.in_amps}A]`;
+            merged.notes = (merged.notes || '') + ` [calibre Gemini: ${geminiDevice.in_amps}A, GPT avait: ${gptDevice.in_amps}A]`;
+          } else if (!gptIsCommon && geminiIsCommon) {
+            // GPT a une valeur spécifique, garder GPT
+            merged.notes = (merged.notes || '') + ` [calibre GPT conservé: ${gptDevice.in_amps}A, Gemini avait: ${geminiDevice.in_amps}A]`;
+          } else {
+            // Les deux ont des valeurs spécifiques ou communes - marquer comme incertain
+            merged.caliber_uncertain = true;
+            merged.caliber_conflict = { gpt: gptDevice.in_amps, gemini: geminiDevice.in_amps };
+            merged.notes = (merged.notes || '') + ` [⚠️ CALIBRE INCERTAIN: GPT=${gptDevice.in_amps}A vs Gemini=${geminiDevice.in_amps}A - VÉRIFIER]`;
           }
           console.log(`[PANEL SCAN] Caliber conflict at ${gptDevice.position_label}: GPT=${gptDevice.in_amps}A vs Gemini=${geminiDevice.in_amps}A`);
         } else if (!gptDevice.in_amps && geminiDevice.in_amps) {
@@ -3176,14 +3191,34 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
           merged.manufacturer = geminiDevice.manufacturer;
         }
 
-        // Pôles: si différent, prendre le plus grand (plus prudent pour triphasé)
+        // Pôles: utiliser width_modules comme vérification croisée
         if (geminiDevice.poles && gptDevice.poles && geminiDevice.poles !== gptDevice.poles) {
-          const maxPoles = Math.max(geminiDevice.poles, gptDevice.poles);
-          if (maxPoles !== gptDevice.poles) {
-            merged.poles = maxPoles;
-            merged.notes = (merged.notes || '') + ` [pôles Gemini: ${geminiDevice.poles}]`;
+          // Utiliser width_modules comme arbitre si disponible
+          const widthModules = gptDevice.width_modules || geminiDevice.width_modules;
+          if (widthModules) {
+            // 1-2 modules = 1-2P (monophasé), 3-4 modules = 3-4P (triphasé)
+            const expectedPoles = widthModules >= 3 ? (widthModules === 3 ? 3 : 4) : widthModules;
+            // Préférer celui qui correspond à la largeur
+            if (gptDevice.poles === expectedPoles) {
+              merged.poles = gptDevice.poles;
+              merged.notes = (merged.notes || '') + ` [pôles GPT confirmé par largeur ${widthModules}M]`;
+            } else if (geminiDevice.poles === expectedPoles) {
+              merged.poles = geminiDevice.poles;
+              merged.notes = (merged.notes || '') + ` [pôles Gemini confirmé par largeur ${widthModules}M]`;
+            } else {
+              // Aucun ne correspond, marquer comme incertain
+              merged.poles_uncertain = true;
+              merged.poles_conflict = { gpt: gptDevice.poles, gemini: geminiDevice.poles, width: widthModules };
+              merged.notes = (merged.notes || '') + ` [⚠️ PÔLES INCERTAINS: GPT=${gptDevice.poles}P vs Gemini=${geminiDevice.poles}P, largeur=${widthModules}M]`;
+              merged.poles = widthModules; // Utiliser la largeur comme estimation
+            }
+          } else {
+            // Pas de width_modules, marquer comme incertain
+            merged.poles_uncertain = true;
+            merged.poles_conflict = { gpt: gptDevice.poles, gemini: geminiDevice.poles };
+            merged.notes = (merged.notes || '') + ` [⚠️ PÔLES INCERTAINS: GPT=${gptDevice.poles}P vs Gemini=${geminiDevice.poles}P - VÉRIFIER]`;
           }
-          console.log(`[PANEL SCAN] Poles conflict at ${gptDevice.position_label}: GPT=${gptDevice.poles} vs Gemini=${geminiDevice.poles}`);
+          console.log(`[PANEL SCAN] Poles conflict at ${gptDevice.position_label}: GPT=${gptDevice.poles}P vs Gemini=${geminiDevice.poles}P (width=${widthModules || '?'}M)`);
         } else if (!gptDevice.poles && geminiDevice.poles) {
           merged.poles = geminiDevice.poles;
         }
@@ -3278,8 +3313,60 @@ Identifie ABSOLUMENT TOUS les appareils avec leurs caractéristiques techniques 
       });
     }
 
+    // ============================================================
+    // POST-PROCESSING: Détection de calibres suspects
+    // ============================================================
+    // Si plusieurs disjoncteurs de même référence ont TOUS le même calibre, c'est suspect
+    const breakers = result.devices.filter(d =>
+      d.device_type?.toLowerCase().includes('disjoncteur') &&
+      !d.device_type?.toLowerCase().includes('différentiel') &&
+      d.reference && d.in_amps
+    );
+
+    // Grouper par référence
+    const refGroups = {};
+    for (const b of breakers) {
+      const refNorm = (b.reference || '').toUpperCase().replace(/\s+/g, '');
+      if (!refGroups[refNorm]) refGroups[refNorm] = [];
+      refGroups[refNorm].push(b);
+    }
+
+    // Vérifier chaque groupe
+    let suspiciousCount = 0;
+    for (const [ref, devices] of Object.entries(refGroups)) {
+      if (devices.length >= 3) { // Au moins 3 disjoncteurs de même référence
+        const calibers = devices.map(d => d.in_amps);
+        const uniqueCalib = [...new Set(calibers)];
+
+        // Si TOUS ont exactement le même calibre, c'est suspect
+        if (uniqueCalib.length === 1) {
+          console.log(`[PANEL SCAN] ⚠️ SUSPECT: ${devices.length} disjoncteurs ${ref} ont TOUS le même calibre (${uniqueCalib[0]}A) - vérifier individuellement!`);
+
+          // Marquer ces devices comme suspects
+          for (const d of devices) {
+            d.caliber_suspect = true;
+            d.notes = (d.notes || '') + ` [⚠️ SUSPECT: tous les ${ref} ont ${uniqueCalib[0]}A - vérifier]`;
+          }
+          suspiciousCount += devices.length;
+        } else {
+          // Calibres variés = bon signe, l'AI a bien analysé individuellement
+          console.log(`[PANEL SCAN] ✓ ${devices.length} disjoncteurs ${ref} avec calibres variés: ${uniqueCalib.join('A, ')}A`);
+        }
+      }
+    }
+
+    if (suspiciousCount > 0) {
+      result.warnings = result.warnings || [];
+      result.warnings.push({
+        type: 'CALIBER_UNIFORMITY_SUSPECT',
+        message: `${suspiciousCount} disjoncteurs avec calibres potentiellement incorrects (même référence, même calibre). Vérification manuelle recommandée.`,
+        count: suspiciousCount
+      });
+      console.log(`[PANEL SCAN] ⚠️ WARNING: ${suspiciousCount} devices with suspicious uniform calibers`);
+    }
+
     job.progress = 50;
-    job.message = `${deviceCount} appareils détectés, enrichissement via cache...`;
+    job.message = `${deviceCount} appareils détectés${suspiciousCount > 0 ? ` (${suspiciousCount} à vérifier)` : ''}, enrichissement via cache...`;
     await saveProgress(); // Save after merge
 
     // ============================================================
