@@ -1426,6 +1426,9 @@ export default function MobileEquipments() {
   const [reportFilters, setReportFilters] = useState({ building: '', status: '', category: '' });
   const [reportLoading, setReportLoading] = useState(false);
 
+  // QR Codes bulk download modal
+  const [showQRModal, setShowQRModal] = useState(false);
+
   // Load equipments
   const loadEquipments = useCallback(async () => {
     setIsLoading(true);
@@ -1457,11 +1460,14 @@ export default function MobileEquipments() {
       const res = await api.switchboardControls.listSchedules({ equipment_type: 'mobile_equipment' });
       const schedules = res.schedules || [];
       const statuses = {};
+      // Use date-only comparison to fix "today" items being marked as overdue
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
 
       schedules.forEach(s => {
         if (s.mobile_equipment_id) {
           const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          if (nextDue) nextDue.setHours(0, 0, 0, 0);
           const isOverdue = nextDue && nextDue < now;
 
           // Initialize if not exists
@@ -1829,6 +1835,14 @@ export default function MobileEquipments() {
             >
               <FileText size={18} />
               <span className="hidden sm:inline">Rapport</span>
+            </button>
+            <button
+              onClick={() => setShowQRModal(true)}
+              className="px-4 py-2 rounded-xl bg-purple-100 text-purple-700 font-medium hover:bg-purple-200 flex items-center gap-2"
+              title="Télécharger tous les QR codes"
+            >
+              <QrCode size={18} />
+              <span className="hidden sm:inline">QR Codes</span>
             </button>
             <button
               onClick={() => navigate('/app/mobile-equipments/map')}
@@ -2217,6 +2231,114 @@ export default function MobileEquipments() {
                     Télécharger le PDF
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Codes Bulk Download Modal */}
+      {showQRModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+            <div className="bg-gradient-to-r from-purple-500 to-violet-600 p-6 text-white">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl">
+                  <QrCode size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">QR Codes - Tous les équipements</h2>
+                  <p className="text-purple-100 text-sm">{equipments.length} équipements disponibles</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-gray-600 text-sm">
+                Téléchargez les QR codes de tous vos équipements mobiles avec leur nom pour une impression facile.
+              </p>
+
+              {/* PDF Option */}
+              <div className="border rounded-xl p-4 hover:border-purple-300 hover:bg-purple-50 transition-colors">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <FileText size={18} className="text-purple-600" />
+                  Format PDF (recommandé)
+                </h3>
+                <p className="text-sm text-gray-500 mt-1 mb-3">
+                  Grille imprimable avec noms au-dessus de chaque QR code
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={api.mobileEquipment.qrBulkPdfUrl(150, 3)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-200"
+                  >
+                    Petit (3 cols)
+                  </a>
+                  <a
+                    href={api.mobileEquipment.qrBulkPdfUrl(200, 2)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700"
+                  >
+                    Moyen (2 cols)
+                  </a>
+                  <a
+                    href={api.mobileEquipment.qrBulkPdfUrl(300, 1)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-200"
+                  >
+                    Grand (1 col)
+                  </a>
+                </div>
+              </div>
+
+              {/* ZIP Option */}
+              <div className="border rounded-xl p-4 hover:border-blue-300 hover:bg-blue-50 transition-colors">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Download size={18} className="text-blue-600" />
+                  Format ZIP (images PNG)
+                </h3>
+                <p className="text-sm text-gray-500 mt-1 mb-3">
+                  Fichiers PNG individuels nommés par équipement
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={api.mobileEquipment.qrBulkZipUrl(256)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200"
+                  >
+                    256px
+                  </a>
+                  <a
+                    href={api.mobileEquipment.qrBulkZipUrl(512)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                  >
+                    512px (HD)
+                  </a>
+                  <a
+                    href={api.mobileEquipment.qrBulkZipUrl(1024)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200"
+                  >
+                    1024px (Print)
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t p-4">
+              <button
+                onClick={() => setShowQRModal(false)}
+                className="w-full py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Fermer
               </button>
             </div>
           </div>

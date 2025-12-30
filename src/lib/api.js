@@ -2286,6 +2286,11 @@ export const api = {
       withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
     qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/mobile-equipment/equipments/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`, bust),
+    // Bulk QR Codes (all equipment)
+    qrBulkPdfUrl: (size = 200, cols = 2, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/qrcodes-bulk.pdf?size=${size}&cols=${cols}`, bust),
+    qrBulkZipUrl: (size = 256, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/mobile-equipment/qrcodes-bulk.zip?size=${size}`, bust),
 
     // NC PDF
     nonConformitiesPdfUrl: (id, { bust = false } = {}) =>

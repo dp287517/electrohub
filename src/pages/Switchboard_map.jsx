@@ -1435,7 +1435,9 @@ export default function SwitchboardMap() {
 
       const statuses = {};
       const upcoming30Days = [];
+      // Use date-only comparison to fix "today" items being marked as overdue
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
       const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       schedules.forEach(s => {
@@ -1443,6 +1445,7 @@ export default function SwitchboardMap() {
         if (!boardId) return;
         const nextDue = s.next_due ? new Date(s.next_due) : null;
         if (!nextDue) return;
+        nextDue.setHours(0, 0, 0, 0);
 
         const isOverdue = nextDue < now;
         const isUpcoming = !isOverdue && nextDue <= in30Days;

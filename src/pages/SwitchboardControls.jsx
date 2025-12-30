@@ -63,6 +63,20 @@ const EQUIPMENT_ICONS = {
   unknown: { Icon: Package, color: 'text-gray-500', bg: 'bg-gray-100' },
 };
 
+// Helper: Check if a due date is overdue (comparing DATE only, not time)
+// This fixes the bug where "today" items were marked as overdue after midnight
+const isDateOverdue = (dueDateStr) => {
+  if (!dueDateStr) return false;
+  // Get today's date at midnight in local timezone
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  // Parse the due date and set to midnight
+  const dueDate = new Date(dueDateStr);
+  dueDate.setHours(0, 0, 0, 0);
+  // Only overdue if strictly before today (not today itself)
+  return dueDate < today;
+};
+
 const getEquipmentDisplay = (item) => {
   // Determine equipment type and name
   if (item.meca_equipment_id) {
@@ -431,8 +445,11 @@ export default function SwitchboardControls() {
   // Filter schedules
   const filteredSchedules = useMemo(() => {
     return schedules.filter(s => {
+      // Use date-only comparison to fix "today" items being marked as overdue
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
       const dueDate = s.next_due_date ? new Date(s.next_due_date) : null;
+      if (dueDate) dueDate.setHours(0, 0, 0, 0);
 
       // Search filter
       if (filters.search) {
@@ -1216,7 +1233,7 @@ function SchedulesTab({ schedules, onStartControl, onDelete, navigate }) {
   return (
     <div className="divide-y">
       {schedules.map((s, idx) => {
-        const isOverdue = s.next_due_date && new Date(s.next_due_date) < new Date();
+        const isOverdue = isDateOverdue(s.next_due_date);
         const equipDisplay = getEquipmentDisplay(s);
         return (
           <div

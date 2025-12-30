@@ -1291,12 +1291,15 @@ export default function Switchboards() {
       const schedules = res.schedules || [];
       const statuses = {};
       const upcoming30Days = [];
+      // Use date-only comparison to fix "today" items being marked as overdue
       const now = new Date();
+      now.setHours(0, 0, 0, 0);
       const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       schedules.forEach(s => {
         if (s.switchboard_id) {
           const nextDue = s.next_due_date ? new Date(s.next_due_date) : null;
+          if (nextDue) nextDue.setHours(0, 0, 0, 0);
           const isOverdue = nextDue && nextDue < now;
           const isUpcoming = nextDue && !isOverdue && nextDue <= in30Days;
 

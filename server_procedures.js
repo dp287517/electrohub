@@ -1591,10 +1591,8 @@ async function ensureSchema() {
 // Audit Trail
 // ------------------------------
 let audit;
-(async () => {
-  audit = await createAuditTrail(pool, "procedures");
-  await audit.ensureTable();
-})();
+// NOTE: Audit trail initialization moved to startServer() to prevent race condition
+// where requests arrive before audit is ready, causing silent logging failures
 
 // ------------------------------
 // AI Guided Procedure Creation
@@ -11113,6 +11111,12 @@ app.get("/api/procedures/activities/recent", async (req, res) => {
 async function startServer() {
   try {
     await ensureSchema();
+
+    // Initialize audit trail BEFORE server starts accepting requests
+    // This fixes the race condition where audit was undefined for early requests
+    audit = await createAuditTrail(pool, "procedures");
+    await audit.ensureTable();
+    console.log("[Procedures] Audit trail initialized");
 
     // Start hourly check for daily reminders
     setInterval(checkAndSendDailyReminders, 60 * 60 * 1000); // Check every hour

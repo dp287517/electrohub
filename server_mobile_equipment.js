@@ -25,6 +25,7 @@ import crypto from "crypto";
 import StreamZip from "node-stream-zip";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
+const archiver = require("archiver");
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 function resolvePdfWorker() {
   try {
@@ -1658,6 +1659,171 @@ app.get("/api/mobile-equipment/equipments/:id/qrcodes.pdf", async (req, res) => 
   }
 });
 
+/* ========================================================================
+   BULK QR Codes - All equipment in one PDF or ZIP
+   GET /api/mobile-equipment/qrcodes-bulk.pdf?size=200&cols=2&format=pdf
+   GET /api/mobile-equipment/qrcodes-bulk.zip?size=200
+   ======================================================================== */
+app.get("/api/mobile-equipment/qrcodes-bulk.pdf", async (req, res) => {
+  try {
+    const size = Math.max(64, Math.min(512, Number(req.query.size) || 200));
+    const cols = Math.max(1, Math.min(4, Number(req.query.cols) || 2));
+    const force = String(req.query.force || "") === "1";
+
+    // Get all equipment, ordered by building/floor/name
+    const { rows: equipments } = await pool.query(`
+      SELECT id, name, code, building, floor, location
+      FROM me_equipments
+      ORDER BY building, floor, name
+    `);
+
+    if (!equipments.length) {
+      return res.status(404).send("no_equipment_found");
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="qrcodes-equipements-${new Date().toISOString().slice(0, 10)}.pdf"`
+    );
+
+    // A4 page dimensions
+    const pageW = 595.28;
+    const pageH = 841.89;
+    const margin = 36;
+
+    // Calculate cell dimensions
+    const availableW = pageW - (margin * 2);
+    const cellW = availableW / cols;
+    const cellPadding = 10;
+    const qrSize = size;
+    const labelHeight = 50; // Space for equipment name above QR
+    const cellH = qrSize + labelHeight + (cellPadding * 2);
+
+    const rowsPerPage = Math.floor((pageH - margin * 2) / cellH);
+
+    const doc = new PDFDocument({ size: "A4", margin: margin, autoFirstPage: false });
+    doc.pipe(res);
+
+    let currentRow = 0;
+    let currentCol = 0;
+
+    for (let i = 0; i < equipments.length; i++) {
+      const equipment = equipments[i];
+
+      // Add new page if needed
+      if (currentCol === 0 && currentRow === 0) {
+        doc.addPage();
+      }
+
+      // Calculate position
+      const cellX = margin + (currentCol * cellW);
+      const cellY = margin + (currentRow * cellH);
+
+      // Draw cell border (light gray)
+      doc.save();
+      doc.rect(cellX, cellY, cellW - 4, cellH - 4)
+        .lineWidth(0.5)
+        .stroke("#E5E7EB");
+      doc.restore();
+
+      // Equipment name (above QR code)
+      const equipmentLabel =
+        (equipment.name || "").trim() ||
+        [equipment.building, equipment.floor, equipment.location].filter(Boolean).join(" - ") ||
+        `Equipement ${equipment.id}`;
+
+      // Calculate text size to fit
+      let fontSize = 12;
+      doc.font("Helvetica-Bold").fontSize(fontSize);
+      const maxTextWidth = cellW - (cellPadding * 2) - 8;
+      while (doc.widthOfString(equipmentLabel) > maxTextWidth && fontSize > 7) {
+        fontSize--;
+        doc.fontSize(fontSize);
+      }
+
+      // Draw equipment name
+      const textX = cellX + cellPadding;
+      const textY = cellY + cellPadding;
+      doc.font("Helvetica-Bold").fontSize(fontSize).fillColor("#111");
+      doc.text(equipmentLabel, textX, textY, {
+        width: maxTextWidth,
+        height: labelHeight - 10,
+        align: "center",
+        lineBreak: true,
+        ellipsis: true
+      });
+
+      // Generate QR code
+      const qrPath = await ensureEquipmentQRCode(req, equipment.id, equipment.name, qrSize, force);
+
+      // Draw QR code (centered below name)
+      const qrX = cellX + (cellW - qrSize) / 2 - 2;
+      const qrY = cellY + labelHeight;
+      doc.image(qrPath, qrX, qrY, { width: qrSize, height: qrSize });
+
+      // Move to next cell
+      currentCol++;
+      if (currentCol >= cols) {
+        currentCol = 0;
+        currentRow++;
+        if (currentRow >= rowsPerPage) {
+          currentRow = 0;
+        }
+      }
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error("[QR Bulk PDF] Error:", e);
+    res.status(500).send("error");
+  }
+});
+
+// ZIP format for bulk QR codes (individual PNG files)
+app.get("/api/mobile-equipment/qrcodes-bulk.zip", async (req, res) => {
+  try {
+    const size = Math.max(64, Math.min(1024, Number(req.query.size) || 256));
+    const force = String(req.query.force || "") === "1";
+
+    const { rows: equipments } = await pool.query(`
+      SELECT id, name, code, building, floor, location
+      FROM me_equipments
+      ORDER BY building, floor, name
+    `);
+
+    if (!equipments.length) {
+      return res.status(404).send("no_equipment_found");
+    }
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="qrcodes-equipements-${new Date().toISOString().slice(0, 10)}.zip"`
+    );
+
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    for (const equipment of equipments) {
+      const qrPath = await ensureEquipmentQRCode(req, equipment.id, equipment.name, size, force);
+
+      // Create sanitized filename from equipment name
+      const safeName = (equipment.name || equipment.id)
+        .replace(/[^a-zA-Z0-9àâäéèêëïîôùûüç\-_ ]/gi, "")
+        .replace(/\s+/g, "_")
+        .slice(0, 50);
+
+      archive.file(qrPath, { name: `${safeName}_${equipment.id.slice(0, 8)}.png` });
+    }
+
+    await archive.finalize();
+  } catch (e) {
+    console.error("[QR Bulk ZIP] Error:", e);
+    res.status(500).send("error");
+  }
+});
+
 // ------------------------------
 // Calendar • /api/mobile-equipment/calendar
 // ------------------------------
@@ -1921,6 +2087,42 @@ app.put("/api/mobile-equipment/maps/plan/:logical/rename", async (req, res) => {
     );
     res.json({ ok: true });
   } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** Get all equipment IDs that have map placements */
+app.get("/api/mobile-equipment/maps/placed-ids", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT p.equipment_id,
+             p.plan_logical_name AS logical_name,
+             p.page_index,
+             vp.display_name
+        FROM me_equipment_positions p
+        LEFT JOIN vsd_plans vp ON vp.logical_name = p.plan_logical_name
+       ORDER BY p.equipment_id
+    `);
+
+    const placed_ids = [...new Set(rows.map(r => r.equipment_id))];
+
+    // Build placed_details with first placement for each equipment
+    const placed_details = {};
+    rows.forEach(r => {
+      if (!placed_details[r.equipment_id]) {
+        placed_details[r.equipment_id] = {
+          logical_name: r.logical_name,
+          display_name: r.display_name || r.logical_name,
+          page_index: r.page_index || 0,
+          plans: []
+        };
+      }
+      placed_details[r.equipment_id].plans.push(r.logical_name);
+    });
+
+    res.json({ ok: true, placed_ids, placed_details });
+  } catch (e) {
+    console.error("[Mobile Maps] placed-ids error:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
