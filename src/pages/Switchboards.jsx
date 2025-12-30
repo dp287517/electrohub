@@ -1173,6 +1173,7 @@ export default function Switchboards() {
   // URL params handling
   useEffect(() => {
     const boardId = searchParams.get('board');
+    const scanJobId = searchParams.get('scanJobId'); // Don't reset if handling scan job
     // Validate boardId is a valid number to prevent /api/switchboard/boards/undefined calls
     const numericBoardId = boardId ? Number(boardId) : null;
     if (boardId && numericBoardId && !isNaN(numericBoardId) && (!selectedBoard || selectedBoard.id !== numericBoardId)) {
@@ -1187,17 +1188,18 @@ export default function Switchboards() {
           }
         })
         .catch(() => showToast('Tableau non trouvé', 'error'));
-    } else if (!boardId && selectedBoard) {
+    } else if (!boardId && !scanJobId && selectedBoard && !showPanelScan) {
+      // Only reset selectedBoard if no board param, no scanJob, and panel scan modal is not open
       setSelectedBoard(null);
     }
-  }, [searchParams]);
+  }, [searchParams, showPanelScan]);
 
   // Handle scan job URL params (from notification click)
   useEffect(() => {
     const scanJobId = searchParams.get('scanJobId');
     const switchboardIdParam = searchParams.get('switchboardId');
 
-    if (scanJobId && switchboardIdParam) {
+    if (scanJobId && switchboardIdParam && !showPanelScan) {
       console.log('[Switchboards] Found scan job params:', { scanJobId, switchboardIdParam });
 
       // Fetch the job result
@@ -1215,20 +1217,21 @@ export default function Switchboards() {
         })
         .then(board => {
           if (board) {
+            console.log('[Switchboards] Opening panel scan modal for board:', board.name || board.code);
             setSelectedBoard(board);
             setShowPanelScan(true);
-            // Clear URL params
-            setSearchParams({});
+            // Clear URL params AFTER state is set (use setTimeout to ensure React batching is complete)
+            setTimeout(() => setSearchParams({}), 100);
           }
         })
         .catch(err => {
           console.error('[Switchboards] Error loading scan job:', err);
           setToast({ message: err.message || 'Erreur lors du chargement du scan', type: 'error' });
-          // Clear URL params
+          // Clear URL params on error
           setSearchParams({});
         });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, showPanelScan]);
 
   useEffect(() => {
     if (selectedBoard) {
