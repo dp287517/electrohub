@@ -427,10 +427,27 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
       // If needs processing (user said "terminé"), show waiting message and process
       if (response.needsProcessing) {
+        const stepsCount = response.collectedData?.raw_steps?.length || collectedData?.raw_steps?.length || 0;
+
+        // Use background mode for large procedures (>10 steps) to avoid timeout
+        if (stepsCount > 10) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'assistant', content: `⏳ **Traitement de ${stepsCount} étapes en cours...**\n\nLe traitement va continuer en arrière-plan.\n\n📲 **Vous recevrez une notification** quand ce sera prêt.\n\n💡 Vous pouvez fermer cette fenêtre sans risque.` }
+          ]);
+
+          // Start background processing
+          await processAISession(sessionId, { background: true });
+          setIsProcessing(false);
+          setCurrentStep('processing_background');
+          return;
+        }
+
+        // For smaller procedures, process synchronously
         setIsProcessing(true);
         setMessages(prev => [
           ...prev,
-          { role: 'assistant', content: "⏳ Traitement des étapes en cours...\n\nGénération des instructions détaillées, EPI et niveau de risque.\n\n💡 Vous pouvez fermer cette fenêtre et vous recevrez une notification quand ce sera prêt." }
+          { role: 'assistant', content: "⏳ Traitement des étapes en cours...\n\nGénération des instructions détaillées, EPI et niveau de risque." }
         ]);
 
         // Call processing endpoint for quality generation
