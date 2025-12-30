@@ -600,7 +600,8 @@ export default function AtexMap({
   const editHandlesLayerRef = useRef(null);
   const positionsRef = useRef([]);  // 🆕 Ref pour garder les positions localement
   const selectedEquipmentIdRef = useRef(selectedEquipmentId);  // 🆕 Ref pour highlight
-  const recentDuplicatesRef = useRef(recentDuplicates);  // 🟣 Ref pour duplicatas
+  // 🛡️ Fallback new Set() pour éviter erreur si prop non passée
+  const recentDuplicatesRef = useRef(recentDuplicates instanceof Set ? recentDuplicates : new Set());
   const onDuplicateClickedRef = useRef(onDuplicateClicked);  // 🟣 Callback pour clic sur duplicata
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
   const [drawMenu, setDrawMenu] = useState(false);
@@ -635,7 +636,8 @@ export default function AtexMap({
   // 🟣 + Mise à jour recentDuplicates pour affichage violet
   useEffect(() => {
     selectedEquipmentIdRef.current = selectedEquipmentId;
-    recentDuplicatesRef.current = recentDuplicates;
+    // 🛡️ Fallback pour éviter erreur si recentDuplicates n'est pas passé
+    recentDuplicatesRef.current = recentDuplicates instanceof Set ? recentDuplicates : new Set();
     onDuplicateClickedRef.current = onDuplicateClicked;
     // Re-dessiner les marqueurs avec le nouveau highlight
     if (baseReadyRef.current && positionsRef.current?.length > 0) {
@@ -650,7 +652,8 @@ export default function AtexMap({
         }
       }
     }
-  }, [selectedEquipmentId, recentDuplicates]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEquipmentId, recentDuplicates, onDuplicateClicked]);
 
   /* ------------------------------- Outside click menu ------------------------------- */
   useEffect(() => {
