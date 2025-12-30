@@ -1425,6 +1425,8 @@ export default function Atex() {
             selectedEquipmentId={selectedEquipmentId}
             setSelectedEquipmentId={setSelectedEquipmentId}
             onUploadClick={() => setUploadModalOpen(true)}
+            recentDuplicates={recentDuplicates}
+            onDuplicateClicked={removeDuplicate}
           />
         )}
 
@@ -2735,7 +2737,7 @@ function CalendarTab({ items, onOpenEquipment }) {
 // PLANS TAB
 // ============================================================
 
-function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId, onUploadClick }) {
+function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefreshTick, setMapRefreshTick, loadPlans, openEdit, applyZonesLocally, reload, mergeZones, editing, setEditing, setToast, selectedEquipmentId, setSelectedEquipmentId, onUploadClick, recentDuplicates = new Set(), onDuplicateClicked = null }) {
   const [regenerating, setRegenerating] = useState(false);
   const [regenProgress, setRegenProgress] = useState({ current: 0, total: 0 });
 
@@ -2997,7 +2999,7 @@ function PlansTab({ plans, mapsLoading, selectedPlan, setSelectedPlan, mapRefres
             pageIndex={selectedPlan._targetPageIndex || 0}
             selectedEquipmentId={selectedEquipmentId}
             recentDuplicates={recentDuplicates}
-            onDuplicateClicked={removeDuplicate}
+            onDuplicateClicked={onDuplicateClicked}
             onOpenEquipment={(eq) => {
               setSelectedEquipmentId(eq?.id || null);
               openEdit(eq);
