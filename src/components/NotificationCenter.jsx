@@ -132,6 +132,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     if (filter === 'all') return true;
     if (filter === 'procedures') return a.type.includes('procedure');
     if (filter === 'signatures') return a.type.includes('signature');
+    if (filter === 'scans') return a.type.includes('scan');
     return true;
   }).slice(0, maxItems);
 
@@ -197,6 +198,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
         {[
           { id: 'all', label: 'Tout' },
           { id: 'actions', label: 'Actions' },
+          { id: 'scans', label: 'Scans IA' },
           { id: 'procedures', label: 'Procédures' },
           { id: 'signatures', label: 'Signatures' },
         ].map(f => (
