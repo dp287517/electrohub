@@ -2673,17 +2673,21 @@ Complète les spécifications manquantes.`
         const validatedMatch = cacheResults.find(c => c.validated &&
           c.reference?.toLowerCase() === result.reference?.toLowerCase());
         if (validatedMatch) {
-          console.log('[PHOTO ANALYSIS v2.0] Found validated cache match, using cached values');
+          console.log('[PHOTO ANALYSIS v2.0] Found validated cache match, using cached values for Icu/voltage');
+          // IMPORTANT: NE PAS utiliser le cache pour in_amps et poles !
+          // Ces valeurs DOIVENT venir de l'analyse photo pour être précises
+          // Le cache est utile uniquement pour icu_ka, ics_ka, voltage_v, trip_unit
           result = {
             ...result,
-            in_amps: result.in_amps || validatedMatch.in_amps,
+            // in_amps: garder la valeur AI - NE PAS utiliser le cache
+            // poles: garder la valeur AI - NE PAS utiliser le cache
             icu_ka: result.icu_ka || validatedMatch.icu_ka,
             ics_ka: result.ics_ka || validatedMatch.ics_ka,
-            poles: result.poles || validatedMatch.poles,
             voltage_v: result.voltage_v || validatedMatch.voltage_v,
             trip_unit: result.trip_unit || validatedMatch.trip_unit,
             from_validated_cache: true
           };
+          console.log(`[PHOTO ANALYSIS v2.0] Cache used for Icu=${result.icu_ka}kA, AI values preserved: in_amps=${result.in_amps}, poles=${result.poles}`);
         }
       } catch (e) { /* ignore cache errors */ }
     }
@@ -3708,18 +3712,28 @@ IMPORTANT: Si tu vois le MÊME calibre partout, vérifie que tu n'as pas copié-
       });
 
       if (cached && cached.icu_ka) {
-        console.log(`[PANEL SCAN] Cache hit for ${device.reference}: Icu=${cached.icu_ka}kA`);
-        return {
+        // IMPORTANT: Le cache ne doit enrichir que les valeurs MANQUANTES
+        // Ne JAMAIS écraser les valeurs détectées par l'IA !
+        // Le cache est utile pour icu_ka (rarement visible sur photos)
+        // mais NE PAS utiliser pour in_amps, poles qui doivent venir de l'analyse photo
+        const enriched = {
           ...device,
+          // Icu/Ics: souvent pas visible sur les photos, cache utile
           icu_ka: device.icu_ka || cached.icu_ka,
           ics_ka: device.ics_ka || cached.ics_ka,
+          // Voltage: garder la valeur AI, sinon cache, sinon défaut
           voltage_v: device.voltage_v || cached.voltage_v || 230,
-          poles: device.poles || cached.poles,
+          // Courbe: garder la valeur AI si présente
           curve_type: device.curve_type || cached.curve_type,
+          // ATTENTION: NE PAS utiliser le cache pour poles !
+          // Les pôles DOIVENT venir de l'analyse photo (mono vs tri)
+          // poles: device.poles - garder tel quel, pas de fallback cache
           from_cache: true,
           cache_validated: cached.validated,
           selected: true
         };
+        console.log(`[PANEL SCAN] Cache enrichment for ${device.reference}: Icu=${enriched.icu_ka}kA (AI poles=${device.poles} preserved)`);
+        return enriched;
       }
 
       // Pas dans le cache - marquer pour enrichissement
