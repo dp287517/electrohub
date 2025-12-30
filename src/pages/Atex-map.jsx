@@ -243,7 +243,7 @@ const STATUS_GRADIENT = {
   fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
   selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
   non_conforme: { from: "#ef4444", to: "#b91c1c" }, // Rouge vif pour non conforme
-  duplicate: { from: "#c4b5fd", to: "#8b5cf6" },    // 🟣 Violet clair pour duplicatas
+  duplicate: { from: "#fbcfe8", to: "#ec4899" },    // 🌸 Rose clair pour duplicatas
 };
 
 // Icône SVG flamme ATEX
@@ -305,7 +305,7 @@ function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = 
   // 🆕 Bordure plus visible pour sélection ou duplicata
   let borderStyle;
   if (isDuplicate) {
-    borderStyle = "border:3px solid #8b5cf6;box-shadow:0 0 0 4px rgba(139,92,246,0.5),0 6px 15px rgba(0,0,0,.35);";
+    borderStyle = "border:3px solid #ec4899;box-shadow:0 0 0 4px rgba(236,72,153,0.5),0 6px 15px rgba(0,0,0,.35);";
   } else if (isSelected) {
     borderStyle = "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);";
   } else {
