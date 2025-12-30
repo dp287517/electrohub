@@ -2435,7 +2435,7 @@ function EquipmentsTab({ items, loading, onOpenEquipment, onGoToMap }) {
       <div className="flex items-start gap-3">
         <div className="w-12 h-12 rounded-lg border overflow-hidden bg-gray-100 flex items-center justify-center shrink-0">
           {eq.photo_url ? (
-            <img src={api.atex.photoUrl(eq.id, { thumb: true })} alt="" loading="lazy" className="w-full h-full object-cover" />
+            <img src={api.atex.photoUrl(eq.id, { thumb: true, bust: false })} alt="" loading="lazy" className="w-full h-full object-cover" />
           ) : (
             <span className="text-gray-400 text-xl">🔥</span>
           )}
@@ -2542,7 +2542,7 @@ function OverdueTab({ overdueList, onOpenEquipment }) {
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-lg border overflow-hidden bg-white flex items-center justify-center">
               {eq.photo_url ? (
-                <img src={api.atex.photoUrl(eq.id, { thumb: true })} alt="" className="w-full h-full object-cover" />
+                <img src={api.atex.photoUrl(eq.id, { thumb: true, bust: false })} alt="" loading="lazy" className="w-full h-full object-cover" />
               ) : (
                 <span className="text-2xl">⚠️</span>
               )}

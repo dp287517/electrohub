@@ -41,6 +41,28 @@ for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
   await fsp.mkdir(d, { recursive: true });
 }
 
+// 🚀 PERF: Simple LRU cache for thumbnails (max 500 items, 10min TTL)
+const thumbCache = new Map();
+const THUMB_CACHE_MAX = 500;
+const THUMB_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+function getThumbFromCache(id) {
+  const entry = thumbCache.get(id);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > THUMB_CACHE_TTL) {
+    thumbCache.delete(id);
+    return null;
+  }
+  return entry.data;
+}
+function setThumbInCache(id, data) {
+  if (thumbCache.size >= THUMB_CACHE_MAX) {
+    // Evict oldest entry
+    const oldest = thumbCache.keys().next().value;
+    thumbCache.delete(oldest);
+  }
+  thumbCache.set(id, { data, ts: Date.now() });
+}
+
 // -------------------------------------------------
 // Helper: Generate a thumbnail from a PDF buffer
 // Tries multiple methods: pdf2pic (GraphicsMagick/ImageMagick), sharp, then placeholder
@@ -1424,12 +1446,22 @@ app.post("/api/atex/equipments/:id/photo", multerFiles.single("photo"), async (r
     res.json({ ok:true, url:`/api/atex/equipments/${id}/photo` });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
-// ✅ VERSION OPTIMISÉE - Génère des thumbnails si thumb=1
+// ✅ VERSION OPTIMISÉE - Génère des thumbnails si thumb=1 (avec cache LRU)
 app.get("/api/atex/equipments/:id/photo", async (req, res) => {
   try {
     const id = String(req.params.id);
     const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
     const thumbSize = 200; // pixels max pour le côté le plus long
+
+    // 🚀 PERF: Check cache first for thumbnails
+    if (wantThumb) {
+      const cached = getThumbFromCache(id);
+      if (cached) {
+        res.type("image/jpeg");
+        res.set("Cache-Control", "public, max-age=3600");
+        return res.end(cached, "binary");
+      }
+    }
 
     const { rows } = await pool.query(
       `SELECT photo_path, photo_content FROM atex_equipments WHERE id=$1`,
@@ -1458,6 +1490,9 @@ app.get("/api/atex/equipments/:id/photo", async (req, res) => {
           .resize(thumbSize, thumbSize, { fit: "inside", withoutEnlargement: true })
           .jpeg({ quality: 70 })
           .toBuffer();
+
+        // 🚀 PERF: Store in cache
+        setThumbInCache(id, thumb);
 
         res.type("image/jpeg");
         res.set("Cache-Control", "public, max-age=3600"); // Cache 1h
