@@ -5767,6 +5767,11 @@ app.post("/api/procedures/:id/recover-photos", async (req, res) => {
 
     console.log(`[RECOVER] Found session ${session.id} with ${rawSteps.length} raw_steps`);
 
+    // Log what's in raw_steps for diagnostics
+    rawSteps.forEach((rs, idx) => {
+      console.log(`[RECOVER] raw_steps[${idx}]: photo=${rs.photo}, has_base64=${!!rs.photo_base64}, base64_len=${rs.photo_base64?.length || 0}`);
+    });
+
     // Get procedure steps
     const { rows: steps } = await pool.query(
       `SELECT * FROM procedure_steps WHERE procedure_id = $1 ORDER BY step_number`,
