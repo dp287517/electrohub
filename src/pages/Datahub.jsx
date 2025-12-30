@@ -1,6 +1,7 @@
 // src/pages/Datahub.jsx - Datahub with custom category markers
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useFormDraft } from '../hooks/useFormDraft';
 import {
   Database, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   Trash2, Edit3, Save, X, AlertTriangle, CheckCircle, RefreshCw, MapPin,
@@ -534,8 +535,35 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
 // Edit Form with Photo & Files upload
 const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
   const isNew = !item?.id;
-  const [form, setForm] = useState({ name: '', code: '', category_id: '', building: '', floor: '', location: '', description: '', notes: '' });
+
+  // Auto-save draft for new items only (don't overwrite existing items)
+  const draftKey = isNew ? 'datahub_new' : null;
+  const initialFormData = { name: '', code: '', category_id: '', building: '', floor: '', location: '', description: '', notes: '' };
+
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft(draftKey || 'datahub_disabled', initialFormData, { debounceMs: 500 });
+
+  // Use draft for new items, local state for existing items
+  const [form, setFormInternal] = useState(initialFormData);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sync form with draft or item
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        if (isNew) setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      if (isNew) setDraftData(newData);
+    }
+  }, [isNew, setDraftData]);
 
   // Photo & Files state
   const [pendingPhoto, setPendingPhoto] = useState(null);
@@ -547,20 +575,23 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
   const fileInputRef = React.useRef(null);
 
   useEffect(() => {
-    if (item) setForm({
-      name: item.name || '', code: item.code || '', category_id: item.category_id || '',
-      building: item.building || '', floor: item.floor || '', location: item.location || '',
-      description: item.description || '', notes: item.notes || ''
-    });
-    // Load existing files for existing items
     if (item?.id) {
+      // Editing existing item - load its data
+      setFormInternal({
+        name: item.name || '', code: item.code || '', category_id: item.category_id || '',
+        building: item.building || '', floor: item.floor || '', location: item.location || '',
+        description: item.description || '', notes: item.notes || ''
+      });
       api.datahub.listFiles(item.id).then(res => setExistingFiles(res?.files || [])).catch(() => {});
+    } else if (isNew && hasDraft) {
+      // New item - restore from draft if available
+      setFormInternal(draftData);
     }
     // Reset pending files when item changes
     setPendingPhoto(null);
     setPendingPhotoPreview(null);
     setPendingFiles([]);
-  }, [item]);
+  }, [item, isNew, hasDraft, draftData]);
 
   const handlePhotoSelect = (e) => {
     const file = e.target.files?.[0];
@@ -609,6 +640,8 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
             console.error('File upload error:', err);
           }
         }
+        // Clear draft after successful save
+        if (isNew) clearDraft();
       }
     } catch { showToast('Erreur', 'error'); }
     finally { setIsSaving(false); }

@@ -1,6 +1,7 @@
 // src/pages/Meca.jsx - Redesigned following Switchboards pattern
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useFormDraft } from '../hooks/useFormDraft';
 import {
   Cog, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
@@ -1287,46 +1288,50 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
 // ==================== EDIT FORM COMPONENT ====================
 
 const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) => {
+  const isNew = !equipment?.id;
+  const initialFormData = {
+    name: '', tag: '', category: '', category_id: '', subcategory_id: '', equipment_type: '',
+    manufacturer: '', model: '', power_kw: '', voltage: '', current_a: '', ip_rating: '',
+    drive_type: '', coupling: '', mounting: '', fluid: '', flow_m3h: '', pressure_bar: '',
+    speed_rpm: '', building: '', floor: '', zone: '', location: '', panel: '',
+    ui_status: '', criticality: '', comments: ''
+  };
+
+  // Auto-save draft for new items only
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft(isNew ? 'meca_new' : 'meca_disabled', initialFormData, { debounceMs: 500 });
+
+  const [form, setFormInternal] = useState(initialFormData);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showAIModal, setShowAIModal] = useState(false);
+
+  // Sync form with draft or equipment
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        if (isNew) setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      if (isNew) setDraftData(newData);
+    }
+  }, [isNew, setDraftData]);
+
   // Debug: Log received categories
   useEffect(() => {
     console.log('[EditForm] Categories received:', categories.length, categories);
   }, [categories]);
 
-  const [form, setForm] = useState({
-    name: '',
-    tag: '',
-    category: '',
-    category_id: '',
-    subcategory_id: '',
-    equipment_type: '',
-    manufacturer: '',
-    model: '',
-    power_kw: '',
-    voltage: '',
-    current_a: '',
-    ip_rating: '',
-    drive_type: '',
-    coupling: '',
-    mounting: '',
-    fluid: '',
-    flow_m3h: '',
-    pressure_bar: '',
-    speed_rpm: '',
-    building: '',
-    floor: '',
-    zone: '',
-    location: '',
-    panel: '',
-    ui_status: '',
-    criticality: '',
-    comments: ''
-  });
-  const [isSaving, setIsSaving] = useState(false);
-  const [showAIModal, setShowAIModal] = useState(false);
-
   useEffect(() => {
-    if (equipment) {
-      setForm({
+    if (equipment?.id) {
+      // Editing existing equipment
+      setFormInternal({
         name: equipment.name || '',
         tag: equipment.tag || '',
         category: equipment.category || '',
@@ -1355,8 +1360,11 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
         criticality: equipment.criticality || '',
         comments: equipment.comments || ''
       });
+    } else if (isNew && hasDraft) {
+      // New equipment - restore from draft
+      setFormInternal(draftData);
     }
-  }, [equipment]);
+  }, [equipment, isNew, hasDraft, draftData]);
 
   // Get subcategories for the selected category
   const selectedCategory = categories.find(c => c.id === form.category_id);
@@ -1397,6 +1405,8 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
       // Remove ui_status from payload since we've mapped it to status
       delete payload.ui_status;
       await onSave(payload);
+      // Clear draft after successful save
+      if (isNew) clearDraft();
     } finally {
       setIsSaving(false);
     }

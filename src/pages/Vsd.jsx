@@ -1,6 +1,7 @@
 // src/pages/Vsd.jsx - Redesigned following Switchboards pattern
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useFormDraft } from '../hooks/useFormDraft';
 import {
   Cpu, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
@@ -849,34 +850,43 @@ const DetailPanel = ({
 // ==================== EDIT FORM COMPONENT ====================
 
 const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
-  const [form, setForm] = useState({
-    name: '',
-    tag: '',
-    manufacturer: '',
-    model: '',
-    reference: '',
-    serial_number: '',
-    power_kw: '',
-    voltage: '',
-    current_a: '',
-    ip_address: '',
-    protocol: '',
-    ip_rating: '',
-    building: '',
-    floor: '',
-    zone: '',
-    location: '',
-    panel: '',
-    ui_status: '',
-    criticality: '',
-    comments: ''
-  });
+  const isNew = !equipment?.id;
+  const initialFormData = {
+    name: '', tag: '', manufacturer: '', model: '', reference: '', serial_number: '',
+    power_kw: '', voltage: '', current_a: '', ip_address: '', protocol: '', ip_rating: '',
+    building: '', floor: '', zone: '', location: '', panel: '', ui_status: '', criticality: '', comments: ''
+  };
+
+  // Auto-save draft for new items only
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft(isNew ? 'vsd_new' : 'vsd_disabled', initialFormData, { debounceMs: 500 });
+
+  const [form, setFormInternal] = useState(initialFormData);
   const [isSaving, setIsSaving] = useState(false);
   const [showAIModal, setShowAIModal] = useState(false);
 
+  // Sync form with draft or equipment
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        if (isNew) setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      if (isNew) setDraftData(newData);
+    }
+  }, [isNew, setDraftData]);
+
   useEffect(() => {
-    if (equipment) {
-      setForm({
+    if (equipment?.id) {
+      // Editing existing equipment
+      setFormInternal({
         name: equipment.name || '',
         tag: equipment.tag || '',
         manufacturer: equipment.manufacturer || '',
@@ -898,8 +908,11 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
         criticality: equipment.criticality || '',
         comments: equipment.comments || ''
       });
+    } else if (isNew && hasDraft) {
+      // New equipment - restore from draft
+      setFormInternal(draftData);
     }
-  }, [equipment]);
+  }, [equipment, isNew, hasDraft, draftData]);
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -910,6 +923,8 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
         current_a: form.current_a !== '' ? Number(form.current_a) : null,
       };
       await onSave(payload);
+      // Clear draft after successful save
+      if (isNew) clearDraft();
     } finally {
       setIsSaving(false);
     }

@@ -10,6 +10,7 @@ import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
 import multer from "multer";
+import sharp from "sharp";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
@@ -3609,6 +3610,192 @@ app.post("/api/procedures/drafts/cleanup-orphans", async (req, res) => {
   }
 });
 
+// ==================== PENDING PHOTOS (Photos en attente) ====================
+// Photos are saved immediately to DB to prevent data loss
+
+// Create pending photos table
+const initPendingPhotosTable = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS procedure_pending_photos (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(255),
+        draft_id INTEGER REFERENCES procedure_drafts(id) ON DELETE CASCADE,
+        user_email VARCHAR(255),
+        site VARCHAR(100),
+        file_name TEXT,
+        file_mime TEXT,
+        file_data BYTEA,
+        thumbnail BYTEA,
+        caption TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_pending_photos_session ON procedure_pending_photos(session_id);
+      CREATE INDEX IF NOT EXISTS idx_pending_photos_draft ON procedure_pending_photos(draft_id);
+    `);
+    console.log("✓ Procedure pending photos table ready");
+  } catch (error) {
+    console.log("Could not create pending photos table:", error.message);
+  }
+};
+initPendingPhotosTable();
+
+// Multer for pending photo uploads (memory storage for DB)
+const uploadPendingPhoto = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Seules les images sont acceptées"), false);
+    }
+  },
+});
+
+// Upload a pending photo (saved immediately to DB)
+app.post("/api/procedures/pending-photos", uploadPendingPhoto.single("photo"), async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+    const { session_id, draft_id, caption } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "No photo provided" });
+    }
+
+    const { buffer, mimetype, originalname } = req.file;
+
+    // Generate thumbnail
+    let thumbnail = null;
+    try {
+      thumbnail = await sharp(buffer)
+        .resize(200, 200, { fit: 'cover' })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+    } catch (e) {
+      console.warn('[PROCEDURES] Thumbnail generation failed:', e.message);
+    }
+
+    const { rows } = await pool.query(`
+      INSERT INTO procedure_pending_photos
+        (session_id, draft_id, user_email, site, file_name, file_mime, file_data, thumbnail, caption)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id, session_id, draft_id, file_name, file_mime, caption, created_at
+    `, [session_id || null, draft_id || null, userEmail, site, originalname, mimetype, buffer, thumbnail, caption || null]);
+
+    console.log(`[PROCEDURES] Saved pending photo ${rows[0].id} for session ${session_id || 'none'}`);
+
+    res.json({ ok: true, photo: rows[0] });
+  } catch (err) {
+    console.error("Error saving pending photo:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Get all pending photos for a session/draft
+app.get("/api/procedures/pending-photos", async (req, res) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+    const { session_id, draft_id } = req.query;
+
+    let query = `
+      SELECT id, session_id, draft_id, file_name, file_mime, caption, created_at
+      FROM procedure_pending_photos
+      WHERE (user_email = $1 OR site = $2)
+    `;
+    const params = [userEmail, site];
+
+    if (session_id) {
+      query += ` AND session_id = $${params.length + 1}`;
+      params.push(session_id);
+    }
+    if (draft_id) {
+      query += ` AND draft_id = $${params.length + 1}`;
+      params.push(draft_id);
+    }
+
+    query += ` ORDER BY created_at ASC`;
+
+    const { rows } = await pool.query(query, params);
+
+    res.json({ ok: true, photos: rows });
+  } catch (err) {
+    console.error("Error getting pending photos:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Get pending photo file
+app.get("/api/procedures/pending-photos/:id/file", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { thumbnail } = req.query;
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    const column = thumbnail === 'true' ? 'thumbnail' : 'file_data';
+    const { rows } = await pool.query(`
+      SELECT ${column} as data, file_mime, file_name
+      FROM procedure_pending_photos
+      WHERE id = $1 AND (user_email = $2 OR site = $3)
+    `, [id, userEmail, site]);
+
+    if (!rows.length || !rows[0].data) {
+      return res.status(404).json({ ok: false, error: "Photo not found" });
+    }
+
+    res.set('Content-Type', rows[0].file_mime || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${rows[0].file_name}"`);
+    res.send(rows[0].data);
+  } catch (err) {
+    console.error("Error getting pending photo file:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Delete a pending photo
+app.delete("/api/procedures/pending-photos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    await pool.query(`
+      DELETE FROM procedure_pending_photos
+      WHERE id = $1 AND (user_email = $2 OR site = $3)
+    `, [id, userEmail, site]);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Error deleting pending photo:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Clear all pending photos for a session (called after procedure is saved)
+app.delete("/api/procedures/pending-photos/session/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
+
+    const { rowCount } = await pool.query(`
+      DELETE FROM procedure_pending_photos
+      WHERE session_id = $1 AND (user_email = $2 OR site = $3)
+    `, [sessionId, userEmail, site]);
+
+    console.log(`[PROCEDURES] Cleared ${rowCount} pending photos for session ${sessionId}`);
+    res.json({ ok: true, deleted: rowCount });
+  } catch (err) {
+    console.error("Error clearing pending photos:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Resume AI session from draft
 app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
   try {
@@ -5210,12 +5397,38 @@ app.post("/api/procedures/ai/start", async (req, res) => {
 app.post("/api/procedures/ai/chat/:sessionId", uploadPhoto.single("photo"), async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { message } = req.body;
+    const { message, pending_photo_id } = req.body;
+    const userEmail = req.headers["x-user-email"];
+    const site = req.headers["x-site"];
 
     let photoPath = null;
     let photoContent = null;
 
-    if (req.file) {
+    // Handle pending photo from server (uploaded earlier and persisted)
+    if (pending_photo_id) {
+      try {
+        const { rows } = await pool.query(`
+          SELECT file_data, file_name, file_mime
+          FROM procedure_pending_photos
+          WHERE id = $1 AND (user_email = $2 OR site = $3)
+        `, [pending_photo_id, userEmail, site]);
+
+        if (rows.length > 0 && rows[0].file_data) {
+          photoPath = rows[0].file_name || `pending-${pending_photo_id}.jpg`;
+          photoContent = rows[0].file_data;
+          console.log(`[PROC] Using pending photo ${pending_photo_id}: ${photoPath} (${photoContent.length} bytes)`);
+
+          // Delete the pending photo after use
+          await pool.query(`DELETE FROM procedure_pending_photos WHERE id = $1`, [pending_photo_id]);
+        } else {
+          console.warn(`[PROC] Pending photo ${pending_photo_id} not found`);
+        }
+      } catch (e) {
+        console.error(`[PROC] Error retrieving pending photo ${pending_photo_id}:`, e.message);
+      }
+    }
+    // Handle direct file upload
+    else if (req.file) {
       photoPath = req.file.filename;
       // CRITICAL: Read photo content and store in DB (Render filesystem is ephemeral)
       try {

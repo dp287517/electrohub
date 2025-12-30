@@ -1,6 +1,7 @@
 // src/pages/Doors.jsx - Redesigned following VSD/Meca/Switchboard pattern
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useFormDraft } from '../hooks/useFormDraft';
 import {
   DoorOpen, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
@@ -879,24 +880,47 @@ const DetailPanel = ({
 
 const EditForm = ({ door, onSave, onCancel, showToast }) => {
   const isNew = !door?.id;
-  const [form, setForm] = useState({
-    name: '',
-    building: '',
-    floor: '',
-    location: ''
-  });
+  const initialFormData = { name: '', building: '', floor: '', location: '' };
+
+  // Auto-save draft for new items only
+  const {
+    formData: draftData,
+    setFormData: setDraftData,
+    clearDraft,
+    hasDraft
+  } = useFormDraft(isNew ? 'doors_new' : 'doors_disabled', initialFormData, { debounceMs: 500 });
+
+  const [form, setFormInternal] = useState(initialFormData);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Sync form with draft or door
+  const setForm = useCallback((newData) => {
+    if (typeof newData === 'function') {
+      setFormInternal(prev => {
+        const updated = newData(prev);
+        if (isNew) setDraftData(updated);
+        return updated;
+      });
+    } else {
+      setFormInternal(newData);
+      if (isNew) setDraftData(newData);
+    }
+  }, [isNew, setDraftData]);
+
   useEffect(() => {
-    if (door) {
-      setForm({
+    if (door?.id) {
+      // Editing existing door
+      setFormInternal({
         name: door.name || '',
         building: door.building || '',
         floor: door.floor || '',
         location: door.location || ''
       });
+    } else if (isNew && hasDraft) {
+      // New door - restore from draft
+      setFormInternal(draftData);
     }
-  }, [door]);
+  }, [door, isNew, hasDraft, draftData]);
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -907,6 +931,8 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
     setIsSaving(true);
     try {
       await onSave(form);
+      // Clear draft after successful save
+      if (isNew) clearDraft();
     } catch (err) {
       showToast('Erreur lors de la sauvegarde', 'error');
     } finally {

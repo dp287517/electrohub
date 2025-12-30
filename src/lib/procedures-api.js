@@ -195,6 +195,51 @@ export async function resumeDraft(draftId) {
   return response.json();
 }
 
+// ==================== PENDING PHOTOS (Photos en attente) ====================
+// Photos uploaded immediately to server to prevent data loss
+
+export async function uploadPendingPhoto(photoFile, sessionId = null, draftId = null, caption = null) {
+  const formData = new FormData();
+  formData.append('photo', photoFile);
+  if (sessionId) formData.append('session_id', sessionId);
+  if (draftId) formData.append('draft_id', draftId);
+  if (caption) formData.append('caption', caption);
+
+  const response = await fetchWithAuth(`${API_BASE}/pending-photos`, {
+    method: 'POST',
+    body: formData,
+  });
+  return response.json();
+}
+
+export async function getPendingPhotos(sessionId = null, draftId = null) {
+  const params = new URLSearchParams();
+  if (sessionId) params.append('session_id', sessionId);
+  if (draftId) params.append('draft_id', draftId);
+
+  const response = await fetchWithAuth(`${API_BASE}/pending-photos?${params}`);
+  return response.json();
+}
+
+export async function deletePendingPhoto(photoId) {
+  const response = await fetchWithAuth(`${API_BASE}/pending-photos/${photoId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+export async function clearPendingPhotos(sessionId) {
+  const response = await fetchWithAuth(`${API_BASE}/pending-photos/session/${sessionId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
+export function getPendingPhotoUrl(photoId, thumbnail = false) {
+  const site = localStorage.getItem('selectedSite') || localStorage.getItem('site') || '';
+  return `${API_BASE}/pending-photos/${photoId}/file?thumbnail=${thumbnail}&site=${site}`;
+}
+
 // ==================== AI GUIDED CREATION ====================
 
 export async function startAISession(initialMessage = null, draftId = null) {
@@ -205,7 +250,17 @@ export async function startAISession(initialMessage = null, draftId = null) {
   return response.json();
 }
 
-export async function continueAISession(sessionId, message, photoFile = null) {
+export async function continueAISession(sessionId, message, photoFile = null, pendingPhotoId = null) {
+  // If using a pending photo from server, pass the ID
+  if (pendingPhotoId) {
+    const response = await fetchWithAuth(`${API_BASE}/ai/chat/${sessionId}`, {
+      method: 'POST',
+      body: JSON.stringify({ message, pending_photo_id: pendingPhotoId }),
+    });
+    return response.json();
+  }
+
+  // If uploading a new photo file
   if (photoFile) {
     const formData = new FormData();
     formData.append('message', message);
@@ -218,6 +273,7 @@ export async function continueAISession(sessionId, message, photoFile = null) {
     return response.json();
   }
 
+  // Text-only message
   const response = await fetchWithAuth(`${API_BASE}/ai/chat/${sessionId}`, {
     method: 'POST',
     body: JSON.stringify({ message }),
