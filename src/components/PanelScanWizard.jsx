@@ -4,7 +4,7 @@
  * Détecte automatiquement tous les appareils et permet la création en masse
  */
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   X, Camera, Upload, Trash2, ChevronRight, ChevronLeft,
   Zap, Check, AlertTriangle, Edit3, Loader2, Image,
@@ -317,6 +317,8 @@ const AnalysisStep = ({ photos, switchboardId, onComplete, onError }) => {
 const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => {
   const [editingIndex, setEditingIndex] = useState(null);
   const [selectAll, setSelectAll] = useState(true);
+  const [quickEditField, setQuickEditField] = useState(null); // {index, field, value}
+  const editInputRef = useRef(null);
 
   const toggleDevice = (index) => {
     setDevices(prev => prev.map((d, i) =>
@@ -336,6 +338,24 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
     ));
   };
 
+  // Quick edit modal for tablet/mobile
+  const openQuickEdit = (index, field, currentValue) => {
+    setQuickEditField({ index, field, value: currentValue || '' });
+    setTimeout(() => editInputRef.current?.focus(), 100);
+  };
+
+  const closeQuickEdit = () => {
+    if (quickEditField) {
+      const { index, field, value } = quickEditField;
+      if (field === 'in_amps' || field === 'icu_ka' || field === 'poles') {
+        updateDevice(index, field, parseInt(value) || null);
+      } else {
+        updateDevice(index, field, value || null);
+      }
+    }
+    setQuickEditField(null);
+  };
+
   const selectedCount = devices.filter(d => d.selected).length;
 
   const getConfidenceBadge = (confidence) => {
@@ -345,6 +365,19 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
       low: 'bg-red-100 text-red-700'
     };
     return colors[confidence] || colors.medium;
+  };
+
+  const getFieldLabel = (field) => {
+    const labels = {
+      in_amps: 'Intensité (A)',
+      icu_ka: 'Icu (kA)',
+      poles: 'Pôles',
+      curve_type: 'Courbe',
+      reference: 'Référence',
+      manufacturer: 'Fabricant',
+      device_type: 'Type'
+    };
+    return labels[field] || field;
   };
 
   return (
@@ -483,10 +516,16 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         type="number"
                         value={device.in_amps || ''}
                         onChange={(e) => updateDevice(idx, 'in_amps', parseInt(e.target.value) || null)}
-                        className="w-16 px-2 py-1 border rounded text-xs text-center"
+                        className="w-20 px-2 py-2 border-2 border-indigo-300 rounded text-sm text-center font-semibold focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
                       />
                     ) : (
-                      <span className="font-semibold">{device.in_amps || '-'}</span>
+                      <button
+                        onClick={() => openQuickEdit(idx, 'in_amps', device.in_amps)}
+                        className="font-semibold text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded min-w-[40px] transition-colors"
+                        title="Tap pour modifier"
+                      >
+                        {device.in_amps || '-'}
+                      </button>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -494,7 +533,7 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                       <select
                         value={device.curve_type || ''}
                         onChange={(e) => updateDevice(idx, 'curve_type', e.target.value || null)}
-                        className="w-14 px-1 py-1 border rounded text-xs text-center"
+                        className="w-16 px-1 py-2 border-2 border-indigo-300 rounded text-sm text-center font-semibold"
                       >
                         <option value="">-</option>
                         <option value="B">B</option>
@@ -504,7 +543,13 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         <option value="Z">Z</option>
                       </select>
                     ) : (
-                      <span className="font-medium">{device.curve_type || '-'}</span>
+                      <button
+                        onClick={() => openQuickEdit(idx, 'curve_type', device.curve_type)}
+                        className="font-medium text-gray-700 hover:bg-gray-100 px-2 py-1 rounded min-w-[30px] transition-colors"
+                        title="Tap pour modifier"
+                      >
+                        {device.curve_type || '-'}
+                      </button>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -513,10 +558,14 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         type="number"
                         value={device.icu_ka || ''}
                         onChange={(e) => updateDevice(idx, 'icu_ka', parseInt(e.target.value) || null)}
-                        className="w-16 px-2 py-1 border rounded text-xs text-center"
+                        className="w-20 px-2 py-2 border-2 border-indigo-300 rounded text-sm text-center font-semibold"
                       />
                     ) : (
-                      <span className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={() => openQuickEdit(idx, 'icu_ka', device.icu_ka)}
+                        className="flex items-center justify-center gap-1 text-gray-700 hover:bg-gray-100 px-2 py-1 rounded min-w-[40px] transition-colors"
+                        title="Tap pour modifier"
+                      >
                         {device.icu_ka || '-'}
                         {device.from_cache && (
                           <span className="w-2 h-2 bg-green-500 rounded-full" title="Depuis le cache" />
@@ -524,7 +573,7 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         {device.enriched_by_ai && (
                           <span className="w-2 h-2 bg-blue-500 rounded-full" title="Enrichi par IA" />
                         )}
-                      </span>
+                      </button>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -532,7 +581,7 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                       <select
                         value={device.poles || 1}
                         onChange={(e) => updateDevice(idx, 'poles', parseInt(e.target.value))}
-                        className="w-14 px-1 py-1 border rounded text-xs text-center"
+                        className="w-16 px-1 py-2 border-2 border-indigo-300 rounded text-sm text-center font-semibold"
                       >
                         <option value={1}>1P</option>
                         <option value={2}>2P</option>
@@ -540,7 +589,17 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
                         <option value={4}>4P</option>
                       </select>
                     ) : (
-                      <span>{device.poles || 1}P</span>
+                      <button
+                        onClick={() => openQuickEdit(idx, 'poles', device.poles || 1)}
+                        className={`font-semibold px-2 py-1 rounded min-w-[40px] transition-colors ${
+                          (device.poles || 1) >= 3
+                            ? 'text-orange-600 hover:bg-orange-50'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                        title="Tap pour modifier"
+                      >
+                        {device.poles || 1}P
+                      </button>
                     )}
                   </td>
                   <td className="px-3 py-2 text-center text-xs text-gray-600">
@@ -628,6 +687,120 @@ const ReviewStep = ({ analysisResult, devices, setDevices, onBack, onNext }) => 
           <ChevronRight size={18} />
         </button>
       </div>
+
+      {/* Quick Edit Modal for tablet/mobile */}
+      {quickEditField && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-[60]" onClick={closeQuickEdit}>
+          <div
+            className="bg-white w-full sm:w-auto sm:min-w-[320px] rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {getFieldLabel(quickEditField.field)}
+              </h3>
+              <button
+                onClick={closeQuickEdit}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm text-gray-500 mb-2">
+                Position: {devices[quickEditField.index]?.position_label || `R${devices[quickEditField.index]?.row}-P${devices[quickEditField.index]?.position_in_row}`}
+              </div>
+
+              {quickEditField.field === 'poles' ? (
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 2, 3, 4].map(p => (
+                    <button
+                      key={p}
+                      onClick={() => {
+                        setQuickEditField(prev => ({ ...prev, value: p }));
+                      }}
+                      className={`py-4 text-xl font-bold rounded-xl transition-colors ${
+                        parseInt(quickEditField.value) === p
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {p}P
+                    </button>
+                  ))}
+                </div>
+              ) : quickEditField.field === 'curve_type' ? (
+                <div className="grid grid-cols-5 gap-2">
+                  {['B', 'C', 'D', 'K', 'Z'].map(c => (
+                    <button
+                      key={c}
+                      onClick={() => {
+                        setQuickEditField(prev => ({ ...prev, value: c }));
+                      }}
+                      className={`py-4 text-xl font-bold rounded-xl transition-colors ${
+                        quickEditField.value === c
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              ) : quickEditField.field === 'in_amps' ? (
+                <div className="space-y-3">
+                  {/* Quick select common values */}
+                  <div className="grid grid-cols-5 gap-2">
+                    {[6, 10, 13, 16, 20, 25, 32, 40, 50, 63].map(a => (
+                      <button
+                        key={a}
+                        onClick={() => {
+                          setQuickEditField(prev => ({ ...prev, value: a }));
+                        }}
+                        className={`py-3 text-lg font-bold rounded-xl transition-colors ${
+                          parseInt(quickEditField.value) === a
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Custom input */}
+                  <input
+                    ref={editInputRef}
+                    type="number"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={quickEditField.value}
+                    onChange={(e) => setQuickEditField(prev => ({ ...prev, value: e.target.value }))}
+                    placeholder="Autre valeur..."
+                    className="w-full px-4 py-4 text-2xl font-bold text-center border-2 border-gray-300 rounded-xl focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                  />
+                </div>
+              ) : (
+                <input
+                  ref={editInputRef}
+                  type={quickEditField.field === 'icu_ka' ? 'number' : 'text'}
+                  inputMode={quickEditField.field === 'icu_ka' ? 'numeric' : 'text'}
+                  value={quickEditField.value}
+                  onChange={(e) => setQuickEditField(prev => ({ ...prev, value: e.target.value }))}
+                  className="w-full px-4 py-4 text-2xl font-bold text-center border-2 border-gray-300 rounded-xl focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                />
+              )}
+            </div>
+
+            <button
+              onClick={closeQuickEdit}
+              className="w-full py-4 bg-indigo-600 text-white rounded-xl font-semibold text-lg hover:bg-indigo-700 transition-colors"
+            >
+              Valider
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
