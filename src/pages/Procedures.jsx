@@ -266,6 +266,25 @@ export default function Procedures() {
     }
   }, [shouldReopenModal, clearReopenSignal, captureCount]);
 
+  // CRITICAL: Auto-reopen modal if there's an active session in localStorage
+  // This handles the case where user minimizes the app and comes back
+  useEffect(() => {
+    const savedSession = localStorage.getItem('activeProcedureSession');
+    if (savedSession && !showCreator) {
+      try {
+        const session = JSON.parse(savedSession);
+        // Only restore if session is less than 24 hours old
+        if (session.sessionId && (Date.now() - session.timestamp) < 24 * 60 * 60 * 1000) {
+          console.log('[Procedures] Found active session in localStorage, reopening modal:', session.sessionId);
+          setShowCreator(true);
+        }
+      } catch (e) {
+        console.error('Error checking active session:', e);
+        localStorage.removeItem('activeProcedureSession');
+      }
+    }
+  }, []); // Run only on mount
+
   // Handle URL parameters for deep linking from QR codes
   useEffect(() => {
     const procedureId = searchParams.get('id');
