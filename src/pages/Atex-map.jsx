@@ -233,17 +233,17 @@ function findContainingSubarea(xf, yf, subareas) {
   return candidates[0].sa;
 }
 
-// 🔺 Triangle ATEX - Images pré-rendues en cache HiDPI (qualité Retina)
+// 🔺 Triangle ATEX - Images pré-rendues en cache (optimisé mobile)
 const ICON_PX_SELECTED = 34;
 const triangleCache = new Map();
-const DPR = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 3) : 2;
+const IS_MOBILE = typeof window !== 'undefined' && (window.innerWidth <= 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent));
+const DPR = IS_MOBILE ? 1 : (typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1);
 
 function getTriangleImage(size, fill, glow = null) {
   try {
     const key = `${size}-${fill}-${glow || 'none'}-${DPR}`;
     if (triangleCache.has(key)) return triangleCache.get(key);
 
-    // Canvas haute résolution (2x ou 3x selon l'écran)
     const scale = DPR;
     const c = document.createElement('canvas');
     c.width = size * scale;
@@ -252,17 +252,8 @@ function getTriangleImage(size, fill, glow = null) {
     if (!ctx) throw new Error('Canvas context unavailable');
     ctx.scale(scale, scale);
 
-    // Anti-aliasing optimisé
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
     const pad = 2;
     const triH = size - pad - 1;
-
-    // Ombre portée subtile
-    ctx.shadowColor = 'rgba(0,0,0,0.3)';
-    ctx.shadowBlur = 3;
-    ctx.shadowOffsetY = 1;
 
     // Triangle principal (fond coloré)
     ctx.beginPath();
@@ -272,11 +263,6 @@ function getTriangleImage(size, fill, glow = null) {
     ctx.closePath();
     ctx.fillStyle = fill;
     ctx.fill();
-
-    // Reset shadow pour les autres éléments
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
 
     // Bordure extérieure noire
     ctx.beginPath();
@@ -297,8 +283,8 @@ function getTriangleImage(size, fill, glow = null) {
     ctx.fillStyle = '#000';
     ctx.fillText('EX', size / 2, size * 0.6);
 
-    // Glow externe (sélection/duplicata)
-    if (glow) {
+    // Glow externe (sélection/duplicata) - seulement sur desktop
+    if (glow && !IS_MOBILE) {
       ctx.beginPath();
       ctx.moveTo(size / 2, 0);
       ctx.lineTo(size, triH + 1);
