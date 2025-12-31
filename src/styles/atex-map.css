@@ -8,7 +8,13 @@
 .blink-orange { animation: blinkPulse 1.2s ease-in-out infinite; }
 .blink-red { animation: blinkPulse 0.9s ease-in-out infinite; }
 
-/* ----------- Animations modernes des marqueurs (style Switchboard) ----------- */
+/* ----------- Animations LÉGÈRES pour mobile (opacity uniquement) ----------- */
+@keyframes atex-pulse-simple {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ----------- Animations desktop (avec box-shadow) ----------- */
 @keyframes atex-pulse-selected {
   0%, 100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0,0,0,.25), 0 0 0 0 rgba(139, 92, 246, 0.7); }
   50% { transform: scale(1.08); box-shadow: 0 6px 15px rgba(0,0,0,.3), 0 0 0 8px rgba(139, 92, 246, 0); }
@@ -38,31 +44,51 @@
   100% { transform: scale(1); filter: brightness(1); }
 }
 
-/* Classes d'animation pour les marqueurs */
-.atex-marker-selected > div,
-.atex-marker-selected {
-  animation: atex-pulse-selected 1.5s ease-in-out infinite;
+/* Classes d'animation pour les marqueurs - DESKTOP */
+@media (min-width: 769px) {
+  .atex-marker-selected > div,
+  .atex-marker-selected {
+    animation: atex-pulse-selected 1.5s ease-in-out infinite;
+  }
+
+  .atex-marker-pulse-orange > div,
+  .atex-marker-pulse-orange {
+    animation: atex-pulse-orange 1.2s ease-in-out infinite;
+  }
+
+  .atex-marker-pulse-red > div,
+  .atex-marker-pulse-red {
+    animation: atex-pulse-red 0.9s ease-in-out infinite;
+  }
+
+  .atex-marker-pulse-violet > div,
+  .atex-marker-pulse-violet {
+    animation: atex-pulse-violet 1.3s ease-in-out infinite;
+  }
+
+  .atex-marker-flash > div,
+  .atex-marker-flash {
+    animation: atex-flash 2s ease-in-out;
+  }
 }
 
-.atex-marker-pulse-orange > div,
-.atex-marker-pulse-orange {
-  animation: atex-pulse-orange 1.2s ease-in-out infinite;
-}
+/* 📱 MOBILE: Animations légères (pas de box-shadow, pas de transform) */
+@media (max-width: 768px) {
+  .atex-marker-selected > div,
+  .atex-marker-selected,
+  .atex-marker-pulse-orange > div,
+  .atex-marker-pulse-orange,
+  .atex-marker-pulse-red > div,
+  .atex-marker-pulse-red,
+  .atex-marker-pulse-violet > div,
+  .atex-marker-pulse-violet {
+    animation: atex-pulse-simple 1.5s ease-in-out infinite;
+  }
 
-.atex-marker-pulse-red > div,
-.atex-marker-pulse-red {
-  animation: atex-pulse-red 0.9s ease-in-out infinite;
-}
-
-/* 🌸 Rose pulsant pour équipements dupliqués */
-.atex-marker-pulse-violet > div,
-.atex-marker-pulse-violet {
-  animation: atex-pulse-violet 1.3s ease-in-out infinite;
-}
-
-.atex-marker-flash > div,
-.atex-marker-flash {
-  animation: atex-flash 2s ease-in-out;
+  .atex-marker-flash > div,
+  .atex-marker-flash {
+    animation: none;
+  }
 }
 
 /* Style de base des marqueurs inline */
