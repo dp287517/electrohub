@@ -2285,6 +2285,130 @@ app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   req.url = "/api/atex/maps/planFile";
   return app._router.handle(req, res);
 });
+
+// 🔹 Plan snippet with marker (for PE and equipment previews)
+app.get("/api/atex/plan-snippet", async (req, res) => {
+  try {
+    const planLogical = (req.query.plan || "").toString();
+    const x = parseFloat(req.query.x);
+    const y = parseFloat(req.query.y);
+    const size = parseInt(req.query.size) || 80;
+
+    if (!planLogical) {
+      return res.status(400).json({ ok: false, error: "plan required" });
+    }
+
+    // Check cache first
+    const cacheKey = `snippet:${planLogical}:${x}:${y}:${size}`;
+    const cached = thumbnailCache.get(cacheKey);
+    if (cached) {
+      res.type('image/png');
+      return res.end(cached);
+    }
+
+    // Try to get thumbnail first, then content
+    const { rows } = await pool.query(`
+      SELECT thumbnail, content, logical_name
+      FROM atex_plans
+      WHERE logical_name = $1
+      ORDER BY version DESC
+      LIMIT 1
+    `, [planLogical]);
+
+    const plan = rows[0];
+    if (!plan) {
+      return res.status(404).json({ ok: false, error: "Plan not found" });
+    }
+
+    let snippetBuffer = null;
+
+    // If we have a thumbnail, add marker to it
+    if (plan.thumbnail && plan.thumbnail.length > 0) {
+      try {
+        const { loadImage } = await import('canvas');
+        const img = await loadImage(plan.thumbnail);
+
+        // Calculate crop area around the marker (with some padding)
+        const snippetSize = size;
+        const markerX = x * img.width;
+        const markerY = y * img.height;
+
+        // Crop area centered on marker
+        const cropSize = Math.min(img.width, img.height) * 0.4; // 40% of smallest dimension
+        let cropX = markerX - cropSize / 2;
+        let cropY = markerY - cropSize / 2;
+
+        // Clamp to image bounds
+        cropX = Math.max(0, Math.min(cropX, img.width - cropSize));
+        cropY = Math.max(0, Math.min(cropY, img.height - cropSize));
+
+        const canvas = createCanvas(snippetSize, snippetSize);
+        const ctx = canvas.getContext('2d');
+
+        // Draw cropped region
+        ctx.drawImage(
+          img,
+          cropX, cropY, cropSize, cropSize,  // source
+          0, 0, snippetSize, snippetSize      // destination
+        );
+
+        // Draw marker at relative position within crop
+        const relX = (markerX - cropX) / cropSize * snippetSize;
+        const relY = (markerY - cropY) / cropSize * snippetSize;
+        const markerRadius = Math.max(4, snippetSize / 12);
+
+        // Red circle with white border
+        ctx.beginPath();
+        ctx.arc(relX, relY, markerRadius, 0, 2 * Math.PI);
+        ctx.fillStyle = '#dc2626';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // White center dot
+        ctx.beginPath();
+        ctx.arc(relX, relY, markerRadius / 3, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        snippetBuffer = canvas.toBuffer('image/png');
+      } catch (imgErr) {
+        console.warn('[plan-snippet] Thumbnail processing error:', imgErr.message);
+      }
+    }
+
+    // Fallback: use pdfToImageWithMarker
+    if (!snippetBuffer && plan.content) {
+      snippetBuffer = await pdfToImageWithMarker(plan.content, x, y, size, plan.logical_name);
+    }
+
+    // Final fallback: simple placeholder
+    if (!snippetBuffer) {
+      const canvas = createCanvas(size, size);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f3f4f6';
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = '#d1d5db';
+      ctx.strokeRect(0, 0, size, size);
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = `${size * 0.15}px Helvetica`;
+      ctx.textAlign = 'center';
+      ctx.fillText('Plan', size / 2, size / 2);
+      snippetBuffer = canvas.toBuffer('image/png');
+    }
+
+    // Cache the result
+    thumbnailCache.set(cacheKey, snippetBuffer);
+
+    res.type('image/png');
+    res.end(snippetBuffer);
+  } catch (e) {
+    console.error('[plan-snippet] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // -------------------------------------------------
 // MAPS — Positions & Subareas (avec auto MAJ fiche équipement)
 function pointInRect(px, py, x1, y1, x2, y2) {
@@ -4157,6 +4281,37 @@ app.get("/api/atex/drpce", async (req, res) => {
       SELECT * FROM atex_subareas ORDER BY logical_name, name
     `);
 
+    // 4b. Récupérer les stats PE (Presse-Étoupes)
+    let peStatsData = { total_baskets: 0, total_photos: 0, total_glands: 0, compliant_glands: 0, non_compliant_glands: 0 };
+    let peNonCompliantList = [];
+    try {
+      const peStatsRes = await pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
+          (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands
+      `, [companyId, siteId]);
+      if (peStatsRes.rows[0]) peStatsData = peStatsRes.rows[0];
+
+      // Get non-compliant PE for the report
+      const peNcRes = await pool.query(`
+        SELECT i.reference, i.type, i.condition, i.notes, i.atex_marking,
+               b.name as basket_name, b.building, b.zone_name
+        FROM cable_gland_items i
+        JOIN cable_gland_baskets b ON b.id = i.basket_id
+        WHERE i.compliance_status = 'issue'
+          AND ($1::int IS NULL OR i.company_id = $1)
+          AND ($2::int IS NULL OR i.site_id = $2)
+        ORDER BY b.building, b.zone_name, i.created_at DESC
+        LIMIT 50
+      `, [companyId, siteId]);
+      peNonCompliantList = peNcRes.rows;
+    } catch (e) {
+      console.warn('[DRPCE] PE stats error:', e.message);
+    }
+
     // 5. Statistiques
     const totalEquipments = equipments.length;
     const conformeCount = equipments.filter(e => e.last_result === 'conforme').length;
@@ -4257,8 +4412,8 @@ app.get("/api/atex/drpce", async (req, res) => {
        .text(`Document genere le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 50, contentStartY + 150, { align: 'center', width: 495 });
 
     // Encadré stats
-    const statsY = contentStartY + 200;
-    doc.rect(100, statsY, 395, 180).fillAndStroke('#fff', colors.primary);
+    const statsY = contentStartY + 180;
+    doc.rect(100, statsY, 395, 230).fillAndStroke('#fff', colors.primary);
 
     doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.primary)
        .text('Synthese', 120, statsY + 15, { width: 355, align: 'center' });
@@ -4275,12 +4430,27 @@ app.get("/api/atex/drpce", async (req, res) => {
     statsItems.forEach(item => {
       doc.fontSize(11).font('Helvetica').fillColor(colors.text).text(item.label, 130, statY);
       doc.font('Helvetica-Bold').fillColor(item.color).text(String(item.value), 400, statY, { width: 70, align: 'right' });
-      statY += 25;
+      statY += 22;
     });
+
+    // PE Stats section
+    statY += 10;
+    doc.moveTo(130, statY).lineTo(470, statY).strokeColor(colors.muted).lineWidth(0.5).stroke();
+    statY += 12;
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('#7c3aed').text('Presse-Etoupes (PE)', 130, statY);
+    statY += 18;
+    const peConformityRate = peStatsData.total_glands > 0 ? Math.round((peStatsData.compliant_glands / peStatsData.total_glands) * 100) : 0;
+    doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(`${peStatsData.total_glands || 0} PE detectes`, 140, statY);
+    doc.fillColor(peConformityRate >= 90 ? colors.success : peConformityRate >= 70 ? colors.warning : colors.danger)
+       .text(`${peConformityRate}% conformes`, 300, statY);
+    if (peStatsData.non_compliant_glands > 0) {
+      statY += 16;
+      doc.fillColor(colors.danger).text(`${peStatsData.non_compliant_glands} non conforme(s)`, 140, statY);
+    }
 
     // Footer page de garde
     doc.fontSize(9).fillColor(colors.muted)
-       .text(`${plans.length} plan(s) | ${subareas.length} zone(s) classee(s)`, 0, 780, { align: 'center', width: 595 });
+       .text(`${plans.length} plan(s) | ${subareas.length} zone(s) classee(s) | ${peStatsData.total_baskets || 0} panier(s) PE`, 0, 780, { align: 'center', width: 595 });
 
     // ========== SOMMAIRE ==========
     doc.addPage();
@@ -4294,9 +4464,10 @@ app.get("/api/atex/drpce", async (req, res) => {
       { num: '3', title: 'Plans ATEX' },
       { num: '4', title: 'Inventaire des equipements' },
       { num: '5', title: 'Etat de conformite' },
-      { num: '6', title: 'Planification des verifications' },
-      { num: '7', title: 'Mesures de prevention et protection' },
-      { num: '8', title: 'Fiches equipements' },
+      { num: '6', title: 'Presse-Etoupes (PE)' },
+      { num: '7', title: 'Planification des verifications' },
+      { num: '8', title: 'Mesures de prevention et protection' },
+      { num: '9', title: 'Fiches equipements' },
     ];
 
     let somY = 110;
@@ -4306,7 +4477,7 @@ app.get("/api/atex/drpce", async (req, res) => {
       const titleWidth = doc.widthOfString(item.title);
       doc.moveTo(85 + titleWidth, somY + 8).lineTo(500, somY + 8).dash(2, { space: 3 }).strokeColor(colors.muted).stroke();
       doc.undash();
-      somY += 30;
+      somY += 28;
     });
 
     // ========== 1. CADRE RÉGLEMENTAIRE SUISSE ==========
@@ -4541,9 +4712,92 @@ app.get("/api/atex/drpce", async (req, res) => {
       });
     }
 
-    // ========== 6. PLANIFICATION ==========
+    // ========== 6. PRESSE-ÉTOUPES (PE) ==========
     doc.addPage();
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Planification des verifications', 50, 50);
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Presse-Etoupes (PE)', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let peY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text('Les presse-etoupes (cable glands) assurent l\'etancheite des traversees de cables dans les zones ATEX. Leur verification est essentielle pour maintenir l\'integrite des zones classees.', 50, peY, { width: 495 });
+    peY += 50;
+
+    // Stats PE
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#7c3aed').text('Synthese des PE', 50, peY);
+    peY += 25;
+
+    const peStatItems = [
+      { label: 'Paniers de photos', value: peStatsData.total_baskets || 0 },
+      { label: 'Photos analysees', value: peStatsData.total_photos || 0 },
+      { label: 'PE detectes', value: peStatsData.total_glands || 0 },
+      { label: 'PE conformes', value: peStatsData.compliant_glands || 0, color: colors.success },
+      { label: 'PE non conformes', value: peStatsData.non_compliant_glands || 0, color: colors.danger },
+      { label: 'Taux de conformite', value: `${peConformityRate}%`, color: peConformityRate >= 90 ? colors.success : peConformityRate >= 70 ? colors.warning : colors.danger },
+    ];
+
+    peStatItems.forEach(item => {
+      doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(item.label, 60, peY);
+      doc.font('Helvetica-Bold').fillColor(item.color || colors.primary).text(String(item.value), 250, peY);
+      peY += 18;
+    });
+    peY += 20;
+
+    // Liste des PE non conformes
+    if (peNonCompliantList.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('PE non conformes', 50, peY);
+      peY += 25;
+
+      const peHeaders = ['Reference/Type', 'Panier', 'Batiment', 'Zone', 'Etat'];
+      const peColW = [120, 100, 100, 100, 75];
+      let px = 50;
+      peHeaders.forEach((h, i) => {
+        doc.rect(px, peY, peColW[i], 18).fillAndStroke(colors.danger, colors.danger);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, px + 4, peY + 4, { width: peColW[i] - 8 });
+        px += peColW[i];
+      });
+      peY += 18;
+
+      peNonCompliantList.slice(0, 25).forEach(pe => {
+        if (peY > 750) {
+          doc.addPage();
+          peY = 50;
+          px = 50;
+          peHeaders.forEach((h, i) => {
+            doc.rect(px, peY, peColW[i], 18).fillAndStroke(colors.danger, colors.danger);
+            doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, px + 4, peY + 4, { width: peColW[i] - 8 });
+            px += peColW[i];
+          });
+          peY += 18;
+        }
+        const row = [
+          (pe.reference || pe.type || '-').substring(0, 22),
+          (pe.basket_name || '-').substring(0, 18),
+          (pe.building || '-').substring(0, 18),
+          (pe.zone_name || '-').substring(0, 18),
+          (pe.condition || '-').substring(0, 12)
+        ];
+        px = 50;
+        row.forEach((cell, i) => {
+          doc.rect(px, peY, peColW[i], 16).fillAndStroke('#fff', '#fecaca');
+          doc.fontSize(7).font('Helvetica').fillColor(colors.text).text(String(cell), px + 4, peY + 4, { width: peColW[i] - 8 });
+          px += peColW[i];
+        });
+        peY += 16;
+      });
+
+      if (peNonCompliantList.length > 25) {
+        peY += 10;
+        doc.fontSize(9).fillColor(colors.muted).text(`+ ${peNonCompliantList.length - 25} autres PE non conformes non affiches`, 50, peY);
+      }
+    } else if (peStatsData.total_glands > 0) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.success).text('Tous les presse-etoupes detectes sont conformes.', 50, peY);
+    } else {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text('Aucun presse-etoupe n\'a ete analyse pour le moment.', 50, peY);
+    }
+
+    // ========== 7. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Planification des verifications', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
     let planY = 100;
@@ -6298,6 +6552,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
 
+    // Basic stats
     const stats = await pool.query(`
       SELECT
         (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
@@ -6310,7 +6565,77 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         (SELECT COUNT(*) FROM cable_gland_analysis_queue WHERE status IN ('pending', 'processing') AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_analyses
     `, [filter.company_id, filter.site_id]);
 
-    res.json({ ok: true, stats: stats.rows[0] });
+    // Stats by building/zone
+    const byBuilding = await pool.query(`
+      SELECT
+        COALESCE(b.building, 'Non assigné') as building,
+        COALESCE(b.zone_name, 'Non assigné') as zone_name,
+        COUNT(DISTINCT b.id) as basket_count,
+        COUNT(DISTINCT p.id) as photo_count,
+        COUNT(DISTINCT i.id) as gland_count,
+        COUNT(DISTINCT CASE WHEN i.compliance_status = 'ok' THEN i.id END) as compliant_count,
+        COUNT(DISTINCT CASE WHEN i.compliance_status = 'issue' THEN i.id END) as non_compliant_count
+      FROM cable_gland_baskets b
+      LEFT JOIN cable_gland_photos p ON p.basket_id = b.id
+      LEFT JOIN cable_gland_items i ON i.basket_id = b.id
+      WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)
+      GROUP BY b.building, b.zone_name
+      ORDER BY b.building, b.zone_name
+    `, [filter.company_id, filter.site_id]);
+
+    // Non-compliant PE items with basket/plan info
+    const nonCompliant = await pool.query(`
+      SELECT
+        i.id,
+        i.reference,
+        i.type,
+        i.condition,
+        i.notes,
+        i.atex_marking,
+        b.name as basket_name,
+        b.building,
+        b.zone_name,
+        b.plan_logical_name,
+        b.x_frac,
+        b.y_frac,
+        p.id as photo_id
+      FROM cable_gland_items i
+      JOIN cable_gland_baskets b ON b.id = i.basket_id
+      LEFT JOIN cable_gland_photos p ON p.id = i.photo_id
+      WHERE i.compliance_status = 'issue'
+        AND ($1::int IS NULL OR i.company_id = $1)
+        AND ($2::int IS NULL OR i.site_id = $2)
+      ORDER BY i.created_at DESC
+      LIMIT 20
+    `, [filter.company_id, filter.site_id]);
+
+    // Recent analysis history
+    const history = await pool.query(`
+      SELECT
+        q.id,
+        q.status,
+        q.started_at,
+        q.completed_at,
+        q.items_processed,
+        q.items_total,
+        q.error_message,
+        b.name as basket_name,
+        b.building,
+        b.zone_name
+      FROM cable_gland_analysis_queue q
+      JOIN cable_gland_baskets b ON b.id = q.basket_id
+      WHERE ($1::int IS NULL OR q.company_id = $1) AND ($2::int IS NULL OR q.site_id = $2)
+      ORDER BY COALESCE(q.completed_at, q.started_at, q.created_at) DESC
+      LIMIT 10
+    `, [filter.company_id, filter.site_id]);
+
+    res.json({
+      ok: true,
+      stats: stats.rows[0],
+      byBuilding: byBuilding.rows,
+      nonCompliant: nonCompliant.rows,
+      history: history.rows
+    });
   } catch (e) {
     console.error('[CableGlands] Get stats error:', e);
     res.status(500).json({ ok: false, error: e.message });

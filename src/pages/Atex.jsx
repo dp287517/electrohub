@@ -269,6 +269,9 @@ export default function Atex() {
   // 🔌 Cable Gland (Presse-Étoupe) stats
   const [peStats, setPeStats] = useState(null);
   const [peAnalyses, setPeAnalyses] = useState([]);
+  const [peByBuilding, setPeByBuilding] = useState([]);
+  const [peNonCompliant, setPeNonCompliant] = useState([]);
+  const [peHistory, setPeHistory] = useState([]);
 
   // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
@@ -415,7 +418,12 @@ export default function Atex() {
       const statsData = await statsRes.json();
       const analysesData = await analysesRes.json();
 
-      if (statsData.ok) setPeStats(statsData.stats);
+      if (statsData.ok) {
+        setPeStats(statsData.stats);
+        setPeByBuilding(statsData.byBuilding || []);
+        setPeNonCompliant(statsData.nonCompliant || []);
+        setPeHistory(statsData.history || []);
+      }
       if (analysesData.ok) setPeAnalyses(analysesData.analyses || []);
     } catch (e) {
       console.error('[ATEX] Load PE stats error:', e);
@@ -1189,14 +1197,16 @@ export default function Atex() {
             </div>
             {/* Content - Filtres */}
             <div className="p-5 space-y-4">
-              {/* 🔌 Cable Gland Stats Section */}
+              {/* 🔌 Cable Gland Stats Section - Enhanced */}
               {peStats && (
-                <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200">
-                  <div className="flex items-center gap-2 mb-3">
+                <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200 space-y-4">
+                  <div className="flex items-center gap-2">
                     <span className="text-lg">⚡</span>
                     <h4 className="font-semibold text-violet-800">Presse-Étoupes (PE)</h4>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+
+                  {/* Stats principales + Taux de conformité */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">
                     <div className="bg-white/60 rounded-lg p-2 text-center">
                       <div className="text-xl font-bold text-violet-600">{peStats.total_baskets || 0}</div>
                       <div className="text-xs text-gray-600">Paniers</div>
@@ -1213,15 +1223,132 @@ export default function Atex() {
                       <div className="text-xl font-bold text-green-600">{peStats.compliant_glands || 0}</div>
                       <div className="text-xs text-gray-600">Conformes</div>
                     </div>
+                    <div className="bg-white/60 rounded-lg p-2 text-center">
+                      <div className={`text-xl font-bold ${(peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.9) ? 'text-green-600' : (peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.7) ? 'text-amber-600' : 'text-red-600'}`}>
+                        {peStats.total_glands > 0 ? Math.round((peStats.compliant_glands / peStats.total_glands) * 100) : 0}%
+                      </div>
+                      <div className="text-xs text-gray-600">Conformité</div>
+                    </div>
                   </div>
+
+                  {/* Analyses en cours */}
                   {peStats.pending_analyses > 0 && (
-                    <div className="mt-3 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-lg p-2">
+                    <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-lg p-2">
                       <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
                       <span>{peStats.pending_analyses} analyse(s) en cours</span>
                     </div>
                   )}
+
+                  {/* Stats par bâtiment/zone */}
+                  {peByBuilding.length > 0 && (
+                    <details className="group">
+                      <summary className="cursor-pointer text-xs font-medium text-violet-700 flex items-center gap-1">
+                        <span className="group-open:rotate-90 transition-transform">▶</span>
+                        Stats par zone ({peByBuilding.length})
+                      </summary>
+                      <div className="mt-2 max-h-40 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-violet-100/50 sticky top-0">
+                            <tr>
+                              <th className="text-left p-1">Bâtiment / Zone</th>
+                              <th className="text-center p-1">PE</th>
+                              <th className="text-center p-1">✓</th>
+                              <th className="text-center p-1">✗</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {peByBuilding.map((row, i) => (
+                              <tr key={i} className="border-t border-violet-100">
+                                <td className="p-1 truncate max-w-[120px]" title={`${row.building} - ${row.zone_name}`}>
+                                  {row.building} <span className="text-gray-400">›</span> {row.zone_name}
+                                </td>
+                                <td className="text-center p-1 text-amber-600 font-medium">{row.gland_count}</td>
+                                <td className="text-center p-1 text-green-600">{row.compliant_count}</td>
+                                <td className="text-center p-1 text-red-600">{row.non_compliant_count}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+
+                  {/* Alertes PE non conformes */}
+                  {peNonCompliant.length > 0 && (
+                    <details className="group" open>
+                      <summary className="cursor-pointer text-xs font-medium text-red-700 flex items-center gap-1">
+                        <span className="group-open:rotate-90 transition-transform">▶</span>
+                        ⚠️ PE non conformes ({peNonCompliant.length})
+                      </summary>
+                      <div className="mt-2 space-y-2 max-h-60 overflow-y-auto">
+                        {peNonCompliant.slice(0, 5).map(pe => (
+                          <div key={pe.id} className="bg-red-50 border border-red-200 rounded-lg p-2 flex gap-2">
+                            {/* Aperçu plan */}
+                            {pe.plan_logical_name && pe.x_frac != null && (
+                              <div className="flex-shrink-0 w-16 h-16 rounded overflow-hidden bg-gray-100 border">
+                                <img
+                                  src={`/api/atex/plan-snippet?plan=${encodeURIComponent(pe.plan_logical_name)}&x=${pe.x_frac}&y=${pe.y_frac}&size=80`}
+                                  alt="Position"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => { e.target.style.display = 'none'; }}
+                                />
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-red-800 text-xs truncate">
+                                {pe.reference || pe.type || 'PE sans référence'}
+                              </div>
+                              <div className="text-xs text-gray-600 truncate">
+                                {pe.basket_name} • {pe.building} › {pe.zone_name}
+                              </div>
+                              {pe.notes && (
+                                <div className="text-xs text-red-600 mt-1 line-clamp-2">{pe.notes}</div>
+                              )}
+                              {pe.condition && (
+                                <div className="text-xs text-gray-500 mt-0.5">État: {pe.condition}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {peNonCompliant.length > 5 && (
+                          <div className="text-xs text-gray-500 text-center">
+                            + {peNonCompliant.length - 5} autres PE non conformes
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  )}
+
+                  {/* Historique des analyses */}
+                  {peHistory.length > 0 && (
+                    <details className="group">
+                      <summary className="cursor-pointer text-xs font-medium text-gray-700 flex items-center gap-1">
+                        <span className="group-open:rotate-90 transition-transform">▶</span>
+                        Historique analyses ({peHistory.length})
+                      </summary>
+                      <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                        {peHistory.map(h => (
+                          <div key={h.id} className={`text-xs p-1.5 rounded flex items-center justify-between ${h.status === 'completed' ? 'bg-green-50' : h.status === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
+                            <span className="truncate flex-1">
+                              {h.status === 'completed' ? '✓' : h.status === 'error' ? '✗' : '⏳'} {h.basket_name}
+                            </span>
+                            <span className="text-gray-500 flex-shrink-0 ml-2">
+                              {h.items_processed || 0}/{h.items_total || 0} PE
+                            </span>
+                            {h.completed_at && (
+                              <span className="text-gray-400 flex-shrink-0 ml-2">
+                                {new Date(h.completed_at).toLocaleDateString('fr-FR')}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  {/* Analyses en cours détaillées */}
                   {peAnalyses.length > 0 && (
-                    <div className="mt-3 space-y-2">
+                    <div className="space-y-2">
                       <div className="text-xs font-medium text-gray-700">Analyses en cours :</div>
                       {peAnalyses.slice(0, 3).map(a => (
                         <div key={a.id} className="bg-white/70 rounded-lg p-2 text-xs">
