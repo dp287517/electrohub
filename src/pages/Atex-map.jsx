@@ -758,6 +758,20 @@ export default function AtexMap({
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
         editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
 
+        // 🚀 OPTIMISATION ZOOM: Désactiver animations pendant zoom pour éviter crash mobile
+        m.on('zoomstart', () => {
+          wrapRef.current?.classList.add('leaflet-zooming');
+        });
+        m.on('zoomend', () => {
+          wrapRef.current?.classList.remove('leaflet-zooming');
+        });
+        m.on('movestart', () => {
+          wrapRef.current?.classList.add('leaflet-panning');
+        });
+        m.on('moveend', () => {
+          wrapRef.current?.classList.remove('leaflet-panning');
+        });
+
         // --- Bounds provisoires avant rendu PDF ---
         const PROV_W = 2000, PROV_H = 1400;
         const provBounds = L.latLngBounds([[0, 0], [PROV_H, PROV_W]]);

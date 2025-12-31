@@ -89,6 +89,25 @@
   }
 }
 
+/* 🚀 OPTIMISATION MOBILE: Désactiver TOUTES les animations pendant zoom/pan */
+.leaflet-zooming *,
+.leaflet-panning * {
+  animation: none !important;
+  transition: none !important;
+  will-change: auto !important;
+}
+
+.leaflet-zooming .atex-marker-inline,
+.leaflet-panning .atex-marker-inline {
+  pointer-events: none !important;
+}
+
+.leaflet-zooming .atex-marker-inline > div,
+.leaflet-panning .atex-marker-inline > div {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
 /* ----------- Animation barre de progression chargement ----------- */
 @keyframes progress-loading {
   0% { width: 5%; }
