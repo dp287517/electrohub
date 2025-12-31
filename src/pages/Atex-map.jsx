@@ -233,50 +233,60 @@ function findContainingSubarea(xf, yf, subareas) {
   return candidates[0].sa;
 }
 
-// 🔥 Marqueurs ATEX avec icône SVG et gradient (style original qui fonctionne)
+// 🔺 Triangle ATEX - Images pré-rendues en cache (solution performante pour mobile)
 const ICON_PX_SELECTED = 34;
+const triangleCache = new Map();
 
-const STATUS_GRADIENT = {
-  a_faire: { from: "#34d399", to: "#059669" },
-  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },
-  en_retard: { from: "#fb7185", to: "#e11d48" },
-  fait: { from: "#60a5fa", to: "#2563eb" },
-  selected: { from: "#a78bfa", to: "#7c3aed" },
-  non_conforme: { from: "#ef4444", to: "#b91c1c" },
-  duplicate: { from: "#fbcfe8", to: "#ec4899" },
-};
+function getTriangleImage(size, fill, glow = null) {
+  const key = `${size}-${fill}-${glow || 'none'}`;
+  if (triangleCache.has(key)) return triangleCache.get(key);
 
-const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>`;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const p = 2, h = size - p;
+
+  // Glow externe (sélection/duplicata)
+  if (glow) {
+    ctx.beginPath();
+    ctx.moveTo(size/2, 1); ctx.lineTo(size-1, h); ctx.lineTo(1, h); ctx.closePath();
+    ctx.strokeStyle = glow; ctx.lineWidth = 3; ctx.globalAlpha = 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // Triangle jaune/rouge
+  ctx.beginPath();
+  ctx.moveTo(size/2, p); ctx.lineTo(size-p, h); ctx.lineTo(p, h); ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+
+  // Bordure noire intérieure
+  ctx.beginPath();
+  ctx.moveTo(size/2, p+4); ctx.lineTo(size-p-4, h-2); ctx.lineTo(p+4, h-2); ctx.closePath();
+  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+
+  // Texte EX
+  ctx.font = `bold ${Math.round(size*0.28)}px Arial`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#1a1a1a'; ctx.fillText('EX', size/2, size*0.62);
+
+  const url = c.toDataURL();
+  triangleCache.set(key, url);
+  return url;
+}
 
 function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
   const s = isSelected || isDuplicate ? ICON_PX_SELECTED : ICON_PX;
+  let fill = '#fbbf24', glow = null, anim = '';
 
-  if (isUnsaved) {
-    const html = `<div class="atex-marker-new${isSelected ? ' atex-marker-selected' : ''}" style="width:${s}px;height:${s}px;border-radius:9999px;background:radial-gradient(circle at 30% 30%,#93c5fd,#2563eb);border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}</div>`;
-    return L.divIcon({ className: "atex-marker-inline", html, iconSize: [s, s], iconAnchor: [Math.round(s / 2), Math.round(s / 2)], popupAnchor: [0, -Math.round(s / 2)] });
-  }
+  if (isUnsaved) { fill = '#93c5fd'; }
+  else if (isDuplicate) { glow = '#ec4899'; anim = 'atex-marker-pulse-violet'; }
+  else if (isSelected) { glow = '#7c3aed'; anim = 'atex-marker-selected'; }
+  else if (complianceState === 'non_conforme' || status === 'en_retard') { fill = '#ef4444'; anim = 'atex-marker-pulse-red'; }
+  else if (status === 'en_cours_30') { anim = 'atex-marker-pulse-orange'; }
 
-  let grad;
-  if (isDuplicate) grad = STATUS_GRADIENT.duplicate;
-  else if (isSelected) grad = STATUS_GRADIENT.selected;
-  else if (complianceState === "non_conforme") grad = STATUS_GRADIENT.non_conforme;
-  else grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
+  const src = getTriangleImage(s, fill, glow);
+  const html = `<div class="${anim}"><img src="${src}" width="${s}" height="${s}" alt=""/></div>`;
 
-  let animClass = "";
-  if (isDuplicate) animClass = "atex-marker-pulse-violet";
-  else if (isSelected) animClass = "atex-marker-selected";
-  else if (complianceState === "non_conforme") animClass = "atex-marker-pulse-red";
-  else if (status === "en_retard") animClass = "atex-marker-pulse-red";
-  else if (status === "en_cours_30") animClass = "atex-marker-pulse-orange";
-
-  let borderStyle;
-  if (isDuplicate) borderStyle = "border:3px solid #ec4899;box-shadow:0 0 0 4px rgba(236,72,153,0.5),0 6px 15px rgba(0,0,0,.35);";
-  else if (isSelected) borderStyle = "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);";
-  else borderStyle = "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
-
-  const html = `<div class="${animClass}" style="width:${s}px;height:${s}px;border-radius:9999px;background:radial-gradient(circle at 30% 30%,${grad.from},${grad.to});${borderStyle}display:flex;align-items:center;justify-content:center;">${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}</div>`;
-
-  return L.divIcon({ className: "atex-marker-inline", html, iconSize: [s, s], iconAnchor: [Math.round(s / 2), Math.round(s / 2)], popupAnchor: [0, -Math.round(s / 2)] });
+  return L.divIcon({ className: 'atex-marker-inline', html, iconSize: [s, s], iconAnchor: [s/2, s*0.7], popupAnchor: [0, -s*0.5] });
 }
 /* ----------------------------- Dessin: modes ----------------------------- */
 const DRAW_NONE = "none";
@@ -2352,22 +2362,26 @@ function setupHandleDrag(map, onMoveCallback) {
       />
     </div>
   ) : null;
+  // Triangle SVG pour la légende (style panneau ATEX)
+  const LegendTriangle = ({ fill, pulse }) => (
+    <svg width="14" height="14" viewBox="0 0 14 14" className={pulse || ''}>
+      <polygon points="7,1 13,13 1,13" fill={fill} stroke="#1a1a1a" strokeWidth="0.8"/>
+      <polygon points="7,3 11,11 3,11" fill="none" stroke="#1a1a1a" strokeWidth="0.5"/>
+      <text x="7" y="10" textAnchor="middle" fontSize="4" fontWeight="bold" fill="#1a1a1a">EX</text>
+    </svg>
+  );
   const MarkerLegend = (
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
-        À faire
+        <LegendTriangle fill="#fbbf24" />
+        Conforme
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-orange" style={{ background: "#f59e0b" }} />
-        ≤90j
+        <LegendTriangle fill="#ef4444" pulse="blink-red" />
+        Non conforme / Retard
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
-        En retard
-      </span>
-      <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
+        <LegendTriangle fill="#93c5fd" />
         Nouvelle (à enregistrer)
       </span>
       <span className="inline-flex items-center gap-1 text-gray-500">
