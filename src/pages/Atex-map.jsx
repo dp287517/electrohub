@@ -287,18 +287,7 @@ function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = 
 
   const triangleSVG = makeAtexTriangleSVG(s, fillColor, isSelected, isDuplicate);
 
-  const html = `
-    <div class="${animClass}" style="
-      width:${s}px;
-      height:${s}px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      transition:all 0.2s ease;
-      z-index:${isSelected ? 1000 : 1};
-    ">
-      ${triangleSVG}
-    </div>`;
+  const html = `<div class="${animClass}" style="width:${s}px;height:${s}px;display:flex;align-items:center;justify-content:center;">${triangleSVG}</div>`;
 
   return L.divIcon({
     className: "atex-marker-inline",

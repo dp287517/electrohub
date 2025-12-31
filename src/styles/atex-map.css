@@ -587,36 +587,39 @@
   animation: pe-pulse 1.5s ease-in-out infinite;
 }
 
-/* 🔺 ATEX Triangle Marker Animations */
+/* 🔺 ATEX Triangle Marker Animations - GPU accelerated (no filter) */
 @keyframes atex-triangle-pulse-yellow {
-  0%, 100% { filter: drop-shadow(0 0 0 rgba(234, 179, 8, 0.6)); }
-  50% { filter: drop-shadow(0 0 12px rgba(234, 179, 8, 0.8)); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.85; }
 }
 
 @keyframes atex-triangle-pulse-red {
-  0%, 100% { filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0.6)); }
-  50% { filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.9)); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.8; }
 }
 
 @keyframes atex-triangle-pulse-violet {
-  0%, 100% { filter: drop-shadow(0 0 0 rgba(167, 139, 250, 0.6)); }
-  50% { filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.9)); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.85; }
 }
 
 .atex-triangle-pulse-yellow {
   animation: atex-triangle-pulse-yellow 2s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 .atex-triangle-pulse-red {
   animation: atex-triangle-pulse-red 1.5s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 .atex-triangle-pulse-violet {
   animation: atex-triangle-pulse-violet 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 .atex-triangle-selected {
-  filter: drop-shadow(0 0 8px rgba(124, 58, 237, 0.7));
+  transform: scale(1.05);
 }
 
 .btn-pencil-wrap { position: relative; }
