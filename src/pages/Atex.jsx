@@ -317,9 +317,26 @@ export default function Atex() {
         try {
           const status = await api.atex.drpceStatus(reportId);
           if (status?.status === 'completed') {
-            // Télécharger le rapport
-            window.open(api.atex.drpceDownloadUrl(reportId), '_blank');
+            // Télécharger le rapport - méthode compatible mobile
             setToast("📄 Téléchargement du rapport en cours...");
+            try {
+              const response = await fetch(api.atex.drpceDownloadUrl(reportId));
+              if (!response.ok) throw new Error('Download failed');
+              const blob = await response.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `DRPCE_${reportId}.pdf`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              setToast("✅ Rapport téléchargé !");
+            } catch (dlErr) {
+              console.error("[ATEX] Blob download failed, trying window.open:", dlErr);
+              // Fallback pour navigateurs qui bloquent les blobs
+              window.location.href = api.atex.drpceDownloadUrl(reportId);
+            }
             setTimeout(() => setToast(""), 5000);
           } else if (status?.status === 'pending') {
             setToast("⏳ Le rapport est encore en cours de génération...");
