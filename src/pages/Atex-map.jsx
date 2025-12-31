@@ -233,104 +233,111 @@ function findContainingSubarea(xf, yf, subareas) {
   return candidates[0].sa;
 }
 
-// 🔥 Nouveau design des marqueurs ATEX avec icône SVG et gradient (style Switchboard)
-const ICON_PX_SELECTED = 34;  // 🆕 Plus grand pour meilleure visibilité
+// 🔺 Triangle ATEX marker design (comme le panneau de danger EX)
+const ICON_PX_SELECTED = 38;  // Plus grand pour sélection
 
-// Gradients par statut pour un design moderne
-const STATUS_GRADIENT = {
-  a_faire: { from: "#34d399", to: "#059669" },      // Vert emeraude
-  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
-  en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
-  fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
-  selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
-  non_conforme: { from: "#ef4444", to: "#b91c1c" }, // Rouge vif pour non conforme
-  duplicate: { from: "#fbcfe8", to: "#ec4899" },    // 🌸 Rose clair pour duplicatas
-};
+// Triangle SVG ATEX avec "EX" - bordure noire qui ne touche pas les bords
+function makeAtexTriangleSVG(size, fillColor, isSelected = false, isDuplicate = false) {
+  const strokeWidth = isSelected || isDuplicate ? 3 : 2.5;
+  const innerPadding = 4; // Espace entre le triangle et la bordure
 
-// Icône SVG flamme ATEX
-const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
-  <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
-</svg>`;
+  // Couleur de la bordure externe pour sélection/duplicata
+  let outerGlow = '';
+  if (isDuplicate) {
+    outerGlow = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="none" stroke="#ec4899" stroke-width="4" opacity="0.6"/>`;
+  } else if (isSelected) {
+    outerGlow = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="none" stroke="#7c3aed" stroke-width="4" opacity="0.6"/>`;
+  }
+
+  return `
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+      <!-- Glow effect pour sélection -->
+      ${outerGlow}
+      <!-- Triangle extérieur jaune/rouge -->
+      <polygon
+        points="${size/2},${innerPadding} ${size-innerPadding},${size-innerPadding} ${innerPadding},${size-innerPadding}"
+        fill="${fillColor}"
+        stroke="none"
+      />
+      <!-- Bordure noire intérieure (ne touche pas les bords) -->
+      <polygon
+        points="${size/2},${innerPadding + 4} ${size-innerPadding-4},${size-innerPadding-3} ${innerPadding+4},${size-innerPadding-3}"
+        fill="none"
+        stroke="#1a1a1a"
+        stroke-width="${strokeWidth}"
+        stroke-linejoin="round"
+      />
+      <!-- Texte EX -->
+      <text
+        x="${size/2}"
+        y="${size * 0.68}"
+        text-anchor="middle"
+        font-family="Arial, sans-serif"
+        font-size="${size * 0.32}px"
+        font-weight="bold"
+        fill="#1a1a1a"
+      >EX</text>
+    </svg>
+  `;
+}
 
 function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
-  const s = isSelected || isDuplicate ? ICON_PX_SELECTED : ICON_PX;
+  const s = isSelected || isDuplicate ? ICON_PX_SELECTED : 30; // Taille de base 30px pour les triangles
 
-  // Marqueur non sauvegardé (nouveau)
-  if (isUnsaved) {
-    const html = `
-      <div class="atex-marker-new${isSelected ? ' atex-marker-selected' : ''}" style="
-        width:${s}px;height:${s}px;border-radius:9999px;
-        background: radial-gradient(circle at 30% 30%, #93c5fd, #2563eb);
-        border:2px solid white;
-        box-shadow:0 4px 10px rgba(0,0,0,.25);
-        display:flex;align-items:center;justify-content:center;
-        transition:all 0.2s ease;
-      ">
-        ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
-      </div>`;
-    return L.divIcon({
-      className: "atex-marker-inline",
-      html,
-      iconSize: [s, s],
-      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
-      popupAnchor: [0, -Math.round(s / 2)],
-    });
-  }
-
-  // 🟣 Priorité: 1) Dupliqué = violet clair pulsant, 2) Sélectionné = violet, 3) Non conforme = rouge, 4) Statut normal
-  let grad;
-  if (isDuplicate) {
-    grad = STATUS_GRADIENT.duplicate;
-  } else if (isSelected) {
-    grad = STATUS_GRADIENT.selected;
-  } else if (complianceState === "non_conforme") {
-    grad = STATUS_GRADIENT.non_conforme;
-  } else {
-    grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
-  }
-
-  // Classes d'animation - duplicata = pulsation violette prioritaire
+  // Déterminer la couleur du triangle
+  let fillColor;
   let animClass = "";
-  if (isDuplicate) {
-    animClass = "atex-marker-pulse-violet"; // 🟣 Violet pulsant pour duplicata
+
+  if (isUnsaved) {
+    // Nouveau marqueur = bleu clair
+    fillColor = "#93c5fd";
+    animClass = "atex-triangle-pulse-yellow";
+  } else if (isDuplicate) {
+    // Duplicata = jaune avec animation violette
+    fillColor = "#fbbf24";
+    animClass = "atex-triangle-pulse-violet";
   } else if (isSelected) {
-    animClass = "atex-marker-selected";
+    // Sélectionné = jaune avec glow violet
+    fillColor = "#fbbf24";
+    animClass = "atex-triangle-selected";
   } else if (complianceState === "non_conforme") {
-    animClass = "atex-marker-pulse-red"; // Rouge pulsant pour non conforme
+    // Non conforme = ROUGE
+    fillColor = "#ef4444";
+    animClass = "atex-triangle-pulse-red";
   } else if (status === "en_retard") {
-    animClass = "atex-marker-pulse-red";
+    // En retard = rouge pulsant
+    fillColor = "#ef4444";
+    animClass = "atex-triangle-pulse-red";
   } else if (status === "en_cours_30") {
-    animClass = "atex-marker-pulse-orange";
+    // En cours = jaune/orange pulsant
+    fillColor = "#fbbf24";
+    animClass = "atex-triangle-pulse-yellow";
+  } else {
+    // Par défaut (a_faire, fait, conforme) = JAUNE standard
+    fillColor = "#fbbf24";
   }
 
-  // 🆕 Bordure plus visible pour sélection ou duplicata
-  let borderStyle;
-  if (isDuplicate) {
-    borderStyle = "border:3px solid #ec4899;box-shadow:0 0 0 4px rgba(236,72,153,0.5),0 6px 15px rgba(0,0,0,.35);";
-  } else if (isSelected) {
-    borderStyle = "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);";
-  } else {
-    borderStyle = "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
-  }
+  const triangleSVG = makeAtexTriangleSVG(s, fillColor, isSelected, isDuplicate);
 
   const html = `
     <div class="${animClass}" style="
-      width:${s}px;height:${s}px;border-radius:9999px;
-      background: radial-gradient(circle at 30% 30%, ${grad.from}, ${grad.to});
-      ${borderStyle}
-      display:flex;align-items:center;justify-content:center;
+      width:${s}px;
+      height:${s}px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
       transition:all 0.2s ease;
       z-index:${isSelected ? 1000 : 1};
     ">
-      ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
+      ${triangleSVG}
     </div>`;
 
   return L.divIcon({
     className: "atex-marker-inline",
     html,
     iconSize: [s, s],
-    iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
-    popupAnchor: [0, -Math.round(s / 2)],
+    iconAnchor: [Math.round(s / 2), Math.round(s * 0.7)], // Ancrage vers le bas du triangle
+    popupAnchor: [0, -Math.round(s * 0.5)],
   });
 }
 /* ----------------------------- Dessin: modes ----------------------------- */
@@ -2404,28 +2411,31 @@ function setupHandleDrag(map, onMoveCallback) {
       />
     </div>
   ) : null;
+  // 🔺 Mini triangle SVG pour la légende
+  const LegendTriangle = ({ fill, pulse = false, pulseColor = "yellow" }) => (
+    <svg width="14" height="14" viewBox="0 0 14 14" className={pulse ? `atex-triangle-pulse-${pulseColor}` : ""}>
+      <polygon points="7,1 13,12 1,12" fill={fill} />
+      <polygon points="7,3 11,11 3,11" fill="none" stroke="#1a1a1a" strokeWidth="1" strokeLinejoin="round" />
+      <text x="7" y="10" textAnchor="middle" fontFamily="Arial" fontSize="5" fontWeight="bold" fill="#1a1a1a">EX</text>
+    </svg>
+  );
+
   const MarkerLegend = (
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
-        À faire
+        <LegendTriangle fill="#fbbf24" />
+        Conforme
       </span>
       <span className="inline-flex items-center gap-1">
-        <span
-          className="w-3 h-3 rounded-full blink-orange"
-          style={{ background: "#f59e0b" }}
-        />
+        <LegendTriangle fill="#fbbf24" pulse pulseColor="yellow" />
         ≤90j
       </span>
       <span className="inline-flex items-center gap-1">
-        <span
-          className="w-3 h-3 rounded-full blink-red"
-          style={{ background: "#e11d48" }}
-        />
-        En retard
+        <LegendTriangle fill="#ef4444" pulse pulseColor="red" />
+        Non conforme / En retard
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
+        <LegendTriangle fill="#3b82f6" />
         Nouvelle (à enregistrer)
       </span>
       <span className="inline-flex items-center gap-1 text-gray-500">

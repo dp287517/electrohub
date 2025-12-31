@@ -483,34 +483,80 @@
   box-shadow: 0 2px 8px rgba(234, 88, 12, 0.35);
 }
 
-/* 🔌 Bouton Presse-Étoupe (PE) */
+/* 🔌 Bouton Presse-Étoupe (PE) - Design réaliste */
 .btn-pe {
   width: 40px;
   height: 40px;
-  border-radius: 12px;
+  border-radius: 10px;
   border: none;
-  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-  color: white;
-  font-size: 18px;
+  background: linear-gradient(180deg, #e5e7eb 0%, #9ca3af 50%, #6b7280 100%);
+  color: #374151;
+  font-size: 11px;
   font-weight: bold;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.25),
+    inset 0 2px 4px rgba(255, 255, 255, 0.6),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.2);
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Filetage du presse-étoupe */
+.btn-pe::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 24px;
+  background: repeating-linear-gradient(
+    0deg,
+    #9ca3af 0px,
+    #9ca3af 2px,
+    #6b7280 2px,
+    #6b7280 4px
+  );
+  border-radius: 2px 0 0 2px;
+}
+
+/* Corps hexagonal du presse-étoupe */
+.btn-pe::after {
+  content: 'PE';
+  position: absolute;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  background: linear-gradient(180deg, #f3f4f6 0%, #d1d5db 100%);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: bold;
+  color: #374151;
+  box-shadow: inset 0 1px 2px rgba(255,255,255,0.8);
 }
 
 .btn-pe:hover {
-  background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
-  transform: translateY(-2px) scale(1.05);
-  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.45);
+  background: linear-gradient(180deg, #f3f4f6 0%, #d1d5db 50%, #9ca3af 100%);
+  transform: translateY(-2px);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.3),
+    inset 0 2px 4px rgba(255, 255, 255, 0.7),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.15);
 }
 
 .btn-pe:active {
-  transform: translateY(0) scale(1);
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.35);
+  transform: translateY(0);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 /* 🔌 Marqueurs Presse-Étoupe */
@@ -539,6 +585,38 @@
 
 .pe-marker-analyzing .pe-marker-inner {
   animation: pe-pulse 1.5s ease-in-out infinite;
+}
+
+/* 🔺 ATEX Triangle Marker Animations */
+@keyframes atex-triangle-pulse-yellow {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(234, 179, 8, 0.6)); }
+  50% { filter: drop-shadow(0 0 12px rgba(234, 179, 8, 0.8)); }
+}
+
+@keyframes atex-triangle-pulse-red {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(239, 68, 68, 0.6)); }
+  50% { filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.9)); }
+}
+
+@keyframes atex-triangle-pulse-violet {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(167, 139, 250, 0.6)); }
+  50% { filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.9)); }
+}
+
+.atex-triangle-pulse-yellow {
+  animation: atex-triangle-pulse-yellow 2s ease-in-out infinite;
+}
+
+.atex-triangle-pulse-red {
+  animation: atex-triangle-pulse-red 1.5s ease-in-out infinite;
+}
+
+.atex-triangle-pulse-violet {
+  animation: atex-triangle-pulse-violet 1.2s ease-in-out infinite;
+}
+
+.atex-triangle-selected {
+  filter: drop-shadow(0 0 8px rgba(124, 58, 237, 0.7));
 }
 
 .btn-pencil-wrap { position: relative; }

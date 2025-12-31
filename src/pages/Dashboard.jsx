@@ -23,12 +23,48 @@ import NotificationCenter from '../components/NotificationCenter';
 // Chart colors
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
+// Custom ATEX Triangle Icon (panneau de danger EX)
+const AtexTriangleIcon = ({ size = 24, className = "" }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    xmlns="http://www.w3.org/2000/svg"
+    className={className}
+  >
+    {/* Triangle jaune */}
+    <polygon
+      points="16,3 30,28 2,28"
+      fill="#fbbf24"
+    />
+    {/* Bordure noire intérieure */}
+    <polygon
+      points="16,7 26,25 6,25"
+      fill="none"
+      stroke="#1a1a1a"
+      strokeWidth="2"
+      strokeLinejoin="round"
+    />
+    {/* Texte EX */}
+    <text
+      x="16"
+      y="22"
+      textAnchor="middle"
+      fontFamily="Arial, sans-serif"
+      fontSize="9"
+      fontWeight="bold"
+      fill="#1a1a1a"
+    >EX</text>
+  </svg>
+);
+
 // Icon mapping
 const iconMap = {
   '⚡': Zap, '♻️': Recycle, '🧩': Puzzle, '📈': TrendingUp, '⚠️': AlertTriangle,
   '🔄': RefreshCw, '💳': CreditCard, '⚙️': Cog, '🧯': Flame,
   '🛠️': Wrench, '🤝': Users, '💬': MessageCircle, '🚪': DoorOpen, '📊': BarChart3,
   '📋': ClipboardCheck, '🔋': Battery, '🗄️': Database, '🔌': Zap,
+  '🔺': AtexTriangleIcon, // Triangle ATEX
 };
 
 // All apps with full names
@@ -52,7 +88,7 @@ const allApps = {
   tools: [
     { id: 'controls', label: 'Contrôles Périodiques', shortLabel: 'Contrôles', to: '/app/switchboard-controls', icon: '📋', color: 'from-blue-400 via-indigo-500 to-purple-600', glow: 'shadow-indigo-500/30' },
     { id: 'projects', label: 'Gestion Projets', shortLabel: 'Projets', to: '/app/projects', icon: '💳', color: 'from-green-400 via-emerald-500 to-teal-600', glow: 'shadow-emerald-500/30' },
-    { id: 'atex', label: 'Zones ATEX', shortLabel: 'ATEX', to: '/app/atex', icon: '🧯', color: 'from-orange-400 via-red-500 to-rose-600', glow: 'shadow-red-500/30' },
+    { id: 'atex', label: 'Zones ATEX', shortLabel: 'ATEX', to: '/app/atex', icon: '🔺', color: 'from-amber-400 via-yellow-500 to-orange-500', glow: 'shadow-yellow-500/30' },
     { id: 'doors', label: 'Portes Coupe-Feu', shortLabel: 'Portes Feu', to: '/app/doors', icon: '🚪', color: 'from-rose-400 via-pink-500 to-fuchsia-600', glow: 'shadow-pink-500/30' },
     { id: 'comp-ext', label: 'Sous-Traitants', shortLabel: 'Contractors', to: '/app/comp-ext', icon: '🤝', color: 'from-teal-400 via-cyan-500 to-blue-600', glow: 'shadow-cyan-500/30' },
     { id: 'ask-veeva', label: 'Ask Veeva AI', shortLabel: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 via-purple-500 to-fuchsia-600', glow: 'shadow-purple-500/30' },
