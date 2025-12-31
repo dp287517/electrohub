@@ -831,15 +831,16 @@ async function ensureSchema() {
       created_at TIMESTAMP DEFAULT now(),
       updated_at TIMESTAMP DEFAULT now()
     );
+
+    -- Migration: Ajouter colonnes de contrôle si elles n'existent pas (AVANT les index)
+    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS last_check_date TIMESTAMP NULL;
+    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS next_check_date TIMESTAMP NULL;
+
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_plan ON cable_gland_baskets(plan_logical_name);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_status ON cable_gland_baskets(status);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_company ON cable_gland_baskets(company_id);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_site ON cable_gland_baskets(site_id);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_next_check ON cable_gland_baskets(next_check_date);
-
-    -- Migration: Ajouter colonnes de contrôle si elles n'existent pas
-    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS last_check_date TIMESTAMP NULL;
-    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS next_check_date TIMESTAMP NULL;
   `);
 
   // Photos individuelles dans chaque panier
