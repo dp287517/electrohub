@@ -798,6 +798,113 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_pending_reports_created ON pending_reports(created_at DESC);
   `);
   console.log('[ATEX] pending_reports table created ✅');
+
+  // ============================================================
+  // CABLE GLAND (PRESSE-ÉTOUPE) TABLES
+  // ============================================================
+  console.log('[ATEX] Creating cable gland tables...');
+
+  // Paniers de presse-étoupes (regroupés par zone/plan)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cable_gland_baskets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL DEFAULT '',
+      description TEXT DEFAULT '',
+      plan_id UUID NULL,
+      plan_logical_name TEXT NULL,
+      zone_id UUID NULL,
+      zone_name TEXT DEFAULT '',
+      building TEXT DEFAULT '',
+      page_index INTEGER DEFAULT 0,
+      x_frac NUMERIC NULL,
+      y_frac NUMERIC NULL,
+      status TEXT DEFAULT 'pending',
+      total_photos INTEGER DEFAULT 0,
+      analyzed_photos INTEGER DEFAULT 0,
+      total_glands INTEGER DEFAULT 0,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_by_name TEXT,
+      created_by_email TEXT,
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cg_baskets_plan ON cable_gland_baskets(plan_logical_name);
+    CREATE INDEX IF NOT EXISTS idx_cg_baskets_status ON cable_gland_baskets(status);
+    CREATE INDEX IF NOT EXISTS idx_cg_baskets_company ON cable_gland_baskets(company_id);
+    CREATE INDEX IF NOT EXISTS idx_cg_baskets_site ON cable_gland_baskets(site_id);
+  `);
+
+  // Photos individuelles dans chaque panier
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cable_gland_photos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      basket_id UUID NOT NULL REFERENCES cable_gland_baskets(id) ON DELETE CASCADE,
+      original_name TEXT NOT NULL,
+      mime TEXT DEFAULT 'image/jpeg',
+      photo_content BYTEA NOT NULL,
+      thumbnail BYTEA NULL,
+      analysis_status TEXT DEFAULT 'pending',
+      analysis_result JSONB DEFAULT '{}',
+      glands_count INTEGER DEFAULT 0,
+      analyzed_at TIMESTAMP NULL,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cg_photos_basket ON cable_gland_photos(basket_id);
+    CREATE INDEX IF NOT EXISTS idx_cg_photos_status ON cable_gland_photos(analysis_status);
+  `);
+
+  // Presse-étoupes individuels détectés dans les photos
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cable_gland_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      photo_id UUID NOT NULL REFERENCES cable_gland_photos(id) ON DELETE CASCADE,
+      basket_id UUID NOT NULL REFERENCES cable_gland_baskets(id) ON DELETE CASCADE,
+      reference TEXT DEFAULT '',
+      manufacturer TEXT DEFAULT '',
+      type TEXT DEFAULT '',
+      size TEXT DEFAULT '',
+      material TEXT DEFAULT '',
+      atex_marking TEXT DEFAULT '',
+      ip_rating TEXT DEFAULT '',
+      condition TEXT DEFAULT 'ok',
+      compliance_status TEXT DEFAULT 'pending',
+      notes TEXT DEFAULT '',
+      bounding_box JSONB DEFAULT '{}',
+      confidence NUMERIC DEFAULT 0,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cg_items_photo ON cable_gland_items(photo_id);
+    CREATE INDEX IF NOT EXISTS idx_cg_items_basket ON cable_gland_items(basket_id);
+    CREATE INDEX IF NOT EXISTS idx_cg_items_compliance ON cable_gland_items(compliance_status);
+  `);
+
+  // Table pour le suivi des analyses en cours (queue asynchrone)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cable_gland_analysis_queue (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      basket_id UUID NOT NULL REFERENCES cable_gland_baskets(id) ON DELETE CASCADE,
+      status TEXT DEFAULT 'pending',
+      progress INTEGER DEFAULT 0,
+      total_items INTEGER DEFAULT 0,
+      error_message TEXT,
+      started_at TIMESTAMP NULL,
+      completed_at TIMESTAMP NULL,
+      user_email TEXT,
+      user_name TEXT,
+      company_id INTEGER,
+      site_id INTEGER,
+      created_at TIMESTAMP DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cg_queue_status ON cable_gland_analysis_queue(status);
+    CREATE INDEX IF NOT EXISTS idx_cg_queue_basket ON cable_gland_analysis_queue(basket_id);
+  `);
+
+  console.log('[ATEX] Cable gland tables created ✅');
 }
 // -------------------------------------------------
 // Utils
@@ -5801,6 +5908,665 @@ app.get("/api/atex/drpce/pending", async (req, res) => {
 
 // -------------------------------------------------
 // FIN DRPCE ASYNC
+// -------------------------------------------------
+
+// ============================================================
+// CABLE GLAND (PRESSE-ÉTOUPE) API ROUTES
+// ============================================================
+
+// List all cable gland baskets
+app.get("/api/atex/cable-glands/baskets", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT
+        b.*,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = b.id) as photo_count,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = b.id AND analysis_status = 'completed') as analyzed_count,
+        (SELECT COUNT(*) FROM cable_gland_items WHERE basket_id = b.id) as gland_count
+      FROM cable_gland_baskets b
+      WHERE ($1::int IS NULL OR b.company_id = $1)
+        AND ($2::int IS NULL OR b.site_id = $2)
+      ORDER BY b.created_at DESC
+    `, [filter.company_id, filter.site_id]);
+
+    res.json({ ok: true, baskets: rows });
+  } catch (e) {
+    console.error('[CableGlands] List baskets error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get baskets for a specific plan
+app.get("/api/atex/cable-glands/baskets/by-plan/:logicalName", async (req, res) => {
+  try {
+    const { logicalName } = req.params;
+    const pageIndex = parseInt(req.query.pageIndex) || 0;
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT
+        b.*,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = b.id) as photo_count,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = b.id AND analysis_status = 'completed') as analyzed_count,
+        (SELECT COUNT(*) FROM cable_gland_items WHERE basket_id = b.id) as gland_count
+      FROM cable_gland_baskets b
+      WHERE b.plan_logical_name = $1
+        AND b.page_index = $2
+        AND ($3::int IS NULL OR b.company_id = $3)
+        AND ($4::int IS NULL OR b.site_id = $4)
+      ORDER BY b.created_at DESC
+    `, [logicalName, pageIndex, filter.company_id, filter.site_id]);
+
+    res.json({ ok: true, baskets: rows });
+  } catch (e) {
+    console.error('[CableGlands] List by plan error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Create a new basket
+app.post("/api/atex/cable-glands/baskets", async (req, res) => {
+  try {
+    const user = getUser(req);
+    const tenant = extractTenantFromRequest(req);
+    const tenantData = addTenantToData({}, tenant);
+
+    const { name, description, planId, planLogicalName, zoneId, zoneName, building, pageIndex, xFrac, yFrac } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO cable_gland_baskets
+        (name, description, plan_id, plan_logical_name, zone_id, zone_name, building, page_index, x_frac, y_frac, company_id, site_id, created_by_name, created_by_email)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      name || 'Nouveau panier PE',
+      description || '',
+      planId || null,
+      planLogicalName || null,
+      zoneId || null,
+      zoneName || '',
+      building || '',
+      pageIndex || 0,
+      xFrac ?? null,
+      yFrac ?? null,
+      tenantData.company_id,
+      tenantData.site_id,
+      user.name,
+      user.email
+    ]);
+
+    await logEvent(req, 'cable_gland_basket_created', { basketId: rows[0].id, name });
+    res.json({ ok: true, basket: rows[0] });
+  } catch (e) {
+    console.error('[CableGlands] Create basket error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get basket details with photos
+app.get("/api/atex/cable-glands/baskets/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const basketRes = await pool.query(`SELECT * FROM cable_gland_baskets WHERE id = $1`, [id]);
+    if (!basketRes.rows[0]) {
+      return res.status(404).json({ ok: false, error: 'Basket not found' });
+    }
+
+    const photosRes = await pool.query(`
+      SELECT id, original_name, mime, analysis_status, glands_count, created_at, analyzed_at,
+             length(photo_content) as size
+      FROM cable_gland_photos
+      WHERE basket_id = $1
+      ORDER BY created_at DESC
+    `, [id]);
+
+    const itemsRes = await pool.query(`
+      SELECT * FROM cable_gland_items WHERE basket_id = $1 ORDER BY created_at DESC
+    `, [id]);
+
+    res.json({
+      ok: true,
+      basket: basketRes.rows[0],
+      photos: photosRes.rows,
+      items: itemsRes.rows
+    });
+  } catch (e) {
+    console.error('[CableGlands] Get basket error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Update basket
+app.put("/api/atex/cable-glands/baskets/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, zoneName, building, xFrac, yFrac } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE cable_gland_baskets
+      SET name = COALESCE($1, name),
+          description = COALESCE($2, description),
+          zone_name = COALESCE($3, zone_name),
+          building = COALESCE($4, building),
+          x_frac = COALESCE($5, x_frac),
+          y_frac = COALESCE($6, y_frac),
+          updated_at = now()
+      WHERE id = $7
+      RETURNING *
+    `, [name, description, zoneName, building, xFrac, yFrac, id]);
+
+    if (!rows[0]) {
+      return res.status(404).json({ ok: false, error: 'Basket not found' });
+    }
+
+    res.json({ ok: true, basket: rows[0] });
+  } catch (e) {
+    console.error('[CableGlands] Update basket error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Delete basket
+app.delete("/api/atex/cable-glands/baskets/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM cable_gland_baskets WHERE id = $1`, [id]);
+    await logEvent(req, 'cable_gland_basket_deleted', { basketId: id });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[CableGlands] Delete basket error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Upload photos to basket (multiple files)
+app.post("/api/atex/cable-glands/baskets/:id/photos", multerFiles.array("photos", 50), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const files = req.files || [];
+    const tenant = extractTenantFromRequest(req);
+    const tenantData = addTenantToData({}, tenant);
+
+    if (files.length === 0) {
+      return res.status(400).json({ ok: false, error: 'No files provided' });
+    }
+
+    const uploadedPhotos = [];
+
+    for (const file of files) {
+      try {
+        // Read file and create compressed version
+        let buf = await fsp.readFile(file.path);
+
+        // Compress with Sharp (max 1920px, quality 85%)
+        const compressed = await sharp(buf)
+          .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+
+        // Create thumbnail (200px)
+        const thumbnail = await sharp(buf)
+          .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 70 })
+          .toBuffer();
+
+        const { rows } = await pool.query(`
+          INSERT INTO cable_gland_photos (basket_id, original_name, mime, photo_content, thumbnail, company_id, site_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id, original_name, analysis_status, created_at
+        `, [id, file.originalname, 'image/jpeg', compressed, thumbnail, tenantData.company_id, tenantData.site_id]);
+
+        uploadedPhotos.push(rows[0]);
+
+        // Clean up temp file
+        await fsp.unlink(file.path).catch(() => {});
+      } catch (fileErr) {
+        console.error(`[CableGlands] Error processing file ${file.originalname}:`, fileErr.message);
+      }
+    }
+
+    // Update basket photo count
+    await pool.query(`
+      UPDATE cable_gland_baskets
+      SET total_photos = (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = $1),
+          updated_at = now()
+      WHERE id = $1
+    `, [id]);
+
+    await logEvent(req, 'cable_gland_photos_uploaded', { basketId: id, count: uploadedPhotos.length });
+    res.json({ ok: true, photos: uploadedPhotos, count: uploadedPhotos.length });
+  } catch (e) {
+    console.error('[CableGlands] Upload photos error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get photo (full or thumbnail)
+app.get("/api/atex/cable-glands/photos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const wantThumb = req.query.thumb === "1" || req.query.thumb === "true";
+
+    const column = wantThumb ? 'thumbnail' : 'photo_content';
+    const { rows } = await pool.query(`SELECT ${column} FROM cable_gland_photos WHERE id = $1`, [id]);
+
+    if (!rows[0] || !rows[0][column]) {
+      return res.status(404).end();
+    }
+
+    res.type('image/jpeg');
+    res.set('Cache-Control', wantThumb ? 'public, max-age=3600' : 'public, max-age=86400');
+    res.end(rows[0][column], 'binary');
+  } catch (e) {
+    console.error('[CableGlands] Get photo error:', e);
+    res.status(404).end();
+  }
+});
+
+// Delete photo
+app.delete("/api/atex/cable-glands/photos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(`SELECT basket_id FROM cable_gland_photos WHERE id = $1`, [id]);
+    const basketId = rows[0]?.basket_id;
+
+    await pool.query(`DELETE FROM cable_gland_photos WHERE id = $1`, [id]);
+
+    // Update basket counts
+    if (basketId) {
+      await pool.query(`
+        UPDATE cable_gland_baskets
+        SET total_photos = (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = $1),
+            analyzed_photos = (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = $1 AND analysis_status = 'completed'),
+            total_glands = (SELECT COUNT(*) FROM cable_gland_items WHERE basket_id = $1),
+            updated_at = now()
+        WHERE id = $1
+      `, [basketId]);
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[CableGlands] Delete photo error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Start async analysis for a basket
+app.post("/api/atex/cable-glands/baskets/:id/analyze", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = getUser(req);
+    const tenant = extractTenantFromRequest(req);
+    const tenantData = addTenantToData({}, tenant);
+
+    // Check if analysis already in progress
+    const existingQueue = await pool.query(`
+      SELECT id FROM cable_gland_analysis_queue
+      WHERE basket_id = $1 AND status IN ('pending', 'processing')
+    `, [id]);
+
+    if (existingQueue.rows.length > 0) {
+      return res.json({ ok: true, queueId: existingQueue.rows[0].id, message: 'Analysis already in progress' });
+    }
+
+    // Count pending photos
+    const photoCount = await pool.query(`
+      SELECT COUNT(*) as count FROM cable_gland_photos
+      WHERE basket_id = $1 AND analysis_status = 'pending'
+    `, [id]);
+
+    const totalItems = parseInt(photoCount.rows[0].count);
+    if (totalItems === 0) {
+      return res.json({ ok: true, message: 'No photos to analyze' });
+    }
+
+    // Create queue entry
+    const { rows } = await pool.query(`
+      INSERT INTO cable_gland_analysis_queue (basket_id, total_items, user_email, user_name, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `, [id, totalItems, user.email, user.name, tenantData.company_id, tenantData.site_id]);
+
+    const queueId = rows[0].id;
+
+    // Update basket status
+    await pool.query(`UPDATE cable_gland_baskets SET status = 'analyzing' WHERE id = $1`, [id]);
+
+    // Start async analysis
+    processCableGlandAnalysis(queueId, id).catch(err => {
+      console.error('[CableGlands] Async analysis error:', err);
+    });
+
+    await logEvent(req, 'cable_gland_analysis_started', { basketId: id, queueId, photoCount: totalItems });
+    res.json({ ok: true, queueId, totalItems });
+  } catch (e) {
+    console.error('[CableGlands] Start analysis error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get analysis progress
+app.get("/api/atex/cable-glands/analysis/:queueId/status", async (req, res) => {
+  try {
+    const { queueId } = req.params;
+    const { rows } = await pool.query(`
+      SELECT * FROM cable_gland_analysis_queue WHERE id = $1
+    `, [queueId]);
+
+    if (!rows[0]) {
+      return res.status(404).json({ ok: false, error: 'Queue not found' });
+    }
+
+    res.json({ ok: true, queue: rows[0] });
+  } catch (e) {
+    console.error('[CableGlands] Get analysis status error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get all pending/processing analyses for monitoring
+app.get("/api/atex/cable-glands/analysis/pending", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT q.*, b.name as basket_name
+      FROM cable_gland_analysis_queue q
+      LEFT JOIN cable_gland_baskets b ON b.id = q.basket_id
+      WHERE q.status IN ('pending', 'processing')
+        AND ($1::int IS NULL OR q.company_id = $1)
+        AND ($2::int IS NULL OR q.site_id = $2)
+      ORDER BY q.created_at DESC
+    `, [filter.company_id, filter.site_id]);
+
+    res.json({ ok: true, analyses: rows });
+  } catch (e) {
+    console.error('[CableGlands] Get pending analyses error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get statistics for management monitoring
+app.get("/api/atex/cable-glands/stats", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const stats = await pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE analysis_status = 'completed' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as analyzed_photos,
+        (SELECT COUNT(*) FROM cable_gland_photos WHERE analysis_status = 'pending' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_photos,
+        (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
+        (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
+        (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands,
+        (SELECT COUNT(*) FROM cable_gland_analysis_queue WHERE status IN ('pending', 'processing') AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_analyses
+    `, [filter.company_id, filter.site_id]);
+
+    res.json({ ok: true, stats: stats.rows[0] });
+  } catch (e) {
+    console.error('[CableGlands] Get stats error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Update cable gland item (manual correction)
+app.put("/api/atex/cable-glands/items/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reference, manufacturer, type, size, material, atexMarking, ipRating, condition, complianceStatus, notes } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE cable_gland_items
+      SET reference = COALESCE($1, reference),
+          manufacturer = COALESCE($2, manufacturer),
+          type = COALESCE($3, type),
+          size = COALESCE($4, size),
+          material = COALESCE($5, material),
+          atex_marking = COALESCE($6, atex_marking),
+          ip_rating = COALESCE($7, ip_rating),
+          condition = COALESCE($8, condition),
+          compliance_status = COALESCE($9, compliance_status),
+          notes = COALESCE($10, notes)
+      WHERE id = $11
+      RETURNING *
+    `, [reference, manufacturer, type, size, material, atexMarking, ipRating, condition, complianceStatus, notes, id]);
+
+    if (!rows[0]) {
+      return res.status(404).json({ ok: false, error: 'Item not found' });
+    }
+
+    res.json({ ok: true, item: rows[0] });
+  } catch (e) {
+    console.error('[CableGlands] Update item error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Async analysis processor function
+async function processCableGlandAnalysis(queueId, basketId) {
+  console.log(`[CableGlands] Starting analysis for queue ${queueId}, basket ${basketId}`);
+
+  try {
+    // Mark as processing
+    await pool.query(`
+      UPDATE cable_gland_analysis_queue
+      SET status = 'processing', started_at = now()
+      WHERE id = $1
+    `, [queueId]);
+
+    // Get pending photos
+    const { rows: photos } = await pool.query(`
+      SELECT id, photo_content FROM cable_gland_photos
+      WHERE basket_id = $1 AND analysis_status = 'pending'
+      ORDER BY created_at ASC
+    `, [basketId]);
+
+    let processedCount = 0;
+    let totalGlands = 0;
+
+    for (const photo of photos) {
+      try {
+        // Resize image for AI analysis (max 1024px)
+        const resized = await sharp(photo.photo_content)
+          .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+
+        const base64Image = resized.toString('base64');
+
+        // Call AI for analysis
+        let analysisResult = null;
+
+        // Try OpenAI first
+        if (process.env.OPENAI_API_KEY) {
+          try {
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+            const response = await openai.chat.completions.create({
+              model: "gpt-4o",
+              messages: [
+                {
+                  role: "system",
+                  content: `Tu es un expert en installations ATEX et presse-étoupes industriels. Analyse cette photo et identifie TOUS les presse-étoupes visibles.
+Pour chaque presse-étoupe détecté, fournis:
+- reference: la référence si visible
+- manufacturer: le fabricant si identifiable
+- type: type de presse-étoupe (métallique, plastique, Ex d, Ex e, etc.)
+- size: la taille (M20, M25, M32, etc.)
+- material: matériau (laiton nickelé, inox, polyamide, etc.)
+- atex_marking: marquage ATEX si visible (Ex d IIC, Ex e II, etc.)
+- ip_rating: indice IP si visible
+- condition: état (ok, usé, endommagé, corrodé)
+- notes: observations particulières
+
+Réponds UNIQUEMENT avec un JSON valide contenant un tableau "glands" avec un objet par presse-étoupe détecté.
+S'il n'y a pas de presse-étoupe visible, renvoie {"glands": []}.`
+                },
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "Analyse cette photo et identifie tous les presse-étoupes visibles:" },
+                    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                  ]
+                }
+              ],
+              max_tokens: 2000
+            });
+
+            const content = response.choices[0]?.message?.content || '';
+            // Extract JSON from response
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              analysisResult = JSON.parse(jsonMatch[0]);
+            }
+          } catch (openaiErr) {
+            console.error('[CableGlands] OpenAI error:', openaiErr.message);
+          }
+        }
+
+        // Fallback to Gemini
+        if (!analysisResult && process.env.GOOGLE_AI_API_KEY) {
+          try {
+            const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            const result = await model.generateContent([
+              {
+                inlineData: {
+                  mimeType: "image/jpeg",
+                  data: base64Image
+                }
+              },
+              `Analyse cette photo et identifie tous les presse-étoupes (cable glands) visibles.
+Pour chaque presse-étoupe, fournis: reference, manufacturer, type, size, material, atex_marking, ip_rating, condition, notes.
+Réponds UNIQUEMENT avec un JSON: {"glands": [...]}`
+            ]);
+
+            const content = result.response.text();
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              analysisResult = JSON.parse(jsonMatch[0]);
+            }
+          } catch (geminiErr) {
+            console.error('[CableGlands] Gemini error:', geminiErr.message);
+          }
+        }
+
+        // Default empty result if no AI available
+        if (!analysisResult) {
+          analysisResult = { glands: [], error: 'No AI service available' };
+        }
+
+        // Store results
+        const glands = analysisResult.glands || [];
+
+        // Get tenant data from basket
+        const basketData = await pool.query(`SELECT company_id, site_id FROM cable_gland_baskets WHERE id = $1`, [basketId]);
+        const tenant = basketData.rows[0] || {};
+
+        // Insert detected glands
+        for (const gland of glands) {
+          await pool.query(`
+            INSERT INTO cable_gland_items
+              (photo_id, basket_id, reference, manufacturer, type, size, material, atex_marking, ip_rating, condition, compliance_status, notes, confidence, company_id, site_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          `, [
+            photo.id, basketId,
+            gland.reference || '',
+            gland.manufacturer || '',
+            gland.type || '',
+            gland.size || '',
+            gland.material || '',
+            gland.atex_marking || gland.atexMarking || '',
+            gland.ip_rating || gland.ipRating || '',
+            gland.condition || 'ok',
+            gland.atex_marking ? 'ok' : 'pending',
+            gland.notes || '',
+            gland.confidence || 0.8,
+            tenant.company_id,
+            tenant.site_id
+          ]);
+        }
+
+        totalGlands += glands.length;
+
+        // Update photo status
+        await pool.query(`
+          UPDATE cable_gland_photos
+          SET analysis_status = 'completed',
+              analysis_result = $1,
+              glands_count = $2,
+              analyzed_at = now()
+          WHERE id = $3
+        `, [JSON.stringify(analysisResult), glands.length, photo.id]);
+
+        processedCount++;
+
+        // Update progress
+        await pool.query(`
+          UPDATE cable_gland_analysis_queue SET progress = $1 WHERE id = $2
+        `, [processedCount, queueId]);
+
+        console.log(`[CableGlands] Processed photo ${processedCount}/${photos.length}, found ${glands.length} glands`);
+
+      } catch (photoErr) {
+        console.error(`[CableGlands] Error processing photo ${photo.id}:`, photoErr.message);
+
+        // Mark photo as error
+        await pool.query(`
+          UPDATE cable_gland_photos
+          SET analysis_status = 'error',
+              analysis_result = $1
+          WHERE id = $2
+        `, [JSON.stringify({ error: photoErr.message }), photo.id]);
+
+        processedCount++;
+      }
+    }
+
+    // Update basket stats
+    await pool.query(`
+      UPDATE cable_gland_baskets
+      SET status = 'analyzed',
+          analyzed_photos = (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = $1 AND analysis_status = 'completed'),
+          total_glands = (SELECT COUNT(*) FROM cable_gland_items WHERE basket_id = $1),
+          updated_at = now()
+      WHERE id = $1
+    `, [basketId]);
+
+    // Mark queue as completed
+    await pool.query(`
+      UPDATE cable_gland_analysis_queue
+      SET status = 'completed', progress = $1, completed_at = now()
+      WHERE id = $2
+    `, [processedCount, queueId]);
+
+    console.log(`[CableGlands] Analysis completed for basket ${basketId}: ${processedCount} photos, ${totalGlands} glands`);
+
+  } catch (err) {
+    console.error('[CableGlands] Analysis error:', err);
+
+    await pool.query(`
+      UPDATE cable_gland_analysis_queue
+      SET status = 'error', error_message = $1, completed_at = now()
+      WHERE id = $2
+    `, [err.message, queueId]);
+
+    await pool.query(`
+      UPDATE cable_gland_baskets SET status = 'error' WHERE id = $1
+    `, [basketId]);
+  }
+}
+
+// -------------------------------------------------
+// FIN CABLE GLAND API
 // -------------------------------------------------
 
 await ensureSchema();
