@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import {
   Bell, AlertCircle, CheckCircle, Clock, FileText,
   PenTool, Play, ChevronRight, Loader2, RefreshCw,
-  X, Filter
+  X, Filter, Trash2, ExternalLink
 } from 'lucide-react';
-import { get } from '../lib/api';
+import { get, del } from '../lib/api';
 
 // Color mapping for activity types
 const colorMap = {
@@ -14,14 +14,6 @@ const colorMap = {
   amber: 'bg-amber-100 text-amber-700 border-amber-200',
   blue: 'bg-blue-100 text-blue-700 border-blue-200',
   red: 'bg-red-100 text-red-700 border-red-200',
-};
-
-const iconColorMap = {
-  violet: 'text-violet-500',
-  green: 'text-green-500',
-  amber: 'text-amber-500',
-  blue: 'text-blue-500',
-  red: 'text-red-500',
 };
 
 // Format relative time
@@ -40,15 +32,23 @@ function formatRelativeTime(timestamp) {
   return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 }
 
-// Activity item component
-function ActivityItem({ activity, compact = false }) {
-  return (
-    <Link
-      to={activity.url}
-      className={`flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors ${
-        activity.actionRequired ? 'bg-amber-50 border border-amber-200' : ''
-      }`}
-    >
+// Activity item component with delete option
+function ActivityItem({ activity, compact = false, onDelete, showDelete = false }) {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (deleting) return;
+    setDeleting(true);
+    await onDelete?.(activity.id);
+    setDeleting(false);
+  };
+
+  const content = (
+    <div className={`flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors ${
+      activity.actionRequired ? 'bg-amber-50 border border-amber-200' : ''
+    }`}>
       {/* Icon */}
       <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-lg ${
         colorMap[activity.color] || colorMap.blue
@@ -85,9 +85,116 @@ function ActivityItem({ activity, compact = false }) {
         )}
       </div>
 
-      {/* Arrow */}
-      <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-    </Link>
+      {/* Actions */}
+      <div className="flex items-center gap-1">
+        {showDelete && (
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+            title="Supprimer"
+          >
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+          </button>
+        )}
+        {activity.url && (
+          <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+        )}
+      </div>
+    </div>
+  );
+
+  if (activity.url) {
+    return <Link to={activity.url}>{content}</Link>;
+  }
+  return content;
+}
+
+// Modal for full activity list
+function ActivityModal({ isOpen, onClose, activities, loading, onRefresh, onDelete, onClearAll }) {
+  if (!isOpen) return null;
+
+  const allActivities = [...(activities.action_required || []), ...(activities.recent || [])];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="px-4 py-3 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-t-2xl flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bell className="w-5 h-5" />
+              <h2 className="font-semibold">Activité récente</h2>
+              {allActivities.length > 0 && (
+                <span className="px-2 py-0.5 text-xs font-bold bg-white/20 rounded-full">
+                  {allActivities.length}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={onRefresh}
+                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                disabled={loading}
+                title="Rafraîchir"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+              {allActivities.length > 0 && (
+                <button
+                  onClick={onClearAll}
+                  className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                  title="Tout effacer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto divide-y">
+          {loading && allActivities.length === 0 ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 text-violet-500 animate-spin" />
+            </div>
+          ) : allActivities.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <Bell className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+              <p className="font-medium">Aucune activité</p>
+              <p className="text-sm">Les nouvelles activités apparaîtront ici</p>
+            </div>
+          ) : (
+            allActivities.map(activity => (
+              <ActivityItem
+                key={activity.id}
+                activity={activity}
+                onDelete={onDelete}
+                showDelete={true}
+              />
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-3 bg-gray-50 border-t rounded-b-2xl flex-shrink-0 text-center">
+          <Link
+            to="/app/procedures"
+            onClick={onClose}
+            className="text-sm text-violet-600 hover:text-violet-700 font-medium inline-flex items-center gap-1"
+          >
+            Voir les procédures <ExternalLink className="w-3 h-3" />
+          </Link>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -96,17 +203,16 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
   const [activities, setActivities] = useState({ action_required: [], recent: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [filter, setFilter] = useState('all'); // all, actions, procedures, signatures
+  const [showModal, setShowModal] = useState(false);
+  const [filter, setFilter] = useState('all');
 
   const fetchActivities = async () => {
     try {
       setLoading(true);
-      // Use unified dashboard activities endpoint that aggregates from ALL modules
       const data = await get('/api/dashboard/activities', { limit: 50 });
       if (data) {
         setActivities(data);
       } else {
-        // Fallback to procedures if unified endpoint fails
         const fallback = await get('/api/procedures/activities/recent', { limit: 50 });
         if (fallback) {
           setActivities(fallback);
@@ -119,53 +225,119 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     }
   };
 
+  const handleDelete = async (id) => {
+    try {
+      await del(`/api/dashboard/activities/${id}`);
+      // Remove from local state
+      setActivities(prev => ({
+        action_required: prev.action_required.filter(a => a.id !== id),
+        recent: prev.recent.filter(a => a.id !== id)
+      }));
+    } catch (err) {
+      console.error('Failed to delete activity:', err);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm('Supprimer toutes les activités ?')) return;
+    try {
+      await del('/api/dashboard/activities');
+      setActivities({ action_required: [], recent: [] });
+    } catch (err) {
+      console.error('Failed to clear activities:', err);
+    }
+  };
+
   useEffect(() => {
     fetchActivities();
-    // Refresh every 2 minutes
     const interval = setInterval(fetchActivities, 120000);
     return () => clearInterval(interval);
   }, []);
 
-  // Filter activities
+  const totalCount = (activities.action_required?.length || 0) + (activities.recent?.length || 0);
+  const actionCount = activities.action_required?.length || 0;
+  const latestActivity = activities.action_required?.[0] || activities.recent?.[0];
+
+  // Compact view - just a clickable card
+  if (compact) {
+    return (
+      <>
+        <button
+          onClick={() => setShowModal(true)}
+          className="w-full text-left p-4 hover:bg-gray-50 transition-colors rounded-xl"
+        >
+          {loading && totalCount === 0 ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-5 h-5 text-violet-500 animate-spin" />
+            </div>
+          ) : totalCount === 0 ? (
+            <div className="flex items-center gap-3 text-gray-500">
+              <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center">
+                <Bell className="w-5 h-5 text-gray-400" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-600">Aucune activité</p>
+                <p className="text-sm text-gray-400">Tout est à jour</p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              {/* Icon with badge */}
+              <div className="relative">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                  actionCount > 0
+                    ? 'bg-gradient-to-br from-amber-400 to-orange-500'
+                    : 'bg-gradient-to-br from-violet-400 to-purple-500'
+                }`}>
+                  <Bell className="w-5 h-5 text-white" />
+                </div>
+                {totalCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
+                    {totalCount > 9 ? '9+' : totalCount}
+                  </span>
+                )}
+              </div>
+
+              {/* Latest activity preview */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-gray-900">
+                    {actionCount > 0 ? `${actionCount} action${actionCount > 1 ? 's' : ''} requise${actionCount > 1 ? 's' : ''}` : `${totalCount} activité${totalCount > 1 ? 's' : ''}`}
+                  </span>
+                </div>
+                {latestActivity && (
+                  <p className="text-sm text-gray-500 truncate">
+                    {latestActivity.icon} {latestActivity.title}
+                  </p>
+                )}
+              </div>
+
+              <ChevronRight className="w-5 h-5 text-gray-400" />
+            </div>
+          )}
+        </button>
+
+        <ActivityModal
+          isOpen={showModal}
+          onClose={() => setShowModal(false)}
+          activities={activities}
+          loading={loading}
+          onRefresh={fetchActivities}
+          onDelete={handleDelete}
+          onClearAll={handleClearAll}
+        />
+      </>
+    );
+  }
+
+  // Filter activities for full view
   const filteredRecent = activities.recent.filter(a => {
     if (filter === 'all') return true;
-    if (filter === 'procedures') return a.type.includes('procedure');
-    if (filter === 'signatures') return a.type.includes('signature');
-    if (filter === 'scans') return a.type.includes('scan');
+    if (filter === 'procedures') return a.type?.includes('procedure');
+    if (filter === 'signatures') return a.type?.includes('signature');
+    if (filter === 'scans') return a.type?.includes('scan');
     return true;
   }).slice(0, maxItems);
-
-  if (loading && activities.recent.length === 0) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Loader2 className="w-6 h-6 text-violet-500 animate-spin" />
-      </div>
-    );
-  }
-
-  if (compact) {
-    // Compact view for dashboard widget
-    return (
-      <div className="space-y-2">
-        {/* Action required items first */}
-        {activities.action_required.slice(0, 3).map(activity => (
-          <ActivityItem key={activity.id} activity={activity} compact />
-        ))}
-
-        {/* Recent items */}
-        {filteredRecent.slice(0, maxItems - activities.action_required.length).map(activity => (
-          <ActivityItem key={activity.id} activity={activity} compact />
-        ))}
-
-        {activities.action_required.length === 0 && filteredRecent.length === 0 && (
-          <div className="text-center py-6 text-gray-500">
-            <Bell className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-            <p>Aucune activité récente</p>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   // Full view
   return (
@@ -182,13 +354,24 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
               </span>
             )}
           </div>
-          <button
-            onClick={fetchActivities}
-            className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-            disabled={loading}
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={fetchActivities}
+              className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+              disabled={loading}
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            {totalCount > 0 && (
+              <button
+                onClick={handleClearAll}
+                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                title="Tout effacer"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -226,7 +409,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
           </div>
           <div className="divide-y">
             {activities.action_required.map(activity => (
-              <ActivityItem key={activity.id} activity={activity} />
+              <ActivityItem key={activity.id} activity={activity} onDelete={handleDelete} showDelete />
             ))}
           </div>
         </div>
@@ -235,7 +418,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
       {/* Recent Activities */}
       <div className="divide-y max-h-[400px] overflow-y-auto">
         {filteredRecent.map(activity => (
-          <ActivityItem key={activity.id} activity={activity} />
+          <ActivityItem key={activity.id} activity={activity} onDelete={handleDelete} showDelete />
         ))}
       </div>
 
