@@ -207,17 +207,37 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
   const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [clearedAt, setClearedAt] = useState(() => {
+    // Load cleared timestamp from localStorage
+    const saved = localStorage.getItem('activities_cleared_at');
+    return saved ? new Date(saved) : null;
+  });
 
   const fetchActivities = async () => {
     try {
       setLoading(true);
       const data = await get('/api/dashboard/activities', { limit: 50 });
       if (data) {
-        setActivities(data);
+        // Filter out activities older than clearedAt
+        const filterByCleared = (items) => {
+          if (!clearedAt) return items;
+          return items.filter(a => new Date(a.timestamp) > clearedAt);
+        };
+        setActivities({
+          action_required: filterByCleared(data.action_required || []),
+          recent: filterByCleared(data.recent || [])
+        });
       } else {
         const fallback = await get('/api/procedures/activities/recent', { limit: 50 });
         if (fallback) {
-          setActivities(fallback);
+          const filterByCleared = (items) => {
+            if (!clearedAt) return items;
+            return items.filter(a => new Date(a.timestamp) > clearedAt);
+          };
+          setActivities({
+            action_required: filterByCleared(fallback.action_required || []),
+            recent: filterByCleared(fallback.recent || [])
+          });
         }
       }
     } catch (err) {
@@ -243,7 +263,12 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
   const handleClearAll = async () => {
     if (!confirm('Supprimer toutes les activités ?')) return;
     try {
+      // Also call backend to clean up deletable entries
       await del('/api/dashboard/activities');
+      // Save current time to localStorage - all activities before this are "cleared"
+      const now = new Date().toISOString();
+      localStorage.setItem('activities_cleared_at', now);
+      setClearedAt(new Date(now));
       setActivities({ action_required: [], recent: [] });
     } catch (err) {
       console.error('Failed to clear activities:', err);
@@ -254,7 +279,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     fetchActivities();
     const interval = setInterval(fetchActivities, 120000);
     return () => clearInterval(interval);
-  }, []);
+  }, [clearedAt]); // Re-fetch when clearedAt changes
 
   const totalCount = (activities.action_required?.length || 0) + (activities.recent?.length || 0);
   const actionCount = activities.action_required?.length || 0;
