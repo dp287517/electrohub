@@ -276,26 +276,15 @@ function getTriangleImage(size, fill, glow = null) {
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
 
-  // Bordure extérieure noire épaisse
+  // Bordure extérieure noire
   ctx.beginPath();
   ctx.moveTo(size / 2, pad);
   ctx.lineTo(size - pad, triH);
   ctx.lineTo(pad, triH);
   ctx.closePath();
   ctx.strokeStyle = '#000';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.5;
   ctx.lineJoin = 'round';
-  ctx.stroke();
-
-  // Bordure intérieure noire (style panneau ATEX)
-  const inset = 4;
-  ctx.beginPath();
-  ctx.moveTo(size / 2, pad + inset);
-  ctx.lineTo(size - pad - inset, triH - 2);
-  ctx.lineTo(pad + inset, triH - 2);
-  ctx.closePath();
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1.5;
   ctx.stroke();
 
   // Texte "EX" net et lisible
