@@ -234,55 +234,23 @@ function findContainingSubarea(xf, yf, subareas) {
 }
 
 // 🔺 Triangle ATEX marker design (comme le panneau de danger EX)
-const ICON_PX_SELECTED = 38;  // Plus grand pour sélection
+const ICON_PX_SELECTED = 34;
 
-// Triangle SVG ATEX avec "EX" - bordure noire qui ne touche pas les bords
 function makeAtexTriangleSVG(size, fillColor, isSelected = false, isDuplicate = false) {
-  const strokeWidth = isSelected || isDuplicate ? 3 : 2.5;
-  const innerPadding = 4; // Espace entre le triangle et la bordure
-
-  // Couleur de la bordure externe pour sélection/duplicata
-  let outerGlow = '';
+  const strokeWidth = isSelected || isDuplicate ? 2 : 1.5;
+  const p = 2;
+  let glow = '';
   if (isDuplicate) {
-    outerGlow = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="none" stroke="#ec4899" stroke-width="4" opacity="0.6"/>`;
+    glow = `<polygon points="${size/2},1 ${size-1},${size-1} 1,${size-1}" fill="none" stroke="#ec4899" stroke-width="3" opacity="0.6"/>`;
   } else if (isSelected) {
-    outerGlow = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="none" stroke="#7c3aed" stroke-width="4" opacity="0.6"/>`;
+    glow = `<polygon points="${size/2},1 ${size-1},${size-1} 1,${size-1}" fill="none" stroke="#7c3aed" stroke-width="3" opacity="0.6"/>`;
   }
-
-  return `
-    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
-      <!-- Glow effect pour sélection -->
-      ${outerGlow}
-      <!-- Triangle extérieur jaune/rouge -->
-      <polygon
-        points="${size/2},${innerPadding} ${size-innerPadding},${size-innerPadding} ${innerPadding},${size-innerPadding}"
-        fill="${fillColor}"
-        stroke="none"
-      />
-      <!-- Bordure noire intérieure (ne touche pas les bords) -->
-      <polygon
-        points="${size/2},${innerPadding + 4} ${size-innerPadding-4},${size-innerPadding-3} ${innerPadding+4},${size-innerPadding-3}"
-        fill="none"
-        stroke="#1a1a1a"
-        stroke-width="${strokeWidth}"
-        stroke-linejoin="round"
-      />
-      <!-- Texte EX -->
-      <text
-        x="${size/2}"
-        y="${size * 0.68}"
-        text-anchor="middle"
-        font-family="Arial, sans-serif"
-        font-size="${size * 0.32}px"
-        font-weight="bold"
-        fill="#1a1a1a"
-      >EX</text>
-    </svg>
-  `;
+  const fontSize = Math.round(size * 0.22);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${glow}<polygon points="${size/2},${p} ${size-p},${size-p} ${p},${size-p}" fill="${fillColor}"/><polygon points="${size/2},${p+3} ${size-p-3},${size-p-2} ${p+3},${size-p-2}" fill="none" stroke="#1a1a1a" stroke-width="${strokeWidth}" stroke-linejoin="round"/><text x="${size/2}" y="${size*0.72}" text-anchor="middle" font-family="Arial" font-size="${fontSize}" font-weight="bold" fill="#1a1a1a">EX</text></svg>`;
 }
 
 function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
-  const s = isSelected || isDuplicate ? ICON_PX_SELECTED : 30; // Taille de base 30px pour les triangles
+  const s = isSelected || isDuplicate ? ICON_PX_SELECTED : ICON_PX;
 
   // Déterminer la couleur du triangle
   let fillColor;
@@ -2413,10 +2381,10 @@ function setupHandleDrag(map, onMoveCallback) {
   ) : null;
   // 🔺 Mini triangle SVG pour la légende
   const LegendTriangle = ({ fill, pulse = false, pulseColor = "yellow" }) => (
-    <svg width="14" height="14" viewBox="0 0 14 14" className={pulse ? `atex-triangle-pulse-${pulseColor}` : ""}>
-      <polygon points="7,1 13,12 1,12" fill={fill} />
-      <polygon points="7,3 11,11 3,11" fill="none" stroke="#1a1a1a" strokeWidth="1" strokeLinejoin="round" />
-      <text x="7" y="10" textAnchor="middle" fontFamily="Arial" fontSize="5" fontWeight="bold" fill="#1a1a1a">EX</text>
+    <svg width="12" height="12" viewBox="0 0 12 12" className={pulse ? `atex-triangle-pulse-${pulseColor}` : ""}>
+      <polygon points="6,1 11,10 1,10" fill={fill} />
+      <polygon points="6,3 9,9 3,9" fill="none" stroke="#1a1a1a" strokeWidth="1" strokeLinejoin="round" />
+      <text x="6" y="8" textAnchor="middle" fontFamily="Arial" fontSize="3" fontWeight="bold" fill="#1a1a1a">EX</text>
     </svg>
   );
 
