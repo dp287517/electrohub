@@ -1056,7 +1056,7 @@ export default function AtexMap({
     }
   }
 
-  // 🔌 Draw PE basket markers (hexagonal markers)
+  // 🔌 Draw PE basket markers (cable gland style)
   function drawPeMarkers(baskets) {
     const m = mapRef.current;
     const base = baseLayerRef.current;
@@ -1075,52 +1075,55 @@ export default function AtexMap({
 
       // Determine color based on status
       const statusColors = {
-        pending: { fill: "#f59e0b", border: "#fbbf24" },     // Amber
-        analyzing: { fill: "#3b82f6", border: "#60a5fa" },   // Blue
-        analyzed: { fill: "#10b981", border: "#34d399" },    // Green
-        error: { fill: "#ef4444", border: "#f87171" }        // Red
+        pending: "#f59e0b",    // Amber
+        analyzing: "#3b82f6",  // Blue
+        analyzed: "#10b981",   // Green
+        error: "#ef4444"       // Red
       };
-      const colors = statusColors[basket.status] || statusColors.pending;
+      const statusColor = statusColors[basket.status] || statusColors.pending;
 
-      // Create hexagonal marker
-      const size = 28;
+      // Create cable gland style marker
+      const size = 24;
       const icon = L.divIcon({
         className: "pe-marker",
         html: `
-          <div class="pe-marker-inner" style="
-            width: ${size}px;
-            height: ${size}px;
-            background: ${colors.fill};
-            border: 2px solid ${colors.border};
-            clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 12px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            transition: transform 0.15s ease;
-          ">
-            <span style="font-size: 10px;">⚡</span>
+          <div style="position:relative;width:${size}px;height:${size + 8}px;">
+            <div style="
+              width:${size}px;
+              height:6px;
+              background:linear-gradient(180deg,#d1d5db 0%,#9ca3af 50%,#6b7280 100%);
+              border-radius:2px 2px 0 0;
+              box-shadow:inset 0 1px 2px rgba(255,255,255,0.5);
+            "></div>
+            <div style="
+              width:${size}px;
+              height:${size}px;
+              background:linear-gradient(180deg,#e5e7eb 0%,#9ca3af 40%,#6b7280 100%);
+              border-radius:4px;
+              display:flex;
+              align-items:center;
+              justify-content:center;
+              box-shadow:0 2px 6px rgba(0,0,0,0.3),inset 0 1px 3px rgba(255,255,255,0.4);
+              border:2px solid ${statusColor};
+            ">
+              <span style="font-size:8px;font-weight:bold;color:#374151;">PE</span>
+            </div>
+            <div style="
+              position:absolute;
+              bottom:-14px;
+              left:50%;
+              transform:translateX(-50%);
+              background:${statusColor};
+              color:white;
+              font-size:8px;
+              padding:1px 4px;
+              border-radius:3px;
+              white-space:nowrap;
+            ">${basket.gland_count || 0}</div>
           </div>
-          <div class="pe-marker-label" style="
-            position: absolute;
-            top: ${size + 2}px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.75);
-            color: white;
-            font-size: 9px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            white-space: nowrap;
-            pointer-events: none;
-          ">${basket.gland_count || 0} PE</div>
         `,
-        iconSize: [size, size + 20],
-        iconAnchor: [size / 2, size / 2]
+        iconSize: [size, size + 22],
+        iconAnchor: [size / 2, (size + 8) / 2]
       });
 
       const marker = L.marker(latlng, { icon, draggable: true });
