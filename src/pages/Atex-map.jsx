@@ -233,69 +233,50 @@ function findContainingSubarea(xf, yf, subareas) {
   return candidates[0].sa;
 }
 
-// 🔺 Triangle ATEX marker design (comme le panneau de danger EX)
+// 🔥 Marqueurs ATEX avec icône SVG et gradient (style original qui fonctionne)
 const ICON_PX_SELECTED = 34;
 
-function makeAtexTriangleSVG(size, fillColor, isSelected = false, isDuplicate = false) {
-  const strokeWidth = isSelected || isDuplicate ? 2 : 1.5;
-  const p = 2;
-  let glow = '';
-  if (isDuplicate) {
-    glow = `<polygon points="${size/2},1 ${size-1},${size-1} 1,${size-1}" fill="none" stroke="#ec4899" stroke-width="3" opacity="0.6"/>`;
-  } else if (isSelected) {
-    glow = `<polygon points="${size/2},1 ${size-1},${size-1} 1,${size-1}" fill="none" stroke="#7c3aed" stroke-width="3" opacity="0.6"/>`;
-  }
-  const fontSize = Math.round(size * 0.22);
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${glow}<polygon points="${size/2},${p} ${size-p},${size-p} ${p},${size-p}" fill="${fillColor}"/><polygon points="${size/2},${p+3} ${size-p-3},${size-p-2} ${p+3},${size-p-2}" fill="none" stroke="#1a1a1a" stroke-width="${strokeWidth}" stroke-linejoin="round"/><text x="${size/2}" y="${size*0.72}" text-anchor="middle" font-family="Arial" font-size="${fontSize}" font-weight="bold" fill="#1a1a1a">EX</text></svg>`;
-}
+const STATUS_GRADIENT = {
+  a_faire: { from: "#34d399", to: "#059669" },
+  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },
+  en_retard: { from: "#fb7185", to: "#e11d48" },
+  fait: { from: "#60a5fa", to: "#2563eb" },
+  selected: { from: "#a78bfa", to: "#7c3aed" },
+  non_conforme: { from: "#ef4444", to: "#b91c1c" },
+  duplicate: { from: "#fbcfe8", to: "#ec4899" },
+};
+
+const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/></svg>`;
 
 function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
   const s = isSelected || isDuplicate ? ICON_PX_SELECTED : ICON_PX;
 
-  // Déterminer la couleur du triangle
-  let fillColor;
-  let animClass = "";
-
   if (isUnsaved) {
-    // Nouveau marqueur = bleu clair
-    fillColor = "#93c5fd";
-    animClass = "atex-triangle-pulse-yellow";
-  } else if (isDuplicate) {
-    // Duplicata = jaune avec animation violette
-    fillColor = "#fbbf24";
-    animClass = "atex-triangle-pulse-violet";
-  } else if (isSelected) {
-    // Sélectionné = jaune avec glow violet
-    fillColor = "#fbbf24";
-    animClass = "atex-triangle-selected";
-  } else if (complianceState === "non_conforme") {
-    // Non conforme = ROUGE
-    fillColor = "#ef4444";
-    animClass = "atex-triangle-pulse-red";
-  } else if (status === "en_retard") {
-    // En retard = rouge pulsant
-    fillColor = "#ef4444";
-    animClass = "atex-triangle-pulse-red";
-  } else if (status === "en_cours_30") {
-    // En cours = jaune/orange pulsant
-    fillColor = "#fbbf24";
-    animClass = "atex-triangle-pulse-yellow";
-  } else {
-    // Par défaut (a_faire, fait, conforme) = JAUNE standard
-    fillColor = "#fbbf24";
+    const html = `<div class="atex-marker-new${isSelected ? ' atex-marker-selected' : ''}" style="width:${s}px;height:${s}px;border-radius:9999px;background:radial-gradient(circle at 30% 30%,#93c5fd,#2563eb);border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}</div>`;
+    return L.divIcon({ className: "atex-marker-inline", html, iconSize: [s, s], iconAnchor: [Math.round(s / 2), Math.round(s / 2)], popupAnchor: [0, -Math.round(s / 2)] });
   }
 
-  const triangleSVG = makeAtexTriangleSVG(s, fillColor, isSelected, isDuplicate);
+  let grad;
+  if (isDuplicate) grad = STATUS_GRADIENT.duplicate;
+  else if (isSelected) grad = STATUS_GRADIENT.selected;
+  else if (complianceState === "non_conforme") grad = STATUS_GRADIENT.non_conforme;
+  else grad = STATUS_GRADIENT[status] || STATUS_GRADIENT.fait;
 
-  const html = `<div class="${animClass}" style="width:${s}px;height:${s}px;display:flex;align-items:center;justify-content:center;">${triangleSVG}</div>`;
+  let animClass = "";
+  if (isDuplicate) animClass = "atex-marker-pulse-violet";
+  else if (isSelected) animClass = "atex-marker-selected";
+  else if (complianceState === "non_conforme") animClass = "atex-marker-pulse-red";
+  else if (status === "en_retard") animClass = "atex-marker-pulse-red";
+  else if (status === "en_cours_30") animClass = "atex-marker-pulse-orange";
 
-  return L.divIcon({
-    className: "atex-marker-inline",
-    html,
-    iconSize: [s, s],
-    iconAnchor: [Math.round(s / 2), Math.round(s * 0.7)], // Ancrage vers le bas du triangle
-    popupAnchor: [0, -Math.round(s * 0.5)],
-  });
+  let borderStyle;
+  if (isDuplicate) borderStyle = "border:3px solid #ec4899;box-shadow:0 0 0 4px rgba(236,72,153,0.5),0 6px 15px rgba(0,0,0,.35);";
+  else if (isSelected) borderStyle = "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);";
+  else borderStyle = "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
+
+  const html = `<div class="${animClass}" style="width:${s}px;height:${s}px;border-radius:9999px;background:radial-gradient(circle at 30% 30%,${grad.from},${grad.to});${borderStyle}display:flex;align-items:center;justify-content:center;">${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}</div>`;
+
+  return L.divIcon({ className: "atex-marker-inline", html, iconSize: [s, s], iconAnchor: [Math.round(s / 2), Math.round(s / 2)], popupAnchor: [0, -Math.round(s / 2)] });
 }
 /* ----------------------------- Dessin: modes ----------------------------- */
 const DRAW_NONE = "none";
@@ -2371,31 +2352,22 @@ function setupHandleDrag(map, onMoveCallback) {
       />
     </div>
   ) : null;
-  // 🔺 Mini triangle SVG pour la légende
-  const LegendTriangle = ({ fill, pulse = false, pulseColor = "yellow" }) => (
-    <svg width="12" height="12" viewBox="0 0 12 12" className={pulse ? `atex-triangle-pulse-${pulseColor}` : ""}>
-      <polygon points="6,1 11,10 1,10" fill={fill} />
-      <polygon points="6,3 9,9 3,9" fill="none" stroke="#1a1a1a" strokeWidth="1" strokeLinejoin="round" />
-      <text x="6" y="8" textAnchor="middle" fontFamily="Arial" fontSize="3" fontWeight="bold" fill="#1a1a1a">EX</text>
-    </svg>
-  );
-
   const MarkerLegend = (
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
       <span className="inline-flex items-center gap-1">
-        <LegendTriangle fill="#fbbf24" />
-        Conforme
+        <span className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
+        À faire
       </span>
       <span className="inline-flex items-center gap-1">
-        <LegendTriangle fill="#fbbf24" pulse pulseColor="yellow" />
+        <span className="w-3 h-3 rounded-full blink-orange" style={{ background: "#f59e0b" }} />
         ≤90j
       </span>
       <span className="inline-flex items-center gap-1">
-        <LegendTriangle fill="#ef4444" pulse pulseColor="red" />
-        Non conforme / En retard
+        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
+        En retard
       </span>
       <span className="inline-flex items-center gap-1">
-        <LegendTriangle fill="#3b82f6" />
+        <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
         Nouvelle (à enregistrer)
       </span>
       <span className="inline-flex items-center gap-1 text-gray-500">
