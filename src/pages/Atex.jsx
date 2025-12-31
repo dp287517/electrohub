@@ -266,6 +266,10 @@ export default function Atex() {
   const [drpceFilters, setDrpceFilters] = useState({ building: "", zone: "", compliance: "" });
   const [drpceLoading, setDrpceLoading] = useState(false);
 
+  // 🔌 Cable Gland (Presse-Étoupe) stats
+  const [peStats, setPeStats] = useState(null);
+  const [peAnalyses, setPeAnalyses] = useState([]);
+
   // 🆕 Lire l'URL au chargement pour navigation directe vers équipement
   useEffect(() => {
     const eqId = searchParams.get("eq");
@@ -389,6 +393,35 @@ export default function Atex() {
     }
   }, []);
 
+  // 🔌 Load Cable Gland (PE) stats and pending analyses
+  const loadPeStats = useCallback(async () => {
+    try {
+      const ATEX_API = import.meta.env.VITE_ATEX_API_URL || "/api/atex";
+      const headers = { "Content-Type": "application/json" };
+      try {
+        const email = localStorage.getItem("email");
+        const name = localStorage.getItem("name");
+        if (email) headers["X-User-Email"] = email;
+        if (name) headers["X-User-Name"] = name;
+        const site = localStorage.getItem("selectedSite");
+        if (site) headers["X-Site"] = site;
+      } catch {}
+
+      const [statsRes, analysesRes] = await Promise.all([
+        fetch(`${ATEX_API}/cable-glands/stats`, { headers }),
+        fetch(`${ATEX_API}/cable-glands/analysis/pending`, { headers })
+      ]);
+
+      const statsData = await statsRes.json();
+      const analysesData = await analysesRes.json();
+
+      if (statsData.ok) setPeStats(statsData.stats);
+      if (analysesData.ok) setPeAnalyses(analysesData.analyses || []);
+    } catch (e) {
+      console.error('[ATEX] Load PE stats error:', e);
+    }
+  }, []);
+
   // Upload a new plan with client-side thumbnail generation
   const handleUploadPlan = useCallback(async (file, buildingName, isMultiZone) => {
     try {
@@ -482,6 +515,7 @@ export default function Atex() {
 
   useEffect(() => {
     reload();
+    loadPeStats(); // 🔌 Load PE stats on mount
   }, []);
 
   useEffect(() => {
@@ -490,7 +524,10 @@ export default function Atex() {
   }, [q, statusFilter, buildingFilter, zoneFilter, complianceFilter]);
 
   useEffect(() => {
-    if (activeTab === "plans") loadPlans();
+    if (activeTab === "plans") {
+      loadPlans();
+      loadPeStats(); // 🔌 Refresh PE stats when viewing plans
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -1152,6 +1189,59 @@ export default function Atex() {
             </div>
             {/* Content - Filtres */}
             <div className="p-5 space-y-4">
+              {/* 🔌 Cable Gland Stats Section */}
+              {peStats && (
+                <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-lg">⚡</span>
+                    <h4 className="font-semibold text-violet-800">Presse-Étoupes (PE)</h4>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="bg-white/60 rounded-lg p-2 text-center">
+                      <div className="text-xl font-bold text-violet-600">{peStats.total_baskets || 0}</div>
+                      <div className="text-xs text-gray-600">Paniers</div>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-2 text-center">
+                      <div className="text-xl font-bold text-blue-600">{peStats.total_photos || 0}</div>
+                      <div className="text-xs text-gray-600">Photos</div>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-2 text-center">
+                      <div className="text-xl font-bold text-amber-600">{peStats.total_glands || 0}</div>
+                      <div className="text-xs text-gray-600">PE détectés</div>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-2 text-center">
+                      <div className="text-xl font-bold text-green-600">{peStats.compliant_glands || 0}</div>
+                      <div className="text-xs text-gray-600">Conformes</div>
+                    </div>
+                  </div>
+                  {peStats.pending_analyses > 0 && (
+                    <div className="mt-3 flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-lg p-2">
+                      <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
+                      <span>{peStats.pending_analyses} analyse(s) en cours</span>
+                    </div>
+                  )}
+                  {peAnalyses.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <div className="text-xs font-medium text-gray-700">Analyses en cours :</div>
+                      {peAnalyses.slice(0, 3).map(a => (
+                        <div key={a.id} className="bg-white/70 rounded-lg p-2 text-xs">
+                          <div className="flex justify-between items-center">
+                            <span className="font-medium text-gray-800">{a.basket_name || "Panier"}</span>
+                            <span className="text-blue-600">{a.progress}/{a.total_items}</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                            <div
+                              className="bg-blue-500 h-1.5 rounded-full transition-all"
+                              style={{ width: `${(a.progress / a.total_items) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <p className="text-gray-600 text-sm">
                 Sélectionnez les filtres pour personnaliser votre rapport. Laissez vide pour inclure tous les éléments.
               </p>

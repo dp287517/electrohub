@@ -383,6 +383,14 @@
     min-height: 36px;
     touch-action: manipulation;
   }
+  .btn-pe {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+    min-width: 36px;
+    min-height: 36px;
+    touch-action: manipulation;
+  }
 }
 
 /* 🆕 Bouton légende dédié - toujours visible */
@@ -473,6 +481,64 @@
 .btn-plus:active, .btn-pencil:active {
   transform: translateY(0);
   box-shadow: 0 2px 8px rgba(234, 88, 12, 0.35);
+}
+
+/* 🔌 Bouton Presse-Étoupe (PE) */
+.btn-pe {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+.btn-pe:hover {
+  background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.45);
+}
+
+.btn-pe:active {
+  transform: translateY(0) scale(1);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.35);
+}
+
+/* 🔌 Marqueurs Presse-Étoupe */
+.pe-marker {
+  z-index: 600;
+}
+
+.pe-marker-inner:hover {
+  transform: scale(1.15);
+}
+
+.pe-marker-label {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.pe-marker:hover .pe-marker-label {
+  opacity: 1;
+}
+
+/* Animation pulse pour les marqueurs PE en analyse */
+@keyframes pe-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+}
+
+.pe-marker-analyzing .pe-marker-inner {
+  animation: pe-pulse 1.5s ease-in-out infinite;
 }
 
 .btn-pencil-wrap { position: relative; }

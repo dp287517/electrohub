@@ -7,6 +7,7 @@ import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
 import { isMobileDevice, getPDFConfig, getNetworkQuality, getPlanCacheKey, getCachedPlan, cachePlan } from "../config/mobile-optimization.js";
+import CableGlandBasket from "../components/CableGlandBasket.jsx";
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -625,6 +626,11 @@ export default function AtexMap({
   const [equipments, setEquipments] = useState([]);
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
 
+  // 🔌 Cable Gland (Presse-Étoupe) states
+  const [peBasketModal, setPeBasketModal] = useState({ open: false, position: null, basketId: null });
+  const [peBaskets, setPeBaskets] = useState([]);
+  const peMarkersLayerRef = useRef(null);
+
   const fileUrl = useMemo(() => {
     if (!plan) return null;
     if (api?.atexMaps?.planFileUrlAuto) return api.atexMaps.planFileUrlAuto(plan, { bust: true });
@@ -921,6 +927,11 @@ export default function AtexMap({
     setTimeout(() => {
       loadSubareas().catch(console.error);
     }, 100);
+
+    // 🔌 Charger les paniers PE
+    setTimeout(() => {
+      loadPeBaskets().catch(console.error);
+    }, 150);
   }
     async function enrichStatuses(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
@@ -1039,6 +1050,163 @@ export default function AtexMap({
       setSubareasById({});
       drawSubareas([]);
     } finally { end(); }
+  }
+
+  // 🔌 Load Cable Gland (PE) baskets for this plan
+  async function loadPeBaskets() {
+    if (!planKey) return;
+    try {
+      const ATEX_API = import.meta.env.VITE_ATEX_API_URL || "/api/atex";
+      const headers = { "Content-Type": "application/json" };
+      try {
+        const email = localStorage.getItem("email");
+        const name = localStorage.getItem("name");
+        if (email) headers["X-User-Email"] = email;
+        if (name) headers["X-User-Name"] = name;
+        const site = localStorage.getItem("selectedSite");
+        if (site) headers["X-Site"] = site;
+      } catch {}
+      const res = await fetch(
+        `${ATEX_API}/cable-glands/baskets/by-plan/${encodeURIComponent(planKey)}?pageIndex=${pageIndex}`,
+        { headers }
+      );
+      const data = await res.json();
+      if (data.ok) {
+        setPeBaskets(data.baskets || []);
+        drawPeMarkers(data.baskets || []);
+        log("PE baskets loaded", { count: data.baskets?.length || 0 });
+      }
+    } catch (e) {
+      console.error("[ATEX] loadPeBaskets error", e);
+    }
+  }
+
+  // 🔌 Draw PE basket markers (hexagonal markers)
+  function drawPeMarkers(baskets) {
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base) return;
+
+    // Create layer if not exists
+    if (!peMarkersLayerRef.current) {
+      peMarkersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
+    }
+    peMarkersLayerRef.current.clearLayers();
+
+    for (const basket of baskets) {
+      if (basket.x_frac == null || basket.y_frac == null) continue;
+
+      const latlng = toLatLngFrac(basket.x_frac, basket.y_frac, base);
+
+      // Determine color based on status
+      const statusColors = {
+        pending: { fill: "#f59e0b", border: "#fbbf24" },     // Amber
+        analyzing: { fill: "#3b82f6", border: "#60a5fa" },   // Blue
+        analyzed: { fill: "#10b981", border: "#34d399" },    // Green
+        error: { fill: "#ef4444", border: "#f87171" }        // Red
+      };
+      const colors = statusColors[basket.status] || statusColors.pending;
+
+      // Create hexagonal marker
+      const size = 28;
+      const icon = L.divIcon({
+        className: "pe-marker",
+        html: `
+          <div class="pe-marker-inner" style="
+            width: ${size}px;
+            height: ${size}px;
+            background: ${colors.fill};
+            border: 2px solid ${colors.border};
+            clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            transition: transform 0.15s ease;
+          ">
+            <span style="font-size: 10px;">⚡</span>
+          </div>
+          <div class="pe-marker-label" style="
+            position: absolute;
+            top: ${size + 2}px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.75);
+            color: white;
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            white-space: nowrap;
+            pointer-events: none;
+          ">${basket.gland_count || 0} PE</div>
+        `,
+        iconSize: [size, size + 20],
+        iconAnchor: [size / 2, size / 2]
+      });
+
+      const marker = L.marker(latlng, { icon, draggable: true });
+
+      marker.on("click", () => {
+        setPeBasketModal({ open: true, position: null, basketId: basket.id });
+      });
+
+      marker.on("dragend", async () => {
+        const newLatLng = marker.getLatLng();
+        const { xf, yf } = fromLatLngToFrac(newLatLng, base);
+        // Update basket position
+        try {
+          const ATEX_API = import.meta.env.VITE_ATEX_API_URL || "/api/atex";
+          const headers = { "Content-Type": "application/json" };
+          try {
+            const email = localStorage.getItem("email");
+            const name = localStorage.getItem("name");
+            if (email) headers["X-User-Email"] = email;
+            if (name) headers["X-User-Name"] = name;
+            const site = localStorage.getItem("selectedSite");
+            if (site) headers["X-Site"] = site;
+          } catch {}
+          await fetch(`${ATEX_API}/cable-glands/baskets/${basket.id}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({ xFrac: xf, yFrac: yf })
+          });
+          log("PE basket moved", { basketId: basket.id, x: xf, y: yf });
+        } catch (err) {
+          console.error("[ATEX] Move PE basket error:", err);
+        }
+      });
+
+      peMarkersLayerRef.current.addLayer(marker);
+    }
+  }
+
+  // 🔌 Create new PE basket at map center or click position
+  function createPeBasketAtPosition(position = null) {
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base) return;
+
+    let xFrac, yFrac;
+    if (position) {
+      xFrac = position.xFrac;
+      yFrac = position.yFrac;
+    } else {
+      // Use map center
+      const center = m.getCenter();
+      const frac = fromLatLngToFrac(center, base);
+      xFrac = frac.xf;
+      yFrac = frac.yf;
+    }
+
+    setPeBasketModal({
+      open: true,
+      position: { xFrac, yFrac },
+      basketId: null
+    });
   }
   async function updateEquipmentMacroAndSub(equipmentId, subareaId, subareaNameDirect = null) {
     try {
@@ -2080,6 +2248,14 @@ function setupHandleDrag(map, onMoveCallback) {
         >
           +
         </button>
+        {/* 🔌 Ajouter un panier Presse-Étoupe */}
+        <button
+          className="btn-pe"
+          onClick={() => createPeBasketAtPosition()}
+          title="Ajouter un panier Presse-Étoupe (PE)"
+        >
+          ⚡
+        </button>
         {/* Dessin zones */}
         <div className="btn-pencil-wrap" ref={drawMenuRef}>
           <button
@@ -2587,6 +2763,26 @@ function setupHandleDrag(map, onMoveCallback) {
           {EditorPopover}
         </div>
       )}
+
+      {/* 🔌 Cable Gland Basket Modal */}
+      <CableGlandBasket
+        isOpen={peBasketModal.open}
+        onClose={() => {
+          setPeBasketModal({ open: false, position: null, basketId: null });
+          // Refresh baskets after close
+          loadPeBaskets().catch(console.error);
+        }}
+        planLogicalName={planKey}
+        pageIndex={pageIndex}
+        initialPosition={peBasketModal.position}
+        zoneName={zone}
+        building={building}
+        existingBasketId={peBasketModal.basketId}
+        onBasketCreated={(basket) => {
+          // Refresh markers
+          loadPeBaskets().catch(console.error);
+        }}
+      />
     </>
   );
 }
