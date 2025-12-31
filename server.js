@@ -8589,7 +8589,7 @@ app.delete("/api/dashboard/activities/:id", async (req, res) => {
   }
 });
 
-// Clear all activities (cleanup old entries)
+// Clear all activities (delete ALL pending_reports and scan jobs)
 app.delete("/api/dashboard/activities", async (req, res) => {
   console.log(`[DASHBOARD ACTIVITIES] 🗑️ Clear all activities request`);
 
@@ -8597,25 +8597,19 @@ app.delete("/api/dashboard/activities", async (req, res) => {
     let deletedReports = 0;
     let deletedScans = 0;
 
-    // Clean up old pending_reports (completed/error > 24h, pending > 48h)
+    // Delete ALL pending_reports (user wants a clean slate)
     try {
-      const result1 = await atexPool.query(`
-        DELETE FROM pending_reports
-        WHERE (status IN ('completed', 'error') AND created_at < NOW() - INTERVAL '24 hours')
-           OR (status = 'pending' AND created_at < NOW() - INTERVAL '48 hours')
-      `);
+      const result1 = await atexPool.query(`DELETE FROM pending_reports`);
       deletedReports = result1.rowCount || 0;
     } catch (e) {
       console.log('[DASHBOARD ACTIVITIES] pending_reports cleanup skipped:', e.message);
     }
 
-    // Clean up old panel_scan_jobs (completed > 7 days, failed > 3 days)
+    // Delete completed/failed panel_scan_jobs (keep in-progress ones)
     try {
       const result2 = await pool.query(`
         DELETE FROM panel_scan_jobs
-        WHERE (status = 'completed' AND completed_at < NOW() - INTERVAL '7 days')
-           OR (status = 'failed' AND completed_at < NOW() - INTERVAL '3 days')
-           OR (status IN ('pending', 'processing') AND created_at < NOW() - INTERVAL '24 hours')
+        WHERE status IN ('completed', 'failed')
       `);
       deletedScans = result2.rowCount || 0;
     } catch (e) {
