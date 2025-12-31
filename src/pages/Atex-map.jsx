@@ -233,42 +233,94 @@ function findContainingSubarea(xf, yf, subareas) {
   return candidates[0].sa;
 }
 
-// 🔺 Triangle ATEX - Images pré-rendues en cache (solution performante pour mobile)
+// 🔺 Triangle ATEX - Images pré-rendues en cache HiDPI (qualité Retina)
 const ICON_PX_SELECTED = 34;
 const triangleCache = new Map();
+const DPR = Math.min(window.devicePixelRatio || 1, 3); // Max 3x pour perf
 
 function getTriangleImage(size, fill, glow = null) {
-  const key = `${size}-${fill}-${glow || 'none'}`;
+  const key = `${size}-${fill}-${glow || 'none'}-${DPR}`;
   if (triangleCache.has(key)) return triangleCache.get(key);
 
+  // Canvas haute résolution (2x ou 3x selon l'écran)
+  const scale = DPR;
   const c = document.createElement('canvas');
-  c.width = size; c.height = size;
+  c.width = size * scale;
+  c.height = size * scale;
   const ctx = c.getContext('2d');
-  const p = 2, h = size - p;
+  ctx.scale(scale, scale);
+
+  // Anti-aliasing optimisé
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const pad = 2;
+  const triH = size - pad - 1;
+
+  // Ombre portée subtile
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetY = 1;
+
+  // Triangle principal (fond coloré)
+  ctx.beginPath();
+  ctx.moveTo(size / 2, pad);
+  ctx.lineTo(size - pad, triH);
+  ctx.lineTo(pad, triH);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  // Reset shadow pour les autres éléments
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Bordure extérieure noire épaisse
+  ctx.beginPath();
+  ctx.moveTo(size / 2, pad);
+  ctx.lineTo(size - pad, triH);
+  ctx.lineTo(pad, triH);
+  ctx.closePath();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Bordure intérieure noire (style panneau ATEX)
+  const inset = 4;
+  ctx.beginPath();
+  ctx.moveTo(size / 2, pad + inset);
+  ctx.lineTo(size - pad - inset, triH - 2);
+  ctx.lineTo(pad + inset, triH - 2);
+  ctx.closePath();
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Texte "EX" net et lisible
+  const fontSize = Math.round(size * 0.32);
+  ctx.font = `bold ${fontSize}px "Arial Black", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#000';
+  ctx.fillText('EX', size / 2, size * 0.6);
 
   // Glow externe (sélection/duplicata)
   if (glow) {
     ctx.beginPath();
-    ctx.moveTo(size/2, 1); ctx.lineTo(size-1, h); ctx.lineTo(1, h); ctx.closePath();
-    ctx.strokeStyle = glow; ctx.lineWidth = 3; ctx.globalAlpha = 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.moveTo(size / 2, 0);
+    ctx.lineTo(size, triH + 1);
+    ctx.lineTo(0, triH + 1);
+    ctx.closePath();
+    ctx.strokeStyle = glow;
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.7;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
-  // Triangle jaune/rouge
-  ctx.beginPath();
-  ctx.moveTo(size/2, p); ctx.lineTo(size-p, h); ctx.lineTo(p, h); ctx.closePath();
-  ctx.fillStyle = fill; ctx.fill();
-
-  // Bordure noire intérieure
-  ctx.beginPath();
-  ctx.moveTo(size/2, p+4); ctx.lineTo(size-p-4, h-2); ctx.lineTo(p+4, h-2); ctx.closePath();
-  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
-
-  // Texte EX
-  ctx.font = `bold ${Math.round(size*0.28)}px Arial`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#1a1a1a'; ctx.fillText('EX', size/2, size*0.62);
-
-  const url = c.toDataURL();
+  const url = c.toDataURL('image/png');
   triangleCache.set(key, url);
   return url;
 }
