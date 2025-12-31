@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
   Bell, AlertCircle, CheckCircle, Clock, FileText,
@@ -110,14 +111,14 @@ function ActivityItem({ activity, compact = false, onDelete, showDelete = false 
   return content;
 }
 
-// Modal for full activity list
+// Modal for full activity list - uses Portal to render at body level
 function ActivityModal({ isOpen, onClose, activities, loading, onRefresh, onDelete, onClearAll }) {
   if (!isOpen) return null;
 
   const allActivities = [...(activities.action_required || []), ...(activities.recent || [])];
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="px-4 py-3 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-t-2xl flex-shrink-0">
@@ -194,7 +195,8 @@ function ActivityModal({ isOpen, onClose, activities, loading, onRefresh, onDele
           </Link>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
