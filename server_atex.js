@@ -822,6 +822,8 @@ async function ensureSchema() {
       total_photos INTEGER DEFAULT 0,
       analyzed_photos INTEGER DEFAULT 0,
       total_glands INTEGER DEFAULT 0,
+      last_check_date TIMESTAMP NULL,
+      next_check_date TIMESTAMP NULL,
       company_id INTEGER,
       site_id INTEGER,
       created_by_name TEXT,
@@ -833,6 +835,11 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_status ON cable_gland_baskets(status);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_company ON cable_gland_baskets(company_id);
     CREATE INDEX IF NOT EXISTS idx_cg_baskets_site ON cable_gland_baskets(site_id);
+    CREATE INDEX IF NOT EXISTS idx_cg_baskets_next_check ON cable_gland_baskets(next_check_date);
+
+    -- Migration: Ajouter colonnes de contrôle si elles n'existent pas
+    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS last_check_date TIMESTAMP NULL;
+    ALTER TABLE cable_gland_baskets ADD COLUMN IF NOT EXISTS next_check_date TIMESTAMP NULL;
   `);
 
   // Photos individuelles dans chaque panier
@@ -6629,12 +6636,47 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
       LIMIT 10
     `, [filter.company_id, filter.site_id]);
 
+    // PE baskets overdue for check (next_check_date < now)
+    const overdue = await pool.query(`
+      SELECT
+        id, name, building, zone_name, plan_logical_name,
+        last_check_date, next_check_date, total_glands
+      FROM cable_gland_baskets
+      WHERE next_check_date < now()
+        AND status = 'analyzed'
+        AND ($1::int IS NULL OR company_id = $1)
+        AND ($2::int IS NULL OR site_id = $2)
+      ORDER BY next_check_date ASC
+      LIMIT 20
+    `, [filter.company_id, filter.site_id]);
+
+    // PE baskets with upcoming checks (within 90 days)
+    const upcoming = await pool.query(`
+      SELECT
+        id, name, building, zone_name, plan_logical_name,
+        last_check_date, next_check_date, total_glands
+      FROM cable_gland_baskets
+      WHERE next_check_date >= now()
+        AND next_check_date < now() + INTERVAL '90 days'
+        AND status = 'analyzed'
+        AND ($1::int IS NULL OR company_id = $1)
+        AND ($2::int IS NULL OR site_id = $2)
+      ORDER BY next_check_date ASC
+      LIMIT 20
+    `, [filter.company_id, filter.site_id]);
+
     res.json({
       ok: true,
-      stats: stats.rows[0],
+      stats: {
+        ...stats.rows[0],
+        overdue_count: overdue.rows.length,
+        upcoming_count: upcoming.rows.length
+      },
       byBuilding: byBuilding.rows,
       nonCompliant: nonCompliant.rows,
-      history: history.rows
+      history: history.rows,
+      overdue: overdue.rows,
+      upcoming: upcoming.rows
     });
   } catch (e) {
     console.error('[CableGlands] Get stats error:', e);
@@ -6856,12 +6898,14 @@ Réponds UNIQUEMENT avec un JSON: {"glands": [...]}`
       }
     }
 
-    // Update basket stats
+    // Update basket stats + set check dates (contrôle tous les 3 ans)
     await pool.query(`
       UPDATE cable_gland_baskets
       SET status = 'analyzed',
           analyzed_photos = (SELECT COUNT(*) FROM cable_gland_photos WHERE basket_id = $1 AND analysis_status = 'completed'),
           total_glands = (SELECT COUNT(*) FROM cable_gland_items WHERE basket_id = $1),
+          last_check_date = now(),
+          next_check_date = now() + INTERVAL '3 years',
           updated_at = now()
       WHERE id = $1
     `, [basketId]);

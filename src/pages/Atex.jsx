@@ -1615,6 +1615,7 @@ export default function Atex() {
             runMassComplianceCheck={runMassComplianceCheck}
             massComplianceRunning={massComplianceRunning}
             onOpenDrpceModal={() => setDrpceModalOpen(true)}
+            peStats={peStats}
           />
         )}
 
@@ -1636,6 +1637,7 @@ export default function Atex() {
             items={items}
             stats={stats}
             loading={loading}
+            peStats={peStats}
           />
         )}
 
@@ -1843,7 +1845,7 @@ function UploadPlanModal({ onClose, onUpload }) {
 // DASHBOARD TAB
 // ============================================================
 
-function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items, runMassComplianceCheck, massComplianceRunning, onOpenDrpceModal }) {
+function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items, runMassComplianceCheck, massComplianceRunning, onOpenDrpceModal, peStats }) {
   const StatCard = ({ label, value, color, icon }) => {
     const colors = {
       blue: "bg-blue-50 text-blue-800 border-blue-200",
@@ -1937,6 +1939,44 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
         </button>
       </div>
 
+      {/* PE Stats */}
+      {peStats && (peStats.total_glands > 0 || peStats.total_baskets > 0) && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4">
+          <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2 text-sm sm:text-base">
+            <span>⚡</span> Presse-Étoupes (PE)
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl sm:text-2xl font-bold text-violet-600">{peStats.total_baskets || 0}</div>
+              <div className="text-[10px] sm:text-xs text-gray-600">Paniers</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl sm:text-2xl font-bold text-amber-600">{peStats.total_glands || 0}</div>
+              <div className="text-[10px] sm:text-xs text-gray-600">PE détectés</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl sm:text-2xl font-bold text-green-600">{peStats.compliant_glands || 0}</div>
+              <div className="text-[10px] sm:text-xs text-gray-600">Conformes</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className={`text-xl sm:text-2xl font-bold ${
+                (peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.9) ? 'text-green-600' :
+                (peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.7) ? 'text-amber-600' : 'text-red-600'
+              }`}>
+                {peStats.total_glands > 0 ? Math.round((peStats.compliant_glands / peStats.total_glands) * 100) : 0}%
+              </div>
+              <div className="text-[10px] sm:text-xs text-gray-600">Taux conformité</div>
+            </div>
+          </div>
+          {peStats.pending_analyses > 0 && (
+            <div className="mt-3 text-xs text-amber-700 flex items-center gap-2 bg-amber-100 px-3 py-1.5 rounded-lg w-fit">
+              <span className="animate-pulse">🔄</span>
+              <span>{peStats.pending_analyses} analyse(s) en cours</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Overdue Alerts */}
       {overdueList.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-3 sm:p-4">
@@ -2010,7 +2050,7 @@ function DashboardTab({ stats, overdueList, upcomingList, onOpenEquipment, items
 // 📊 ANALYTICS TAB - Onglet d'analyse FURIEUX avec graphiques dynamiques
 // ============================================================
 
-function AnalyticsTab({ items, stats, loading }) {
+function AnalyticsTab({ items, stats, loading, peStats }) {
   // États pour les filtres
   const [timeFilter, setTimeFilter] = useState("all");
   const [buildingFilter, setBuildingFilter] = useState("all");
@@ -2513,6 +2553,42 @@ function AnalyticsTab({ items, stats, loading }) {
           {chartStats.enRetard > 0 && <div className="kpi-trend down">Urgent</div>}
         </div>
       </div>
+
+      {/* PE Stats Section */}
+      {peStats && (peStats.total_glands > 0 || peStats.total_baskets > 0) && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 mb-6">
+          <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
+            <span>⚡</span> Presse-Étoupes (PE)
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-violet-600">{peStats.total_baskets || 0}</div>
+              <div className="text-xs text-gray-600">Paniers</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-blue-600">{peStats.total_photos || 0}</div>
+              <div className="text-xs text-gray-600">Photos</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-amber-600">{peStats.total_glands || 0}</div>
+              <div className="text-xs text-gray-600">PE détectés</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className="text-xl font-bold text-green-600">{peStats.compliant_glands || 0}</div>
+              <div className="text-xs text-gray-600">Conformes</div>
+            </div>
+            <div className="bg-white/80 rounded-lg p-3 text-center">
+              <div className={`text-xl font-bold ${
+                (peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.9) ? 'text-green-600' :
+                (peStats.total_glands > 0 && peStats.compliant_glands / peStats.total_glands >= 0.7) ? 'text-amber-600' : 'text-red-600'
+              }`}>
+                {peStats.total_glands > 0 ? Math.round((peStats.compliant_glands / peStats.total_glands) * 100) : 0}%
+              </div>
+              <div className="text-xs text-gray-600">Conformité PE</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Panel IA Insights */}
       {aiInsights.length > 0 && (

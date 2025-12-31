@@ -305,21 +305,21 @@ export default function CableGlandBasket({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[9000] flex items-center justify-center">
+    <div className="fixed inset-0 z-[9000] flex items-end sm:items-center justify-center">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      {/* Modal */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-[90vw] max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+      {/* Modal - Full width on mobile, centered on desktop */}
+      <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:w-[90vw] sm:max-w-4xl max-h-[92vh] sm:max-h-[85vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-amber-50 to-orange-50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-white text-lg">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b bg-gradient-to-r from-amber-50 to-orange-50">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500 flex items-center justify-center text-white text-base sm:text-lg">
               ⚡
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Presse-Étoupes</h2>
-              <p className="text-sm text-gray-500">
+              <h2 className="text-base sm:text-lg font-semibold text-gray-900">Presse-Étoupes</h2>
+              <p className="text-xs sm:text-sm text-gray-500 truncate max-w-[180px] sm:max-w-none">
                 {mode === "create" ? "Nouveau panier" : selectedBasket?.name || "Gestion des PE"}
               </p>
             </div>
@@ -335,7 +335,7 @@ export default function CableGlandBasket({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {loading && !selectedBasket ? (
             <div className="flex items-center justify-center py-12">
               <div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full" />
@@ -503,7 +503,7 @@ export default function CableGlandBasket({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 sm:gap-3">
                     {selectedBasket.photos.map(photo => (
                       <div key={photo.id} className="relative group">
                         <img
@@ -541,7 +541,40 @@ export default function CableGlandBasket({
                   <h4 className="text-sm font-medium text-gray-700 mb-3">
                     Presse-étoupes détectés ({selectedBasket.items.length})
                   </h4>
-                  <div className="border rounded-xl overflow-hidden">
+
+                  {/* Mobile: Card layout */}
+                  <div className="sm:hidden space-y-3">
+                    {selectedBasket.items.map(item => (
+                      <div key={item.id} className="p-3 bg-gray-50 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium text-gray-900">{item.type || "PE"}</div>
+                          <span className={`px-2 py-0.5 rounded text-xs ${
+                            item.compliance_status === "ok" ? "bg-green-100 text-green-700" :
+                            item.compliance_status === "issue" ? "bg-red-100 text-red-700" :
+                            "bg-gray-100 text-gray-700"
+                          }`}>
+                            {item.compliance_status === "ok" ? "Conforme" :
+                             item.compliance_status === "issue" ? "Non conforme" : "À vérifier"}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          {item.size && <span className="px-2 py-0.5 bg-gray-200 rounded">{item.size}</span>}
+                          {item.atex_marking && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded">{item.atex_marking}</span>}
+                          <span className={`px-2 py-0.5 rounded ${
+                            item.condition === "ok" ? "bg-green-100 text-green-700" :
+                            item.condition === "usé" ? "bg-yellow-100 text-yellow-700" :
+                            "bg-red-100 text-red-700"
+                          }`}>
+                            {item.condition || "?"}
+                          </span>
+                        </div>
+                        {item.manufacturer && <div className="text-xs text-gray-500">{item.manufacturer}</div>}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Desktop: Table layout */}
+                  <div className="hidden sm:block border rounded-xl overflow-hidden">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50">
                         <tr>
@@ -598,20 +631,20 @@ export default function CableGlandBasket({
 
               {/* Stats summary */}
               {selectedBasket && (
-                <div className="grid grid-cols-3 gap-4 p-4 bg-gray-50 rounded-xl">
+                <div className="grid grid-cols-3 gap-2 sm:gap-4 p-3 sm:p-4 bg-gray-50 rounded-xl">
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-amber-600">{selectedBasket.photos?.length || 0}</div>
-                    <div className="text-xs text-gray-500">Photos</div>
+                    <div className="text-xl sm:text-2xl font-bold text-amber-600">{selectedBasket.photos?.length || 0}</div>
+                    <div className="text-[10px] sm:text-xs text-gray-500">Photos</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-blue-600">{selectedBasket.items?.length || 0}</div>
-                    <div className="text-xs text-gray-500">PE détectés</div>
+                    <div className="text-xl sm:text-2xl font-bold text-blue-600">{selectedBasket.items?.length || 0}</div>
+                    <div className="text-[10px] sm:text-xs text-gray-500">PE détectés</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-green-600">
+                    <div className="text-xl sm:text-2xl font-bold text-green-600">
                       {selectedBasket.items?.filter(i => i.compliance_status === "ok").length || 0}
                     </div>
-                    <div className="text-xs text-gray-500">Conformes</div>
+                    <div className="text-[10px] sm:text-xs text-gray-500">Conformes</div>
                   </div>
                 </div>
               )}
@@ -620,10 +653,10 @@ export default function CableGlandBasket({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t bg-gray-50 flex justify-end gap-3">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t bg-gray-50 flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition"
+            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition text-sm sm:text-base"
           >
             Fermer
           </button>
