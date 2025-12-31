@@ -236,82 +236,89 @@ function findContainingSubarea(xf, yf, subareas) {
 // 🔺 Triangle ATEX - Images pré-rendues en cache HiDPI (qualité Retina)
 const ICON_PX_SELECTED = 34;
 const triangleCache = new Map();
-const DPR = Math.min(window.devicePixelRatio || 1, 3); // Max 3x pour perf
+const DPR = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 3) : 2;
 
 function getTriangleImage(size, fill, glow = null) {
-  const key = `${size}-${fill}-${glow || 'none'}-${DPR}`;
-  if (triangleCache.has(key)) return triangleCache.get(key);
+  try {
+    const key = `${size}-${fill}-${glow || 'none'}-${DPR}`;
+    if (triangleCache.has(key)) return triangleCache.get(key);
 
-  // Canvas haute résolution (2x ou 3x selon l'écran)
-  const scale = DPR;
-  const c = document.createElement('canvas');
-  c.width = size * scale;
-  c.height = size * scale;
-  const ctx = c.getContext('2d');
-  ctx.scale(scale, scale);
+    // Canvas haute résolution (2x ou 3x selon l'écran)
+    const scale = DPR;
+    const c = document.createElement('canvas');
+    c.width = size * scale;
+    c.height = size * scale;
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('Canvas context unavailable');
+    ctx.scale(scale, scale);
 
-  // Anti-aliasing optimisé
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
+    // Anti-aliasing optimisé
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
-  const pad = 2;
-  const triH = size - pad - 1;
+    const pad = 2;
+    const triH = size - pad - 1;
 
-  // Ombre portée subtile
-  ctx.shadowColor = 'rgba(0,0,0,0.3)';
-  ctx.shadowBlur = 3;
-  ctx.shadowOffsetY = 1;
+    // Ombre portée subtile
+    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetY = 1;
 
-  // Triangle principal (fond coloré)
-  ctx.beginPath();
-  ctx.moveTo(size / 2, pad);
-  ctx.lineTo(size - pad, triH);
-  ctx.lineTo(pad, triH);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-
-  // Reset shadow pour les autres éléments
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-
-  // Bordure extérieure noire
-  ctx.beginPath();
-  ctx.moveTo(size / 2, pad);
-  ctx.lineTo(size - pad, triH);
-  ctx.lineTo(pad, triH);
-  ctx.closePath();
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 2.5;
-  ctx.lineJoin = 'round';
-  ctx.stroke();
-
-  // Texte "EX" net et lisible
-  const fontSize = Math.round(size * 0.32);
-  ctx.font = `bold ${fontSize}px "Arial Black", Arial, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#000';
-  ctx.fillText('EX', size / 2, size * 0.6);
-
-  // Glow externe (sélection/duplicata)
-  if (glow) {
+    // Triangle principal (fond coloré)
     ctx.beginPath();
-    ctx.moveTo(size / 2, 0);
-    ctx.lineTo(size, triH + 1);
-    ctx.lineTo(0, triH + 1);
+    ctx.moveTo(size / 2, pad);
+    ctx.lineTo(size - pad, triH);
+    ctx.lineTo(pad, triH);
     ctx.closePath();
-    ctx.strokeStyle = glow;
-    ctx.lineWidth = 4;
-    ctx.globalAlpha = 0.7;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
+    ctx.fillStyle = fill;
+    ctx.fill();
 
-  const url = c.toDataURL('image/png');
-  triangleCache.set(key, url);
-  return url;
+    // Reset shadow pour les autres éléments
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    // Bordure extérieure noire
+    ctx.beginPath();
+    ctx.moveTo(size / 2, pad);
+    ctx.lineTo(size - pad, triH);
+    ctx.lineTo(pad, triH);
+    ctx.closePath();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Texte "EX" net et lisible
+    const fontSize = Math.round(size * 0.32);
+    ctx.font = `bold ${fontSize}px "Arial Black", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000';
+    ctx.fillText('EX', size / 2, size * 0.6);
+
+    // Glow externe (sélection/duplicata)
+    if (glow) {
+      ctx.beginPath();
+      ctx.moveTo(size / 2, 0);
+      ctx.lineTo(size, triH + 1);
+      ctx.lineTo(0, triH + 1);
+      ctx.closePath();
+      ctx.strokeStyle = glow;
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.7;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    const url = c.toDataURL('image/png');
+    triangleCache.set(key, url);
+    return url;
+  } catch (err) {
+    console.error('[ATEX] Triangle render error:', err);
+    // Fallback: simple colored data URL
+    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="${fill}" stroke="#000" stroke-width="2"/><text x="${size/2}" y="${size*0.65}" text-anchor="middle" font-size="${size*0.3}" font-weight="bold">EX</text></svg>`)}`;
+  }
 }
 
 function makeEquipIcon(status, isUnsaved, isSelected = false, complianceState = "na", isDuplicate = false) {
@@ -1344,22 +1351,23 @@ export default function AtexMap({
       // 🆕 Mettre à jour positionsRef pour le re-dessin lors de changement de sélection
       positionsRef.current = list || [];
       (list || []).forEach((p) => {
-        const latlng = toLatLngFrac(p.x, p.y, base);
-        // Passer isSelected pour highlight violet, compliance_state pour rouge si non conforme
-        // 🟣 isDuplicate pour affichage violet des duplicatas
-        const isSelected = p.id === selectedEquipmentIdRef.current;
-        const isDuplicate = recentDuplicatesRef.current?.has?.(p.id) || false;
-        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state, isDuplicate);
-        const mk = L.marker(latlng, {
-          icon,
-          draggable: true,
-          autoPan: true,
-          bubblingMouseEvents: false,
-          keyboard: false,
-          riseOnHover: true,
-          pane: "markersPane",
-        });
-        mk.__meta = p;
+        try {
+          const latlng = toLatLngFrac(p.x, p.y, base);
+          // Passer isSelected pour highlight violet, compliance_state pour rouge si non conforme
+          // 🟣 isDuplicate pour affichage violet des duplicatas
+          const isSelected = p.id === selectedEquipmentIdRef.current;
+          const isDuplicate = recentDuplicatesRef.current?.has?.(p.id) || false;
+          const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state, isDuplicate);
+          const mk = L.marker(latlng, {
+            icon,
+            draggable: true,
+            autoPan: true,
+            bubblingMouseEvents: false,
+            keyboard: false,
+            riseOnHover: true,
+            pane: "markersPane",
+          });
+          mk.__meta = p;
         mk.on("dragstart", () => { draggingRef.current = true; log("marker dragstart", { id: p.id, at: mk.getLatLng() }); });
         mk.on("drag", () => DEBUG() && log("marker drag", { id: p.id, at: mk.getLatLng() }));
         mk.on("dragend", async () => {
@@ -1446,6 +1454,9 @@ export default function AtexMap({
           });
         });
         mk.addTo(layer);
+        } catch (markerErr) {
+          console.error('[ATEX] Marker render error for equipment:', p?.id, markerErr);
+        }
       });
       layer.bringToFront?.();
     } finally { end(); }
