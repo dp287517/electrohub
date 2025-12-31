@@ -72,22 +72,25 @@
   }
 }
 
-/* 📱 MOBILE: Animations légères (pas de box-shadow, pas de transform) */
+/* 📱 MOBILE: AUCUNE animation pour éviter les crashs */
 @media (max-width: 768px) {
-  .atex-marker-selected > div,
   .atex-marker-selected,
-  .atex-marker-pulse-orange > div,
+  .atex-marker-selected > div,
   .atex-marker-pulse-orange,
-  .atex-marker-pulse-red > div,
+  .atex-marker-pulse-orange > div,
   .atex-marker-pulse-red,
+  .atex-marker-pulse-red > div,
+  .atex-marker-pulse-violet,
   .atex-marker-pulse-violet > div,
-  .atex-marker-pulse-violet {
-    animation: atex-pulse-simple 1.5s ease-in-out infinite;
-  }
-
+  .atex-marker-flash,
   .atex-marker-flash > div,
-  .atex-marker-flash {
-    animation: none;
+  .blink-orange,
+  .blink-red {
+    animation: none !important;
+    transform: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+    will-change: auto !important;
   }
 }
 
