@@ -529,7 +529,10 @@ export default function MiniEquipmentPreview({
 
   // Fetch equipment position and plan data
   useEffect(() => {
+    console.log('[MiniEquipmentPreview] Props received:', { equipmentId, equipmentType, equipment, config: config?.name });
+
     if (!equipmentId) {
+      console.log('[MiniEquipmentPreview] No equipmentId, stopping');
       setLoading(false);
       return;
     }
@@ -540,11 +543,15 @@ export default function MiniEquipmentPreview({
 
       try {
         // 1. Get placed IDs to find placement info
+        console.log('[MiniEquipmentPreview] Fetching placed-ids for type:', equipmentType);
         const placedResponse = await config.api.placedIds();
+        console.log('[MiniEquipmentPreview] Placed response:', placedResponse);
         const placedDetails = placedResponse?.data?.placed_details || placedResponse?.placed_details || {};
         const placement = placedDetails[equipmentId];
+        console.log('[MiniEquipmentPreview] Looking for ID:', equipmentId, 'Found placement:', placement);
 
         if (!placement) {
+          console.log('[MiniEquipmentPreview] Equipment not placed on map');
           setError('not_placed');
           setLoading(false);
           return;
