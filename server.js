@@ -1365,13 +1365,26 @@ async function getAIContext(site) {
 
     // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
+      // Query supports all equipment types (switchboard, mobile, vsd, meca, hv, glo, datahub)
       const ctrlRes = await pool.query(`
-        SELECT cs.id, cs.switchboard_id, cs.next_due_date, cs.status, cs.last_control_date,
+        SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id,
+               cs.meca_equipment_id, cs.hv_equipment_id, cs.glo_equipment_id,
+               cs.next_due_date, cs.status, cs.last_control_date, cs.equipment_type,
                ct.name as template_name, ct.id as template_id, ct.frequency_months,
-               s.name as switchboard_name, s.code as switchboard_code, s.building_code, s.floor, s.room
+               -- Switchboard data
+               s.name as switchboard_name, s.code as switchboard_code, s.building_code as s_building, s.floor as s_floor, s.room as s_room,
+               -- Mobile equipment data (from me_equipments)
+               me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location,
+               -- VSD data
+               vsd.name as vsd_name, vsd.building as vsd_building, vsd.floor as vsd_floor, vsd.location as vsd_location,
+               -- MECA data
+               meca.name as meca_name, meca.building as meca_building, meca.floor as meca_floor, meca.location as meca_location
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+        LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
+        LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
+        LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
         WHERE cs.site = $1
         ORDER BY cs.next_due_date NULLS LAST
       `, [site]);
@@ -1383,21 +1396,68 @@ async function getAIContext(site) {
         const dueDateStr = dueDate ? dueDate.toISOString().split('T')[0] : null;
         const lastControlStr = ctrl.last_control_date ? new Date(ctrl.last_control_date).toISOString().split('T')[0] : 'Jamais';
 
+        // Determine equipment data based on equipment_type
+        const eqType = ctrl.equipment_type || 'switchboard';
+        let eqName, eqCode, eqBuilding, eqFloor, eqRoom, eqId;
+
+        switch (eqType) {
+          case 'mobile_equipment':
+            eqName = ctrl.mobile_name;
+            eqCode = ctrl.mobile_code;
+            eqBuilding = ctrl.me_building;
+            eqFloor = ctrl.me_floor;
+            eqRoom = ctrl.me_location;
+            eqId = ctrl.mobile_equipment_id;
+            break;
+          case 'vsd':
+            eqName = ctrl.vsd_name;
+            eqBuilding = ctrl.vsd_building;
+            eqFloor = ctrl.vsd_floor;
+            eqRoom = ctrl.vsd_location;
+            eqId = ctrl.vsd_equipment_id;
+            break;
+          case 'meca':
+            eqName = ctrl.meca_name;
+            eqBuilding = ctrl.meca_building;
+            eqFloor = ctrl.meca_floor;
+            eqRoom = ctrl.meca_location;
+            eqId = ctrl.meca_equipment_id;
+            break;
+          default: // switchboard
+            eqName = ctrl.switchboard_name;
+            eqCode = ctrl.switchboard_code;
+            eqBuilding = ctrl.s_building;
+            eqFloor = ctrl.s_floor;
+            eqRoom = ctrl.s_room;
+            eqId = ctrl.switchboard_id;
+        }
+
         const controlItem = {
           id: ctrl.id,
-          switchboardId: ctrl.switchboard_id,
-          switchboard: ctrl.switchboard_name || 'N/A',
-          switchboardCode: ctrl.switchboard_code || 'N/A',
-          building: ctrl.building_code || 'N/A',
-          floor: ctrl.floor || 'N/A',
-          room: ctrl.room || '',
+          switchboardId: eqId,
+          equipmentId: eqId,
+          switchboard: eqName || 'N/A',
+          switchboardCode: eqCode || 'N/A',
+          building: eqBuilding || 'N/A',
+          floor: eqFloor || 'N/A',
+          room: eqRoom || '',
           template: ctrl.template_name || 'Contrôle standard',
           templateId: ctrl.template_id,
           dueDate: dueDateStr,
           dueDateFormatted: dueDate ? dueDate.toLocaleDateString('fr-FR') : 'Non planifié',
           lastControl: lastControlStr,
           frequencyMonths: ctrl.frequency_months || 12,
-          status: ctrl.status || 'pending'
+          status: ctrl.status || 'pending',
+          equipmentType: eqType === 'mobile_equipment' ? 'mobile' : eqType,
+          equipment: {
+            id: eqId,
+            name: eqName,
+            code: eqCode,
+            building: eqBuilding,
+            building_code: eqBuilding,
+            floor: eqFloor,
+            room: eqRoom
+          }
         };
 
         // Store all scheduled controls
