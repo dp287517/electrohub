@@ -2099,23 +2099,25 @@ app.put("/api/mobile-equipment/maps/plan/:logical/rename", async (req, res) => {
 // 🚀 PERF: Simplified query - no JOIN, no ORDER BY (like HV pattern)
 app.get("/api/mobile-equipment/maps/placed-ids", async (req, res) => {
   try {
-    // Simple query without JOIN - much faster
+    // Get all equipment positions with page_index for MiniEquipmentPreview compatibility
     const { rows } = await pool.query(`
-      SELECT DISTINCT equipment_id, plan_logical_name AS logical_name
+      SELECT DISTINCT ON (equipment_id) equipment_id, plan_logical_name AS logical_name, page_index,
+             (SELECT display_name FROM vsd_plans WHERE logical_name = plan_logical_name LIMIT 1) as display_name
         FROM me_equipment_positions
+        ORDER BY equipment_id, page_index
     `);
 
-    const placed_ids = [...new Set(rows.map(r => r.equipment_id))];
+    const placed_ids = rows.map(r => r.equipment_id);
 
-    // Build placed_details
+    // Build placed_details with format expected by MiniEquipmentPreview
     const placed_details = {};
     rows.forEach(r => {
-      if (!placed_details[r.equipment_id]) {
-        placed_details[r.equipment_id] = { plans: [] };
-      }
-      if (!placed_details[r.equipment_id].plans.includes(r.logical_name)) {
-        placed_details[r.equipment_id].plans.push(r.logical_name);
-      }
+      placed_details[r.equipment_id] = {
+        logical_name: r.logical_name,
+        display_name: r.display_name || r.logical_name,
+        page_index: r.page_index || 0,
+        plans: [r.logical_name]  // Keep for backwards compatibility
+      };
     });
 
     res.json({ ok: true, placed_ids, placed_details });
