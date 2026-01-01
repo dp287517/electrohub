@@ -2409,8 +2409,22 @@ export default function Switchboards() {
               </div>
             </div>
           )}
+
+          {/* Historique des modifications - uniquement en mode édition */}
+          {editingDeviceId && (
+            <div className="mt-4">
+              <AuditHistory
+                apiEndpoint="/api/switchboard/audit/entity"
+                entityType="device"
+                entityId={editingDeviceId}
+                title="Historique du disjoncteur"
+                maxHeight="200px"
+                showFilters={false}
+              />
+            </div>
+          )}
         </div>
-        
+
         <div className="border-t p-4 flex gap-3">
           <button onClick={resetDeviceForm} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler

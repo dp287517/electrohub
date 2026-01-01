@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import MiniElectro from '../components/MiniElectro';
+import AuditHistory from '../components/AuditHistory.jsx';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
@@ -854,6 +855,18 @@ const DetailPanel = ({
             }
           }}
         />
+
+        {/* Historique des modifications */}
+        {door.id && (
+          <AuditHistory
+            apiEndpoint="/api/doors/audit/entity"
+            entityType="door"
+            entityId={door.id}
+            title="Historique des modifications"
+            maxHeight="250px"
+            showFilters={false}
+          />
+        )}
       </div>
 
       {/* Actions */}
