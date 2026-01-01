@@ -541,12 +541,38 @@ const LeafletViewer = forwardRef(({
       const lng = pt.x_frac * imgSize.w;
       const isSel = pt.equipment_id === selectedId;
 
+      // Check control status for this equipment
+      const controlStatus = controlStatusesRef.current[pt.equipment_id];
+      const isOverdue = controlStatus?.status === 'overdue';
+      const isUpcoming = controlStatus?.status === 'upcoming';
+
+      // Determine colors based on status
+      let bgGradient, pulseColor;
+      if (isSel) {
+        bgGradient = "from-purple-400 to-purple-600";
+        pulseColor = "bg-purple-500";
+      } else if (isOverdue) {
+        bgGradient = "from-red-400 to-red-600";
+        pulseColor = "bg-red-500";
+      } else if (isUpcoming) {
+        bgGradient = "from-amber-400 to-amber-600";
+        pulseColor = "bg-amber-500";
+      } else {
+        bgGradient = "from-cyan-400 to-blue-600";
+        pulseColor = "bg-cyan-500";
+      }
+
+      // Determine animation class
+      let animClass = "";
+      if (isSel) animClass = "mobile-marker-selected";
+      else if (isOverdue) animClass = "mobile-marker-overdue";
+
       const icon = L.divIcon({
-        className: "",
+        className: "mobile-marker-inline",
         html: `
-          <div class="relative flex items-center justify-center ${isSel ? "animate-bounce" : ""}">
-            <div class="absolute w-8 h-8 bg-cyan-500 rounded-full opacity-30 ${isSel ? "animate-ping" : ""}"></div>
-            <div class="relative w-6 h-6 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs font-bold">
+          <div class="relative flex items-center justify-center ${animClass}">
+            <div class="absolute w-8 h-8 ${pulseColor} rounded-full opacity-30 ${isSel ? "animate-ping" : ""}"></div>
+            <div class="relative w-6 h-6 bg-gradient-to-br ${bgGradient} rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs font-bold">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="4" y="4" width="16" height="16" rx="2"/>
                 <rect x="9" y="9" width="6" height="6"/>

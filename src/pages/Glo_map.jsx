@@ -426,12 +426,27 @@ const GloLeafletViewer = forwardRef(({
     }
   }, [controlStatuses]);
 
-  function makeGloIcon(isSelected = false) {
+  function makeGloIcon(isSelected = false, equipmentId = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const bg = isSelected
-      ? "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"
-      : "background: radial-gradient(circle at 30% 30%, #34d399, #059669);";
-    const animClass = isSelected ? "glo-marker-selected" : "";
+    const controlStatus = equipmentId ? controlStatusesRef.current[equipmentId] : null;
+    const isOverdue = controlStatus?.status === 'overdue';
+    const isUpcoming = controlStatus?.status === 'upcoming';
+
+    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
+    let bg;
+    if (isSelected) {
+      bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
+    } else if (isOverdue) {
+      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
+    } else if (isUpcoming) {
+      bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
+    } else {
+      bg = "background: radial-gradient(circle at 30% 30%, #34d399, #059669);"; // Emerald - GLO default
+    }
+
+    let animClass = "";
+    if (isSelected) animClass = "glo-marker-selected";
+    else if (isOverdue) animClass = "glo-marker-overdue";
 
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
@@ -466,7 +481,7 @@ const GloLeafletViewer = forwardRef(({
 
       const latlng = L.latLng(y, x);
       const isSelected = p.equipment_id === selectedIdRef.current;
-      const icon = makeGloIcon(isSelected);
+      const icon = makeGloIcon(isSelected, p.equipment_id);
 
       const mk = L.marker(latlng, {
         icon,
