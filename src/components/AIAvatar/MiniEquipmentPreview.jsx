@@ -195,76 +195,104 @@ function pdfDocOpts(url) {
 // Clamp utility
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
+// Icon paths for different equipment types
+const EQUIPMENT_ICON_PATHS = {
+  switchboard: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>', // Zap
+  vsd: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>', // Cpu
+  meca: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>', // Cog
+  glo: '<rect x="6" y="7" width="12" height="10" rx="1"/><path d="M10 7V4M14 7V4"/>', // Battery
+  hv: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>', // Zap
+  mobile: '<path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>', // Smartphone
+  atex: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', // Shield
+};
+
+// Map equipment config name to icon key
+function getEquipmentIconKey(configName) {
+  const mapping = {
+    'Tableau électrique': 'switchboard',
+    'Variateur': 'vsd',
+    'Équipement mécanique': 'meca',
+    'Équipement GLO': 'glo',
+    'Haute Tension': 'hv',
+    'Équipement mobile': 'mobile',
+    'Équipement ATEX': 'atex',
+  };
+  return mapping[configName] || 'switchboard';
+}
+
 /**
  * MiniLeafletMap - Internal component that renders the Leaflet map
+ * Supports single or multiple equipment markers on the same plan
  */
 function MiniLeafletMap({
   planData,
-  position,
+  position,        // Single position (for backward compatibility)
+  positions = [],  // Multiple positions for multi-marker support
   equipmentConfig,
   controlStatus,
   isExpanded,
   onExpand,
+  equipmentDetails,
 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
-  const markerRef = useRef(null);
+  const markersRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const MARKER_SIZE = isExpanded ? 28 : 18;
+  const MARKER_SIZE = isExpanded ? 32 : 22;
 
-  // Create equipment marker icon
-  const createMarkerIcon = useCallback((isOverdue) => {
-    const s = MARKER_SIZE;
+  // Get all positions (combine single + multiple)
+  const allPositions = positions.length > 0 ? positions : (position ? [{ ...position, isPrimary: true }] : []);
+
+  // Create equipment marker icon with enhanced visuals
+  const createMarkerIcon = useCallback((markerData = {}) => {
+    const { isOverdue = false, isPrimary = true, index = 0, name = '' } = markerData;
+    const s = isPrimary ? MARKER_SIZE : MARKER_SIZE * 0.85;
     const colors = equipmentConfig.markerColor;
-    let bg;
-    let animClass = "";
 
+    // Determine background based on status
+    let bg, borderColor, animClass = "";
     if (isOverdue) {
-      bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);";
-      animClass = "mini-marker-pulse";
+      bg = "background: linear-gradient(135deg, #ef4444 0%, #dc2626 50%, #b91c1c 100%);";
+      borderColor = "#fecaca";
+      animClass = "mini-marker-pulse-urgent";
+    } else if (isPrimary) {
+      bg = `background: linear-gradient(135deg, ${colors.gradient[0]} 0%, ${colors.gradient[1]} 100%);`;
+      borderColor = "white";
+      animClass = "mini-marker-glow";
     } else {
-      bg = `background: radial-gradient(circle at 30% 30%, ${colors.gradient[0]}, ${colors.gradient[1]});`;
+      bg = `background: linear-gradient(135deg, ${colors.gradient[0]}dd 0%, ${colors.gradient[1]}dd 100%);`;
+      borderColor = "rgba(255,255,255,0.8)";
     }
 
-    // Get icon SVG path based on equipment type
-    const iconPaths = {
-      switchboard: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>', // Zap
-      vsd: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>', // Cpu
-      meca: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>', // Cog
-      glo: '<rect x="6" y="7" width="12" height="10" rx="1"/><path d="M10 7V4M14 7V4"/>', // Battery
-      hv: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>', // Zap
-      mobile: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>', // Cpu
-      atex: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', // Shield
-    };
+    const iconKey = getEquipmentIconKey(equipmentConfig.name);
+    const iconPath = EQUIPMENT_ICON_PATHS[iconKey] || EQUIPMENT_ICON_PATHS.switchboard;
 
-    const iconPath = iconPaths[equipmentConfig.name === 'Tableau électrique' ? 'switchboard' :
-                               equipmentConfig.name === 'Variateur' ? 'vsd' :
-                               equipmentConfig.name === 'Équipement mécanique' ? 'meca' :
-                               equipmentConfig.name === 'Équipement GLO' ? 'glo' :
-                               equipmentConfig.name === 'Haute Tension' ? 'hv' :
-                               equipmentConfig.name === 'Équipement mobile' ? 'mobile' :
-                               'atex'] || iconPaths.switchboard;
+    // Add number badge for multiple markers
+    const numberBadge = index > 0 && !isPrimary ? `
+      <div style="position:absolute;top:-4px;right:-4px;width:14px;height:14px;background:#1e40af;border:1.5px solid white;border-radius:50%;font-size:9px;font-weight:bold;color:white;display:flex;align-items:center;justify-content:center;">${index + 1}</div>
+    ` : '';
 
     const html = `
-      <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2.5px solid white;border-radius:9999px;box-shadow:0 4px 12px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;">
-        <svg viewBox="0 0 24 24" width="${s * 0.55}" height="${s * 0.55}" fill="white" stroke="white" stroke-width="0" xmlns="http://www.w3.org/2000/svg">
+      <div class="${animClass}" style="position:relative;width:${s}px;height:${s}px;${bg}border:2.5px solid ${borderColor};border-radius:9999px;box-shadow:0 4px 15px rgba(0,0,0,.4), 0 2px 4px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.2s ease;transform-origin:center bottom;" title="${name}">
+        <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" stroke="white" stroke-width="0.5" xmlns="http://www.w3.org/2000/svg">
           ${iconPath}
         </svg>
+        ${numberBadge}
       </div>`;
 
     return L.divIcon({
       className: "mini-eq-marker",
       html,
       iconSize: [s, s],
-      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+      iconAnchor: [Math.round(s / 2), s], // Anchor at bottom center for better positioning
     });
   }, [MARKER_SIZE, equipmentConfig]);
 
-  // Load and render the map
+  // Load and render the map with high quality
   useEffect(() => {
-    if (!planData || !position || !containerRef.current) return;
+    if (!planData || allPositions.length === 0 || !containerRef.current) return;
 
     let cancelled = false;
     let pdfDoc = null;
@@ -274,13 +302,14 @@ function MiniLeafletMap({
       setError(null);
 
       try {
-        // Clean up previous map
+        // Clean up previous map and markers
         if (mapRef.current) {
           try {
             mapRef.current.remove();
           } catch {}
           mapRef.current = null;
         }
+        markersRef.current = [];
 
         const pdfUrl = planData.planFileUrl;
 
@@ -293,45 +322,55 @@ function MiniLeafletMap({
         const page = await pdfDoc.getPage((planData.page_index || 0) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // Calculate render size based on container
-        const containerWidth = containerRef.current.clientWidth || (isExpanded ? 580 : 260);
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const targetWidth = Math.min(2048, containerWidth * dpr * 1.5);
-        const scale = clamp(targetWidth / baseVp.width, 0.5, 2.5);
+        // HIGH QUALITY RENDERING: Use higher DPI for crisp visuals
+        const containerWidth = containerRef.current.clientWidth || (isExpanded ? 600 : 280);
+        const dpr = Math.min(window.devicePixelRatio || 1, 3); // Allow up to 3x DPI
+        const targetWidth = Math.min(3072, containerWidth * dpr * 2); // Higher resolution
+        const scale = clamp(targetWidth / baseVp.width, 0.8, 4);
         const viewport = page.getViewport({ scale });
 
-        // Render to canvas
+        // Render to canvas with high quality settings
         const canvas = document.createElement("canvas");
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        const ctx = canvas.getContext("2d", { alpha: true });
+        const ctx = canvas.getContext("2d", { alpha: false });
 
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        // Enable image smoothing for better quality
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        await page.render({
+          canvasContext: ctx,
+          viewport,
+          intent: 'display' // Optimize for display quality
+        }).promise;
 
         if (cancelled) return;
 
-        // Convert to image
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        // Use PNG for better quality (especially for technical drawings)
+        const dataUrl = canvas.toDataURL("image/png");
         const imgW = canvas.width;
         const imgH = canvas.height;
 
-        // Create Leaflet map
+        // Create Leaflet map with smooth animations
         const map = L.map(containerRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
           zoomAnimation: true,
-          fadeAnimation: false,
+          fadeAnimation: true,
           scrollWheelZoom: true,
           touchZoom: true,
           doubleClickZoom: true,
           dragging: true,
           attributionControl: false,
           preferCanvas: true,
+          zoomSnap: 0.25, // Smoother zoom levels
+          zoomDelta: 0.5,
         });
 
         mapRef.current = map;
 
-        // Add zoom control in expanded mode
+        // Add custom zoom control in expanded mode
         if (isExpanded) {
           L.control.zoom({ position: "topright" }).addTo(map);
         }
@@ -342,43 +381,80 @@ function MiniLeafletMap({
           [imgH, imgW],
         ]);
 
-        // Add image layer
+        // Add image layer with better quality
         L.imageOverlay(dataUrl, bounds, {
           interactive: true,
           opacity: 1,
+          className: 'leaflet-image-layer-crisp',
         }).addTo(map);
 
-        // Fit to bounds with padding
+        // Configure zoom levels
         const fitZoom = map.getBoundsZoom(bounds, true);
-        map.setMinZoom(fitZoom - 1);
-        map.setMaxZoom(fitZoom + 5);
-        map.setMaxBounds(bounds.pad(0.3));
+        map.setMinZoom(fitZoom - 0.5);
+        map.setMaxZoom(fitZoom + 6);
+        map.setMaxBounds(bounds.pad(0.4));
 
-        // Calculate marker position and center the view on it
-        const markerX = position.x_frac * imgW;
-        const markerY = position.y_frac * imgH;
-        const markerLatLng = L.latLng(markerY, markerX);
+        // Calculate view based on all markers
+        const markerLatLngs = allPositions.map(pos => {
+          const x = (pos.x_frac || 0) * imgW;
+          const y = (pos.y_frac || 0) * imgH;
+          return L.latLng(y, x);
+        });
 
-        // Center on marker with appropriate zoom
-        const initialZoom = isExpanded ? fitZoom + 1.5 : fitZoom + 0.5;
-        map.setView(markerLatLng, initialZoom);
+        // Smart zoom: if multiple markers, fit them all; if single, zoom closer
+        let initialView;
+        if (markerLatLngs.length > 1) {
+          const markerBounds = L.latLngBounds(markerLatLngs);
+          map.fitBounds(markerBounds.pad(0.3), { animate: false });
+        } else if (markerLatLngs.length === 1) {
+          const initialZoom = isExpanded ? fitZoom + 2 : fitZoom + 1;
+          map.setView(markerLatLngs[0], initialZoom, { animate: false });
+        }
 
-        // Add marker
+        // Add markers for all positions
         const isOverdue = controlStatus?.hasOverdue;
-        const marker = L.marker(markerLatLng, {
-          icon: createMarkerIcon(isOverdue),
-          interactive: true,
-        });
+        const markers = [];
 
-        marker.addTo(map);
-        markerRef.current = marker;
+        allPositions.forEach((pos, index) => {
+          const x = (pos.x_frac || 0) * imgW;
+          const y = (pos.y_frac || 0) * imgH;
+          const latLng = L.latLng(y, x);
 
-        // Add popup on click
-        marker.on('click', () => {
-          if (!isExpanded && onExpand) {
-            onExpand();
+          const markerIcon = createMarkerIcon({
+            isOverdue: pos.isOverdue ?? isOverdue,
+            isPrimary: index === 0 || pos.isPrimary,
+            index,
+            name: pos.name || equipmentDetails?.name || '',
+          });
+
+          const marker = L.marker(latLng, {
+            icon: markerIcon,
+            interactive: true,
+            zIndexOffset: index === 0 ? 1000 : 0, // Primary marker on top
+          });
+
+          // Add tooltip for equipment name
+          if (pos.name || equipmentDetails?.name) {
+            marker.bindTooltip(pos.name || equipmentDetails?.name, {
+              permanent: false,
+              direction: 'top',
+              className: 'mini-eq-tooltip',
+              offset: [0, -10],
+            });
           }
+
+          marker.addTo(map);
+          markers.push(marker);
+
+          // Click handler
+          marker.on('click', () => {
+            if (!isExpanded && onExpand) {
+              onExpand();
+            }
+          });
         });
+
+        markersRef.current = markers;
 
         // Cleanup PDF
         try {
@@ -406,22 +482,35 @@ function MiniLeafletMap({
         } catch {}
         mapRef.current = null;
       }
+      markersRef.current = [];
     };
-  }, [planData, position, isExpanded, controlStatus, createMarkerIcon, onExpand]);
+  }, [planData, allPositions.length, isExpanded, controlStatus, createMarkerIcon, onExpand, equipmentDetails]);
 
-  // Update marker icon when controlStatus changes
+  // Update marker icons when controlStatus changes
   useEffect(() => {
-    if (markerRef.current) {
+    if (markersRef.current.length > 0) {
       const isOverdue = controlStatus?.hasOverdue;
-      markerRef.current.setIcon(createMarkerIcon(isOverdue));
+      markersRef.current.forEach((marker, index) => {
+        marker.setIcon(createMarkerIcon({
+          isOverdue,
+          isPrimary: index === 0,
+          index,
+          name: equipmentDetails?.name || '',
+        }));
+      });
     }
-  }, [controlStatus, createMarkerIcon]);
+  }, [controlStatus, createMarkerIcon, equipmentDetails]);
 
-  // Center on marker handler
+  // Center on markers handler - fits all markers or centers on primary
   const handleCenterOnMarker = useCallback(() => {
-    if (mapRef.current && markerRef.current) {
-      const ll = markerRef.current.getLatLng();
-      mapRef.current.setView(ll, mapRef.current.getZoom() + 0.5, { animate: true });
+    if (mapRef.current && markersRef.current.length > 0) {
+      if (markersRef.current.length === 1) {
+        const ll = markersRef.current[0].getLatLng();
+        mapRef.current.setView(ll, mapRef.current.getZoom() + 0.5, { animate: true });
+      } else {
+        const bounds = L.latLngBounds(markersRef.current.map(m => m.getLatLng()));
+        mapRef.current.fitBounds(bounds.pad(0.2), { animate: true });
+      }
     }
   }, []);
 
@@ -768,12 +857,13 @@ export default function MiniEquipmentPreview({
         </div>
 
         {/* Mini Leaflet map */}
-        <div className="relative bg-white" style={{ height: 160 }}>
+        <div className="relative bg-white" style={{ height: 180 }}>
           <MiniLeafletMap
             planData={planData}
             position={position}
             equipmentConfig={config}
             controlStatus={controlStatus}
+            equipmentDetails={equipmentDetails}
             isExpanded={false}
             onExpand={() => setIsExpanded(true)}
           />
@@ -830,6 +920,7 @@ export default function MiniEquipmentPreview({
                   position={position}
                   equipmentConfig={config}
                   controlStatus={controlStatus}
+                  equipmentDetails={equipmentDetails}
                   isExpanded={true}
                   onExpand={() => {}}
                 />
@@ -870,18 +961,89 @@ export default function MiniEquipmentPreview({
         </div>
       )}
 
-      {/* CSS for marker animations */}
+      {/* Enhanced CSS for marker animations and map quality */}
       <style>{`
+        /* Base marker styles */
         .mini-eq-marker {
           background: transparent !important;
           border: none !important;
         }
+
+        /* Crisp image rendering for plans */
+        .leaflet-image-layer-crisp {
+          image-rendering: -webkit-optimize-contrast;
+          image-rendering: crisp-edges;
+        }
+
+        /* Subtle glow effect for primary markers */
+        .mini-marker-glow {
+          animation: mini-glow 2s ease-in-out infinite;
+        }
+        @keyframes mini-glow {
+          0%, 100% {
+            transform: scale(1);
+            filter: drop-shadow(0 0 3px rgba(59, 130, 246, 0.5));
+          }
+          50% {
+            transform: scale(1.05);
+            filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.7));
+          }
+        }
+
+        /* Urgent pulse for overdue equipment */
+        .mini-marker-pulse-urgent {
+          animation: mini-pulse-urgent 1s ease-in-out infinite;
+        }
+        @keyframes mini-pulse-urgent {
+          0%, 100% {
+            transform: scale(1);
+            filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.6));
+          }
+          50% {
+            transform: scale(1.15);
+            filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.9));
+          }
+        }
+
+        /* Legacy pulse animation */
         .mini-marker-pulse {
           animation: mini-pulse 1.5s ease-in-out infinite;
         }
         @keyframes mini-pulse {
           0%, 100% { transform: scale(1); opacity: 1; }
           50% { transform: scale(1.15); opacity: 0.9; }
+        }
+
+        /* Tooltip styling */
+        .mini-eq-tooltip {
+          background: rgba(15, 23, 42, 0.95) !important;
+          border: none !important;
+          border-radius: 6px !important;
+          padding: 4px 10px !important;
+          font-size: 12px !important;
+          font-weight: 500 !important;
+          color: white !important;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.25) !important;
+        }
+        .mini-eq-tooltip::before {
+          border-top-color: rgba(15, 23, 42, 0.95) !important;
+        }
+
+        /* Hover effects for markers */
+        .mini-eq-marker > div:hover {
+          transform: scale(1.1) !important;
+          z-index: 10000 !important;
+        }
+
+        /* Leaflet container improvements */
+        .leaflet-container {
+          background: #f1f5f9 !important;
+          font-family: inherit !important;
+        }
+
+        /* Smooth tile transitions */
+        .leaflet-tile {
+          transition: opacity 0.2s ease-in-out;
         }
       `}</style>
     </>
