@@ -1252,6 +1252,20 @@ app.put(
         );
         closedRow = upd[0];
 
+        // 📝 AUDIT: Log contrôle terminé
+        await audit.log(req, AUDIT_ACTIONS.CHECK_COMPLETED, {
+          entityType: 'door',
+          entityId: doorId,
+          details: {
+            checkId: closedRow.id,
+            status: status,
+            result: status === 'ok' ? 'conforme' : 'non_conforme',
+            counts: counts,
+            inspector_name: userName,
+            inspector_email: userEmail
+          }
+        });
+
         const months = FREQ_TO_MONTHS[settings.frequency] || 12;
         const nextDue = addMonthsISO(todayISO(), months);
         await pool.query(`INSERT INTO fd_checks(door_id, due_date) VALUES($1,$2)`, [
