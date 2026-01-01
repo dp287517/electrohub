@@ -3827,7 +3827,6 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           const equipResult = await pool.query(query, params);
 
           if (equipResult.rows.length > 0) {
-            const firstEquipment = equipResult.rows[0];
             const equipmentList = equipResult.rows.map(eq => ({
               id: eq.id,
               name: eq.name,
@@ -3846,18 +3845,69 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
               byFloor[f].push(eq);
             });
 
-            let response = `## 🗺️ Équipements du bâtiment ${buildingCode}\n\n`;
-            response += `📊 **${equipResult.rows.length} équipement${equipResult.rows.length > 1 ? 's' : ''}** trouvé${equipResult.rows.length > 1 ? 's' : ''}\n\n`;
+            const floors = Object.keys(byFloor).sort();
+            const hasMultipleFloors = floors.length > 1;
 
-            Object.keys(byFloor).sort().forEach(f => {
-              response += `**📍 Étage ${f}**\n`;
-              byFloor[f].forEach(eq => {
-                response += `• ${eq.name}${eq.room ? ` - ${eq.room}` : ''}\n`;
+            // If multiple floors and no floor specified, ask user to choose
+            if (hasMultipleFloors && !floor) {
+              let response = `## 🏢 Bâtiment ${buildingCode}\n\n`;
+              response += `📊 **${equipResult.rows.length} équipement${equipResult.rows.length > 1 ? 's' : ''}** sur **${floors.length} étages** différents.\n\n`;
+              response += `Chaque étage a son propre plan. **Quel étage veux-tu voir ?**\n\n`;
+
+              floors.forEach(f => {
+                const count = byFloor[f].length;
+                response += `• **Étage ${f}** — ${count} équipement${count > 1 ? 's' : ''}\n`;
               });
-              response += '\n';
+
+              // Create floor selection actions
+              const actions = floors.map(f => ({
+                label: `📍 Étage ${f}`,
+                prompt: `Montre-moi les équipements de l'étage ${f} du bâtiment ${buildingCode}`,
+                type: 'floor',
+                floor: f,
+                buildingCode
+              }));
+
+              return res.json({
+                message: response,
+                equipmentList: equipmentList,
+                buildingCode,
+                floors,
+                showMap: false, // Don't show map until floor is selected
+                actions,
+                provider: 'system'
+              });
+            }
+
+            // Single floor or floor specified - show map
+            const targetFloor = floor || floors[0];
+            const floorEquipment = byFloor[targetFloor] || equipResult.rows;
+            const firstEquipment = floorEquipment[0];
+
+            let response = `## 🗺️ Bâtiment ${buildingCode} — Étage ${targetFloor}\n\n`;
+            response += `📊 **${floorEquipment.length} équipement${floorEquipment.length > 1 ? 's' : ''}** trouvé${floorEquipment.length > 1 ? 's' : ''}\n\n`;
+
+            floorEquipment.forEach(eq => {
+              response += `• **${eq.name}**${eq.room ? ` - ${eq.room}` : ''}\n`;
             });
 
             response += `\nVoici la localisation de **${firstEquipment.name}** sur le plan :`;
+
+            // Actions for other equipment on this floor + other floors
+            const actions = floorEquipment.slice(0, 3).map(eq => ({
+              label: `📍 ${eq.name.substring(0, 20)}`,
+              prompt: `Montre-moi ${eq.name} sur la carte`
+            }));
+
+            // Add other floors as options if multiple floors exist
+            if (hasMultipleFloors) {
+              floors.filter(f => f !== targetFloor).slice(0, 2).forEach(f => {
+                actions.push({
+                  label: `🔄 Étage ${f}`,
+                  prompt: `Montre-moi les équipements de l'étage ${f} du bâtiment ${buildingCode}`
+                });
+              });
+            }
 
             return res.json({
               message: response,
@@ -3871,11 +3921,16 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                 room: firstEquipment.room
               },
               locationEquipmentType: 'switchboard',
-              equipmentList: equipmentList,
-              actions: equipmentList.slice(0, 3).map(eq => ({
-                label: `📍 ${eq.name.substring(0, 20)}`,
-                prompt: `Montre-moi ${eq.name} sur la carte`
+              equipmentList: floorEquipment.map(eq => ({
+                id: eq.id,
+                name: eq.name,
+                code: eq.code,
+                building_code: eq.building_code,
+                floor: eq.floor,
+                room: eq.room,
+                equipmentType: 'switchboard'
               })),
+              actions,
               provider: 'system'
             });
           }
@@ -3976,40 +4031,88 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           });
 
           const totalEquipment = equipResult.rows.length;
-          const floors = [...new Set(equipResult.rows.map(e => e.floor).filter(Boolean))];
+          const floors = Object.keys(byFloor).sort();
+          const hasMultipleFloors = floors.length > 1;
 
-          let response = `## 🗺️ ${buildingCode ? `Bâtiment ${buildingCode}` : 'Équipements électriques'}\n\n`;
-          response += `📊 **${totalEquipment} équipement${totalEquipment > 1 ? 's' : ''}** trouvé${totalEquipment > 1 ? 's' : ''}`;
-          if (floors.length > 0) {
+          // For direct building queries with multiple floors, ask user to choose floor first
+          if (buildingCode && isDirectBuildingEquipmentQuery && hasMultipleFloors && !floor) {
+            let response = `## 🏢 Bâtiment ${buildingCode}\n\n`;
+            response += `📊 **${totalEquipment} équipement${totalEquipment > 1 ? 's' : ''}** sur **${floors.length} étages** différents.\n\n`;
+            response += `Chaque étage a son propre plan. **Quel étage veux-tu voir ?**\n\n`;
+
+            floors.forEach(f => {
+              const count = byFloor[f].length;
+              response += `• **Étage ${f}** — ${count} équipement${count > 1 ? 's' : ''}\n`;
+            });
+
+            // Create floor selection actions
+            const actions = floors.map(f => ({
+              label: `📍 Étage ${f}`,
+              prompt: `Montre-moi les équipements de l'étage ${f} du bâtiment ${buildingCode}`,
+              type: 'floor',
+              floor: f,
+              buildingCode
+            }));
+
+            return res.json({
+              message: response,
+              equipmentList: equipResult.rows,
+              buildingCode,
+              floors,
+              showMap: false,
+              actions,
+              provider: 'system'
+            });
+          }
+
+          // Determine target floor for map display
+          const targetFloor = floor || floors[0];
+          const floorEquipment = floor ? byFloor[floor] || equipResult.rows : equipResult.rows;
+
+          let response = `## 🗺️ ${buildingCode ? `Bâtiment ${buildingCode}` : 'Équipements électriques'}`;
+          if (floor) response += ` — Étage ${floor}`;
+          response += `\n\n`;
+
+          response += `📊 **${floorEquipment.length} équipement${floorEquipment.length > 1 ? 's' : ''}** trouvé${floorEquipment.length > 1 ? 's' : ''}`;
+          if (!floor && floors.length > 0) {
             response += ` sur ${floors.length} étage${floors.length > 1 ? 's' : ''} (${floors.join(', ')})`;
           }
           response += '\n\n';
 
           if (floor) {
-            response += `**Étage ${floor}**\n\n`;
-          }
-
-          Object.keys(byFloor).sort().forEach(f => {
-            if (!floor) response += `### 📍 Étage ${f}\n`;
-            byFloor[f].forEach(eq => {
+            // Show only equipment for selected floor
+            floorEquipment.forEach(eq => {
               response += `• **${eq.name}** (${eq.code || 'N/A'})`;
               if (eq.room) response += ` - ${eq.room}`;
               response += `\n`;
             });
             response += '\n';
-          });
+          } else {
+            // Show all equipment grouped by floor
+            Object.keys(byFloor).sort().forEach(f => {
+              response += `### 📍 Étage ${f}\n`;
+              byFloor[f].forEach(eq => {
+                response += `• **${eq.name}** (${eq.code || 'N/A'})`;
+                if (eq.room) response += ` - ${eq.room}`;
+                response += `\n`;
+              });
+              response += '\n';
+            });
+          }
 
-          // Show map when: single equipment OR direct building equipment query
-          const shouldShowMap = equipResult.rows.length === 1 || (buildingCode && isDirectBuildingEquipmentQuery);
-          const firstEquipment = shouldShowMap ? equipResult.rows[0] : null;
+          // Show map when: single equipment OR direct building query with floor specified
+          const shouldShowMap = equipResult.rows.length === 1 ||
+            (buildingCode && isDirectBuildingEquipmentQuery && (floor || !hasMultipleFloors));
+          const firstEquipment = shouldShowMap ? (floor ? floorEquipment[0] : equipResult.rows[0]) : null;
 
-          // Add map intro message when showing multiple equipment
-          if (shouldShowMap && equipResult.rows.length > 1 && firstEquipment) {
+          // Add map intro message when showing map
+          if (shouldShowMap && firstEquipment) {
             response += `\nVoici la localisation de **${firstEquipment.name}** sur le plan :`;
           }
 
           // Create equipment actions with navigation data
-          const actions = equipResult.rows.slice(0, 5).map(eq => ({
+          const displayEquipment = floor ? floorEquipment : equipResult.rows;
+          const actions = displayEquipment.slice(0, 5).map(eq => ({
             label: `🔌 ${eq.name.substring(0, 25)}`,
             prompt: `Montre-moi le tableau ${eq.name}`,
             type: 'equipment',
@@ -4022,8 +4125,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             }
           }));
 
-          // Add floor filter if building has multiple floors
-          if (floors.length > 1 && !floor) {
+          // Add floor filter if building has multiple floors and no floor specified
+          if (hasMultipleFloors && !floor) {
             floors.slice(0, 3).forEach(f => {
               actions.push({
                 label: `📍 Étage ${f}`,
@@ -4031,6 +4134,16 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                 type: 'floor',
                 floor: f,
                 buildingCode
+              });
+            });
+          }
+
+          // Add other floors as options if floor is specified
+          if (floor && hasMultipleFloors) {
+            floors.filter(f => f !== floor).slice(0, 2).forEach(f => {
+              actions.push({
+                label: `🔄 Étage ${f}`,
+                prompt: `Montre-moi les équipements de l'étage ${f} du bâtiment ${buildingCode}`
               });
             });
           }
@@ -4045,13 +4158,13 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
 
           return res.json({
             message: response,
-            equipmentList: equipResult.rows,
+            equipmentList: displayEquipment,
             buildingCode,
             floor,
             floors,
             navigationMode: true,
             navigateTo: `/app/switchboards${buildingCode ? `?building=${buildingCode}` : ''}${floor ? `&floor=${floor}` : ''}`,
-            // Map integration - show mini map when single equipment OR direct building query
+            // Map integration - show mini map when conditions are met
             showMap: shouldShowMap,
             locationEquipment: firstEquipment ? {
               id: firstEquipment.id,
