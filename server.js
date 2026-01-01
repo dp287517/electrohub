@@ -1762,7 +1762,7 @@ async function getAIContext(site) {
     context.hv = { count: 0, list: [] };
     try {
       const hvRes = await pool.query(`
-        SELECT id, name, code, building_code, floor, room, power_mva, voltage_kv
+        SELECT id, name, code, building_code, floor, room
         FROM hv_equipments
         ORDER BY building_code, floor, name
         LIMIT 50
@@ -1801,7 +1801,7 @@ async function getAIContext(site) {
     context.mobile = { count: 0, list: [] };
     try {
       const meRes = await pool.query(`
-        SELECT id, name, code, serial_number, building, floor, location, status
+        SELECT id, name, code, serial_number, building, floor, location
         FROM me_equipments
         ORDER BY building, floor, name
         LIMIT 50
