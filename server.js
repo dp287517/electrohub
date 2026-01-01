@@ -3787,6 +3787,105 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     }
 
     // ==========================================================================
+    // BUILDING EQUIPMENT MAP REQUEST - Show map for building equipment
+    // ==========================================================================
+    const wantsBuildingMap = (
+      (msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.match(/\bbat\.?\s*\d/i)) &&
+      (msgLower.includes('équipement') || msgLower.includes('tableau') || msgLower.includes('électrique')) &&
+      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('montre') || msgLower.includes('voir'))
+    );
+
+    if (wantsBuildingMap) {
+      console.log('[AI] 🗺️ Map requested for building equipment - fetching directly');
+
+      // Extract building code
+      const buildingMatch = msgLower.match(/(?:bâtiment|batiment|building|bat\.?)\s*([a-z]?\d{1,3}[a-z]?)/i) ||
+                            msgLower.match(/\b(\d{2})\b/);
+      const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
+
+      // Extract floor if mentioned
+      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i);
+      const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
+
+      if (buildingCode) {
+        try {
+          let query = `
+            SELECT s.id, s.name, s.code, s.building_code, s.floor, s.room,
+                   'switchboard' as equipment_type
+            FROM switchboards s
+            WHERE s.site = $1 AND UPPER(s.building_code) = $2
+          `;
+          const params = [site, buildingCode];
+
+          if (floor) {
+            query += ` AND UPPER(s.floor) = $${params.length + 1}`;
+            params.push(floor);
+          }
+
+          query += ` ORDER BY s.floor, s.name LIMIT 20`;
+
+          const equipResult = await pool.query(query, params);
+
+          if (equipResult.rows.length > 0) {
+            const firstEquipment = equipResult.rows[0];
+            const equipmentList = equipResult.rows.map(eq => ({
+              id: eq.id,
+              name: eq.name,
+              code: eq.code,
+              building_code: eq.building_code,
+              floor: eq.floor,
+              room: eq.room,
+              equipmentType: eq.equipment_type
+            }));
+
+            // Group by floor for display
+            const byFloor = {};
+            equipResult.rows.forEach(eq => {
+              const f = eq.floor || 'N/A';
+              if (!byFloor[f]) byFloor[f] = [];
+              byFloor[f].push(eq);
+            });
+
+            let response = `## 🗺️ Équipements du bâtiment ${buildingCode}\n\n`;
+            response += `📊 **${equipResult.rows.length} équipement${equipResult.rows.length > 1 ? 's' : ''}** trouvé${equipResult.rows.length > 1 ? 's' : ''}\n\n`;
+
+            Object.keys(byFloor).sort().forEach(f => {
+              response += `**📍 Étage ${f}**\n`;
+              byFloor[f].forEach(eq => {
+                response += `• ${eq.name}${eq.room ? ` - ${eq.room}` : ''}\n`;
+              });
+              response += '\n';
+            });
+
+            response += `\nVoici la localisation de **${firstEquipment.name}** sur le plan :`;
+
+            return res.json({
+              message: response,
+              showMap: true,
+              locationEquipment: {
+                id: firstEquipment.id,
+                name: firstEquipment.name,
+                code: firstEquipment.code,
+                building_code: firstEquipment.building_code,
+                floor: firstEquipment.floor,
+                room: firstEquipment.room
+              },
+              locationEquipmentType: 'switchboard',
+              equipmentList: equipmentList,
+              actions: equipmentList.slice(0, 3).map(eq => ({
+                label: `📍 ${eq.name.substring(0, 20)}`,
+                prompt: `Montre-moi ${eq.name} sur la carte`
+              })),
+              provider: 'system'
+            });
+          }
+        } catch (e) {
+          console.error('[AI] Building map query error:', e.message);
+        }
+      }
+    }
+
+    // ==========================================================================
     // SMART NAVIGATION DETECTION - Understand natural French requests
     // ==========================================================================
 
@@ -3817,10 +3916,19 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       msgLower.includes('distribution') || msgLower.includes('coffret') || msgLower.includes('datahub')
     );
 
+    // DIRECT BUILDING EQUIPMENT PATTERN: "équipement(s) du bâtiment X" or "bâtiment X équipement(s)"
+    const isDirectBuildingEquipmentQuery = (
+      hasLocationKeyword && hasEquipmentKeyword &&
+      (msgLower.includes('du bâtiment') || msgLower.includes('du batiment') ||
+       msgLower.includes('de bâtiment') || msgLower.includes('de batiment') ||
+       msgLower.match(/bâtiment\s+\d/) || msgLower.match(/batiment\s+\d/))
+    );
+
     // Detect plan/building/navigation requests (BEFORE procedure logic)
-    // Now uses smarter detection: needs action + (location OR equipment)
+    // Now uses smarter detection: needs action + (location OR equipment) OR direct building equipment query
     const wantsPlanOrNavigation = (
-      hasActionKeyword && (hasLocationKeyword || hasEquipmentKeyword)
+      (hasActionKeyword && (hasLocationKeyword || hasEquipmentKeyword)) ||
+      isDirectBuildingEquipmentQuery
     ) && !msgLower.includes('procédure') && !msgLower.includes('procedure') && !msgLower.includes('étape');
 
     if (wantsPlanOrNavigation) {
@@ -3891,9 +3999,14 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             response += '\n';
           });
 
-          // If only ONE equipment, show map with location
-          const showSingleEquipmentMap = equipResult.rows.length === 1;
-          const singleEquipment = showSingleEquipmentMap ? equipResult.rows[0] : null;
+          // Show map when: single equipment OR direct building equipment query
+          const shouldShowMap = equipResult.rows.length === 1 || (buildingCode && isDirectBuildingEquipmentQuery);
+          const firstEquipment = shouldShowMap ? equipResult.rows[0] : null;
+
+          // Add map intro message when showing multiple equipment
+          if (shouldShowMap && equipResult.rows.length > 1 && firstEquipment) {
+            response += `\nVoici la localisation de **${firstEquipment.name}** sur le plan :`;
+          }
 
           // Create equipment actions with navigation data
           const actions = equipResult.rows.slice(0, 5).map(eq => ({
@@ -3938,15 +4051,15 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             floors,
             navigationMode: true,
             navigateTo: `/app/switchboards${buildingCode ? `?building=${buildingCode}` : ''}${floor ? `&floor=${floor}` : ''}`,
-            // Map integration - show mini map when single equipment found
-            showMap: showSingleEquipmentMap,
-            locationEquipment: singleEquipment ? {
-              id: singleEquipment.id,
-              name: singleEquipment.name,
-              code: singleEquipment.code,
-              building_code: singleEquipment.building_code,
-              floor: singleEquipment.floor,
-              room: singleEquipment.room
+            // Map integration - show mini map when single equipment OR direct building query
+            showMap: shouldShowMap,
+            locationEquipment: firstEquipment ? {
+              id: firstEquipment.id,
+              name: firstEquipment.name,
+              code: firstEquipment.code,
+              building_code: firstEquipment.building_code,
+              floor: firstEquipment.floor,
+              room: firstEquipment.room
             } : null,
             locationEquipmentType: 'switchboard',
             actions,
