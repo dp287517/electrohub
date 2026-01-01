@@ -7,8 +7,8 @@ import {
   Zap, Plus, Search, ChevronRight, ChevronDown, Building2, Layers,
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Upload, RefreshCw, Eye, AlertCircle, Menu, Share2, ExternalLink,
-  MapPin, Tag, Hash, Info, Calendar, Clock, FileText, Download, Check,
-  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu, Sparkles
+  MapPin, Tag, Hash, Info, Clock, FileText, Download, Check,
+  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu, Sparkles, Printer
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
@@ -458,144 +458,6 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
           >
             Fermer
           </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Calendar Modal
-const CalendarModal = ({ isOpen, onClose, events = [], onDayClick }) => {
-  const [cursor, setCursor] = useState(() => dayjs().startOf('month'));
-
-  if (!isOpen) return null;
-
-  const start = cursor.startOf('week');
-  const end = cursor.endOf('month').endOf('week');
-  const days = [];
-  let d = start;
-  while (d.isBefore(end) || d.isSame(end, 'day')) {
-    days.push(d);
-    d = d.add(1, 'day');
-  }
-
-  const eventMap = new Map();
-  for (const e of events) {
-    const k = dayjs(e.date).format('YYYY-MM-DD');
-    const arr = eventMap.get(k) || [];
-    arr.push(e);
-    eventMap.set(k, arr);
-  }
-
-  const getStatusColor = (status) => {
-    if (status === 'en_retard') return 'bg-red-100 text-red-700';
-    if (status === 'en_cours_30') return 'bg-amber-100 text-amber-700';
-    return 'bg-emerald-100 text-emerald-700';
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden animate-slideUp max-h-[90vh] flex flex-col">
-        <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-white/20 rounded-xl">
-                <Calendar size={24} />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold">Calendrier des controles</h2>
-                <p className="text-blue-200 text-sm">Visualisez les prochains controles</p>
-              </div>
-            </div>
-            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg">
-              <X size={24} />
-            </button>
-          </div>
-        </div>
-
-        <div className="p-6 overflow-y-auto flex-1">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-lg text-gray-900">{cursor.format('MMMM YYYY')}</h3>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCursor(cursor.subtract(1, 'month'))}
-                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
-              >
-                Precedent
-              </button>
-              <button
-                onClick={() => setCursor(dayjs().startOf('month'))}
-                className="px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-sm font-medium"
-              >
-                Aujourd'hui
-              </button>
-              <button
-                onClick={() => setCursor(cursor.add(1, 'month'))}
-                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm"
-              >
-                Suivant
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-2">
-            {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((l) => (
-              <div key={l} className="px-2 py-1 text-center font-medium">{l}</div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-1">
-            {days.map((day) => {
-              const key = day.format('YYYY-MM-DD');
-              const dayEvents = eventMap.get(key) || [];
-              const isCurMonth = day.month() === cursor.month();
-              const isToday = day.isSame(dayjs(), 'day');
-
-              return (
-                <button
-                  key={key}
-                  onClick={() => dayEvents.length > 0 && onDayClick?.({ date: key, events: dayEvents })}
-                  disabled={dayEvents.length === 0}
-                  className={`
-                    border rounded-lg p-2 text-left min-h-[80px] transition-all
-                    ${isCurMonth ? 'bg-white' : 'bg-gray-50 text-gray-400'}
-                    ${isToday ? 'ring-2 ring-blue-500' : ''}
-                    ${dayEvents.length > 0 ? 'hover:border-blue-300 hover:shadow-sm cursor-pointer' : 'cursor-default'}
-                  `}
-                >
-                  <div className={`text-xs mb-1 font-medium ${isToday ? 'text-blue-600' : ''}`}>
-                    {day.format('D')}
-                  </div>
-                  <div className="flex flex-wrap gap-0.5">
-                    {dayEvents.slice(0, 3).map((ev, i) => (
-                      <span
-                        key={i}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium truncate max-w-full ${getStatusColor(ev.status)}`}
-                        title={ev.equipment_name}
-                      >
-                        {ev.equipment_name || ev.equipment_id}
-                      </span>
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <span className="text-[10px] text-gray-500 font-medium">+{dayEvents.length - 3}</span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 flex items-center gap-4 text-xs text-gray-500 border-t pt-4">
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-emerald-100"></span> A faire
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-amber-100"></span> Sous 30 jours
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-red-100"></span> En retard
-            </span>
-          </div>
         </div>
       </div>
     </div>
@@ -1104,6 +966,15 @@ const DetailPanel = ({
           <MapPin size={18} />
           {isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
         </button>
+        <a
+          href={api.mobileEquipment.qrcodesUrl(equipment.id, '80,120,200')}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full py-3 px-4 rounded-xl bg-purple-100 text-purple-700 font-medium hover:bg-purple-200 flex items-center justify-center gap-2 transition-all"
+        >
+          <Printer size={18} />
+          Imprimer QR Code
+        </a>
         <button
           onClick={() => onDelete(equipment)}
           className="w-full py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100 flex items-center justify-center gap-2 transition-all"
@@ -1416,8 +1287,6 @@ export default function MobileEquipments() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [showCalendarModal, setShowCalendarModal] = useState(false);
-  const [calendarEvents, setCalendarEvents] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -1534,18 +1403,6 @@ export default function MobileEquipments() {
     }
   }, []);
 
-  // Load calendar events
-  const loadCalendar = useCallback(async () => {
-    try {
-      const res = await api.mobileEquipment.calendar?.() || {};
-      const events = Array.isArray(res?.events) ? res.events : [];
-      setCalendarEvents(events);
-    } catch (err) {
-      console.error('Load calendar error:', err);
-      setCalendarEvents([]);
-    }
-  }, []);
-
   // Effects
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -1560,13 +1417,6 @@ export default function MobileEquipments() {
     loadPlacements();
     loadControlStatuses();
   }, [loadEquipments, loadCategories, loadSettings, loadPlacements, loadControlStatuses]);
-
-  // Load calendar when modal opens
-  useEffect(() => {
-    if (showCalendarModal) {
-      loadCalendar();
-    }
-  }, [showCalendarModal, loadCalendar]);
 
   // URL params handling
   useEffect(() => {
@@ -1814,13 +1664,6 @@ export default function MobileEquipments() {
 
           {/* Actions */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowCalendarModal(true)}
-              className="p-2 hover:bg-gray-100 rounded-lg text-gray-600"
-              title="Calendrier des controles"
-            >
-              <Calendar size={20} />
-            </button>
             <button
               onClick={() => setShowSettingsModal(true)}
               className="p-2 hover:bg-purple-100 rounded-lg text-purple-600"
@@ -2115,18 +1958,6 @@ export default function MobileEquipments() {
         categories={categories}
         onCategoriesChange={loadCategories}
         showToast={showToast}
-      />
-
-      <CalendarModal
-        isOpen={showCalendarModal}
-        onClose={() => setShowCalendarModal(false)}
-        events={calendarEvents}
-        onDayClick={(day) => {
-          setShowCalendarModal(false);
-          if (day.events?.[0]?.equipment_id) {
-            handleSelectEquipment({ id: day.events[0].equipment_id });
-          }
-        }}
       />
 
       {/* Report Modal */}
