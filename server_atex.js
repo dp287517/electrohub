@@ -4287,28 +4287,30 @@ app.get("/api/atex/drpce", async (req, res) => {
     `);
 
     // 4b. Récupérer les stats PE (Presse-Étoupes)
+    // IMPORTANT: Utiliser JOIN avec cable_gland_baskets pour le filtrage car les colonnes
+    // company_id/site_id peuvent ne pas être renseignées dans photos/items
     let peStatsData = { total_baskets: 0, total_photos: 0, total_glands: 0, compliant_glands: 0, non_compliant_glands: 0 };
     let peNonCompliantList = [];
     try {
       const peStatsRes = await pool.query(`
         SELECT
           (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
-          (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands
+          (SELECT COUNT(*) FROM cable_gland_photos p JOIN cable_gland_baskets b ON p.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_photos,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_glands,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'ok' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as compliant_glands,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'issue' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as non_compliant_glands
       `, [companyId, siteId]);
       if (peStatsRes.rows[0]) peStatsData = peStatsRes.rows[0];
 
-      // Get non-compliant PE for the report
+      // Get non-compliant PE for the report (filtrage via basket)
       const peNcRes = await pool.query(`
         SELECT i.reference, i.type, i.condition, i.notes, i.atex_marking,
                b.name as basket_name, b.building, b.zone_name
         FROM cable_gland_items i
         JOIN cable_gland_baskets b ON b.id = i.basket_id
         WHERE i.compliance_status = 'issue'
-          AND ($1::int IS NULL OR i.company_id = $1)
-          AND ($2::int IS NULL OR i.site_id = $2)
+          AND ($1::int IS NULL OR b.company_id = $1)
+          AND ($2::int IS NULL OR b.site_id = $2)
         ORDER BY b.building, b.zone_name, i.created_at DESC
         LIMIT 50
       `, [companyId, siteId]);
@@ -5311,28 +5313,30 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     const { rows: subareas } = await pool.query(`SELECT * FROM atex_subareas ORDER BY logical_name, name`);
 
     // Récupérer les stats PE (Presse-Étoupes)
+    // IMPORTANT: Utiliser JOIN avec cable_gland_baskets pour le filtrage car les colonnes
+    // company_id/site_id peuvent ne pas être renseignées dans photos/items
     let peStatsData = { total_baskets: 0, total_photos: 0, total_glands: 0, compliant_glands: 0, non_compliant_glands: 0 };
     let peNonCompliantList = [];
     try {
       const peStatsRes = await pool.query(`
         SELECT
           (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
-          (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
-          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands
+          (SELECT COUNT(*) FROM cable_gland_photos p JOIN cable_gland_baskets b ON p.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_photos,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_glands,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'ok' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as compliant_glands,
+          (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'issue' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as non_compliant_glands
       `, [companyId, siteId]);
       if (peStatsRes.rows[0]) peStatsData = peStatsRes.rows[0];
 
-      // Get non-compliant PE for the report
+      // Get non-compliant PE for the report (filtrage via basket)
       const peNcRes = await pool.query(`
         SELECT i.reference, i.type, i.condition, i.notes, i.atex_marking,
                b.name as basket_name, b.building, b.zone_name
         FROM cable_gland_items i
         JOIN cable_gland_baskets b ON b.id = i.basket_id
         WHERE i.compliance_status = 'issue'
-          AND ($1::int IS NULL OR i.company_id = $1)
-          AND ($2::int IS NULL OR i.site_id = $2)
+          AND ($1::int IS NULL OR b.company_id = $1)
+          AND ($2::int IS NULL OR b.site_id = $2)
         ORDER BY b.building, b.zone_name, i.created_at DESC
         LIMIT 50
       `, [companyId, siteId]);
@@ -6651,13 +6655,14 @@ app.get("/api/atex/cable-glands/analysis/pending", async (req, res) => {
     const companyId = tenant.companyId || null;
     const siteId = tenant.siteId || null;
 
+    // Utiliser JOIN avec cable_gland_baskets pour le filtrage
     const { rows } = await pool.query(`
       SELECT q.*, b.name as basket_name
       FROM cable_gland_analysis_queue q
-      LEFT JOIN cable_gland_baskets b ON b.id = q.basket_id
+      JOIN cable_gland_baskets b ON b.id = q.basket_id
       WHERE q.status IN ('pending', 'processing')
-        AND ($1::int IS NULL OR q.company_id = $1)
-        AND ($2::int IS NULL OR q.site_id = $2)
+        AND ($1::int IS NULL OR b.company_id = $1)
+        AND ($2::int IS NULL OR b.site_id = $2)
       ORDER BY q.created_at DESC
     `, [companyId, siteId]);
 
@@ -6675,17 +6680,18 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
     const companyId = tenant.companyId || null;
     const siteId = tenant.siteId || null;
 
-    // Basic stats
+    // Basic stats - utiliser JOIN avec cable_gland_baskets pour le filtrage car les colonnes
+    // company_id/site_id peuvent ne pas être renseignées dans photos/items/queue
     const stats = await pool.query(`
       SELECT
         (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
-        (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
-        (SELECT COUNT(*) FROM cable_gland_photos WHERE analysis_status = 'completed' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as analyzed_photos,
-        (SELECT COUNT(*) FROM cable_gland_photos WHERE analysis_status = 'pending' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_photos,
-        (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
-        (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
-        (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands,
-        (SELECT COUNT(*) FROM cable_gland_analysis_queue WHERE status IN ('pending', 'processing') AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_analyses
+        (SELECT COUNT(*) FROM cable_gland_photos p JOIN cable_gland_baskets b ON p.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_photos,
+        (SELECT COUNT(*) FROM cable_gland_photos p JOIN cable_gland_baskets b ON p.basket_id = b.id WHERE p.analysis_status = 'completed' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as analyzed_photos,
+        (SELECT COUNT(*) FROM cable_gland_photos p JOIN cable_gland_baskets b ON p.basket_id = b.id WHERE p.analysis_status = 'pending' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as pending_photos,
+        (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as total_glands,
+        (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'ok' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as compliant_glands,
+        (SELECT COUNT(*) FROM cable_gland_items i JOIN cable_gland_baskets b ON i.basket_id = b.id WHERE i.compliance_status = 'issue' AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as non_compliant_glands,
+        (SELECT COUNT(*) FROM cable_gland_analysis_queue q JOIN cable_gland_baskets b ON q.basket_id = b.id WHERE q.status IN ('pending', 'processing') AND ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)) as pending_analyses
     `, [companyId, siteId]);
 
     // Stats by building/zone
@@ -6706,7 +6712,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
       ORDER BY b.building, b.zone_name
     `, [companyId, siteId]);
 
-    // Non-compliant PE items with basket/plan info
+    // Non-compliant PE items with basket/plan info (filtrage via basket)
     const nonCompliant = await pool.query(`
       SELECT
         i.id,
@@ -6726,13 +6732,13 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
       JOIN cable_gland_baskets b ON b.id = i.basket_id
       LEFT JOIN cable_gland_photos p ON p.id = i.photo_id
       WHERE i.compliance_status = 'issue'
-        AND ($1::int IS NULL OR i.company_id = $1)
-        AND ($2::int IS NULL OR i.site_id = $2)
+        AND ($1::int IS NULL OR b.company_id = $1)
+        AND ($2::int IS NULL OR b.site_id = $2)
       ORDER BY i.created_at DESC
       LIMIT 20
     `, [companyId, siteId]);
 
-    // Recent analysis history
+    // Recent analysis history (filtrage via basket)
     const history = await pool.query(`
       SELECT
         q.id,
@@ -6747,7 +6753,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         b.zone_name
       FROM cable_gland_analysis_queue q
       JOIN cable_gland_baskets b ON b.id = q.basket_id
-      WHERE ($1::int IS NULL OR q.company_id = $1) AND ($2::int IS NULL OR q.site_id = $2)
+      WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)
       ORDER BY COALESCE(q.completed_at, q.started_at, q.created_at) DESC
       LIMIT 10
     `, [companyId, siteId]);
