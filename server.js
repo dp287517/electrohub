@@ -1435,6 +1435,61 @@ async function getAIContext(site) {
       console.error('[AI] Control schedules error:', e.message);
     }
 
+    // ========== MOBILE EQUIPMENT CHECKS ==========
+    try {
+      const mobileRes = await pool.query(`
+        SELECT c.id as check_id, c.equipment_id, c.due_date, c.closed_at,
+               e.id, e.name, e.code, e.building, e.floor, e.location,
+               e.category_id, cat.name as category_name
+        FROM me_checks c
+        JOIN me_equipments e ON e.id = c.equipment_id
+        LEFT JOIN me_categories cat ON cat.id = e.category_id
+        WHERE c.closed_at IS NULL
+        ORDER BY c.due_date NULLS LAST
+      `);
+
+      mobileRes.rows.forEach(check => {
+        const dueDate = check.due_date ? new Date(check.due_date) : null;
+
+        if (dueDate && dueDate < today) {
+          const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+          const controlItem = {
+            id: check.check_id,
+            equipmentId: check.equipment_id,
+            switchboard: check.name,  // For consistency with other controls
+            switchboardCode: check.code || 'N/A',
+            building: check.building || 'N/A',
+            floor: check.floor || 'N/A',
+            room: check.location || '',
+            template: check.category_name || 'Contrôle équipement mobile',
+            dueDate: dueDate.toISOString().split('T')[0],
+            dueDateFormatted: dueDate.toLocaleDateString('fr-FR'),
+            daysOverdue,
+            urgency: daysOverdue > 30 ? 'CRITIQUE' : daysOverdue > 7 ? 'URGENT' : 'ATTENTION',
+            equipmentType: 'mobile_equipment',
+            equipment: {
+              id: check.equipment_id,
+              name: check.name,
+              code: check.code,
+              building: check.building,
+              building_code: check.building,
+              floor: check.floor,
+              room: check.location,
+              location: check.location
+            }
+          };
+          context.controls.overdue++;
+          context.controls.overdueList.push(controlItem);
+          context.urgentItems.push({ type: 'control_overdue', urgency: controlItem.urgency, ...controlItem });
+        }
+      });
+
+      // Re-sort overdue by days (most overdue first)
+      context.controls.overdueList.sort((a, b) => b.daysOverdue - a.daysOverdue);
+    } catch (e) {
+      console.error('[AI] Mobile equipment checks error:', e.message);
+    }
+
     // ========== VSD EQUIPMENTS ==========
     try {
       const vsdRes = await pool.query(`
@@ -3278,21 +3333,63 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ==========================================================================
     const wantsMapFromContext = (
       (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('voir') || msgLower.includes('montre')) &&
-      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('localisation') || msgLower.includes('position'))
+      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('localisation') || msgLower.includes('position') ||
+       msgLower.includes('équipement') || msgLower.includes('retard'))
     );
 
     if (wantsMapFromContext && conversationHistory?.length > 0) {
       console.log('[AI] 🗺️ Map request with context detected');
 
-      // Look for equipment in recent conversation
+      // Look for equipment in recent conversation (single or list)
       const recentEquipmentMsg = [...conversationHistory].reverse().find(msg =>
-        msg.equipment || msg.locationEquipment || msg.equipmentList?.length === 1
+        msg.equipment || msg.locationEquipment || msg.equipmentList?.length > 0
       );
 
       if (recentEquipmentMsg) {
+        // Handle multiple equipment in a list
+        if (recentEquipmentMsg.equipmentList?.length > 1) {
+          const equipmentList = recentEquipmentMsg.equipmentList;
+          console.log(`[AI] 🗺️ Found ${equipmentList.length} equipment in context list`);
+
+          // Use the first equipment for the map display
+          const firstEquipment = equipmentList[0];
+          const equipmentType = firstEquipment.equipmentType || 'switchboard';
+
+          let response = `## 🗺️ Localisation des équipements\n\n`;
+          response += `**${equipmentList.length} équipements à contrôler:**\n\n`;
+          equipmentList.forEach((eq, i) => {
+            const typeEmoji = eq.equipmentType === 'mobile_equipment' ? '📱' : '🔌';
+            response += `${i + 1}. ${typeEmoji} **${eq.name}** — Bât. ${eq.building_code || 'N/A'}, ét. ${eq.floor || 'N/A'}\n`;
+          });
+          response += `\nVoici la localisation du premier équipement sur le plan :`;
+
+          return res.json({
+            message: response,
+            showMap: true,
+            locationEquipment: {
+              id: firstEquipment.id,
+              name: firstEquipment.name,
+              code: firstEquipment.code,
+              building_code: firstEquipment.building_code,
+              floor: firstEquipment.floor,
+              room: firstEquipment.room
+            },
+            locationEquipmentType: equipmentType,
+            equipmentList: equipmentList,
+            actions: equipmentList.slice(0, 3).map(eq => ({
+              label: `📍 ${eq.name.substring(0, 20)}`,
+              prompt: `Montre-moi ${eq.name} sur la carte`
+            })),
+            provider: 'system'
+          });
+        }
+
+        // Handle single equipment
         const equipment = recentEquipmentMsg.equipment || recentEquipmentMsg.locationEquipment ||
                          (recentEquipmentMsg.equipmentList?.[0]);
-        const equipmentType = recentEquipmentMsg.locationEquipmentType || recentEquipmentMsg.equipmentType || 'switchboard';
+        const equipmentType = recentEquipmentMsg.locationEquipmentType ||
+                             equipment?.equipmentType ||
+                             recentEquipmentMsg.equipmentType || 'switchboard';
 
         if (equipment) {
           console.log(`[AI] 🗺️ Found equipment in context: ${equipment.name} (${equipmentType})`);
@@ -5761,12 +5858,30 @@ function generateIntelligentFallback(message, ctx) {
 
     let response = '';
 
+    // Build equipment list for map display (include equipment data for subsequent map requests)
+    const equipmentList = [];
+
     if (overdueCount > 0) {
       response += `🚨 **${overdueCount} contrôle(s) en retard!**\n\n`;
       if (overdueList.length > 0) {
-        response += overdueList.slice(0, 5).map(c =>
-          `• **${c.switchboard}** (${c.switchboardCode})\n  📍 Bât. ${c.building}, ét. ${c.floor} | ⏰ ${c.daysOverdue}j de retard`
-        ).join('\n') + '\n\n';
+        response += overdueList.slice(0, 5).map(c => {
+          // Indicate if it's mobile equipment
+          const typeLabel = c.equipmentType === 'mobile_equipment' ? ' 📱' : '';
+          return `• **${c.switchboard}**${typeLabel} (${c.switchboardCode})\n  📍 Bât. ${c.building}, ét. ${c.floor} | ⏰ ${c.daysOverdue}j de retard`;
+        }).join('\n') + '\n\n';
+
+        // Build equipment list for map context
+        overdueList.slice(0, 5).forEach(c => {
+          equipmentList.push({
+            id: c.equipment?.id || c.equipmentId || c.switchboardId,
+            name: c.switchboard,
+            code: c.switchboardCode,
+            building_code: c.building,
+            floor: c.floor,
+            room: c.room,
+            equipmentType: c.equipmentType || 'switchboard'
+          });
+        });
       }
     }
 
@@ -5790,14 +5905,32 @@ function generateIntelligentFallback(message, ctx) {
         `🏢 ${ctx.switchboards?.count || 0} armoires électriques sur ${summary.totalBuildings || 0} bâtiments.`;
     }
 
+    // Actions with map navigation for overdue equipment
+    const actions = [
+      { label: "Voir par bâtiment", prompt: "Répartition par bâtiment" },
+      { label: "ATEX", prompt: "Situation ATEX" }
+    ];
+
+    // Add map action if there are overdue items
+    if (equipmentList.length > 0) {
+      actions.unshift({ label: "🗺️ Voir sur la carte", prompt: "Montre-moi la carte des équipements en retard" });
+    }
+
+    // If there's exactly one overdue item, include it for direct map display
+    const singleEquipment = equipmentList.length === 1 ? equipmentList[0] : null;
+
     return {
       message: response,
-      actions: [
-        { label: "Voir par bâtiment", prompt: "Répartition par bâtiment" },
-        { label: "ATEX", prompt: "Situation ATEX" }
-      ],
+      actions,
       chart: autoGenerateChart(ctx, 'controls'),
-      provider: "Electro"
+      provider: "Electro",
+      // Include equipment data for subsequent map requests
+      equipmentList: equipmentList.length > 0 ? equipmentList : undefined,
+      // If single equipment, also include direct location data
+      ...(singleEquipment && {
+        locationEquipment: singleEquipment,
+        locationEquipmentType: singleEquipment.equipmentType
+      })
     };
   }
 
