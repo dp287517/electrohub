@@ -13,6 +13,7 @@ import {
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
+import AuditHistory from '../components/AuditHistory.jsx';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
@@ -951,6 +952,18 @@ const DetailPanel = ({
             }
           }}
         />
+
+        {/* Historique des modifications */}
+        {equipment.id && (
+          <AuditHistory
+            apiEndpoint="/api/mobile-equipment/audit/entity"
+            entityType="equipment"
+            entityId={equipment.id}
+            title="Historique des modifications"
+            maxHeight="250px"
+            showFilters={false}
+          />
+        )}
       </div>
 
       {/* Actions */}

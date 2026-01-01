@@ -4040,7 +4040,6 @@ function EquipmentDrawer({
               {/* Full audit history */}
               <AuditHistory
                 apiEndpoint="/api/atex/audit/equipment"
-                entityType="equipment"
                 entityId={editing.id}
                 title="Historique complet"
                 maxHeight="350px"
