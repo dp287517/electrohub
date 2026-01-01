@@ -550,6 +550,72 @@ app.get("/api/doors/health", async (_req, res) => {
 });
 
 // ------------------------------
+// Dashboard stats for main dashboard badges
+// ------------------------------
+app.get("/api/doors/dashboard", async (_req, res) => {
+  try {
+    // Get all doors with their check status
+    const { rows } = await pool.query(`
+      WITH last_closed AS (
+        SELECT DISTINCT ON (door_id)
+               door_id, status, closed_at
+          FROM fd_checks
+         WHERE closed_at IS NOT NULL
+         ORDER BY door_id, closed_at DESC
+      ),
+      pending_checks AS (
+        SELECT door_id, due_date, started_at, closed_at
+        FROM fd_checks
+        WHERE closed_at IS NULL
+      )
+      SELECT d.id,
+             pc.due_date,
+             pc.started_at IS NOT NULL AND pc.closed_at IS NULL AS has_started,
+             CASE WHEN lc.status = 'nc' THEN 'non_conforme'
+                  WHEN lc.status = 'ok' THEN 'conforme'
+                  ELSE NULL END AS door_state
+      FROM fd_doors d
+      LEFT JOIN last_closed lc ON lc.door_id = d.id
+      LEFT JOIN pending_checks pc ON pc.door_id = d.id
+    `);
+
+    const today = new Date(todayISO());
+    let total = 0, aFaire = 0, enCours = 0, enRetard = 0, nonConforme = 0;
+
+    for (const r of rows) {
+      total++;
+      // Compute status
+      let status = STATUS.A_FAIRE;
+      if (r.due_date) {
+        const due = new Date(r.due_date);
+        const days = Math.ceil((due - today) / 86400000);
+        if (days < 0) status = STATUS.EN_RETARD;
+        else if (days <= 30) status = STATUS.EN_COURS;
+      }
+
+      if (status === STATUS.A_FAIRE) aFaire++;
+      else if (status === STATUS.EN_COURS) enCours++;
+      else if (status === STATUS.EN_RETARD) enRetard++;
+
+      if (r.door_state === 'non_conforme') nonConforme++;
+    }
+
+    res.json({
+      ok: true,
+      total,
+      aFaire,
+      enCours,
+      enRetard,
+      nonConforme,
+      // Badge value: overdue + non-conforming doors
+      pendingAttention: enRetard + nonConforme
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ------------------------------
 // Debug identité
 // ------------------------------
 app.get("/api/doors/_debug_identity", (req, res) => {

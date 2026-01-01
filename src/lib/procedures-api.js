@@ -752,6 +752,12 @@ export async function sendSignatureReminders() {
   return response.json();
 }
 
+// Get dashboard stats for main dashboard badges
+export async function getDashboardStats() {
+  const response = await fetchWithAuth(`${API_BASE}/dashboard`);
+  return response.json();
+}
+
 // ==================== CONSTANTS ====================
 
 export const RISK_LEVELS = {

@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { getAllowedApps } from '../lib/permissions';
 import { api } from '../lib/api';
+import { getDashboardStats as getProceduresDashboard } from '../lib/procedures-api';
 import WeatherBackground from '../components/WeatherBackground';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
 import StoryBrief from '../components/StoryBrief';
@@ -351,6 +352,8 @@ export default function Dashboard() {
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
   const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0, overdueByEquipment: {}, pendingByEquipment: {} });
+  const [proceduresStats, setProceduresStats] = useState({ pendingAttention: 0 });
+  const [doorsStats, setDoorsStats] = useState({ pendingAttention: 0 });
   const [briefData, setBriefData] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [equipmentData, setEquipmentData] = useState([]);
@@ -366,8 +369,10 @@ export default function Dashboard() {
       fetch('/api/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
       api.switchboardControls.dashboard().catch(() => null),
       aiAssistant.getMorningBrief().catch(() => null),
-      aiAssistant.getHistoricalStats(7).catch(() => null)
-    ]).then(([depts, sitesRes, me, controls, brief, historical]) => {
+      aiAssistant.getHistoricalStats(7).catch(() => null),
+      getProceduresDashboard().catch(() => null),
+      api.doors.dashboard().catch(() => null)
+    ]).then(([depts, sitesRes, me, controls, brief, historical, procedures, doors]) => {
       setDepartments(depts.departments || []);
       setSites(sitesRes.sites || []);
 
@@ -386,6 +391,14 @@ export default function Dashboard() {
           overdueByEquipment: controls.stats?.overdueByEquipment || {},
           pendingByEquipment: controls.stats?.pendingByEquipment || {}
         });
+      }
+
+      if (procedures) {
+        setProceduresStats(procedures);
+      }
+
+      if (doors) {
+        setDoorsStats(doors);
       }
 
       if (brief) {
@@ -643,9 +656,13 @@ export default function Dashboard() {
                 <span className="text-sm text-gray-400 font-medium">{tools.length} apps</span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
-                {tools.map((app, i) => (
-                  <AppCard key={app.id} {...app} index={i} badge={app.id === 'controls' ? stats.overdue : 0} />
-                ))}
+                {tools.map((app, i) => {
+                  let badge = 0;
+                  if (app.id === 'controls') badge = stats.overdue;
+                  else if (app.id === 'procedures') badge = proceduresStats.pendingAttention || 0;
+                  else if (app.id === 'doors') badge = doorsStats.pendingAttention || 0;
+                  return <AppCard key={app.id} {...app} index={i} badge={badge} />;
+                })}
               </div>
             </section>
           )}

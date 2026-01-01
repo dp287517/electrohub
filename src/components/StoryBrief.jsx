@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { aiAssistant } from '../lib/ai-assistant';
+import { getDashboardStats as getProceduresDashboard } from '../lib/procedures-api';
 
 // Icon mapping for datahub categories
 const ICON_MAP = {
@@ -160,6 +161,8 @@ export default function StoryBrief({
   const [briefData, setBriefData] = useState(null);
   const [datahubCategories, setDatahubCategories] = useState([]);
   const [datahubStats, setDatahubStats] = useState(null);
+  const [proceduresStats, setProceduresStats] = useState(null);
+  const [doorsStats, setDoorsStats] = useState(null);
   const containerRef = useRef(null);
   const touchStartX = useRef(0);
 
@@ -168,15 +171,19 @@ export default function StoryBrief({
     const loadData = async () => {
       setIsLoading(true);
       try {
-        const [brief, categories, stats] = await Promise.all([
+        const [brief, categories, stats, procedures, doors] = await Promise.all([
           aiAssistant.getMorningBrief().catch(() => null),
           api.datahub.listCategories().catch(() => ({ categories: [] })),
-          api.datahub.stats().catch(() => null)
+          api.datahub.stats().catch(() => null),
+          getProceduresDashboard().catch(() => null),
+          api.doors.dashboard().catch(() => null)
         ]);
 
         setBriefData(brief);
         setDatahubCategories(categories?.categories || []);
         setDatahubStats(stats);
+        setProceduresStats(procedures);
+        setDoorsStats(doors);
       } catch (err) {
         console.error('StoryBrief load error:', err);
       } finally {
@@ -361,7 +368,144 @@ export default function StoryBrief({
       )
     },
 
-    // Slide 3: Equipment Types
+    // Slide 3: Procedures
+    {
+      id: 'procedures',
+      gradient: 'from-violet-600 via-purple-600 to-indigo-600',
+      content: (
+        <div className="flex-1 flex flex-col p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+              <FileText size={24} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white">Procédures</h2>
+              <p className="text-white/70">Méthodes opérationnelles</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <StatBubble
+              icon={FileText}
+              value={proceduresStats?.draft || 0}
+              label="Brouillons"
+              onClick={() => navigateTo('/app/procedures?status=draft')}
+              delay={100}
+            />
+            <StatBubble
+              icon={Clock}
+              value={proceduresStats?.review || 0}
+              label="En révision"
+              onClick={() => navigateTo('/app/procedures?status=review')}
+              delay={200}
+            />
+            <StatBubble
+              icon={CheckCircle}
+              value={proceduresStats?.approved || 0}
+              label="Approuvées"
+              onClick={() => navigateTo('/app/procedures?status=approved')}
+              delay={300}
+            />
+            <StatBubble
+              icon={AlertTriangle}
+              value={proceduresStats?.highRisk || 0}
+              label="Haut risque"
+              onClick={() => navigateTo('/app/procedures')}
+              delay={400}
+            />
+          </div>
+
+          {(proceduresStats?.pendingAttention || 0) > 0 && (
+            <div className="bg-purple-500/30 backdrop-blur-sm border border-purple-400/50 rounded-xl p-4 animate-pulse-slow">
+              <div className="flex items-center gap-3">
+                <FileText size={24} className="text-purple-200" />
+                <div>
+                  <p className="text-white font-semibold">Procédures à traiter</p>
+                  <p className="text-white/80 text-sm">
+                    {proceduresStats.pendingAttention} procédure(s) en attente de finalisation
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    },
+
+    // Slide 4: Fire Doors
+    {
+      id: 'doors',
+      gradient: 'from-rose-500 via-pink-500 to-red-500',
+      content: (
+        <div className="flex-1 flex flex-col p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+              <DoorOpen size={24} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white">Portes Coupe-Feu</h2>
+              <p className="text-white/70">État des contrôles</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <StatBubble
+              icon={CheckCircle}
+              value={doorsStats?.aFaire || 0}
+              label="À faire"
+              onClick={() => navigateTo('/app/doors?status=a_faire')}
+              delay={100}
+            />
+            <StatBubble
+              icon={Clock}
+              value={doorsStats?.enCours || 0}
+              label="Sous 30 jours"
+              onClick={() => navigateTo('/app/doors?status=en_cours_30')}
+              delay={200}
+            />
+            <StatBubble
+              icon={AlertTriangle}
+              value={doorsStats?.enRetard || 0}
+              label="En retard"
+              onClick={() => navigateTo('/app/doors?status=en_retard')}
+              delay={300}
+            />
+            <StatBubble
+              icon={Shield}
+              value={doorsStats?.nonConforme || 0}
+              label="Non conformes"
+              onClick={() => navigateTo('/app/doors?door_state=non_conforme')}
+              delay={400}
+            />
+          </div>
+
+          {(doorsStats?.enRetard || 0) > 0 && (
+            <div className="bg-red-500/30 backdrop-blur-sm border border-red-400/50 rounded-xl p-4 animate-pulse-slow">
+              <div className="flex items-center gap-3">
+                <AlertTriangle size={24} className="text-red-200" />
+                <div>
+                  <p className="text-white font-semibold">Contrôles urgents</p>
+                  <p className="text-white/80 text-sm">
+                    {doorsStats.enRetard} porte(s) avec contrôle en retard
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-auto bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
+            <div className="flex items-center justify-between">
+              <span className="text-white/70">Total portes</span>
+              <span className="text-2xl font-bold text-white">
+                <AnimatedNumber value={doorsStats?.total || 0} />
+              </span>
+            </div>
+          </div>
+        </div>
+      )
+    },
+
+    // Slide 5: Equipment Types
     {
       id: 'equipment',
       gradient: 'from-amber-500 via-orange-500 to-red-500',
