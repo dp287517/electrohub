@@ -714,14 +714,74 @@ const DetailPanel = ({
           </div>
         </div>
 
-        {/* Start Check Button */}
+        {/* Start/Continue Check Button */}
         <button
           onClick={() => onStartCheck(door)}
-          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white font-medium flex items-center justify-center gap-2 hover:from-rose-600 hover:to-red-700 transition-all"
+          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
+            door.current_check?.items?.length > 0
+              ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700 animate-pulse'
+              : 'bg-gradient-to-r from-rose-500 to-red-600 text-white hover:from-rose-600 hover:to-red-700'
+          }`}
         >
           <ClipboardCheck size={18} />
-          Lancer un contrôle
+          {door.current_check?.items?.length > 0 ? 'Continuer le contrôle' : 'Lancer un contrôle'}
         </button>
+
+        {/* Current Check Items Preview - Clickable */}
+        {door.current_check?.items?.length > 0 && (
+          <div
+            onClick={() => onStartCheck(door)}
+            className="bg-amber-50 rounded-xl p-4 border-2 border-amber-200 cursor-pointer hover:bg-amber-100 transition-colors"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-amber-900 flex items-center gap-2">
+                <ClipboardCheck size={16} className="text-amber-600" />
+                Contrôle en cours
+              </h3>
+              <span className="text-xs bg-amber-200 text-amber-800 px-2 py-1 rounded-full">
+                Cliquez pour continuer →
+              </span>
+            </div>
+            <div className="space-y-2">
+              {door.current_check.items.slice(0, 5).map((item, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-sm">
+                  {item.value === 'conforme' ? (
+                    <CheckCircle size={14} className="text-emerald-500" />
+                  ) : item.value === 'non_conforme' ? (
+                    <XCircle size={14} className="text-red-500" />
+                  ) : item.value === 'na' ? (
+                    <HelpCircle size={14} className="text-gray-400" />
+                  ) : (
+                    <div className="w-3.5 h-3.5 rounded-full border-2 border-amber-400 bg-amber-100" />
+                  )}
+                  <span className={`truncate flex-1 ${!item.value ? 'text-amber-700 font-medium' : 'text-gray-700'}`}>
+                    {item.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {/* Progress indicator */}
+            {(() => {
+              const filled = door.current_check.items.filter(i => i.value).length;
+              const total = door.current_check.items.length;
+              const pct = Math.round((filled / total) * 100);
+              return (
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <div className="flex items-center justify-between text-xs text-amber-700 mb-1">
+                    <span>{filled} / {total} points complétés</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="h-2 bg-amber-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-amber-500 rounded-full transition-all"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         {/* Location */}
         <div className="bg-gray-50 rounded-xl p-4">
@@ -744,32 +804,6 @@ const DetailPanel = ({
             </div>
           </div>
         </div>
-
-        {/* Current Check Items Preview */}
-        {door.current_check?.items?.length > 0 && (
-          <div className="bg-gray-50 rounded-xl p-4">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
-              <ClipboardCheck size={16} className="text-rose-500" />
-              Contrôle en cours
-            </h3>
-            <div className="space-y-2">
-              {door.current_check.items.slice(0, 5).map((item, idx) => (
-                <div key={idx} className="flex items-center gap-2 text-sm">
-                  {item.value === 'conforme' ? (
-                    <CheckCircle size={14} className="text-emerald-500" />
-                  ) : item.value === 'non_conforme' ? (
-                    <XCircle size={14} className="text-red-500" />
-                  ) : item.value === 'na' ? (
-                    <HelpCircle size={14} className="text-gray-400" />
-                  ) : (
-                    <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />
-                  )}
-                  <span className="text-gray-700 truncate flex-1">{item.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* History Toggle */}
         <div className="bg-gray-50 rounded-xl p-4">
