@@ -350,7 +350,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
-  const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0 });
+  const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0, overdueByEquipment: {}, pendingByEquipment: {} });
   const [briefData, setBriefData] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [equipmentData, setEquipmentData] = useState([]);
@@ -382,7 +382,9 @@ export default function Dashboard() {
           overdue: controls.stats?.overdue || controls.overdue_count || 0,
           pending: controls.stats?.pending || controls.pending_count || 0,
           completed: controls.stats?.completed_this_week || 0,
-          total: controls.stats?.total || 0
+          total: controls.stats?.total || 0,
+          overdueByEquipment: controls.stats?.overdueByEquipment || {},
+          pendingByEquipment: controls.stats?.pendingByEquipment || {}
         });
       }
 
@@ -410,6 +412,24 @@ export default function Dashboard() {
 
   const allowedApps = useMemo(() => getAllowedApps(user?.email), [user?.email]);
   const filterApps = apps => apps.filter(a => allowedApps.some(x => x.route === a.to));
+
+  // Mapping app IDs to equipment_type for control badges
+  const appToEquipmentType = {
+    switchboards: ['switchboard', 'device'],
+    vsd: ['vsd'],
+    meca: ['meca'],
+    mobile: ['mobile_equipment'],
+    hv: ['hv'],
+    glo: ['glo'],
+    datahub: ['datahub']
+  };
+
+  // Get overdue count for an app based on its equipment types
+  const getOverdueForApp = (appId) => {
+    const types = appToEquipmentType[appId];
+    if (!types) return 0;
+    return types.reduce((sum, type) => sum + (stats.overdueByEquipment[type] || 0), 0);
+  };
 
   const equipment = filterApps(allApps.equipment);
   const analysis = filterApps(allApps.analysis);
@@ -588,7 +608,7 @@ export default function Dashboard() {
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
                 {equipment.map((app, i) => (
-                  <AppCard key={app.id} {...app} index={i} badge={app.id === 'switchboards' ? stats.overdue : 0} />
+                  <AppCard key={app.id} {...app} index={i} badge={getOverdueForApp(app.id)} />
                 ))}
               </div>
             </section>

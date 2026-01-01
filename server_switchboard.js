@@ -6833,16 +6833,28 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    // Pending controls
+    // Pending controls (global + by equipment type)
     const pending = await quickQuery(`
       SELECT COUNT(*) as count FROM control_schedules
       WHERE site = $1 AND next_due_date >= CURRENT_DATE AND status != 'done'
     `, [site]);
 
-    // Overdue controls
+    const pendingByType = await quickQuery(`
+      SELECT equipment_type, COUNT(*) as count FROM control_schedules
+      WHERE site = $1 AND next_due_date >= CURRENT_DATE AND status != 'done'
+      GROUP BY equipment_type
+    `, [site]);
+
+    // Overdue controls (global + by equipment type)
     const overdue = await quickQuery(`
       SELECT COUNT(*) as count FROM control_schedules
       WHERE site = $1 AND next_due_date < CURRENT_DATE AND status != 'done'
+    `, [site]);
+
+    const overdueByType = await quickQuery(`
+      SELECT equipment_type, COUNT(*) as count FROM control_schedules
+      WHERE site = $1 AND next_due_date < CURRENT_DATE AND status != 'done'
+      GROUP BY equipment_type
     `, [site]);
 
     // Recent completions (last 30 days)
@@ -6901,12 +6913,25 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LIMIT 20
     `, [site]);
 
+    // Build stats by equipment type
+    const overdueByEquipment = {};
+    const pendingByEquipment = {};
+    for (const row of overdueByType.rows) {
+      overdueByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
+    }
+    for (const row of pendingByType.rows) {
+      pendingByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
+    }
+
     res.json({
       stats: {
         pending: Number(pending.rows[0]?.count || 0),
         overdue: Number(overdue.rows[0]?.count || 0),
         completed_30d: Number(recent.rows[0]?.count || 0),
-        templates: Number(templates.rows[0]?.count || 0)
+        templates: Number(templates.rows[0]?.count || 0),
+        // Stats by equipment type for dashboard badges
+        overdueByEquipment,
+        pendingByEquipment
       },
       upcoming: upcoming.rows,
       overdue_list: overdueList.rows
