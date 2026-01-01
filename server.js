@@ -1370,7 +1370,7 @@ async function getAIContext(site) {
       // - vsd_equipments: name, building, zone (no code, no floor)
       // - meca_equipments: name, tag, building, floor, location
       // - hv_equipments: name, code, building_code, floor, room
-      // - glo_equipments: name, tag, building, floor, local
+      // - glo_equipments: name, tag, building, floor, location
       // - dh_items: name, code, building, floor, location
       const ctrlRes = await pool.query(`
         SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id, cs.meca_equipment_id,
@@ -1387,8 +1387,8 @@ async function getAIContext(site) {
                meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.location as meca_room,
                -- HV data (has all standard columns)
                hv.name as hv_name, hv.code as hv_code, hv.building_code as hv_building, hv.floor as hv_floor, hv.room as hv_room,
-               -- GLO data (uses tag for code, local for room)
-               glo.name as glo_name, glo.tag as glo_code, glo.building as glo_building, glo.floor as glo_floor, glo.local as glo_room,
+               -- GLO data (uses tag for code, location for room)
+               glo.name as glo_name, glo.tag as glo_code, glo.building as glo_building, glo.floor as glo_floor, glo.location as glo_room,
                -- Datahub data (uses location for room)
                dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.location as dh_room
         FROM control_schedules cs
