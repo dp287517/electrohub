@@ -1365,20 +1365,35 @@ async function getAIContext(site) {
 
     // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
-      // Query supports switchboard and mobile equipment types
-      // Note: vsd/meca have type mismatch (INTEGER vs UUID) so we don't JOIN them
+      // Query supports ALL equipment types using ::text casting to avoid INTEGER vs UUID mismatch
       const ctrlRes = await pool.query(`
-        SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.equipment_type,
+        SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id, cs.meca_equipment_id,
+               cs.hv_equipment_id, cs.glo_equipment_id, cs.datahub_equipment_id, cs.equipment_type,
                cs.next_due_date, cs.status, cs.last_control_date,
                ct.name as template_name, ct.id as template_id, ct.frequency_months,
                -- Switchboard data
                s.name as switchboard_name, s.code as switchboard_code, s.building_code as s_building, s.floor as s_floor, s.room as s_room,
-               -- Mobile equipment data (from me_equipments - UUID type matches)
-               me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location
+               -- Mobile equipment data
+               me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location,
+               -- VSD data
+               vsd.name as vsd_name, vsd.code as vsd_code, vsd.building_code as vsd_building, vsd.floor as vsd_floor, vsd.local as vsd_room,
+               -- MECA data
+               meca.name as meca_name, meca.code as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.local as meca_room,
+               -- HV data
+               hv.name as hv_name, hv.code as hv_code, hv.building as hv_building, hv.floor as hv_floor, hv.room as hv_room,
+               -- GLO data
+               glo.name as glo_name, glo.tag as glo_code, glo.building as glo_building, glo.floor as glo_floor, glo.local as glo_room,
+               -- Datahub data
+               dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.room as dh_room
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
-        LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
+        LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
+        LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
+        LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
+        LEFT JOIN hv_equipments hv ON cs.hv_equipment_id::text = hv.id::text
+        LEFT JOIN glo_equipments glo ON cs.glo_equipment_id::text = glo.id::text
+        LEFT JOIN dh_items dh ON cs.datahub_equipment_id::text = dh.id::text
         WHERE cs.site = $1
         ORDER BY cs.next_due_date NULLS LAST
       `, [site]);
@@ -1404,13 +1419,44 @@ async function getAIContext(site) {
             eqId = ctrl.mobile_equipment_id;
             break;
           case 'vsd':
+            eqName = ctrl.vsd_name;
+            eqCode = ctrl.vsd_code;
+            eqBuilding = ctrl.vsd_building;
+            eqFloor = ctrl.vsd_floor;
+            eqRoom = ctrl.vsd_room;
+            eqId = ctrl.vsd_equipment_id;
+            break;
           case 'meca':
+            eqName = ctrl.meca_name;
+            eqCode = ctrl.meca_code;
+            eqBuilding = ctrl.meca_building;
+            eqFloor = ctrl.meca_floor;
+            eqRoom = ctrl.meca_room;
+            eqId = ctrl.meca_equipment_id;
+            break;
           case 'hv':
+            eqName = ctrl.hv_name;
+            eqCode = ctrl.hv_code;
+            eqBuilding = ctrl.hv_building;
+            eqFloor = ctrl.hv_floor;
+            eqRoom = ctrl.hv_room;
+            eqId = ctrl.hv_equipment_id;
+            break;
           case 'glo':
+            eqName = ctrl.glo_name;
+            eqCode = ctrl.glo_code;
+            eqBuilding = ctrl.glo_building;
+            eqFloor = ctrl.glo_floor;
+            eqRoom = ctrl.glo_room;
+            eqId = ctrl.glo_equipment_id;
+            break;
           case 'datahub':
-            // These have type mismatch (INTEGER vs UUID in their tables)
-            // Show type name for now - data lookup would require separate queries
-            eqName = `Équipement ${eqType.toUpperCase()}`;
+            eqName = ctrl.dh_name;
+            eqCode = ctrl.dh_code;
+            eqBuilding = ctrl.dh_building;
+            eqFloor = ctrl.dh_floor;
+            eqRoom = ctrl.dh_room;
+            eqId = ctrl.datahub_equipment_id;
             break;
           default: // switchboard
             eqName = ctrl.switchboard_name;
