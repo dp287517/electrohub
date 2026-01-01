@@ -1331,7 +1331,7 @@ async function getAIContext(site) {
     },
     vsd: { count: 0, list: [] },
     meca: { count: 0, list: [] },
-    atex: { totalEquipments: 0, ncCount: 0, conformeCount: 0, ncList: [], equipmentsByZone: {} },
+    atex: { totalEquipments: 0, ncCount: 0, conformeCount: 0, ncList: [], list: [], equipmentsByZone: {} },
     procedures: { count: 0, list: [], byCategory: {} },
     buildings: {},
     urgentItems: [],
@@ -1602,8 +1602,10 @@ async function getAIContext(site) {
       context.vsd.list = vsdRes.rows.map(v => ({
         ...v,
         power: v.power_kw,
+        equipmentType: 'vsd',
         lastControlFormatted: v.next_check_date ? new Date(v.next_check_date).toLocaleDateString('fr-FR') : 'Jamais'
       }));
+      console.log(`[AI] ⚙️ Loaded ${context.vsd.count} VSD equipment`);
     } catch (e) {
       console.error('[AI] VSD error:', e.message);
     }
@@ -1619,8 +1621,10 @@ async function getAIContext(site) {
       context.meca.count = mecaRes.rows.length;
       context.meca.list = mecaRes.rows.map(m => ({
         ...m,
-        type: m.equipment_type
+        type: m.equipment_type,
+        equipmentType: 'meca'
       }));
+      console.log(`[AI] 🔧 Loaded ${context.meca.count} MECA equipment`);
     } catch (e) {
       console.error('[AI] MECA error:', e.message);
     }
@@ -1652,6 +1656,22 @@ async function getAIContext(site) {
         `, [siteId]);
 
         context.atex.totalEquipments = atexRes.rows.length;
+
+        // Build list of all ATEX equipment for intelligent queries
+        context.atex.list = atexRes.rows.map(eq => ({
+          id: eq.id,
+          name: eq.name,
+          building: eq.building,
+          floor: eq.zone, // ATEX uses zone instead of floor
+          zone: eq.zone,
+          location: eq.zone,
+          type: eq.type || eq.equipment,
+          manufacturer: eq.manufacturer,
+          equipmentType: 'atex',
+          lastResult: eq.last_result,
+          lastCheckDate: eq.last_check_date
+        }));
+        console.log(`[AI] ⚠️ Loaded ${context.atex.totalEquipments} ATEX equipment`);
 
         atexRes.rows.forEach(eq => {
           // Count by zone
@@ -3952,6 +3972,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // INTELLIGENT EQUIPMENT TYPE QUERY - Detect equipment type (datahub, hv, glo, mobile, etc.)
     // ==========================================================================
     const equipmentTypeKeywords = {
+      switchboard: ['tableau', 'tableaux', 'armoire', 'armoires', 'switchboard', 'tdbt', 'tgbt', 'électrique', 'electrique'],
+      vsd: ['vsd', 'variateur', 'variateurs', 'variable speed', 'drive', 'convertisseur', 'convertisseurs de fréquence'],
+      meca: ['meca', 'méca', 'mécanique', 'mecanique', 'pompe', 'pompes', 'compresseur', 'ventilateur', 'moteur'],
+      atex: ['atex', 'zone atex', 'atmosphère explosive', 'explosive', 'zone explosive'],
       datahub: ['datahub', 'data hub', 'data-hub', 'dh'],
       hv: ['haute tension', 'hv', 'ht', 'high voltage', 'moyenne tension', 'mt'],
       glo: ['glo', 'groupe électrogène', 'generateur', 'onduleur', 'ups', 'batterie'],
@@ -3979,6 +4003,30 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       let typeIcon = '🔧';
 
       switch (detectedEquipmentType) {
+        case 'switchboard':
+          equipmentList = (dbContext.switchboards?.list || []).map(s => ({
+            ...s,
+            building: s.building_code,
+            equipmentType: 'switchboard'
+          }));
+          typeLabel = 'Tableaux Électriques';
+          typeIcon = '⚡';
+          break;
+        case 'vsd':
+          equipmentList = dbContext.vsd?.list || [];
+          typeLabel = 'VSD (Variateurs)';
+          typeIcon = '⚙️';
+          break;
+        case 'meca':
+          equipmentList = dbContext.meca?.list || [];
+          typeLabel = 'Mécanique';
+          typeIcon = '🔧';
+          break;
+        case 'atex':
+          equipmentList = dbContext.atex?.list || [];
+          typeLabel = 'ATEX';
+          typeIcon = '⚠️';
+          break;
         case 'datahub':
           equipmentList = dbContext.datahub?.list || [];
           typeLabel = 'DataHub';
