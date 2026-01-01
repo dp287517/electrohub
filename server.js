@@ -3791,7 +3791,7 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ==========================================================================
     const wantsBuildingMap = (
       (msgLower.includes('bâtiment') || msgLower.includes('batiment') || msgLower.match(/\bbat\.?\s*\d/i)) &&
-      (msgLower.includes('équipement') || msgLower.includes('tableau') || msgLower.includes('électrique')) &&
+      (msgLower.includes('équipement') || msgLower.includes('equipement') || msgLower.includes('tableau') || msgLower.includes('électrique') || msgLower.includes('electrique')) &&
       (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('montre') || msgLower.includes('voir'))
     );
 
@@ -3803,8 +3803,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                             msgLower.match(/\b(\d{2})\b/);
       const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
 
-      // Extract floor if mentioned
-      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i);
+      // Extract floor if mentioned (with or without keyword prefix)
+      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
+                         msgLower.match(/\b(sous-sol|ss)\b/i) ||
+                         msgLower.match(/\b(rdc|rc)\b/i);
       const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
 
       if (buildingCode) {
@@ -3963,12 +3965,14 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       msgLower.match(/\b[a-z]?\d{2}[a-z]?\b/)  // Building codes like "02", "B02", etc.
     );
 
-    // EQUIPMENT KEYWORDS: Words that indicate electrical equipment
+    // EQUIPMENT KEYWORDS: Words that indicate electrical equipment (with/without accents)
     const hasEquipmentKeyword = (
       msgLower.includes('tableau') || msgLower.includes('armoire') || msgLower.includes('tgbt') ||
-      msgLower.includes('équipement') || msgLower.includes('électrique') || msgLower.includes('vsd') ||
-      msgLower.includes('variateur') || msgLower.includes('atex') || msgLower.includes('td ') ||
-      msgLower.includes('distribution') || msgLower.includes('coffret') || msgLower.includes('datahub')
+      msgLower.includes('équipement') || msgLower.includes('equipement') ||
+      msgLower.includes('électrique') || msgLower.includes('electrique') ||
+      msgLower.includes('vsd') || msgLower.includes('variateur') || msgLower.includes('atex') ||
+      msgLower.includes('td ') || msgLower.includes('distribution') ||
+      msgLower.includes('coffret') || msgLower.includes('datahub')
     );
 
     // DIRECT BUILDING EQUIPMENT PATTERN: "équipement(s) du bâtiment X" or "bâtiment X équipement(s)"
@@ -3979,11 +3983,19 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
        msgLower.match(/bâtiment\s+\d/) || msgLower.match(/batiment\s+\d/))
     );
 
+    // DIRECT BUILDING QUERY: "bâtiment X" alone or with floor (without equipment keyword)
+    const isDirectBuildingQuery = (
+      !hasEquipmentKeyword &&
+      (msgLower.match(/^(?:bâtiment|batiment|bat\.?)\s*\d+/i) ||
+       msgLower.match(/^(?:bâtiment|batiment|bat\.?)\s*\d+\s*(?:étage|etage|sous-sol|ss|rdc|rc|\d+)/i))
+    );
+
     // Detect plan/building/navigation requests (BEFORE procedure logic)
-    // Now uses smarter detection: needs action + (location OR equipment) OR direct building equipment query
+    // Now uses smarter detection: needs action + (location OR equipment) OR direct building/equipment query
     const wantsPlanOrNavigation = (
       (hasActionKeyword && (hasLocationKeyword || hasEquipmentKeyword)) ||
-      isDirectBuildingEquipmentQuery
+      isDirectBuildingEquipmentQuery ||
+      isDirectBuildingQuery
     ) && !msgLower.includes('procédure') && !msgLower.includes('procedure') && !msgLower.includes('étape');
 
     if (wantsPlanOrNavigation) {
@@ -3994,8 +4006,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                            msgLower.match(/\b([a-z]?\d{2}[a-z]?)\b/);
       const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
 
-      // Extract floor if mentioned
-      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i);
+      // Extract floor if mentioned (with or without keyword prefix)
+      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
+                         msgLower.match(/\b(sous-sol|ss)\b/i) ||
+                         msgLower.match(/\b(rdc|rc)\b/i);
       const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
 
       // Query equipment in the building
