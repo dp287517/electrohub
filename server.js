@@ -1439,7 +1439,8 @@ async function getAIContext(site) {
     try {
       const mobileRes = await pool.query(`
         SELECT c.id as check_id, c.equipment_id, c.due_date, c.closed_at,
-               e.id, e.name, e.code, e.building, e.floor, e.location,
+               e.id as eq_id, e.name as eq_name, e.code as eq_code,
+               e.building as eq_building, e.floor as eq_floor, e.location as eq_location,
                e.category_id, cat.name as category_name
         FROM me_checks c
         JOIN me_equipments e ON e.id = c.equipment_id
@@ -1456,11 +1457,11 @@ async function getAIContext(site) {
           const controlItem = {
             id: check.check_id,
             equipmentId: check.equipment_id,
-            switchboard: check.name,  // For consistency with other controls
-            switchboardCode: check.code || 'N/A',
-            building: check.building || 'N/A',
-            floor: check.floor || 'N/A',
-            room: check.location || '',
+            switchboard: check.eq_name || 'Équipement mobile',  // Use aliased column
+            switchboardCode: check.eq_code || 'N/A',
+            building: check.eq_building || 'N/A',
+            floor: check.eq_floor || 'N/A',
+            room: check.eq_location || '',
             template: check.category_name || 'Contrôle équipement mobile',
             dueDate: dueDate.toISOString().split('T')[0],
             dueDateFormatted: dueDate.toLocaleDateString('fr-FR'),
@@ -1469,13 +1470,13 @@ async function getAIContext(site) {
             equipmentType: 'mobile',  // Must match MiniEquipmentPreview EQUIPMENT_CONFIGS key
             equipment: {
               id: check.equipment_id,
-              name: check.name,
-              code: check.code,
-              building: check.building,
-              building_code: check.building,
-              floor: check.floor,
-              room: check.location,
-              location: check.location
+              name: check.eq_name,
+              code: check.eq_code,
+              building: check.eq_building,
+              building_code: check.eq_building,
+              floor: check.eq_floor,
+              room: check.eq_location,
+              location: check.eq_location
             }
           };
           context.controls.overdue++;
@@ -3331,10 +3332,12 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ==========================================================================
     // MAP REQUEST WITH CONTEXT - User wants to see map of previously mentioned equipment
     // ==========================================================================
+    // Detect explicit map requests OR confirmations ("oui", "ok") after equipment was mentioned
+    const isConfirmation = /^(oui|ok|d'accord|yes|sure|affirmative|bien sûr|vas-y|go|montre|voir)\s*[!.?]*$/i.test(message.trim());
     const wantsMapFromContext = (
-      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('voir') || msgLower.includes('montre')) &&
+      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('voir') || msgLower.includes('montre') || isConfirmation) &&
       (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('localisation') || msgLower.includes('position') ||
-       msgLower.includes('équipement') || msgLower.includes('retard'))
+       msgLower.includes('équipement') || msgLower.includes('retard') || isConfirmation)
     );
 
     if (wantsMapFromContext && conversationHistory?.length > 0) {
