@@ -547,35 +547,72 @@ export default function MiniEquipmentPreview({
         const placedResponse = await config.api.placedIds();
         console.log('[MiniEquipmentPreview] Placed response:', placedResponse);
         const placedDetails = placedResponse?.data?.placed_details || placedResponse?.placed_details || {};
-        const placement = placedDetails[equipmentId];
-        console.log('[MiniEquipmentPreview] Looking for ID:', equipmentId, 'Found placement:', placement);
+
+        // Try to find placement - handle type mismatches (string vs number IDs)
+        let placement = placedDetails[equipmentId];
+        if (!placement && equipmentId != null) {
+          // Try with string key if numeric lookup failed
+          placement = placedDetails[String(equipmentId)];
+          // Try with numeric key if string lookup failed
+          if (!placement && !isNaN(equipmentId)) {
+            placement = placedDetails[Number(equipmentId)];
+          }
+        }
+        console.log('[MiniEquipmentPreview] Looking for ID:', equipmentId, '(type:', typeof equipmentId, ') Found placement:', placement);
 
         if (!placement) {
-          console.log('[MiniEquipmentPreview] Equipment not placed on map');
+          console.log('[MiniEquipmentPreview] Equipment not placed on map. Available keys:', Object.keys(placedDetails).slice(0, 10), 'Key types:', Object.keys(placedDetails).slice(0, 3).map(k => typeof k));
           setError('not_placed');
           setLoading(false);
           return;
         }
 
+        // Extract logical_name - handle both formats:
+        // - New format: { logical_name, page_index, display_name }
+        // - Legacy format: { plans: [logical_name1, logical_name2, ...] }
+        const logicalName = placement.logical_name || placement.plans?.[0];
+        const pageIndex = placement.page_index ?? 0;
+
+        if (!logicalName) {
+          console.log('[MiniEquipmentPreview] No logical_name found in placement:', placement);
+          setError('not_placed');
+          setLoading(false);
+          return;
+        }
+
+        console.log('[MiniEquipmentPreview] Using logicalName:', logicalName, 'pageIndex:', pageIndex);
+
         // 2. Get position data
-        const positionsData = await config.api.positions(placement.logical_name, placement.page_index || 0);
-        const positions = positionsData?.data || positionsData || [];
+        const positionsData = await config.api.positions(logicalName, pageIndex);
+        const positions = positionsData?.data || positionsData?.positions || positionsData || [];
+        console.log('[MiniEquipmentPreview] Positions loaded:', positions?.length || 0);
+
+        // Helper to compare IDs with type coercion
+        const idsMatch = (a, b) => {
+          if (a == null || b == null) return false;
+          return String(a) === String(b);
+        };
+
         const myPosition = positions.find(p =>
-          p[config.idField] === equipmentId ||
-          p.equipment_id === equipmentId ||
-          p.id === equipmentId
+          idsMatch(p[config.idField], equipmentId) ||
+          idsMatch(p.equipment_id, equipmentId) ||
+          idsMatch(p.id, equipmentId)
         );
+
+        if (!myPosition && positions.length > 0) {
+          console.log('[MiniEquipmentPreview] Position not found. Looking for:', equipmentId, 'Available IDs:', positions.slice(0, 5).map(p => p.equipment_id || p[config.idField] || p.id));
+        }
 
         if (myPosition) {
           setPosition(myPosition);
 
-          // Get plan file URL
-          const planFileUrl = config.api.planFileUrl(placement.logical_name);
+          // Get plan file URL using resolved logicalName
+          const planFileUrl = config.api.planFileUrl(logicalName);
 
           setPlanData({
-            logical_name: placement.logical_name,
-            display_name: placement.display_name || placement.logical_name,
-            page_index: placement.page_index || 0,
+            logical_name: logicalName,
+            display_name: placement.display_name || logicalName,
+            page_index: pageIndex,
             planFileUrl: typeof planFileUrl === 'string' ? planFileUrl : planFileUrl
           });
 
