@@ -4372,6 +4372,30 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     // Save completed job to database for persistence
     await savePanelScanJob(job);
 
+    // 📝 AUDIT: Log fin du scan avec les résultats
+    try {
+      const mockReq = {
+        user: { email: userEmail, name: userEmail?.split('@')[0] },
+        headers: { 'x-site': site },
+        ip: null
+      };
+      await audit.log(mockReq, 'panel_scan_completed', {
+        entityType: 'switchboard',
+        entityId: switchboardId,
+        details: {
+          jobId,
+          photos_analyzed: images.length,
+          devices_detected: deviceCount,
+          devices_to_create: willCreateCount,
+          devices_to_update: willUpdateCount,
+          duration_seconds: Math.round(totalDuration / 1000),
+          site
+        }
+      });
+    } catch (auditErr) {
+      console.warn('[PANEL SCAN] Audit log failed (non-blocking):', auditErr.message);
+    }
+
   } catch (error) {
     const errorDuration = Date.now() - (job.created_at || Date.now());
     console.error(`\n${'='.repeat(70)}`);
@@ -4727,6 +4751,17 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
 
     // Save to database for persistence WITH IMAGES for resume capability
     await savePanelScanJob(job, images);
+
+    // 📝 AUDIT: Log démarrage du scan
+    await audit.log(req, 'panel_scan_started', {
+      entityType: 'switchboard',
+      entityId: switchboard_id,
+      details: {
+        jobId,
+        photos_count: req.files.length,
+        site
+      }
+    });
 
     // Return immediately with job ID
     res.json({
@@ -7466,19 +7501,59 @@ app.get('/api/switchboard/audit/history', async (req, res) => {
 });
 
 // GET /audit/entity/:type/:id - Historique d'une entité spécifique
+// Pour les switchboards: inclut aussi les événements des devices associés
 app.get('/api/switchboard/audit/entity/:type/:id', async (req, res) => {
   try {
     const { type, id } = req.params;
-    const { limit = 50 } = req.query;
+    const { limit = 100, include_children = 'true' } = req.query;
 
-    const { rows } = await quickQuery(`
-      SELECT id, ts, action, entity_type, entity_id,
-             actor_name, actor_email, details, old_values, new_values
-      FROM switchboard_audit_log
-      WHERE entity_type = $1 AND entity_id = $2
-      ORDER BY ts DESC
-      LIMIT $3
-    `, [type, id, parseInt(limit)]);
+    let rows;
+
+    // Pour les switchboards, on inclut aussi les événements des devices associés
+    if (type === 'switchboard' && include_children === 'true') {
+      // Récupérer les IDs des devices de ce switchboard
+      const devicesResult = await quickQuery(
+        `SELECT id FROM devices WHERE switchboard_id = $1`,
+        [parseInt(id)]
+      );
+      const deviceIds = devicesResult.rows.map(d => d.id.toString());
+
+      if (deviceIds.length > 0) {
+        // Requête incluant switchboard ET ses devices
+        const result = await quickQuery(`
+          SELECT id, ts, action, entity_type, entity_id,
+                 actor_name, actor_email, details, old_values, new_values
+          FROM switchboard_audit_log
+          WHERE (entity_type = 'switchboard' AND entity_id = $1)
+             OR (entity_type = 'device' AND entity_id = ANY($2))
+          ORDER BY ts DESC
+          LIMIT $3
+        `, [id, deviceIds, parseInt(limit)]);
+        rows = result.rows;
+      } else {
+        // Pas de devices, requête simple
+        const result = await quickQuery(`
+          SELECT id, ts, action, entity_type, entity_id,
+                 actor_name, actor_email, details, old_values, new_values
+          FROM switchboard_audit_log
+          WHERE entity_type = $1 AND entity_id = $2
+          ORDER BY ts DESC
+          LIMIT $3
+        `, [type, id, parseInt(limit)]);
+        rows = result.rows;
+      }
+    } else {
+      // Requête simple pour les autres types d'entités
+      const result = await quickQuery(`
+        SELECT id, ts, action, entity_type, entity_id,
+               actor_name, actor_email, details, old_values, new_values
+        FROM switchboard_audit_log
+        WHERE entity_type = $1 AND entity_id = $2
+        ORDER BY ts DESC
+        LIMIT $3
+      `, [type, id, parseInt(limit)]);
+      rows = result.rows;
+    }
 
     res.json({ events: rows });
   } catch (e) {
