@@ -3560,7 +3560,15 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ==========================================================================
     // Detect explicit map requests OR confirmations ("oui", "ok") after equipment was mentioned
     const isConfirmation = /^(oui|ok|d'accord|yes|sure|affirmative|bien sûr|vas-y|go|montre|voir)\s*[!.?]*$/i.test(message.trim());
+
+    // Check if user is requesting a specific floor/building - if so, don't use context
+    const hasSpecificFloorRequest = msgLower.match(/(?:étage|etage)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
+                                    msgLower.match(/l'étage\s+\d+/i) ||
+                                    msgLower.match(/\bétage\s+\d+\s+du\s+bâtiment/i);
+    const hasSpecificBuildingRequest = msgLower.match(/(?:bâtiment|batiment)\s*\d+/i) && hasSpecificFloorRequest;
+
     const wantsMapFromContext = (
+      !hasSpecificBuildingRequest && // Don't use context if specific building+floor requested
       (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('voir') || msgLower.includes('montre') || isConfirmation) &&
       (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('localisation') || msgLower.includes('position') ||
        msgLower.includes('équipement') || msgLower.includes('retard') || isConfirmation)
@@ -3803,8 +3811,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                             msgLower.match(/\b(\d{2})\b/);
       const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
 
-      // Extract floor if mentioned (with or without keyword prefix)
-      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
+      // Extract floor if mentioned (with or without keyword prefix, with or without "l'" prefix)
+      const floorMatch = msgLower.match(/(?:l')?(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
                          msgLower.match(/\b(sous-sol|ss)\b/i) ||
                          msgLower.match(/\b(rdc|rc)\b/i);
       const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
@@ -4006,8 +4014,8 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
                            msgLower.match(/\b([a-z]?\d{2}[a-z]?)\b/);
       const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
 
-      // Extract floor if mentioned (with or without keyword prefix)
-      const floorMatch = msgLower.match(/(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
+      // Extract floor if mentioned (with or without keyword prefix, with or without "l'" prefix)
+      const floorMatch = msgLower.match(/(?:l')?(?:étage|etage|floor|niveau)\s*(-?\d+|rc|rdc|sous-sol|ss)/i) ||
                          msgLower.match(/\b(sous-sol|ss)\b/i) ||
                          msgLower.match(/\b(rdc|rc)\b/i);
       const floor = floorMatch ? floorMatch[1].toUpperCase() : null;
