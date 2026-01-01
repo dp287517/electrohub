@@ -1703,6 +1703,99 @@ async function getAIContext(site) {
       console.error('[AI] ATEX error:', e.message);
     }
 
+    // ========== DATAHUB EQUIPMENT ==========
+    context.datahub = { count: 0, list: [], byCategory: {}, byBuilding: {} };
+    try {
+      const dhRes = await pool.query(`
+        SELECT i.id, i.name, i.code, i.building, i.floor, i.location, i.description,
+               c.name as category_name, c.color as category_color, c.icon as category_icon
+        FROM dh_items i
+        LEFT JOIN dh_categories c ON i.category_id = c.id
+        ORDER BY i.building, i.floor, i.name
+        LIMIT 100
+      `);
+      context.datahub.count = dhRes.rows.length;
+      context.datahub.list = dhRes.rows.map(d => ({
+        ...d,
+        equipmentType: 'datahub'
+      }));
+
+      // Group by category and building
+      dhRes.rows.forEach(item => {
+        const cat = item.category_name || 'Non catégorisé';
+        const bldg = item.building || 'Non assigné';
+        if (!context.datahub.byCategory[cat]) context.datahub.byCategory[cat] = 0;
+        if (!context.datahub.byBuilding[bldg]) context.datahub.byBuilding[bldg] = { count: 0, floors: [] };
+        context.datahub.byCategory[cat]++;
+        context.datahub.byBuilding[bldg].count++;
+        if (item.floor && !context.datahub.byBuilding[bldg].floors.includes(item.floor)) {
+          context.datahub.byBuilding[bldg].floors.push(item.floor);
+        }
+      });
+
+      console.log(`[AI] 📊 Loaded ${context.datahub.count} Datahub equipment`);
+    } catch (e) {
+      console.error('[AI] Datahub error:', e.message);
+    }
+
+    // ========== HV (High Voltage) EQUIPMENT ==========
+    context.hv = { count: 0, list: [] };
+    try {
+      const hvRes = await pool.query(`
+        SELECT id, name, code, building_code, floor, room, type, power_mva, voltage_kv
+        FROM hv_equipments
+        ORDER BY building_code, floor, name
+        LIMIT 50
+      `);
+      context.hv.count = hvRes.rows.length;
+      context.hv.list = hvRes.rows.map(h => ({
+        ...h,
+        building: h.building_code,
+        equipmentType: 'hv'
+      }));
+      console.log(`[AI] ⚡ Loaded ${context.hv.count} HV equipment`);
+    } catch (e) {
+      console.error('[AI] HV error:', e.message);
+    }
+
+    // ========== GLO EQUIPMENT ==========
+    context.glo = { count: 0, list: [] };
+    try {
+      const gloRes = await pool.query(`
+        SELECT id, name, tag as code, building, floor, location, type
+        FROM glo_equipments
+        ORDER BY building, floor, name
+        LIMIT 50
+      `);
+      context.glo.count = gloRes.rows.length;
+      context.glo.list = gloRes.rows.map(g => ({
+        ...g,
+        equipmentType: 'glo'
+      }));
+      console.log(`[AI] 🔋 Loaded ${context.glo.count} GLO equipment`);
+    } catch (e) {
+      console.error('[AI] GLO error:', e.message);
+    }
+
+    // ========== MOBILE EQUIPMENT ==========
+    context.mobile = { count: 0, list: [] };
+    try {
+      const meRes = await pool.query(`
+        SELECT id, name, code, serial_number, building, floor, location, category, status
+        FROM me_equipments
+        ORDER BY building, floor, name
+        LIMIT 50
+      `);
+      context.mobile.count = meRes.rows.length;
+      context.mobile.list = meRes.rows.map(m => ({
+        ...m,
+        equipmentType: 'mobile'
+      }));
+      console.log(`[AI] 📱 Loaded ${context.mobile.count} mobile equipment`);
+    } catch (e) {
+      console.error('[AI] Mobile equipment error:', e.message);
+    }
+
     // ========== PROACTIVE ANALYSIS ==========
     context.proactive = {
       neverControlled: [],
@@ -1992,7 +2085,19 @@ async function getAIContext(site) {
 
     // ========== BUILD SUMMARY ==========
     context.summary = {
-      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count + context.atex.totalEquipments,
+      totalEquipments: context.switchboards.count + context.vsd.count + context.meca.count +
+                       context.atex.totalEquipments + context.datahub.count +
+                       context.hv.count + context.glo.count + context.mobile.count,
+      byType: {
+        switchboards: context.switchboards.count,
+        vsd: context.vsd.count,
+        meca: context.meca.count,
+        atex: context.atex.totalEquipments,
+        datahub: context.datahub.count,
+        hv: context.hv.count,
+        glo: context.glo.count,
+        mobile: context.mobile.count
+      },
       totalBuildings: Object.keys(context.buildings).length,
       urgentActions: context.urgentItems.length,
       controlsOverdue: context.controls.overdue,
@@ -3840,6 +3945,141 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
         }
       } catch (e) {
         console.error('[AI] Navigation query error:', e.message);
+      }
+    }
+
+    // ==========================================================================
+    // INTELLIGENT EQUIPMENT TYPE QUERY - Detect equipment type (datahub, hv, glo, mobile, etc.)
+    // ==========================================================================
+    const equipmentTypeKeywords = {
+      datahub: ['datahub', 'data hub', 'data-hub', 'dh'],
+      hv: ['haute tension', 'hv', 'ht', 'high voltage', 'moyenne tension', 'mt'],
+      glo: ['glo', 'groupe électrogène', 'generateur', 'onduleur', 'ups', 'batterie'],
+      mobile: ['mobile', 'portable', 'équipement mobile', 'appareil mobile']
+    };
+
+    let detectedEquipmentType = null;
+    for (const [eqType, keywords] of Object.entries(equipmentTypeKeywords)) {
+      if (keywords.some(kw => msgLower.includes(kw))) {
+        detectedEquipmentType = eqType;
+        break;
+      }
+    }
+
+    // Extract building code from message
+    const buildingMatch = msgLower.match(/(?:bâtiment|batiment|bat\.?|building)\s*[:\s]?\s*(\d+[\w-]*|\w+)/i);
+    const requestedBuilding = buildingMatch ? buildingMatch[1].toUpperCase() : null;
+
+    // Handle specific equipment type queries
+    if (detectedEquipmentType && !msgLower.includes('procédure')) {
+      console.log(`[AI] 🔧 Equipment type query detected: ${detectedEquipmentType}` + (requestedBuilding ? ` for building ${requestedBuilding}` : ''));
+
+      let equipmentList = [];
+      let typeLabel = '';
+      let typeIcon = '🔧';
+
+      switch (detectedEquipmentType) {
+        case 'datahub':
+          equipmentList = dbContext.datahub?.list || [];
+          typeLabel = 'DataHub';
+          typeIcon = '📊';
+          break;
+        case 'hv':
+          equipmentList = dbContext.hv?.list || [];
+          typeLabel = 'Haute Tension';
+          typeIcon = '⚡';
+          break;
+        case 'glo':
+          equipmentList = dbContext.glo?.list || [];
+          typeLabel = 'GLO';
+          typeIcon = '🔋';
+          break;
+        case 'mobile':
+          equipmentList = dbContext.mobile?.list || [];
+          typeLabel = 'Équipement Mobile';
+          typeIcon = '📱';
+          break;
+      }
+
+      // Filter by building if specified
+      if (requestedBuilding) {
+        equipmentList = equipmentList.filter(eq => {
+          const eqBuilding = (eq.building || eq.building_code || '').toUpperCase();
+          // Handle multi-building plans like "B20_21"
+          return eqBuilding.includes(requestedBuilding) || requestedBuilding.includes(eqBuilding);
+        });
+      }
+
+      if (equipmentList.length > 0) {
+        // Group by floor
+        const byFloor = {};
+        equipmentList.forEach(eq => {
+          const floor = eq.floor || 'Non défini';
+          if (!byFloor[floor]) byFloor[floor] = [];
+          byFloor[floor].push(eq);
+        });
+
+        let response = `## ${typeIcon} Équipements ${typeLabel}`;
+        if (requestedBuilding) response += ` - Bâtiment ${requestedBuilding}`;
+        response += `\n\n📊 **${equipmentList.length} équipement(s)** trouvé(s)`;
+        if (Object.keys(byFloor).length > 1) {
+          response += ` sur **${Object.keys(byFloor).length} étages**`;
+        }
+        response += `\n\n`;
+
+        // List by floor
+        const sortedFloors = Object.keys(byFloor).sort();
+        sortedFloors.forEach(floor => {
+          response += `### 📍 Étage ${floor}\n`;
+          byFloor[floor].forEach(eq => {
+            response += `• **${eq.name}**${eq.code ? ` (${eq.code})` : ''}`;
+            if (eq.location) response += ` - ${eq.location}`;
+            if (eq.category_name) response += ` [${eq.category_name}]`;
+            response += `\n`;
+          });
+          response += `\n`;
+        });
+
+        // Add floor navigation actions if multiple floors
+        const actions = [];
+        if (Object.keys(byFloor).length > 1) {
+          sortedFloors.slice(0, 4).forEach(floor => {
+            actions.push({
+              label: `📍 Étage ${floor}`,
+              prompt: `Montre-moi les équipements ${typeLabel} à l'étage ${floor}${requestedBuilding ? ` du bâtiment ${requestedBuilding}` : ''}`
+            });
+          });
+        }
+        actions.push({
+          label: '🗺️ Voir sur la carte',
+          prompt: `Montre-moi la carte des équipements ${typeLabel}${requestedBuilding ? ` du bâtiment ${requestedBuilding}` : ''}`
+        });
+
+        return res.json({
+          message: response,
+          equipmentList: equipmentList.map(eq => ({
+            id: eq.id,
+            name: eq.name,
+            code: eq.code,
+            building_code: eq.building || eq.building_code,
+            floor: eq.floor,
+            room: eq.location || eq.room,
+            equipmentType: detectedEquipmentType
+          })),
+          floors: sortedFloors,
+          buildingCode: requestedBuilding,
+          actions,
+          provider: 'system'
+        });
+      } else {
+        return res.json({
+          message: `${typeIcon} Aucun équipement ${typeLabel} trouvé${requestedBuilding ? ` dans le bâtiment ${requestedBuilding}` : ''}.\n\nVérifie le nom du bâtiment ou essaie une autre recherche.`,
+          actions: [
+            { label: '📋 Liste des bâtiments', prompt: 'Liste des bâtiments' },
+            { label: `🔍 Tous les ${typeLabel}`, prompt: `Montre-moi tous les équipements ${typeLabel}` }
+          ],
+          provider: 'system'
+        });
       }
     }
 

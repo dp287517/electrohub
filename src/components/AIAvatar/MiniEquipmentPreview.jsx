@@ -138,6 +138,23 @@ const EQUIPMENT_CONFIGS = {
     },
     idField: 'equipment_id',
   },
+  datahub: {
+    name: 'DataHub',
+    icon: Cpu,
+    color: 'cyan',
+    gradient: 'from-cyan-400 to-teal-500',
+    bgLight: 'from-cyan-50 to-teal-50',
+    borderColor: 'border-cyan-200',
+    markerColor: { normal: '#06b6d4', gradient: ['#06b6d4', '#14b8a6'] },
+    mapUrl: '/app/datahub/map',
+    api: {
+      placedIds: () => api.datahub.maps.placedIds(),
+      positions: (logical_name, page_index) => api.datahub.maps.positionsAuto(logical_name, page_index),
+      planFileUrl: (logical_name) => api.datahub.maps.planFileUrlAuto(logical_name, { bust: false }),
+      getEquipment: (id) => api.datahub.get(id),
+    },
+    idField: 'equipment_id',
+  },
 };
 
 // Get user identity for API calls
@@ -204,13 +221,14 @@ const EQUIPMENT_ICON_PATHS = {
   hv: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>', // Zap
   mobile: '<path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>', // Smartphone
   atex: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', // Shield
+  datahub: '<path d="M12 2v20M2 12h20M12 2a10 10 0 0110 10M12 2a10 10 0 00-10 10M12 22a10 10 0 01-10-10M12 22a10 10 0 0010-10"/>', // Globe-like
 };
 
 // Get equipment type key for icon selection
 // Use the equipment type directly (it's already the correct key)
 function getEquipmentIconKey(equipmentType) {
   // Valid equipment types
-  const validTypes = ['switchboard', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex'];
+  const validTypes = ['switchboard', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'datahub'];
   if (validTypes.includes(equipmentType)) {
     return equipmentType;
   }
@@ -223,6 +241,7 @@ function getEquipmentIconKey(equipmentType) {
     'Haute Tension': 'hv',
     'Équipement mobile': 'mobile',
     'Équipement ATEX': 'atex',
+    'DataHub': 'datahub',
   };
   return mapping[equipmentType] || 'switchboard';
 }
