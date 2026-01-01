@@ -231,6 +231,11 @@ class AIAssistant {
         conversationHistory: conversationHistory.map(m => ({
           role: m.role,
           content: m.content,
+          // Equipment data for map context
+          equipmentList: m.equipmentList || null,
+          equipment: m.equipment || null,
+          locationEquipment: m.locationEquipment || null,
+          locationEquipmentType: m.locationEquipmentType || null,
           // Procedure context for guidance (v2.0)
           procedureToOpen: m.procedureToOpen || null,
           proceduresFound: m.proceduresFound || null,
@@ -268,6 +273,21 @@ class AIAssistant {
         // Create procedure - triggers modal
         openProcedureCreator: data.openProcedureCreator || false,
         procedureCreatorContext: data.procedureCreatorContext || null,
+        // ===============================
+        // NAVIGATION INTEGRATION
+        // ===============================
+        navigationMode: data.navigationMode || null,
+        navigateTo: data.navigateTo || null,
+        buildingCode: data.buildingCode || null,
+        floor: data.floor || null,
+        equipmentList: data.equipmentList || null,
+        // ===============================
+        // MAP LOCATION INTEGRATION
+        // ===============================
+        showMap: data.showMap || false,
+        locationEquipment: data.locationEquipment || null,
+        locationEquipmentType: data.locationEquipmentType || null,
+        locationControlStatus: data.locationControlStatus || null,
         // ===============================
         // Legacy fields (backward compat)
         // ===============================
@@ -323,6 +343,11 @@ class AIAssistant {
           role: m.role,
           content: m.content,
           photo: m.photo ? true : false, // Juste indiquer si photo, pas le contenu
+          // Equipment data for map context
+          equipmentList: m.equipmentList || null,
+          equipment: m.equipment || null,
+          locationEquipment: m.locationEquipment || null,
+          locationEquipmentType: m.locationEquipmentType || null,
           // Procedure context for guidance (v2.0)
           procedureToOpen: m.procedureToOpen || null,
           proceduresFound: m.proceduresFound || null,
@@ -365,6 +390,21 @@ class AIAssistant {
         procedureGuidance: data.procedureGuidance || null,
         openProcedureCreator: data.openProcedureCreator || false,
         procedureCreatorContext: data.procedureCreatorContext || null,
+        // ===============================
+        // NAVIGATION INTEGRATION
+        // ===============================
+        navigationMode: data.navigationMode || null,
+        navigateTo: data.navigateTo || null,
+        buildingCode: data.buildingCode || null,
+        floor: data.floor || null,
+        equipmentList: data.equipmentList || null,
+        // ===============================
+        // MAP LOCATION INTEGRATION
+        // ===============================
+        showMap: data.showMap || false,
+        locationEquipment: data.locationEquipment || null,
+        locationEquipmentType: data.locationEquipmentType || null,
+        locationControlStatus: data.locationControlStatus || null,
         // Legacy fields
         procedureSessionId: data.procedureSessionId || null,
         procedureStep: data.procedureStep || null,
