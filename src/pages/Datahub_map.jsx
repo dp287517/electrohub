@@ -491,6 +491,9 @@ export default function DatahubMap() {
   const [toast, setToast] = useState(null);
   const [pdfReady, setPdfReady] = useState(false);
 
+  // Control statuses for datahub items { item_id: { status: 'overdue'|'upcoming' } }
+  const [controlStatuses, setControlStatuses] = useState({});
+
   // External equipment categories (VSD, HV, MECA, GLO, Mobile, Switchboards)
   // Store plan key WITH positions to ensure synchronization (prevents stale data issues)
   const [externalPositions, setExternalPositions] = useState({
@@ -526,12 +529,40 @@ export default function DatahubMap() {
   const imgSizeRef = useRef({ w: 0, h: 0 }); // Store image size for redrawing
   const currentPlanKeyRef = useRef(null); // Track current plan being loaded (for stale response detection)
   const drawMarkersRef = useRef(null); // Ref to always get latest drawMarkers (avoids stale closures)
+  const controlStatusesRef = useRef({}); // Keep control statuses ref for marker drawing
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
   useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+  useEffect(() => { controlStatusesRef.current = controlStatuses; }, [controlStatuses]);
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
+
+  // Load control statuses for datahub items
+  const loadControlStatuses = useCallback(async () => {
+    try {
+      const dashboardRes = await api.switchboardControls.dashboard();
+      const statuses = {};
+
+      // Process overdue items
+      (dashboardRes?.overdue_list || []).forEach(item => {
+        if (item.datahub_equipment_id) {
+          statuses[item.datahub_equipment_id] = { status: 'overdue', template_name: item.template_name };
+        }
+      });
+
+      // Process upcoming items (only if not already marked as overdue)
+      (dashboardRes?.upcoming || []).forEach(item => {
+        if (item.datahub_equipment_id && !statuses[item.datahub_equipment_id]) {
+          statuses[item.datahub_equipment_id] = { status: 'upcoming', template_name: item.template_name };
+        }
+      });
+
+      setControlStatuses(statuses);
+    } catch (err) {
+      console.error("Error loading datahub control statuses:", err);
+    }
+  }, []);
 
   // Responsive
   useEffect(() => {
@@ -559,10 +590,13 @@ export default function DatahubMap() {
       setCategories(catsRes?.categories || []);
       setPlacedIds(new Set((placedRes?.placed_ids || []).map(String)));
       setPlacedDetails(placedRes?.placed_details || {});
+
+      // Load control statuses for markers
+      loadControlStatuses();
     } catch (e) {
       console.error("Load error:", e);
     }
-  }, []);
+  }, [loadControlStatuses]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -802,15 +836,34 @@ export default function DatahubMap() {
   // Create marker icon (like Switchboard's makeSwitchboardIcon)
   const makeMarkerIcon = useCallback((item, cat, isSelected) => {
     const size = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const color = cat?.color || "#6366F1";
     const iconId = cat?.icon || 'circle';
     const svgPath = SVG_PATHS[iconId] || SVG_PATHS.default;
 
+    // Check control status for this item
+    const controlStatus = item?.id ? controlStatusesRef.current[item.id] : null;
+    const isOverdue = controlStatus?.status === 'overdue';
+    const isUpcoming = controlStatus?.status === 'upcoming';
+
+    // Determine colors based on control status (overdue takes priority)
+    let bgGradient;
+    if (isSelected) {
+      bgGradient = "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)"; // Purple - selected
+    } else if (isOverdue) {
+      bgGradient = "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)"; // Red - overdue
+    } else if (isUpcoming) {
+      bgGradient = "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)"; // Amber - upcoming
+    } else {
+      const color = cat?.color || "#6366F1";
+      bgGradient = `radial-gradient(circle at 30% 30%, ${color}cc, ${color})`; // Category color - default
+    }
+
     // Animation class goes on the INNER div (like Switchboard)
-    const animClass = isSelected ? 'datahub-marker-selected' : '';
+    let animClass = "";
+    if (isSelected) animClass = "datahub-marker-selected";
+    else if (isOverdue) animClass = "datahub-marker-overdue";
 
     const html = `
-      <div class="${animClass}" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 30% 30%, ${color}cc, ${color});border:2px solid white;border-radius:50%;
+      <div class="${animClass}" style="width:${size}px;height:${size}px;background:${bgGradient};border:2px solid white;border-radius:50%;
         box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
         <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           ${svgPath}
@@ -1152,7 +1205,7 @@ export default function DatahubMap() {
       // Mark PDF as ready after markers are drawn
       setPdfReady(true);
     }
-  }, [positions, items, categories, selectedCategories, externalPositions, visibleExternalCategories]);
+  }, [positions, items, categories, selectedCategories, externalPositions, visibleExternalCategories, controlStatuses]);
 
   // Redraw markers when selectedItem changes (like Switchboard line 574-580)
   useEffect(() => {
@@ -1279,6 +1332,10 @@ export default function DatahubMap() {
           0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
           50% { transform: scale(1.15); box-shadow: 0 0 0 10px rgba(99, 102, 241, 0); }
         }
+        @keyframes blink-overdue {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.6; }
+        }
         @keyframes flash-marker {
           0%, 100% { transform: scale(1); filter: brightness(1); }
           20% { transform: scale(1.5); filter: brightness(1.4); }
@@ -1291,6 +1348,7 @@ export default function DatahubMap() {
         .datahub-marker-inline { background: transparent !important; border: none !important; }
         /* Animation class on inner div (like Switchboard) */
         .datahub-marker-selected { animation: pulse-selected 1.5s ease-in-out infinite; z-index: 2000 !important; }
+        .datahub-marker-overdue { animation: blink-overdue 1s ease-in-out infinite; }
         .datahub-marker-flash > div { animation: flash-marker 2s ease-in-out; }
         @keyframes flash-marker {
           0%, 100% { transform: scale(1); filter: brightness(1); }
