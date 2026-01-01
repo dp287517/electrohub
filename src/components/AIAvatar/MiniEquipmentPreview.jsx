@@ -792,8 +792,8 @@ export default function MiniEquipmentPreview({
     );
   }
 
-  // Not placed or error state
-  if (error === 'not_placed' || !equipmentId) {
+  // Not placed or position error state
+  if (error === 'not_placed' || error === 'position_not_found' || !equipmentId) {
     return (
       <div className={`bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border border-slate-200 p-4 ${className}`}>
         <div className="flex items-start gap-3">
@@ -811,18 +811,18 @@ export default function MiniEquipmentPreview({
     );
   }
 
-  // Render error
+  // Render fetch error
   if (error) {
     return (
-      <div className={`bg-gradient-to-br from-red-50 to-red-100 rounded-xl border border-red-200 p-4 ${className}`}>
+      <div className={`bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border border-amber-200 p-4 ${className}`}>
         <div className="flex items-start gap-3">
-          <div className="p-2 bg-red-200 rounded-lg">
-            <AlertTriangle className="w-5 h-5 text-red-600" />
+          <div className="p-2 bg-amber-200 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
           </div>
           <div>
-            <p className="text-sm font-medium text-red-700">Erreur de chargement</p>
-            <p className="text-xs text-red-500 mt-0.5">
-              Impossible de charger le plan.
+            <p className="text-sm font-medium text-amber-700">Chargement indisponible</p>
+            <p className="text-xs text-amber-500 mt-0.5">
+              Le plan n'a pas pu être récupéré.
             </p>
           </div>
         </div>
