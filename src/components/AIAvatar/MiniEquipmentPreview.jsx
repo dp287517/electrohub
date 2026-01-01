@@ -27,7 +27,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-amber-50 to-orange-50',
     borderColor: 'border-amber-200',
     markerColor: { normal: '#f59e0b', gradient: ['#f59e0b', '#ea580c'] },
-    mapUrl: '/switchboard-map',
+    mapUrl: '/app/switchboards/map',
     api: {
       placedIds: () => api.get('/api/switchboard-map/placed-ids'),
       positions: (logical_name, page_index) => api.get('/api/switchboard/maps/positions', { params: { logical_name, page_index } }),
@@ -44,7 +44,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-green-50 to-emerald-50',
     borderColor: 'border-green-200',
     markerColor: { normal: '#10b981', gradient: ['#10b981', '#059669'] },
-    mapUrl: '/vsd-map',
+    mapUrl: '/app/vsd/map',
     api: {
       placedIds: () => api.vsdMaps.placedIds(),
       positions: (logical_name, page_index) => api.vsdMaps.positionsAuto(logical_name, page_index),
@@ -61,7 +61,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-orange-50 to-red-50',
     borderColor: 'border-orange-200',
     markerColor: { normal: '#f97316', gradient: ['#f97316', '#ea580c'] },
-    mapUrl: '/meca-map',
+    mapUrl: '/app/meca/map',
     api: {
       placedIds: () => api.mecaMaps.placedIds(),
       positions: (logical_name, page_index) => api.mecaMaps.positionsAuto(logical_name, page_index),
@@ -78,7 +78,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-emerald-50 to-teal-50',
     borderColor: 'border-emerald-200',
     markerColor: { normal: '#10b981', gradient: ['#10b981', '#14b8a6'] },
-    mapUrl: '/glo-map',
+    mapUrl: '/app/glo/map',
     api: {
       placedIds: () => api.gloMaps.placedIds(),
       positions: (logical_name, page_index) => api.gloMaps.positionsAuto(logical_name, page_index),
@@ -95,7 +95,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-amber-50 to-yellow-50',
     borderColor: 'border-amber-200',
     markerColor: { normal: '#eab308', gradient: ['#eab308', '#f59e0b'] },
-    mapUrl: '/hv-map',
+    mapUrl: '/app/hv/map',
     api: {
       placedIds: () => api.hvMaps.placedIds(),
       positions: (logical_name, page_index) => api.hvMaps.positionsAuto(logical_name, page_index),
@@ -112,7 +112,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-blue-50 to-indigo-50',
     borderColor: 'border-blue-200',
     markerColor: { normal: '#3b82f6', gradient: ['#3b82f6', '#6366f1'] },
-    mapUrl: '/mobile-map',
+    mapUrl: '/app/mobile-equipments/map',
     api: {
       placedIds: () => api.mobileEquipment.maps.placedIds(),
       positions: (logical_name, page_index) => api.mobileEquipment.maps.positionsAuto(logical_name, page_index),
@@ -129,7 +129,7 @@ const EQUIPMENT_CONFIGS = {
     bgLight: 'from-purple-50 to-pink-50',
     borderColor: 'border-purple-200',
     markerColor: { normal: '#a855f7', gradient: ['#a855f7', '#ec4899'] },
-    mapUrl: '/atex',
+    mapUrl: '/app/atex',
     api: {
       placedIds: () => api.atexMaps.placedIds(),
       positions: (logical_name, page_index) => api.atexMaps.positionsAuto(logical_name, page_index),
@@ -206,8 +206,15 @@ const EQUIPMENT_ICON_PATHS = {
   atex: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', // Shield
 };
 
-// Map equipment config name to icon key
-function getEquipmentIconKey(configName) {
+// Get equipment type key for icon selection
+// Use the equipment type directly (it's already the correct key)
+function getEquipmentIconKey(equipmentType) {
+  // Valid equipment types
+  const validTypes = ['switchboard', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex'];
+  if (validTypes.includes(equipmentType)) {
+    return equipmentType;
+  }
+  // Fallback mapping for display names (legacy support)
   const mapping = {
     'Tableau électrique': 'switchboard',
     'Variateur': 'vsd',
@@ -217,7 +224,7 @@ function getEquipmentIconKey(configName) {
     'Équipement mobile': 'mobile',
     'Équipement ATEX': 'atex',
   };
-  return mapping[configName] || 'switchboard';
+  return mapping[equipmentType] || 'switchboard';
 }
 
 /**
@@ -229,6 +236,7 @@ function MiniLeafletMap({
   position,        // Single position (for backward compatibility)
   positions = [],  // Multiple positions for multi-marker support
   equipmentConfig,
+  equipmentType,   // The equipment type key (switchboard, vsd, meca, etc.)
   controlStatus,
   isExpanded,
   onExpand,
@@ -266,7 +274,8 @@ function MiniLeafletMap({
       borderColor = "rgba(255,255,255,0.8)";
     }
 
-    const iconKey = getEquipmentIconKey(equipmentConfig.name);
+    // Use the equipmentType directly for correct icon selection
+    const iconKey = getEquipmentIconKey(equipmentType);
     const iconPath = EQUIPMENT_ICON_PATHS[iconKey] || EQUIPMENT_ICON_PATHS.switchboard;
 
     // Add number badge for multiple markers
@@ -288,7 +297,7 @@ function MiniLeafletMap({
       iconSize: [s, s],
       iconAnchor: [Math.round(s / 2), s], // Anchor at bottom center for better positioning
     });
-  }, [MARKER_SIZE, equipmentConfig]);
+  }, [MARKER_SIZE, equipmentConfig, equipmentType]);
 
   // Load and render the map with high quality
   useEffect(() => {
@@ -324,9 +333,12 @@ function MiniLeafletMap({
 
         // HIGH QUALITY RENDERING: Use higher DPI for crisp visuals
         const containerWidth = containerRef.current.clientWidth || (isExpanded ? 600 : 280);
-        const dpr = Math.min(window.devicePixelRatio || 1, 3); // Allow up to 3x DPI
-        const targetWidth = Math.min(3072, containerWidth * dpr * 2); // Higher resolution
-        const scale = clamp(targetWidth / baseVp.width, 0.8, 4);
+        const dpr = Math.min(window.devicePixelRatio || 1, 4); // Allow up to 4x DPI for high-res screens
+        // Higher resolution for expanded mode, more reasonable for mini mode
+        const targetWidth = isExpanded
+          ? Math.min(4096, containerWidth * dpr * 3) // Very high quality for expanded view
+          : Math.min(2048, containerWidth * dpr * 2.5); // Good quality for mini view
+        const scale = clamp(targetWidth / baseVp.width, 1, 6); // Higher min/max scale
         const viewport = page.getViewport({ scale });
 
         // Render to canvas with high quality settings
@@ -335,14 +347,14 @@ function MiniLeafletMap({
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: false });
 
-        // Enable image smoothing for better quality
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+        // Disable image smoothing for sharper technical drawings
+        ctx.imageSmoothingEnabled = false;
 
+        // Use 'print' intent for highest quality PDF rendering
         await page.render({
           canvasContext: ctx,
           viewport,
-          intent: 'display' // Optimize for display quality
+          intent: 'print' // Higher quality rendering
         }).promise;
 
         if (cancelled) return;
@@ -558,19 +570,15 @@ function MiniLeafletMap({
         </button>
       )}
 
-      {/* Expand hint (mini mode) */}
+      {/* Expand button (mini mode) - positioned in corner to not block map interactions */}
       {!isExpanded && !loading && (
-        <div
-          className="absolute inset-0 bg-transparent cursor-pointer group"
+        <button
           onClick={onExpand}
+          className="absolute top-2 right-2 p-1.5 bg-white/90 backdrop-blur-sm rounded-lg shadow-md hover:bg-white hover:shadow-lg transition-all z-[1000] group"
+          title="Agrandir le plan"
         >
-          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-            <div className="px-3 py-1.5 bg-white/95 backdrop-blur-sm rounded-full shadow-lg flex items-center gap-2">
-              <Maximize2 className="w-4 h-4 text-slate-600" />
-              <span className="text-sm font-medium text-slate-700">Agrandir</span>
-            </div>
-          </div>
-        </div>
+          <Maximize2 className="w-4 h-4 text-slate-500 group-hover:text-slate-700" />
+        </button>
       )}
 
       {/* Plan name badge */}
@@ -729,6 +737,14 @@ export default function MiniEquipmentPreview({
 
   // Handle navigation to full map
   const handleViewFullMap = () => {
+    console.log('[MiniEquipmentPreview] handleViewFullMap called:', {
+      equipmentType,
+      equipmentId,
+      configMapUrl: config.mapUrl,
+      planData,
+      hasOnNavigate: !!onNavigate,
+    });
+
     if (onNavigate) {
       onNavigate(equipmentId, planData);
     } else {
@@ -736,6 +752,7 @@ export default function MiniEquipmentPreview({
       onClose?.();
       // Navigate to equipment map with this equipment selected
       const mapUrl = `${config.mapUrl}?equipment=${equipmentId}&plan=${encodeURIComponent(planData?.logical_name || '')}`;
+      console.log('[MiniEquipmentPreview] Navigating to:', mapUrl);
       navigate(mapUrl);
     }
   };
@@ -862,6 +879,7 @@ export default function MiniEquipmentPreview({
             planData={planData}
             position={position}
             equipmentConfig={config}
+            equipmentType={equipmentType}
             controlStatus={controlStatus}
             equipmentDetails={equipmentDetails}
             isExpanded={false}
@@ -919,6 +937,7 @@ export default function MiniEquipmentPreview({
                   planData={planData}
                   position={position}
                   equipmentConfig={config}
+                  equipmentType={equipmentType}
                   controlStatus={controlStatus}
                   equipmentDetails={equipmentDetails}
                   isExpanded={true}

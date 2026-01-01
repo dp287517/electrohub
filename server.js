@@ -8589,7 +8589,7 @@ app.get("/api/dashboard/activities", async (req, res) => {
     // Helper to safely query audit tables
     const safeQuery = async (tableName, mapper) => {
       try {
-        // Try with 'ts' first (lib/audit-trail.js schema), then 'created_at' (manual schema)
+        // Try with 'ts' first (lib/audit-trail.js schema), then 'created_at', then 'at' (pm_audit schema)
         let rows;
         let usedColumn = 'ts';
         try {
@@ -8601,13 +8601,24 @@ app.get("/api/dashboard/activities", async (req, res) => {
           rows = result.rows;
         } catch (tsError) {
           // Try with created_at instead
-          usedColumn = 'created_at';
-          const result = await pool.query(`
-            SELECT *, created_at as ts FROM ${tableName}
-            ORDER BY created_at DESC
-            LIMIT 15
-          `);
-          rows = result.rows;
+          try {
+            usedColumn = 'created_at';
+            const result = await pool.query(`
+              SELECT *, created_at as ts FROM ${tableName}
+              ORDER BY created_at DESC
+              LIMIT 15
+            `);
+            rows = result.rows;
+          } catch (createdAtError) {
+            // Try with 'at' column (pm_audit table)
+            usedColumn = 'at';
+            const result = await pool.query(`
+              SELECT *, at as ts, at as created_at FROM ${tableName}
+              ORDER BY at DESC
+              LIMIT 15
+            `);
+            rows = result.rows;
+          }
         }
         console.log(`[DASHBOARD ACTIVITIES]   📋 ${tableName}: ${rows.length} rows (using ${usedColumn})`);
         return rows.map(mapper);
@@ -8722,12 +8733,12 @@ app.get("/api/dashboard/activities", async (req, res) => {
       id: `pm-${row.id}`,
       type: row.action,
       module: 'projects',
-      title: row.action.includes('create') ? 'Projet créé' :
-             row.action.includes('update') ? 'Projet modifié' :
-             row.action.includes('delete') ? 'Projet supprimé' : row.action,
-      description: row.details?.name || row.action,
-      actor: row.user_email,
-      timestamp: row.ts || row.created_at,
+      title: row.action?.includes('create') ? 'Projet créé' :
+             row.action?.includes('update') ? 'Projet modifié' :
+             row.action?.includes('delete') ? 'Projet supprimé' : row.action,
+      description: row.meta?.name || row.action,
+      actor: row.actor,
+      timestamp: row.ts || row.at,
       url: '/app/projects',
       icon: '💳',
       color: 'green'
