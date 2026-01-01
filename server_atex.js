@@ -4239,18 +4239,17 @@ app.get("/api/atex/drpce", async (req, res) => {
     console.log(`[DRPCE] Found ${equipments.length} equipments (filters: building=${filterBuilding}, zone=${filterZone}, compliance=${filterCompliance})`);
 
     // 2b. Récupérer les positions des équipements sur les plans (avec thumbnails pré-générés)
+    // OPTIMISATION MÉMOIRE: Ne pas charger plan_content (PDF binaire lourd) - seulement les thumbnails
     const equipmentIds = equipments.map(e => e.id);
     let positionsMap = new Map();
     if (equipmentIds.length > 0) {
-      // Requête améliorée: récupère le thumbnail pré-généré, sinon le content (PDF)
       const { rows: positions } = await pool.query(`
         SELECT pos.equipment_id, pos.logical_name, pos.plan_id, pos.x_frac, pos.y_frac,
                COALESCE(p_by_logical.thumbnail, p_by_id.thumbnail) AS plan_thumbnail,
-               COALESCE(p_by_logical.content, p_by_id.content) AS plan_content,
                COALESCE(pn.display_name, pos.logical_name, 'Plan') AS plan_display_name
         FROM atex_positions pos
         LEFT JOIN (
-          SELECT DISTINCT ON (logical_name) id, logical_name, content, thumbnail
+          SELECT DISTINCT ON (logical_name) id, logical_name, thumbnail
           FROM atex_plans
           ORDER BY logical_name, version DESC
         ) p_by_logical ON p_by_logical.logical_name = pos.logical_name
@@ -4266,11 +4265,9 @@ app.get("/api/atex/drpce", async (req, res) => {
         }
       }
       console.log(`[DRPCE] Found ${positions.length} equipment positions on plans`);
-      // Debug: afficher les détails des positions trouvées
       if (positions.length > 0) {
         const withThumbnail = positions.filter(p => p.plan_thumbnail && p.plan_thumbnail.length > 0).length;
-        const withContent = positions.filter(p => p.plan_content && p.plan_content.length > 0).length;
-        console.log(`[DRPCE] Positions with thumbnail: ${withThumbnail}/${positions.length}, with content: ${withContent}/${positions.length}`);
+        console.log(`[DRPCE] Positions with thumbnail: ${withThumbnail}/${positions.length}`);
       }
     }
 
@@ -4869,9 +4866,9 @@ app.get("/api/atex/drpce", async (req, res) => {
       });
     }
 
-    // ========== 7. MESURES DE PRÉVENTION ==========
+    // ========== 8. MESURES DE PRÉVENTION ==========
     doc.addPage();
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Mesures de prevention et protection', 50, 50);
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Mesures de prevention et protection', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
     let mesY = 100;
@@ -4916,11 +4913,11 @@ app.get("/api/atex/drpce", async (req, res) => {
       70, mesY + 32, { width: 455 }
     );
 
-    // ========== 8. FICHES EQUIPEMENTS ==========
+    // ========== 9. FICHES EQUIPEMENTS ==========
     // Afficher tous les équipements avec vignette du plan si disponible
     if (equipments.length > 0) {
       doc.addPage();
-      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50, { lineBreak: false });
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('9. Fiches equipements', 50, 50, { lineBreak: false });
       doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
       let ficheY = 100;
@@ -4976,21 +4973,22 @@ app.get("/api/atex/drpce", async (req, res) => {
         }
 
         // Vignette du plan avec localisation (à côté de la photo)
-        const planX = rightColX + imgWidth + 10;
-        if (position && (position.plan_thumbnail || position.plan_content)) {
+        // Note: planX + imgWidth doit rester <= 545 (marge droite de la page A4)
+        const planX = rightColX + imgWidth + 5; // Réduit l'espace pour éviter dépassement de marge
+        if (position && position.plan_thumbnail && position.plan_thumbnail.length > 0) {
           try {
             const planDisplayName = position.plan_display_name || 'Plan';
             let planThumbnail = null;
 
-            // Priorité 1: Utiliser le thumbnail pré-généré (PNG)
-            if (position.plan_thumbnail && position.plan_thumbnail.length > 0) {
-              // Ajouter le marqueur de position sur le thumbnail
-              const { loadImage } = await import('canvas');
-              const thumbnailBuffer = Buffer.isBuffer(position.plan_thumbnail)
-                ? position.plan_thumbnail
-                : Buffer.from(position.plan_thumbnail);
+            // Utiliser le thumbnail pré-généré (PNG) avec marqueur de position
+            const { loadImage } = await import('canvas');
+            const thumbnailBuffer = Buffer.isBuffer(position.plan_thumbnail)
+              ? position.plan_thumbnail
+              : Buffer.from(position.plan_thumbnail);
 
-              const img = await loadImage(thumbnailBuffer);
+            const img = await loadImage(thumbnailBuffer);
+            // Validation des dimensions pour éviter les erreurs canvas
+            if (img.width > 0 && img.height > 0) {
               const canvas = createCanvas(img.width, img.height);
               const ctx = canvas.getContext('2d');
               ctx.drawImage(img, 0, 0);
@@ -5019,15 +5017,6 @@ app.get("/api/atex/drpce", async (req, res) => {
               }
 
               planThumbnail = canvas.toBuffer('image/png');
-            } else {
-              // Priorité 2: Essayer de convertir le PDF (fallback vers placeholder)
-              planThumbnail = await pdfToImageWithMarker(
-                position.plan_content,
-                position.x_frac,
-                position.y_frac,
-                imgWidth * 2,
-                planDisplayName
-              );
             }
 
             if (planThumbnail) {
@@ -5045,6 +5034,11 @@ app.get("/api/atex/drpce", async (req, res) => {
             doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
             doc.fontSize(7).fillColor(colors.muted).text('Plan N/A', planX + 35, rightY + 50, { lineBreak: false });
           }
+        } else if (position) {
+          // Position existe mais pas de thumbnail
+          doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
+          const planDisplayName = position.plan_display_name || 'Plan';
+          doc.fontSize(7).fillColor(colors.muted).text(planDisplayName, planX + 20, rightY + 50, { lineBreak: false });
         } else {
           doc.rect(planX, rightY, imgWidth, imgHeight).stroke(colors.light);
           doc.fontSize(7).fillColor(colors.muted).text('Non positionne', planX + 25, rightY + 50, { lineBreak: false });
@@ -5316,6 +5310,38 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     `);
     const { rows: subareas } = await pool.query(`SELECT * FROM atex_subareas ORDER BY logical_name, name`);
 
+    // Récupérer les stats PE (Presse-Étoupes)
+    let peStatsData = { total_baskets: 0, total_photos: 0, total_glands: 0, compliant_glands: 0, non_compliant_glands: 0 };
+    let peNonCompliantList = [];
+    try {
+      const peStatsRes = await pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM cable_gland_baskets WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_baskets,
+          (SELECT COUNT(*) FROM cable_gland_photos WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_photos,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as total_glands,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
+          (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands
+      `, [companyId, siteId]);
+      if (peStatsRes.rows[0]) peStatsData = peStatsRes.rows[0];
+
+      // Get non-compliant PE for the report
+      const peNcRes = await pool.query(`
+        SELECT i.reference, i.type, i.condition, i.notes, i.atex_marking,
+               b.name as basket_name, b.building, b.zone_name
+        FROM cable_gland_items i
+        JOIN cable_gland_baskets b ON b.id = i.basket_id
+        WHERE i.compliance_status = 'issue'
+          AND ($1::int IS NULL OR i.company_id = $1)
+          AND ($2::int IS NULL OR i.site_id = $2)
+        ORDER BY b.building, b.zone_name, i.created_at DESC
+        LIMIT 50
+      `, [companyId, siteId]);
+      peNonCompliantList = peNcRes.rows;
+    } catch (e) {
+      console.warn('[DRPCE-Async] PE stats error:', e.message);
+    }
+    const peConformityRate = peStatsData.total_glands > 0 ? Math.round((peStatsData.compliant_glands / peStatsData.total_glands) * 100) : 0;
+
     // Statistiques
     const totalEquipments = equipments.length;
     const conformeCount = equipments.filter(e => e.last_result === 'conforme').length;
@@ -5424,16 +5450,17 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       { num: '3', title: 'Plans ATEX' },
       { num: '4', title: 'Inventaire des equipements' },
       { num: '5', title: 'Etat de conformite' },
-      { num: '6', title: 'Planification des verifications' },
-      { num: '7', title: 'Mesures de prevention et protection' },
-      { num: '8', title: 'Fiches equipements' },
+      { num: '6', title: 'Presse-Etoupes (PE)' },
+      { num: '7', title: 'Planification des verifications' },
+      { num: '8', title: 'Mesures de prevention et protection' },
+      { num: '9', title: 'Fiches equipements' },
     ];
 
     let somY = 110;
     sommaire.forEach(item => {
       doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text(item.num, 50, somY);
       doc.font('Helvetica').text(item.title, 80, somY);
-      somY += 30;
+      somY += 28;
     });
 
     // ========== 1. CADRE RÉGLEMENTAIRE SUISSE ==========
@@ -5637,9 +5664,92 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       });
     }
 
-    // ========== 6. PLANIFICATION ==========
+    // ========== 6. PRESSE-ÉTOUPES (PE) ==========
     doc.addPage();
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Planification des verifications', 50, 50);
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('6. Presse-Etoupes (PE)', 50, 50);
+    doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
+
+    let peY = 100;
+    doc.fontSize(11).font('Helvetica').fillColor(colors.text)
+       .text('Les presse-etoupes (cable glands) assurent l\'etancheite des traversees de cables dans les zones ATEX. Leur verification est essentielle pour maintenir l\'integrite des zones classees.', 50, peY, { width: 495 });
+    peY += 50;
+
+    // Stats PE
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#7c3aed').text('Synthese des PE', 50, peY);
+    peY += 25;
+
+    const peStatItems = [
+      { label: 'Paniers de photos', value: peStatsData.total_baskets || 0 },
+      { label: 'Photos analysees', value: peStatsData.total_photos || 0 },
+      { label: 'PE detectes', value: peStatsData.total_glands || 0 },
+      { label: 'PE conformes', value: peStatsData.compliant_glands || 0, color: colors.success },
+      { label: 'PE non conformes', value: peStatsData.non_compliant_glands || 0, color: colors.danger },
+      { label: 'Taux de conformite', value: `${peConformityRate}%`, color: peConformityRate >= 90 ? colors.success : peConformityRate >= 70 ? colors.warning : colors.danger },
+    ];
+
+    peStatItems.forEach(item => {
+      doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(item.label, 60, peY);
+      doc.font('Helvetica-Bold').fillColor(item.color || colors.primary).text(String(item.value), 250, peY);
+      peY += 18;
+    });
+    peY += 20;
+
+    // Liste des PE non conformes
+    if (peNonCompliantList.length > 0) {
+      doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.danger).text('PE non conformes', 50, peY);
+      peY += 25;
+
+      const peHeaders = ['Reference/Type', 'Panier', 'Batiment', 'Zone', 'Etat'];
+      const peColW = [120, 100, 100, 100, 75];
+      let px = 50;
+      peHeaders.forEach((h, i) => {
+        doc.rect(px, peY, peColW[i], 18).fillAndStroke(colors.danger, colors.danger);
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, px + 4, peY + 4, { width: peColW[i] - 8 });
+        px += peColW[i];
+      });
+      peY += 18;
+
+      peNonCompliantList.slice(0, 25).forEach(pe => {
+        if (peY > 750) {
+          doc.addPage();
+          peY = 50;
+          px = 50;
+          peHeaders.forEach((h, i) => {
+            doc.rect(px, peY, peColW[i], 18).fillAndStroke(colors.danger, colors.danger);
+            doc.fontSize(8).font('Helvetica-Bold').fillColor('#fff').text(h, px + 4, peY + 4, { width: peColW[i] - 8 });
+            px += peColW[i];
+          });
+          peY += 18;
+        }
+        const row = [
+          (pe.reference || pe.type || '-').substring(0, 22),
+          (pe.basket_name || '-').substring(0, 18),
+          (pe.building || '-').substring(0, 18),
+          (pe.zone_name || '-').substring(0, 18),
+          (pe.condition || '-').substring(0, 12)
+        ];
+        px = 50;
+        row.forEach((cell, i) => {
+          doc.rect(px, peY, peColW[i], 16).fillAndStroke('#fff', '#fecaca');
+          doc.fontSize(7).font('Helvetica').fillColor(colors.text).text(String(cell), px + 4, peY + 4, { width: peColW[i] - 8 });
+          px += peColW[i];
+        });
+        peY += 16;
+      });
+
+      if (peNonCompliantList.length > 25) {
+        peY += 10;
+        doc.fontSize(9).fillColor(colors.muted).text(`+ ${peNonCompliantList.length - 25} autres PE non conformes non affiches`, 50, peY);
+      }
+    } else if (peStatsData.total_glands > 0) {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.success).text('Tous les presse-etoupes detectes sont conformes.', 50, peY);
+    } else {
+      doc.fontSize(11).font('Helvetica').fillColor(colors.muted).text('Aucun presse-etoupe n\'a ete analyse pour le moment.', 50, peY);
+    }
+
+    // ========== 7. PLANIFICATION ==========
+    doc.addPage();
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Planification des verifications', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
     let planY = 100;
@@ -5703,9 +5813,9 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       });
     }
 
-    // ========== 7. MESURES DE PRÉVENTION ==========
+    // ========== 8. MESURES DE PRÉVENTION ==========
     doc.addPage();
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('7. Mesures de prevention et protection', 50, 50);
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Mesures de prevention et protection', 50, 50);
     doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
     let mesY = 100;
@@ -5750,11 +5860,11 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
       70, mesY + 32, { width: 455 }
     );
 
-    // ========== 8. FICHES EQUIPEMENTS ==========
+    // ========== 9. FICHES EQUIPEMENTS ==========
     // Afficher tous les équipements avec vignette du plan si disponible
     if (equipments.length > 0) {
       doc.addPage();
-      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('8. Fiches equipements', 50, 50, { lineBreak: false });
+      doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.primary).text('9. Fiches equipements', 50, 50, { lineBreak: false });
       doc.moveTo(50, 80).lineTo(545, 80).strokeColor(colors.primary).lineWidth(1).stroke();
 
       let ficheY = 100;
@@ -5812,7 +5922,8 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
         }
 
         // Vignette du plan avec localisation (à côté de la photo) - CHARGEMENT À LA DEMANDE
-        const planX = rightColX + imgWidth + 10;
+        // Note: planX + imgWidth doit rester <= 545 (marge droite de la page A4)
+        const planX = rightColX + imgWidth + 5; // Réduit l'espace pour éviter dépassement de marge
         const planThumbnailData = position ? await loadPlanThumbnail(position.logical_name, position.plan_id) : null;
         if (position && planThumbnailData) {
           try {
