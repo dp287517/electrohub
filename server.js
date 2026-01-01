@@ -1365,26 +1365,20 @@ async function getAIContext(site) {
 
     // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
-      // Query supports all equipment types (switchboard, mobile, vsd, meca, hv, glo, datahub)
+      // Query supports switchboard and mobile equipment types
+      // Note: vsd/meca have type mismatch (INTEGER vs UUID) so we don't JOIN them
       const ctrlRes = await pool.query(`
-        SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id,
-               cs.meca_equipment_id, cs.hv_equipment_id, cs.glo_equipment_id,
-               cs.next_due_date, cs.status, cs.last_control_date, cs.equipment_type,
+        SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.equipment_type,
+               cs.next_due_date, cs.status, cs.last_control_date,
                ct.name as template_name, ct.id as template_id, ct.frequency_months,
                -- Switchboard data
                s.name as switchboard_name, s.code as switchboard_code, s.building_code as s_building, s.floor as s_floor, s.room as s_room,
-               -- Mobile equipment data (from me_equipments)
-               me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location,
-               -- VSD data
-               vsd.name as vsd_name, vsd.building as vsd_building, vsd.floor as vsd_floor, vsd.location as vsd_location,
-               -- MECA data
-               meca.name as meca_name, meca.building as meca_building, meca.floor as meca_floor, meca.location as meca_location
+               -- Mobile equipment data (from me_equipments - UUID type matches)
+               me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
         LEFT JOIN me_equipments me ON cs.mobile_equipment_id = me.id
-        LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id = vsd.id
-        LEFT JOIN meca_equipments meca ON cs.meca_equipment_id = meca.id
         WHERE cs.site = $1
         ORDER BY cs.next_due_date NULLS LAST
       `, [site]);
@@ -1410,18 +1404,13 @@ async function getAIContext(site) {
             eqId = ctrl.mobile_equipment_id;
             break;
           case 'vsd':
-            eqName = ctrl.vsd_name;
-            eqBuilding = ctrl.vsd_building;
-            eqFloor = ctrl.vsd_floor;
-            eqRoom = ctrl.vsd_location;
-            eqId = ctrl.vsd_equipment_id;
-            break;
           case 'meca':
-            eqName = ctrl.meca_name;
-            eqBuilding = ctrl.meca_building;
-            eqFloor = ctrl.meca_floor;
-            eqRoom = ctrl.meca_location;
-            eqId = ctrl.meca_equipment_id;
+          case 'hv':
+          case 'glo':
+          case 'datahub':
+            // These have type mismatch (INTEGER vs UUID in their tables)
+            // Show type name for now - data lookup would require separate queries
+            eqName = `Équipement ${eqType.toUpperCase()}`;
             break;
           default: // switchboard
             eqName = ctrl.switchboard_name;
