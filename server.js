@@ -5268,6 +5268,45 @@ ${highRisk.slice(0, 5).map(r => `- **${r.name}**: Risque ${(parseFloat(r.riskSco
       response.proceduresFound = procedureSearchResults.procedures;
     }
 
+    // === EQUIPMENT LIST FOR MAP CONTEXT ===
+    // When the response mentions equipment/switchboards/controls, include equipment list for future map requests
+    const msgLowerForEquip = message.toLowerCase();
+    const responseLower = parsed.message.toLowerCase();
+    const mentionsEquipment = (
+      (msgLowerForEquip.includes('équipement') || msgLowerForEquip.includes('equipement') ||
+       msgLowerForEquip.includes('tableau') || msgLowerForEquip.includes('contrôle') ||
+       msgLowerForEquip.includes('bâtiment') || msgLowerForEquip.includes('batiment')) &&
+      (responseLower.includes('tableau') || responseLower.includes('équipement') ||
+       responseLower.includes('switchboard') || responseLower.includes('contrôler'))
+    );
+
+    if (mentionsEquipment && dbContext.switchboards?.list?.length > 0) {
+      // Extract building code from message if present
+      const buildingMatch = msgLowerForEquip.match(/(?:bâtiment|batiment|bat\.?|building)\s*[:\s]?\s*(\w+)/i);
+      const buildingCode = buildingMatch ? buildingMatch[1].toUpperCase() : null;
+
+      // Filter equipment by building if specified
+      let equipmentForList = dbContext.switchboards.list;
+      if (buildingCode) {
+        equipmentForList = equipmentForList.filter(eq =>
+          eq.building_code?.toUpperCase() === buildingCode
+        );
+      }
+
+      if (equipmentForList.length > 0) {
+        response.equipmentList = equipmentForList.map(eq => ({
+          id: eq.id,
+          name: eq.name,
+          code: eq.code,
+          building_code: eq.building_code || eq.building,
+          floor: eq.floor,
+          room: eq.room,
+          equipmentType: 'switchboard'
+        }));
+        console.log(`[AI] 📦 Equipment list attached: ${response.equipmentList.length} items${buildingCode ? ` (filtered by building ${buildingCode})` : ''}`);
+      }
+    }
+
     // Add chart if present, or auto-generate for statistical queries
     if (parsed.chart) {
       response.chart = parsed.chart;
