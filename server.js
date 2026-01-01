@@ -3417,6 +3417,80 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     }
 
     // ==========================================================================
+    // OVERDUE CONTROL QUERIES - Return structured data with equipment info
+    // ==========================================================================
+    const wantsOverdueControls = (
+      (msgLower.includes('retard') || msgLower.includes('overdue') || msgLower.includes('en attente')) &&
+      (msgLower.includes('contrôle') || msgLower.includes('controle') || msgLower.includes('équipement') || msgLower.includes('mobile'))
+    );
+
+    if (wantsOverdueControls) {
+      console.log('[AI] ⏰ Overdue control query detected');
+
+      try {
+        // Build context to get overdue controls
+        const dbContext = await getAIContext(site);
+        const overdueList = dbContext.controls?.overdueList || [];
+        const overdueCount = dbContext.controls?.overdue || 0;
+
+        if (overdueCount > 0) {
+          let response = `🚨 **${overdueCount} contrôle(s) en retard!**\n\n`;
+
+          // Build equipment list for map context
+          const equipmentList = [];
+
+          overdueList.slice(0, 5).forEach((c, i) => {
+            const typeEmoji = c.equipmentType === 'mobile' ? '📱' : '🔌';
+            response += `${i + 1}. ${typeEmoji} **${c.switchboard}** (${c.switchboardCode})\n`;
+            response += `   📍 Bât. ${c.building}, ét. ${c.floor} | ⏰ ${c.daysOverdue}j de retard\n\n`;
+
+            // Add to equipment list for map display
+            equipmentList.push({
+              id: c.equipment?.id || c.equipmentId || c.switchboardId,
+              name: c.switchboard,
+              code: c.switchboardCode,
+              building_code: c.building,
+              floor: c.floor,
+              room: c.room,
+              equipmentType: c.equipmentType || 'switchboard'
+            });
+          });
+
+          if (overdueCount > 5) {
+            response += `\n_...et ${overdueCount - 5} autre(s)_\n`;
+          }
+
+          response += `\nVeux-tu que je te montre leur localisation sur le plan ?`;
+
+          // Actions with map navigation
+          const actions = [
+            { label: "🗺️ Voir sur la carte", prompt: "Montre-moi la carte des équipements en retard" },
+            { label: "📋 Planifier les contrôles", prompt: "Planifier les contrôles en retard" }
+          ];
+
+          // If single equipment, include direct location data
+          const singleEquipment = equipmentList.length === 1 ? equipmentList[0] : null;
+
+          return res.json({
+            message: response,
+            actions,
+            provider: "Electro",
+            // Include equipment data for subsequent map requests
+            equipmentList: equipmentList.length > 0 ? equipmentList : undefined,
+            // If single equipment, also include direct location data for immediate map display
+            ...(singleEquipment && {
+              showMap: true,
+              locationEquipment: singleEquipment,
+              locationEquipmentType: singleEquipment.equipmentType
+            })
+          });
+        }
+      } catch (e) {
+        console.error('[AI] Overdue control query error:', e.message);
+      }
+    }
+
+    // ==========================================================================
     // SMART NAVIGATION DETECTION - Understand natural French requests
     // ==========================================================================
 
