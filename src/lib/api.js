@@ -579,6 +579,7 @@ export const api = {
 
   /** --- DOORS --- */
   doors: {
+    dashboard: () => get("/api/doors/dashboard"),
     list: (params) => get("/api/doors/doors", params),
     get: (id) =>
       get(`/api/doors/doors/${encodeURIComponent(id)}`),

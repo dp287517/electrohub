@@ -3392,6 +3392,71 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "procedures", port: PORT });
 });
 
+// --- DASHBOARD STATS ---
+
+// Get procedure stats for main dashboard badges
+app.get("/api/procedures/dashboard", async (req, res) => {
+  try {
+    const site = extractTenantFromRequest(req);
+
+    // Count by status
+    const statusQuery = `
+      SELECT status, COUNT(*) as count
+      FROM procedures
+      WHERE ($1::text IS NULL OR $1 = 'all' OR site = $1 OR site IS NULL)
+      GROUP BY status
+    `;
+    const { rows: statusRows } = await pool.query(statusQuery, [site]);
+
+    // Count high-risk procedures
+    const riskQuery = `
+      SELECT COUNT(*) as count
+      FROM procedures
+      WHERE ($1::text IS NULL OR $1 = 'all' OR site = $1 OR site IS NULL)
+        AND risk_level IN ('high', 'critical')
+        AND status != 'archived'
+    `;
+    const { rows: riskRows } = await pool.query(riskQuery, [site]);
+
+    // Count drafts (auto-save)
+    const draftsQuery = `
+      SELECT COUNT(*) as count
+      FROM procedure_drafts
+      WHERE ($1::text IS NULL OR $1 = 'all' OR site = $1)
+    `;
+    const { rows: draftsRows } = await pool.query(draftsQuery, [site]);
+
+    // Recent executions (last 7 days)
+    const recentQuery = `
+      SELECT COUNT(*) as count
+      FROM procedure_executions
+      WHERE started_at > NOW() - INTERVAL '7 days'
+    `;
+    const { rows: recentRows } = await pool.query(recentQuery);
+
+    // Build stats object
+    const byStatus = {};
+    for (const row of statusRows) {
+      byStatus[row.status] = Number(row.count);
+    }
+
+    res.json({
+      draft: byStatus.draft || 0,
+      review: byStatus.review || 0,
+      approved: byStatus.approved || 0,
+      archived: byStatus.archived || 0,
+      highRisk: Number(riskRows[0]?.count || 0),
+      autoSaveDrafts: Number(draftsRows[0]?.count || 0),
+      recentExecutions: Number(recentRows[0]?.count || 0),
+      // Badge value: drafts + in review (items needing attention)
+      pendingAttention: (byStatus.draft || 0) + (byStatus.review || 0)
+    });
+  } catch (err) {
+    console.error("Error getting procedures dashboard:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- PROCEDURES CRUD ---
 
 // List all procedures
