@@ -1762,7 +1762,7 @@ async function getAIContext(site) {
     context.hv = { count: 0, list: [] };
     try {
       const hvRes = await pool.query(`
-        SELECT id, name, code, building_code, floor, room, type, power_mva, voltage_kv
+        SELECT id, name, code, building_code, floor, room, power_mva, voltage_kv
         FROM hv_equipments
         ORDER BY building_code, floor, name
         LIMIT 50
@@ -1782,7 +1782,7 @@ async function getAIContext(site) {
     context.glo = { count: 0, list: [] };
     try {
       const gloRes = await pool.query(`
-        SELECT id, name, tag as code, building, floor, location, type
+        SELECT id, name, tag as code, building, floor, location
         FROM glo_equipments
         ORDER BY building, floor, name
         LIMIT 50
@@ -1801,7 +1801,7 @@ async function getAIContext(site) {
     context.mobile = { count: 0, list: [] };
     try {
       const meRes = await pool.query(`
-        SELECT id, name, code, serial_number, building, floor, location, category, status
+        SELECT id, name, code, serial_number, building, floor, location, status
         FROM me_equipments
         ORDER BY building, floor, name
         LIMIT 50
