@@ -5062,7 +5062,7 @@ app.get("/api/atex/drpce", async (req, res) => {
         ];
 
         infoItems.forEach(([label, value]) => {
-          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 85 });
+          doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(label + ':', infoX, infoY, { width: 85, lineBreak: false });
           doc.font('Helvetica').fillColor(colors.muted).text(value, infoX + 88, infoY, { width: infoWidth - 88, lineBreak: false });
           infoY += 16;
         });
@@ -5080,9 +5080,9 @@ app.get("/api/atex/drpce", async (req, res) => {
     const totalPages = range.count;
     for (let i = range.start; i < range.start + totalPages; i++) {
       doc.switchToPage(i);
-      // Utiliser lineBreak: false pour éviter la création de pages supplémentaires
+      // Footer en bas de page (y=780 pour rester dans la zone d'impression A4)
       doc.fontSize(8).fillColor(colors.muted)
-         .text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
+         .text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 780, { align: 'center', width: 495, lineBreak: false });
     }
 
     doc.end();
@@ -6036,7 +6036,8 @@ async function generateDRPCEAsync(reportId, siteName, filters, userEmail, userNa
     const totalPages = range.count;
     for (let i = range.start; i < range.start + totalPages; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor(colors.muted).text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 810, { align: 'center', width: 495, lineBreak: false });
+      // Footer en bas de page (y=780 pour rester dans la zone d'impression A4)
+      doc.fontSize(8).fillColor(colors.muted).text(`Management Monitoring - ${siteInfo.company_name || 'Document'} - Page ${i + 1}/${totalPages}`, 50, 780, { align: 'center', width: 495, lineBreak: false });
     }
 
     // Finaliser le PDF - attendre que le fichier soit complètement écrit
@@ -6290,8 +6291,9 @@ app.get("/api/atex/drpce/pending", async (req, res) => {
 // List all cable gland baskets
 app.get("/api/atex/cable-glands/baskets", async (req, res) => {
   try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+    const companyId = tenant.companyId || null;
+    const siteId = tenant.siteId || null;
 
     const { rows } = await pool.query(`
       SELECT
@@ -6303,7 +6305,7 @@ app.get("/api/atex/cable-glands/baskets", async (req, res) => {
       WHERE ($1::int IS NULL OR b.company_id = $1)
         AND ($2::int IS NULL OR b.site_id = $2)
       ORDER BY b.created_at DESC
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     res.json({ ok: true, baskets: rows });
   } catch (e) {
@@ -6317,8 +6319,9 @@ app.get("/api/atex/cable-glands/baskets/by-plan/:logicalName", async (req, res) 
   try {
     const { logicalName } = req.params;
     const pageIndex = parseInt(req.query.pageIndex) || 0;
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+    const companyId = tenant.companyId || null;
+    const siteId = tenant.siteId || null;
 
     const { rows } = await pool.query(`
       SELECT
@@ -6332,7 +6335,7 @@ app.get("/api/atex/cable-glands/baskets/by-plan/:logicalName", async (req, res) 
         AND ($3::int IS NULL OR b.company_id = $3)
         AND ($4::int IS NULL OR b.site_id = $4)
       ORDER BY b.created_at DESC
-    `, [logicalName, pageIndex, filter.company_id, filter.site_id]);
+    `, [logicalName, pageIndex, companyId, siteId]);
 
     res.json({ ok: true, baskets: rows });
   } catch (e) {
@@ -6345,8 +6348,7 @@ app.get("/api/atex/cable-glands/baskets/by-plan/:logicalName", async (req, res) 
 app.post("/api/atex/cable-glands/baskets", async (req, res) => {
   try {
     const user = getUser(req);
-    const tenant = extractTenantFromRequest(req);
-    const tenantData = addTenantToData({}, tenant);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
 
     const { name, description, planId, planLogicalName, zoneId, zoneName, building, pageIndex, xFrac, yFrac } = req.body;
 
@@ -6366,8 +6368,8 @@ app.post("/api/atex/cable-glands/baskets", async (req, res) => {
       pageIndex || 0,
       xFrac ?? null,
       yFrac ?? null,
-      tenantData.company_id,
-      tenantData.site_id,
+      tenant.companyId || null,
+      tenant.siteId || null,
       user.name,
       user.email
     ]);
@@ -6645,8 +6647,9 @@ app.get("/api/atex/cable-glands/analysis/:queueId/status", async (req, res) => {
 // Get all pending/processing analyses for monitoring
 app.get("/api/atex/cable-glands/analysis/pending", async (req, res) => {
   try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+    const companyId = tenant.companyId || null;
+    const siteId = tenant.siteId || null;
 
     const { rows } = await pool.query(`
       SELECT q.*, b.name as basket_name
@@ -6656,7 +6659,7 @@ app.get("/api/atex/cable-glands/analysis/pending", async (req, res) => {
         AND ($1::int IS NULL OR q.company_id = $1)
         AND ($2::int IS NULL OR q.site_id = $2)
       ORDER BY q.created_at DESC
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     res.json({ ok: true, analyses: rows });
   } catch (e) {
@@ -6668,8 +6671,9 @@ app.get("/api/atex/cable-glands/analysis/pending", async (req, res) => {
 // Get statistics for management monitoring
 app.get("/api/atex/cable-glands/stats", async (req, res) => {
   try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
+    const tenant = await enrichTenantWithSiteId(extractTenantFromRequest(req), req, pool);
+    const companyId = tenant.companyId || null;
+    const siteId = tenant.siteId || null;
 
     // Basic stats
     const stats = await pool.query(`
@@ -6682,7 +6686,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'ok' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as compliant_glands,
         (SELECT COUNT(*) FROM cable_gland_items WHERE compliance_status = 'issue' AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as non_compliant_glands,
         (SELECT COUNT(*) FROM cable_gland_analysis_queue WHERE status IN ('pending', 'processing') AND ($1::int IS NULL OR company_id = $1) AND ($2::int IS NULL OR site_id = $2)) as pending_analyses
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     // Stats by building/zone
     const byBuilding = await pool.query(`
@@ -6700,7 +6704,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
       WHERE ($1::int IS NULL OR b.company_id = $1) AND ($2::int IS NULL OR b.site_id = $2)
       GROUP BY b.building, b.zone_name
       ORDER BY b.building, b.zone_name
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     // Non-compliant PE items with basket/plan info
     const nonCompliant = await pool.query(`
@@ -6726,7 +6730,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         AND ($2::int IS NULL OR i.site_id = $2)
       ORDER BY i.created_at DESC
       LIMIT 20
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     // Recent analysis history
     const history = await pool.query(`
@@ -6746,7 +6750,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
       WHERE ($1::int IS NULL OR q.company_id = $1) AND ($2::int IS NULL OR q.site_id = $2)
       ORDER BY COALESCE(q.completed_at, q.started_at, q.created_at) DESC
       LIMIT 10
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     // PE baskets overdue for check (next_check_date < now)
     const overdue = await pool.query(`
@@ -6760,7 +6764,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         AND ($2::int IS NULL OR site_id = $2)
       ORDER BY next_check_date ASC
       LIMIT 20
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     // PE baskets with upcoming checks (within 90 days)
     const upcoming = await pool.query(`
@@ -6775,7 +6779,7 @@ app.get("/api/atex/cable-glands/stats", async (req, res) => {
         AND ($2::int IS NULL OR site_id = $2)
       ORDER BY next_check_date ASC
       LIMIT 20
-    `, [filter.company_id, filter.site_id]);
+    `, [companyId, siteId]);
 
     res.json({
       ok: true,
