@@ -4822,10 +4822,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     // ============================================================
 
     // Check if user is confirming to see a procedure ("oui", "la première", "celle-ci", "la 1", etc.)
-    const isConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|la \d+|le \d+|num[ée]ro \d+|\d+|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
+    const isProcedureConfirmation = /^(oui|ok|d'accord|celle[- ]?(ci|là)|la premi[èe]re|la 1[èe]?re?|la \d+|le \d+|num[ée]ro \d+|\d+|yes|yep|ouais|vas-y|go|voir|montre)[\s!.]*$/i.test(msgLower.trim());
 
     // If user confirms, check conversation history for recent procedure list
-    if (isConfirmation && conversationHistory?.length > 0) {
+    if (isProcedureConfirmation && conversationHistory?.length > 0) {
       const lastAssistantMsg = conversationHistory.filter(m => m.role === 'assistant').slice(-1)[0];
       if (lastAssistantMsg?.content?.includes('procédure')) {
         console.log('[AI] 📋 User confirmed - checking for procedure context...');
