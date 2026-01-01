@@ -793,27 +793,101 @@ const DetailPanel = ({
               ) : history.length === 0 ? (
                 <p className="text-sm text-gray-500 text-center py-2">Aucun contrôle</p>
               ) : (
-                history.slice(0, 5).map((check) => (
-                  <div key={check.id} className="bg-white rounded-lg p-3 border border-gray-200">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium text-gray-900">
-                        {dayjs(check.date || check.closed_at).format('DD/MM/YYYY')}
-                      </span>
-                      <Badge variant={check.result === 'conforme' ? 'success' : 'danger'}>
-                        {check.result === 'conforme' ? 'Conforme' : 'Non conforme'}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      Par {check.user || 'Inconnu'}
-                    </p>
-                    {(check.counts || check.result_counts) && (
-                      <div className="flex gap-2 mt-2 text-xs">
-                        <span className="text-emerald-600">{(check.counts || check.result_counts)?.conforme || 0} OK</span>
-                        <span className="text-red-600">{(check.counts || check.result_counts)?.nc || 0} NC</span>
-                        <span className="text-gray-400">{(check.counts || check.result_counts)?.na || 0} N/A</span>
+                history.slice(0, 10).map((check) => (
+                  <details key={check.id} className="bg-white rounded-lg border border-gray-200 group">
+                    <summary className="p-3 cursor-pointer list-none">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <ChevronRight size={16} className="text-gray-400 transition-transform group-open:rotate-90" />
+                          <span className="text-sm font-medium text-gray-900">
+                            {dayjs(check.date || check.closed_at).format('DD/MM/YYYY')}
+                          </span>
+                        </div>
+                        <Badge variant={check.result === 'conforme' ? 'success' : 'danger'}>
+                          {check.result === 'conforme' ? 'Conforme' : 'Non conforme'}
+                        </Badge>
                       </div>
-                    )}
-                  </div>
+                      <p className="text-xs text-gray-500 ml-6">
+                        Par {check.user || 'Inconnu'}
+                      </p>
+                      {(check.counts || check.result_counts) && (
+                        <div className="flex gap-2 mt-2 ml-6 text-xs">
+                          <span className="text-emerald-600">{(check.counts || check.result_counts)?.conforme || 0} OK</span>
+                          <span className="text-red-600">{(check.counts || check.result_counts)?.nc || 0} NC</span>
+                          <span className="text-gray-400">{(check.counts || check.result_counts)?.na || 0} N/A</span>
+                        </div>
+                      )}
+                    </summary>
+
+                    {/* Détails du contrôle */}
+                    <div className="px-3 pb-3 border-t border-gray-100 mt-2 pt-3 space-y-2">
+                      {/* Questions avec résultats */}
+                      {check.items && check.items.length > 0 && (
+                        <div className="space-y-1.5">
+                          {check.items.map((item, idx) => (
+                            <div key={idx} className="text-xs">
+                              <div className="flex items-start gap-2">
+                                {item.value === 'conforme' ? (
+                                  <CheckCircle size={14} className="text-emerald-500 mt-0.5 flex-shrink-0" />
+                                ) : item.value === 'non_conforme' ? (
+                                  <XCircle size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+                                ) : (
+                                  <HelpCircle size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                                )}
+                                <span className={`flex-1 ${
+                                  item.value === 'non_conforme' ? 'text-red-700 font-medium' : 'text-gray-600'
+                                }`}>
+                                  {item.label || `Point ${idx + 1}`}
+                                </span>
+                              </div>
+                              {/* Commentaire */}
+                              {item.comment && (
+                                <div className="ml-6 mt-1 p-2 bg-amber-50 rounded text-amber-800 italic">
+                                  💬 {item.comment}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Photos/Fichiers du contrôle */}
+                      {check.files && check.files.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-gray-100">
+                          <p className="text-xs font-medium text-gray-500 mb-2">📎 Pièces jointes ({check.files.length})</p>
+                          <div className="flex flex-wrap gap-2">
+                            {check.files.map((file) => (
+                              <a
+                                key={file.id}
+                                href={file.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs text-gray-700"
+                              >
+                                <FileText size={12} />
+                                {file.name}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lien vers PDF NC */}
+                      {check.nc_pdf_url && (
+                        <div className="mt-2 pt-2 border-t border-gray-100">
+                          <a
+                            href={check.nc_pdf_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 hover:bg-red-100 rounded-lg text-xs text-red-700 font-medium"
+                          >
+                            <Download size={14} />
+                            Télécharger le rapport de non-conformités
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </details>
                 ))
               )}
             </div>
