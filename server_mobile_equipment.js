@@ -2100,9 +2100,10 @@ app.put("/api/mobile-equipment/maps/plan/:logical/rename", async (req, res) => {
 app.get("/api/mobile-equipment/maps/placed-ids", async (req, res) => {
   try {
     // Get all equipment positions with page_index for MiniEquipmentPreview compatibility
+    // Use vsd_plan_names for display_name (not vsd_plans which doesn't have this column)
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (equipment_id) equipment_id, plan_logical_name AS logical_name, page_index,
-             (SELECT display_name FROM vsd_plans WHERE logical_name = plan_logical_name LIMIT 1) as display_name
+             (SELECT display_name FROM vsd_plan_names WHERE logical_name = plan_logical_name LIMIT 1) as display_name
         FROM me_equipment_positions
         ORDER BY equipment_id, page_index
     `);
