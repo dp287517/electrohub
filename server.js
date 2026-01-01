@@ -1366,6 +1366,12 @@ async function getAIContext(site) {
     // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
       // Query supports ALL equipment types using ::text casting to avoid INTEGER vs UUID mismatch
+      // Column mapping per table:
+      // - vsd_equipments: name, building, zone (no code, no floor)
+      // - meca_equipments: name, tag, building, floor, location
+      // - hv_equipments: name, code, building_code, floor, room
+      // - glo_equipments: name, tag, building, floor, local
+      // - dh_items: name, code, building, floor, location
       const ctrlRes = await pool.query(`
         SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id, cs.meca_equipment_id,
                cs.hv_equipment_id, cs.glo_equipment_id, cs.datahub_equipment_id, cs.equipment_type,
@@ -1375,16 +1381,16 @@ async function getAIContext(site) {
                s.name as switchboard_name, s.code as switchboard_code, s.building_code as s_building, s.floor as s_floor, s.room as s_room,
                -- Mobile equipment data
                me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location,
-               -- VSD data
-               vsd.name as vsd_name, vsd.code as vsd_code, vsd.building_code as vsd_building, vsd.floor as vsd_floor, vsd.local as vsd_room,
-               -- MECA data
-               meca.name as meca_name, meca.code as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.local as meca_room,
-               -- HV data
-               hv.name as hv_name, hv.code as hv_code, hv.building as hv_building, hv.floor as hv_floor, hv.room as hv_room,
-               -- GLO data
+               -- VSD data (no code column, no floor - uses zone)
+               vsd.name as vsd_name, vsd.name as vsd_code, vsd.building as vsd_building, vsd.zone as vsd_floor, '' as vsd_room,
+               -- MECA data (uses tag for code, location for room)
+               meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.location as meca_room,
+               -- HV data (has all standard columns)
+               hv.name as hv_name, hv.code as hv_code, hv.building_code as hv_building, hv.floor as hv_floor, hv.room as hv_room,
+               -- GLO data (uses tag for code, local for room)
                glo.name as glo_name, glo.tag as glo_code, glo.building as glo_building, glo.floor as glo_floor, glo.local as glo_room,
-               -- Datahub data
-               dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.room as dh_room
+               -- Datahub data (uses location for room)
+               dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.location as dh_room
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
