@@ -1366,6 +1366,12 @@ async function getAIContext(site) {
     // ========== CONTROL SCHEDULES - WITH DATE RANGES ==========
     try {
       // Query supports ALL equipment types using ::text casting to avoid INTEGER vs UUID mismatch
+      // Column mapping per table:
+      // - vsd_equipments: name, building, zone (no code, no floor)
+      // - meca_equipments: name, tag, building, floor, location
+      // - hv_equipments: name, code, building_code, floor, room
+      // - glo_equipments: name, tag, building, floor, local
+      // - dh_items: name, code, building, floor, location
       const ctrlRes = await pool.query(`
         SELECT cs.id, cs.switchboard_id, cs.mobile_equipment_id, cs.vsd_equipment_id, cs.meca_equipment_id,
                cs.hv_equipment_id, cs.glo_equipment_id, cs.datahub_equipment_id, cs.equipment_type,
@@ -1375,16 +1381,16 @@ async function getAIContext(site) {
                s.name as switchboard_name, s.code as switchboard_code, s.building_code as s_building, s.floor as s_floor, s.room as s_room,
                -- Mobile equipment data
                me.name as mobile_name, me.code as mobile_code, me.building as me_building, me.floor as me_floor, me.location as me_location,
-               -- VSD data
-               vsd.name as vsd_name, vsd.code as vsd_code, vsd.building_code as vsd_building, vsd.floor as vsd_floor, vsd.local as vsd_room,
-               -- MECA data
-               meca.name as meca_name, meca.code as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.local as meca_room,
-               -- HV data
-               hv.name as hv_name, hv.code as hv_code, hv.building as hv_building, hv.floor as hv_floor, hv.room as hv_room,
-               -- GLO data
+               -- VSD data (no code column, no floor - uses zone)
+               vsd.name as vsd_name, vsd.name as vsd_code, vsd.building as vsd_building, vsd.zone as vsd_floor, '' as vsd_room,
+               -- MECA data (uses tag for code, location for room)
+               meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building, meca.floor as meca_floor, meca.location as meca_room,
+               -- HV data (has all standard columns)
+               hv.name as hv_name, hv.code as hv_code, hv.building_code as hv_building, hv.floor as hv_floor, hv.room as hv_room,
+               -- GLO data (uses tag for code, local for room)
                glo.name as glo_name, glo.tag as glo_code, glo.building as glo_building, glo.floor as glo_floor, glo.local as glo_room,
-               -- Datahub data
-               dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.room as dh_room
+               -- Datahub data (uses location for room)
+               dh.name as dh_name, dh.code as dh_code, dh.building as dh_building, dh.floor as dh_floor, dh.location as dh_room
         FROM control_schedules cs
         LEFT JOIN control_templates ct ON cs.template_id = ct.id
         LEFT JOIN switchboards s ON cs.switchboard_id = s.id
@@ -3437,6 +3443,18 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
 
     if (wantsMapFromContext && conversationHistory?.length > 0) {
       console.log('[AI] 🗺️ Map request with context detected');
+      console.log('[AI] 🗺️ Conversation history length:', conversationHistory.length);
+
+      // Log what equipment data is available in history
+      const historyWithEquipment = conversationHistory.filter(msg =>
+        msg.equipment || msg.locationEquipment || msg.equipmentList?.length > 0
+      );
+      console.log('[AI] 🗺️ Messages with equipment data:', historyWithEquipment.length);
+      if (historyWithEquipment.length > 0) {
+        historyWithEquipment.forEach((msg, i) => {
+          console.log(`[AI] 🗺️   [${i}] equipment:`, !!msg.equipment, 'locationEquipment:', !!msg.locationEquipment, 'equipmentList:', msg.equipmentList?.length || 0);
+        });
+      }
 
       // Look for equipment in recent conversation (single or list)
       const recentEquipmentMsg = [...conversationHistory].reverse().find(msg =>
@@ -3512,6 +3530,58 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           });
         }
       }
+
+      // FALLBACK: If map was requested for "équipements en retard" but no equipment in history,
+      // fetch overdue controls and show map directly
+      if (msgLower.includes('retard') && (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('montre'))) {
+        console.log('[AI] 🗺️ Map requested for overdue controls - fetching directly');
+        try {
+          const dbContext = await getAIContext(site);
+          const overdueList = dbContext.controls?.overdueList || [];
+
+          if (overdueList.length > 0) {
+            const firstEquipment = overdueList[0];
+            const equipmentList = overdueList.slice(0, 5).map(c => ({
+              id: c.equipment?.id || c.equipmentId || c.switchboardId,
+              name: c.switchboard,
+              code: c.switchboardCode,
+              building_code: c.building,
+              floor: c.floor,
+              room: c.room,
+              equipmentType: c.equipmentType || 'switchboard'
+            }));
+
+            let response = `## 🗺️ Équipements en retard de contrôle\n\n`;
+            overdueList.slice(0, 5).forEach((c, i) => {
+              const typeEmoji = c.equipmentType === 'mobile' ? '📱' : '🔌';
+              response += `${i + 1}. ${typeEmoji} **${c.switchboard}** — Bât. ${c.building}, ét. ${c.floor}\n`;
+            });
+            response += `\nVoici la localisation de **${firstEquipment.switchboard}** sur le plan :`;
+
+            return res.json({
+              message: response,
+              showMap: true,
+              locationEquipment: {
+                id: firstEquipment.equipment?.id || firstEquipment.equipmentId || firstEquipment.switchboardId,
+                name: firstEquipment.switchboard,
+                code: firstEquipment.switchboardCode,
+                building_code: firstEquipment.building,
+                floor: firstEquipment.floor,
+                room: firstEquipment.room
+              },
+              locationEquipmentType: firstEquipment.equipmentType || 'switchboard',
+              equipmentList: equipmentList,
+              actions: equipmentList.slice(0, 3).map(eq => ({
+                label: `📍 ${eq.name.substring(0, 20)}`,
+                prompt: `Montre-moi ${eq.name} sur la carte`
+              })),
+              provider: 'system'
+            });
+          }
+        } catch (e) {
+          console.error('[AI] Fallback map query error:', e.message);
+        }
+      }
     }
 
     // ==========================================================================
@@ -3522,7 +3592,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       (msgLower.includes('contrôle') || msgLower.includes('controle') || msgLower.includes('équipement') || msgLower.includes('mobile'))
     );
 
-    if (wantsOverdueControls) {
+    // Don't re-trigger overdue list if user explicitly asked for the map
+    const wantsMapExplicitly = msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('montre');
+
+    if (wantsOverdueControls && !wantsMapExplicitly) {
       console.log('[AI] ⏰ Overdue control query detected');
 
       try {
