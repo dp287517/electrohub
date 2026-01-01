@@ -1466,7 +1466,7 @@ async function getAIContext(site) {
             dueDateFormatted: dueDate.toLocaleDateString('fr-FR'),
             daysOverdue,
             urgency: daysOverdue > 30 ? 'CRITIQUE' : daysOverdue > 7 ? 'URGENT' : 'ATTENTION',
-            equipmentType: 'mobile_equipment',
+            equipmentType: 'mobile',  // Must match MiniEquipmentPreview EQUIPMENT_CONFIGS key
             equipment: {
               id: check.equipment_id,
               name: check.name,
@@ -3358,7 +3358,7 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
           let response = `## 🗺️ Localisation des équipements\n\n`;
           response += `**${equipmentList.length} équipements à contrôler:**\n\n`;
           equipmentList.forEach((eq, i) => {
-            const typeEmoji = eq.equipmentType === 'mobile_equipment' ? '📱' : '🔌';
+            const typeEmoji = eq.equipmentType === 'mobile' ? '📱' : '🔌';
             response += `${i + 1}. ${typeEmoji} **${eq.name}** — Bât. ${eq.building_code || 'N/A'}, ét. ${eq.floor || 'N/A'}\n`;
           });
           response += `\nVoici la localisation du premier équipement sur le plan :`;
@@ -3407,7 +3407,7 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             },
             locationEquipmentType: equipmentType,
             actions: [
-              { label: '🗺️ Vue complète', type: 'navigate', navigateTo: `/app/${equipmentType === 'mobile_equipment' ? 'mobile-equipments' : equipmentType + 's'}` },
+              { label: '🗺️ Vue complète', type: 'navigate', navigateTo: `/app/${equipmentType === 'mobile' ? 'mobile-equipments' : equipmentType + 's'}` },
               { label: '📋 Détails', prompt: `Détails sur ${equipment.name}` }
             ],
             provider: 'system'
@@ -5866,7 +5866,7 @@ function generateIntelligentFallback(message, ctx) {
       if (overdueList.length > 0) {
         response += overdueList.slice(0, 5).map(c => {
           // Indicate if it's mobile equipment
-          const typeLabel = c.equipmentType === 'mobile_equipment' ? ' 📱' : '';
+          const typeLabel = c.equipmentType === 'mobile' ? ' 📱' : '';
           return `• **${c.switchboard}**${typeLabel} (${c.switchboardCode})\n  📍 Bât. ${c.building}, ét. ${c.floor} | ⏰ ${c.daysOverdue}j de retard`;
         }).join('\n') + '\n\n';
 
