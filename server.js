@@ -3274,6 +3274,52 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
     const msgLower = message.toLowerCase();
 
     // ==========================================================================
+    // MAP REQUEST WITH CONTEXT - User wants to see map of previously mentioned equipment
+    // ==========================================================================
+    const wantsMapFromContext = (
+      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('voir') || msgLower.includes('montre')) &&
+      (msgLower.includes('carte') || msgLower.includes('plan') || msgLower.includes('localisation') || msgLower.includes('position'))
+    );
+
+    if (wantsMapFromContext && conversationHistory?.length > 0) {
+      console.log('[AI] 🗺️ Map request with context detected');
+
+      // Look for equipment in recent conversation
+      const recentEquipmentMsg = [...conversationHistory].reverse().find(msg =>
+        msg.equipment || msg.locationEquipment || msg.equipmentList?.length === 1
+      );
+
+      if (recentEquipmentMsg) {
+        const equipment = recentEquipmentMsg.equipment || recentEquipmentMsg.locationEquipment ||
+                         (recentEquipmentMsg.equipmentList?.[0]);
+        const equipmentType = recentEquipmentMsg.locationEquipmentType || recentEquipmentMsg.equipmentType || 'switchboard';
+
+        if (equipment) {
+          console.log(`[AI] 🗺️ Found equipment in context: ${equipment.name} (${equipmentType})`);
+
+          return res.json({
+            message: `## 🗺️ Localisation de ${equipment.name}\n\n📍 **Bâtiment:** ${equipment.building_code || equipment.building || 'N/A'}\n📍 **Étage:** ${equipment.floor || 'N/A'}\n\nVoici la position sur le plan :`,
+            showMap: true,
+            locationEquipment: {
+              id: equipment.id,
+              name: equipment.name,
+              code: equipment.code || equipment.tag,
+              building_code: equipment.building_code || equipment.building,
+              floor: equipment.floor,
+              room: equipment.room || equipment.location
+            },
+            locationEquipmentType: equipmentType,
+            actions: [
+              { label: '🗺️ Vue complète', type: 'navigate', navigateTo: `/app/${equipmentType === 'mobile_equipment' ? 'mobile-equipments' : equipmentType + 's'}` },
+              { label: '📋 Détails', prompt: `Détails sur ${equipment.name}` }
+            ],
+            provider: 'system'
+          });
+        }
+      }
+    }
+
+    // ==========================================================================
     // SMART NAVIGATION DETECTION - Understand natural French requests
     // ==========================================================================
 
@@ -3325,7 +3371,7 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
       // Query equipment in the building
       try {
         let query = `
-          SELECT s.id, s.name, s.code, s.building_code, s.floor, s.room, s.type,
+          SELECT s.id, s.name, s.code, s.building_code, s.floor, s.room,
                  'switchboard' as equipment_type
           FROM switchboards s
           WHERE s.site = $1
@@ -3378,6 +3424,10 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             response += '\n';
           });
 
+          // If only ONE equipment, show map with location
+          const showSingleEquipmentMap = equipResult.rows.length === 1;
+          const singleEquipment = showSingleEquipmentMap ? equipResult.rows[0] : null;
+
           // Create equipment actions with navigation data
           const actions = equipResult.rows.slice(0, 5).map(eq => ({
             label: `🔌 ${eq.name.substring(0, 25)}`,
@@ -3421,6 +3471,17 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
             floors,
             navigationMode: true,
             navigateTo: `/app/switchboards${buildingCode ? `?building=${buildingCode}` : ''}${floor ? `&floor=${floor}` : ''}`,
+            // Map integration - show mini map when single equipment found
+            showMap: showSingleEquipmentMap,
+            locationEquipment: singleEquipment ? {
+              id: singleEquipment.id,
+              name: singleEquipment.name,
+              code: singleEquipment.code,
+              building_code: singleEquipment.building_code,
+              floor: singleEquipment.floor,
+              room: singleEquipment.room
+            } : null,
+            locationEquipmentType: 'switchboard',
             actions,
             provider: 'system'
           });
@@ -3555,6 +3616,17 @@ app.post("/api/ai-assistant/chat", express.json(), async (req, res) => {
               navigateTo: `/app/switchboards?switchboard=${eq.id}`,
               buildingCode: eq.building_code,
               floor: eq.floor,
+              // Show map with equipment location
+              showMap: true,
+              locationEquipment: {
+                id: eq.id,
+                name: eq.name,
+                code: eq.code,
+                building_code: eq.building_code,
+                floor: eq.floor,
+                room: eq.room
+              },
+              locationEquipmentType: 'switchboard',
               actions: [
                 {
                   label: '🔌 Voir l\'équipement',
