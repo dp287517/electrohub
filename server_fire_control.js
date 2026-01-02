@@ -17,6 +17,7 @@ import pg from "pg";
 import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notifyUser, notify } from "./lib/push-notify.js";
 
 // PDF parsing
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -466,6 +467,10 @@ app.post("/api/fire-control/campaigns", async (req, res) => {
       details: { name: campName, year },
     });
 
+    // Send push notification
+    notifyEquipmentCreated('fire_campaign', { id: rows[0].id, name: campName, code: campName }, email)
+      .catch(err => console.log('[FireControl] Push notify error:', err.message));
+
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("[FireControl] POST campaign error:", err);
@@ -494,11 +499,18 @@ app.put("/api/fire-control/campaigns/:id", async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: "Campaign not found" });
 
+    const { email } = getIdentityFromReq(req);
     await audit.log(req, AUDIT_ACTIONS.UPDATED, {
       entityType: "campaign",
       entityId: id,
       details: { name, status },
     });
+
+    // Notify status change if status was updated
+    if (status) {
+      notifyStatusChanged('fire_campaign', { id: rows[0].id, name: rows[0].name, code: rows[0].name }, status, email)
+        .catch(err => console.log('[FireControl] Push notify error:', err.message));
+    }
 
     res.json(rows[0]);
   } catch (err) {
@@ -1041,11 +1053,21 @@ app.post("/api/fire-control/campaigns/:id/generate-checks", async (req, res) => 
       }
     }
 
+    const { email } = getIdentityFromReq(req);
     await audit.log(req, AUDIT_ACTIONS.CREATED, {
       entityType: "checks_batch",
       entityId: id,
       details: { created_count: created, building, floor },
     });
+
+    // Notify user that checks were generated
+    if (created > 0) {
+      notify(`🔥 Contrôles générés`, `${created} contrôle(s) créé(s) pour la campagne`, {
+        type: 'fire_control_checks_generated',
+        excludeUserId: email,
+        data: { campaignId: id, url: `/app/fire-control?tab=controls&campaign=${id}` }
+      }).catch(err => console.log('[FireControl] Push notify error:', err.message));
+    }
 
     res.json({ success: true, created_count: created, total_detectors: detectors.length });
   } catch (err) {
@@ -1095,6 +1117,29 @@ app.put("/api/fire-control/checks/:id", async (req, res) => {
       entityId: id,
       details: { alarm1_ok, alarm2_ok, status: finalStatus },
     });
+
+    // Send notification for completed check
+    if (finalStatus && finalStatus !== 'pending') {
+      // Get detector info for notification
+      const detResult = await pool.query(`SELECT code, name, building, floor FROM fc_detectors WHERE id = $1`, [rows[0].detector_id]);
+      const detector = detResult.rows[0] || {};
+      const detectorName = detector.code || detector.name || `Détecteur #${rows[0].detector_id}`;
+
+      if (finalStatus === 'failed' || finalStatus === 'partial') {
+        // Non-conformity detected
+        notifyNonConformity('fire_detector',
+          { id: rows[0].detector_id, name: detectorName, code: detectorName },
+          `Alarme 1: ${alarm1_ok ? 'OK' : 'KO'}, Alarme 2: ${alarm2_ok ? 'OK' : 'KO'}`
+        ).catch(err => console.log('[FireControl] Push notify error:', err.message));
+      } else {
+        // Maintenance completed successfully
+        notifyMaintenanceCompleted('fire_detector',
+          { id: rows[0].detector_id, name: detectorName, code: detectorName },
+          { id: rows[0].id, status: finalStatus },
+          email
+        ).catch(err => console.log('[FireControl] Push notify error:', err.message));
+      }
+    }
 
     res.json(rows[0]);
   } catch (err) {
