@@ -18,6 +18,11 @@ import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notify } from "./lib/push-notify.js";
+import OpenAI from "openai";
+import { createCanvas } from "canvas";
+
+// OpenAI client for Vision AI
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // PDF parsing
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -1370,6 +1375,229 @@ app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
     res.json({ equipment });
   } catch (err) {
     console.error("[FireControl] Get matrix equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// AI-powered matrix PDF parsing - Extract equipment data using Vision AI
+app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = extractTenantFromRequest(req);
+
+    // Get matrix file path
+    const { rows: matrixRows } = await pool.query(
+      `SELECT file_path, content, name FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
+      [id, tenant.companyId, tenant.siteId]
+    );
+
+    if (!matrixRows.length) {
+      return res.status(404).json({ error: "Matrix not found" });
+    }
+
+    const matrix = matrixRows[0];
+    let pdfBuffer;
+
+    // Get PDF content from database or file
+    if (matrix.content) {
+      pdfBuffer = matrix.content;
+    } else if (matrix.file_path) {
+      pdfBuffer = await fsp.readFile(matrix.file_path);
+    } else {
+      return res.status(400).json({ error: "No PDF content available" });
+    }
+
+    // Load PDF with pdf.js
+    const pdfDoc = await pdfjsLib.getDocument({ data: pdfBuffer }).promise;
+    const numPages = pdfDoc.numPages;
+    console.log(`[FireControl] Parsing matrix "${matrix.name}" with ${numPages} pages...`);
+
+    // Render each page to image and analyze with Vision AI
+    const allEquipment = [];
+    const allZones = [];
+    const allLinks = [];
+
+    for (let pageNum = 1; pageNum <= Math.min(numPages, 10); pageNum++) {
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2.0 }); // Higher resolution
+
+      // Create canvas and render page
+      const canvas = createCanvas(viewport.width, viewport.height);
+      const context = canvas.getContext('2d');
+
+      await page.render({
+        canvasContext: context,
+        viewport: viewport,
+      }).promise;
+
+      // Convert to base64
+      const imageBuffer = canvas.toBuffer('image/png');
+      const base64Image = imageBuffer.toString('base64');
+
+      console.log(`[FireControl] Analyzing page ${pageNum}/${numPages} with Vision AI...`);
+
+      // Call OpenAI Vision to extract equipment data
+      const visionResponse = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `Tu es un expert en matrices d'asservissement incendie. Analyse cette page de matrice et extrais les données.
+
+Retourne UNIQUEMENT du JSON valide avec cette structure exacte:
+{
+  "zones": [
+    {"code": "ZD-01", "name": "Zone Détection 01", "building": "A", "floor": "RDC", "detector_numbers": "1-10", "detector_type": "smoke"}
+  ],
+  "equipment": [
+    {"code": "PCF-01", "name": "Porte coupe-feu 01", "type": "pcf", "building": "A", "floor": "RDC", "location": "Couloir", "fdcio_module": "M1", "fdcio_output": "S1"}
+  ],
+  "links": [
+    {"zone_code": "ZD-01", "equipment_code": "PCF-01", "alarm_level": 1, "action": "fermeture"}
+  ]
+}
+
+Types d'équipements: pcf (porte coupe-feu), vmc (ventilation), extincteur, desenfumage, alarme, coupure_elec, autre
+Niveaux d'alarme: 1 (pré-alarme), 2 (alarme feu confirmée)
+
+Si la page ne contient pas de données d'asservissement, retourne: {"zones": [], "equipment": [], "links": []}`
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${base64Image}`,
+                  detail: "high"
+                }
+              },
+              {
+                type: "text",
+                text: `Page ${pageNum} de la matrice d'asservissement "${matrix.name}". Extrais toutes les zones de détection, équipements asservis, et leurs liaisons.`
+              }
+            ]
+          }
+        ],
+        max_tokens: 4096,
+        temperature: 0.1
+      });
+
+      const content = visionResponse.choices[0]?.message?.content || "";
+
+      // Parse JSON from response
+      try {
+        // Extract JSON from response (may have markdown code blocks)
+        let jsonStr = content;
+        const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[1].trim();
+        }
+
+        const parsed = JSON.parse(jsonStr);
+
+        if (parsed.zones?.length) allZones.push(...parsed.zones);
+        if (parsed.equipment?.length) allEquipment.push(...parsed.equipment);
+        if (parsed.links?.length) allLinks.push(...parsed.links);
+
+        console.log(`[FireControl] Page ${pageNum}: Found ${parsed.zones?.length || 0} zones, ${parsed.equipment?.length || 0} equipment, ${parsed.links?.length || 0} links`);
+      } catch (parseError) {
+        console.warn(`[FireControl] Page ${pageNum}: Could not parse AI response:`, parseError.message);
+      }
+    }
+
+    console.log(`[FireControl] Total extracted: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
+
+    // Deduplicate by code
+    const uniqueZones = [...new Map(allZones.map(z => [z.code, z])).values()];
+    const uniqueEquipment = [...new Map(allEquipment.map(e => [e.code, e])).values()];
+
+    // Save to database
+    let zonesCreated = 0, equipmentCreated = 0, linksCreated = 0;
+
+    for (const z of uniqueZones) {
+      try {
+        await pool.query(`
+          INSERT INTO fc_zones (code, name, description, building, floor, detector_numbers, detector_type, matrix_id, company_id, site_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = EXCLUDED.name, building = EXCLUDED.building, floor = EXCLUDED.floor,
+            detector_numbers = EXCLUDED.detector_numbers, matrix_id = EXCLUDED.matrix_id, updated_at = now()
+        `, [z.code, z.name, z.description || '', z.building, z.floor, z.detector_numbers, z.detector_type || 'smoke', id, tenant.companyId, tenant.siteId]);
+        zonesCreated++;
+      } catch (e) {
+        console.warn(`[FireControl] Failed to insert zone ${z.code}:`, e.message);
+      }
+    }
+
+    for (const e of uniqueEquipment) {
+      try {
+        await pool.query(`
+          INSERT INTO fc_equipment (code, name, equipment_type, building, floor, location, fdcio_module, fdcio_output, matrix_id, company_id, site_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = EXCLUDED.name, equipment_type = EXCLUDED.equipment_type,
+            building = EXCLUDED.building, location = EXCLUDED.location,
+            fdcio_module = EXCLUDED.fdcio_module, fdcio_output = EXCLUDED.fdcio_output,
+            matrix_id = EXCLUDED.matrix_id, updated_at = now()
+        `, [e.code, e.name, e.type || 'autre', e.building, e.floor, e.location, e.fdcio_module, e.fdcio_output, id, tenant.companyId, tenant.siteId]);
+        equipmentCreated++;
+      } catch (err) {
+        console.warn(`[FireControl] Failed to insert equipment ${e.code}:`, err.message);
+      }
+    }
+
+    // Create links
+    for (const link of allLinks) {
+      try {
+        const { rows: zoneRows } = await pool.query(
+          `SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`,
+          [link.zone_code, tenant.companyId, tenant.siteId]
+        );
+        const { rows: equipRows } = await pool.query(
+          `SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`,
+          [link.equipment_code, tenant.companyId, tenant.siteId]
+        );
+
+        if (zoneRows.length && equipRows.length) {
+          await pool.query(`
+            INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (zone_id, equipment_id, alarm_level) DO UPDATE SET action_type = EXCLUDED.action_type
+          `, [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action || 'activate', id]);
+          linksCreated++;
+        }
+      } catch (err) {
+        console.warn(`[FireControl] Failed to create link:`, err.message);
+      }
+    }
+
+    // Store parsed data in matrix
+    await pool.query(
+      `UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`,
+      [JSON.stringify({ zones: uniqueZones, equipment: uniqueEquipment, links: allLinks, parsed_at: new Date().toISOString() }), id]
+    );
+
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+      entityType: "matrix",
+      entityId: id,
+      details: { action: "ai_parsed", zones: zonesCreated, equipment: equipmentCreated, links: linksCreated },
+    });
+
+    res.json({
+      success: true,
+      zones_created: zonesCreated,
+      equipment_created: equipmentCreated,
+      links_created: linksCreated,
+      raw_extracted: {
+        zones: uniqueZones.length,
+        equipment: uniqueEquipment.length,
+        links: allLinks.length
+      }
+    });
+
+  } catch (err) {
+    console.error("[FireControl] AI parse matrix error:", err);
     res.status(500).json({ error: err.message });
   }
 });

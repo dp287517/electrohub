@@ -2725,6 +2725,7 @@ export const api = {
     matrixFileUrl: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/fire-control/matrices/${encodeURIComponent(id)}/file?site=${currentSite()}`, bust),
     parseMatrix: (id, parsedData) => post(`/api/fire-control/matrices/${encodeURIComponent(id)}/parse`, { parsed_data: parsedData }),
+    aiParseMatrix: (id) => post(`/api/fire-control/matrices/${encodeURIComponent(id)}/ai-parse`, {}),
     getMatrixEquipment: (id) => get(`/api/fire-control/matrices/${encodeURIComponent(id)}/equipment`),
 
     // ========================= BUILDING PLANS =========================
