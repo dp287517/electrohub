@@ -2728,6 +2728,7 @@ export const api = {
     aiParseMatrix: (id) => post(`/api/fire-control/matrices/${encodeURIComponent(id)}/ai-parse`, {}),
     getMatrixParseJob: (jobId) => get(`/api/fire-control/matrix-parse-job/${encodeURIComponent(jobId)}`),
     getMatrixEquipment: (id) => get(`/api/fire-control/matrices/${encodeURIComponent(id)}/equipment`),
+    deleteMatrix: (id) => del(`/api/fire-control/matrices/${encodeURIComponent(id)}`),
 
     // ========================= BUILDING PLANS =========================
     listPlans: (params) => get("/api/fire-control/plans", params),
