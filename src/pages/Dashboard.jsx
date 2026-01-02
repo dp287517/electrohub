@@ -91,6 +91,7 @@ const allApps = {
     { id: 'projects', label: 'Gestion Projets', shortLabel: 'Projets', to: '/app/projects', icon: '💳', color: 'from-green-400 via-emerald-500 to-teal-600', glow: 'shadow-emerald-500/30' },
     { id: 'atex', label: 'Zones ATEX', shortLabel: 'ATEX', to: '/app/atex', icon: '🔺', color: 'from-amber-400 via-yellow-500 to-orange-500', glow: 'shadow-yellow-500/30' },
     { id: 'doors', label: 'Portes Coupe-Feu', shortLabel: 'Portes Feu', to: '/app/doors', icon: '🚪', color: 'from-rose-400 via-pink-500 to-fuchsia-600', glow: 'shadow-pink-500/30' },
+    { id: 'fire-control', label: 'Contrôle Asservissements Incendie', shortLabel: 'Incendie', to: '/app/fire-control', icon: '🔥', color: 'from-orange-400 via-red-500 to-rose-600', glow: 'shadow-red-500/30' },
     { id: 'comp-ext', label: 'Sous-Traitants', shortLabel: 'Contractors', to: '/app/comp-ext', icon: '🤝', color: 'from-teal-400 via-cyan-500 to-blue-600', glow: 'shadow-cyan-500/30' },
     { id: 'ask-veeva', label: 'Ask Veeva AI', shortLabel: 'Ask Veeva', to: '/app/ask-veeva', icon: '💬', color: 'from-violet-400 via-purple-500 to-fuchsia-600', glow: 'shadow-purple-500/30' },
     { id: 'dcf', label: 'Support SAP', shortLabel: 'DCF', to: '/app/dcf', icon: '📊', color: 'from-emerald-400 via-green-500 to-lime-600', glow: 'shadow-green-500/30' },

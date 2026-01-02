@@ -3389,6 +3389,8 @@ const compExtTarget      = process.env.COMP_EXT_BASE_URL      || "http://127.0.0
 const askVeevaTarget     = process.env.ASK_VEEVA_BASE_URL     || "http://127.0.0.1:3015";
 // 🔵 Doors (portes coupe-feu) — microservice sur 3016  ✅ AJOUT
 const doorsTarget        = process.env.DOORS_BASE_URL         || "http://127.0.0.1:3016";
+// 🔥 Fire Control (contrôle asservissements incendie) — microservice sur 3018
+const fireControlTarget  = process.env.FIRE_CONTROL_BASE_URL  || "http://127.0.0.1:3018";
 // 🔵 VSD (Variateurs de fréquence) — microservice sur 3020  ✅ AJOUT
 const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0.1:3020";
 const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
@@ -3493,6 +3495,9 @@ app.use("/api/vsd", mkProxy(vsdTarget, { withRestream: true }));
 
 // >>> Doors (photos + pièces jointes) : re-stream INDISPENSABLE  ✅ AJOUT
 app.use("/api/doors", mkProxy(doorsTarget, { withRestream: true }));
+
+// >>> Fire Control (contrôle asservissements incendie) : re-stream pour uploads PDF/photos
+app.use("/api/fire-control", mkProxy(fireControlTarget, { withRestream: true }));
 
 // >>> Meca (Maintenance Mécanique) : re-stream nécessaire pour upload
 app.use("/api/meca", mkProxy(mecaTarget, { withRestream: true }));

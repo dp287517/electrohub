@@ -41,6 +41,7 @@ import GloMap from './pages/Glo_map.jsx';
 import Datahub from './pages/Datahub.jsx';
 import DatahubMap from './pages/Datahub_map.jsx';
 import Procedures from './pages/Procedures.jsx';
+import FireControl from './pages/FireControl.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
 // Infrastructure is now unified under ATEX
 
@@ -119,6 +120,7 @@ export default function App() {
           <Route path="/app/datahub" element={<ProtectedRoute><Datahub /></ProtectedRoute>} />
           <Route path="/app/datahub/map" element={<ProtectedRoute><DatahubMap /></ProtectedRoute>} />
           <Route path="/app/procedures" element={<ProtectedRoute><Procedures /></ProtectedRoute>} />
+          <Route path="/app/fire-control" element={<ProtectedRoute><FireControl /></ProtectedRoute>} />
           {/* Infrastructure is now unified under ATEX - redirect */}
           <Route path="/app/infrastructure" element={<Navigate to="/app/atex?tab=plans" replace />} />
 

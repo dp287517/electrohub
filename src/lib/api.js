@@ -2696,6 +2696,84 @@ export const api = {
     // ========================= STATS =========================
     stats: (params = {}) => get("/api/infra/stats", params),
   },
+
+  // ========== FIRE CONTROL (Contrôle des asservissements incendie) ==========
+  fireControl: {
+    // Dashboard
+    dashboard: (params) => get("/api/fire-control/dashboard", params),
+    health: () => get("/api/fire-control/health"),
+
+    // ========================= CAMPAIGNS =========================
+    listCampaigns: (params) => get("/api/fire-control/campaigns", params),
+    getCampaign: (id) => get(`/api/fire-control/campaigns/${encodeURIComponent(id)}`),
+    createCampaign: (payload) => post("/api/fire-control/campaigns", payload),
+    updateCampaign: (id, payload) => put(`/api/fire-control/campaigns/${encodeURIComponent(id)}`, payload),
+    deleteCampaign: (id) => del(`/api/fire-control/campaigns/${encodeURIComponent(id)}`),
+    generateChecks: (campaignId, payload = {}) => post(`/api/fire-control/campaigns/${encodeURIComponent(campaignId)}/generate-checks`, payload),
+    generateReport: (campaignId) => post(`/api/fire-control/campaigns/${encodeURIComponent(campaignId)}/report`, {}),
+
+    // ========================= MATRICES =========================
+    listMatrices: (params) => get("/api/fire-control/matrices", params),
+    uploadMatrix: (file, extra = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (extra.campaign_id) fd.append("campaign_id", extra.campaign_id);
+      if (extra.matrix_name) fd.append("matrix_name", extra.matrix_name);
+      if (extra.version) fd.append("version", extra.version);
+      return upload("/api/fire-control/matrices/upload", fd);
+    },
+    matrixFileUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/fire-control/matrices/${encodeURIComponent(id)}/file?site=${currentSite()}`, bust),
+    parseMatrix: (id, parsedData) => post(`/api/fire-control/matrices/${encodeURIComponent(id)}/parse`, { parsed_data: parsedData }),
+
+    // ========================= BUILDING PLANS =========================
+    listPlans: (params) => get("/api/fire-control/plans", params),
+    listBuildings: () => get("/api/fire-control/buildings"),
+    uploadPlan: (file, extra = {}) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (extra.building) fd.append("building", extra.building);
+      if (extra.floor) fd.append("floor", extra.floor);
+      if (extra.plan_name) fd.append("plan_name", extra.plan_name);
+      if (extra.version) fd.append("version", extra.version);
+      return upload("/api/fire-control/plans/upload", fd);
+    },
+    planFileUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/fire-control/plans/${encodeURIComponent(id)}/file?site=${currentSite()}`, bust),
+    getPlanPositions: (planId, pageIndex = 0) => get(`/api/fire-control/plans/${encodeURIComponent(planId)}/positions`, { page_index: pageIndex }),
+
+    // ========================= DETECTORS =========================
+    listDetectors: (params) => get("/api/fire-control/detectors", params),
+    getDetector: (id) => get(`/api/fire-control/detectors/${encodeURIComponent(id)}`),
+    createDetector: (payload) => post("/api/fire-control/detectors", payload),
+    setDetectorPosition: (detectorId, payload) => post(`/api/fire-control/detectors/${encodeURIComponent(detectorId)}/position`, payload),
+
+    // ========================= INTERLOCKS =========================
+    listInterlocks: (params) => get("/api/fire-control/interlocks", params),
+
+    // ========================= CHECKS (Controls) =========================
+    listChecks: (params) => get("/api/fire-control/checks", params),
+    createCheck: (payload) => post("/api/fire-control/checks", payload),
+    updateCheck: (id, payload) => put(`/api/fire-control/checks/${encodeURIComponent(id)}`, payload),
+    listCheckFiles: (checkId) => get(`/api/fire-control/checks/${encodeURIComponent(checkId)}/files`),
+    uploadCheckFile: (checkId, file, fileType = 'photo') => {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("file_type", fileType);
+      return upload(`/api/fire-control/checks/${encodeURIComponent(checkId)}/files`, fd);
+    },
+    fileUrl: (fileId, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/fire-control/files/${encodeURIComponent(fileId)}?site=${currentSite()}`, bust),
+
+    // ========================= SCHEDULE =========================
+    listSchedule: (params) => get("/api/fire-control/schedule", params),
+    createSchedule: (payload) => post("/api/fire-control/schedule", payload),
+    updateSchedule: (id, payload) => put(`/api/fire-control/schedule/${encodeURIComponent(id)}`, payload),
+
+    // ========================= REPORTS =========================
+    listReports: (params) => get("/api/fire-control/reports", params),
+    reportFileUrl: (id) => `${API_BASE}/api/fire-control/reports/${encodeURIComponent(id)}/file?site=${currentSite()}`,
+  },
 };
 
 // Default export for convenience
