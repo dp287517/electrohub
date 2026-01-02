@@ -1988,6 +1988,228 @@ app.get("/api/fire-control/alerts", async (req, res) => {
 });
 
 // ------------------------------
+// ROUTES: Cross-System Equipment (from Doors, Switchboard, etc.)
+// ------------------------------
+
+// Get all fire-interlock linked equipment from external systems with positions
+app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
+  try {
+    const { plan_logical_name, page_index = 0, zone_check_id } = req.query;
+    const allEquipment = [];
+
+    // 1. Fetch doors with fire_interlock=true
+    const doorsQuery = await pool.query(`
+      SELECT
+        d.id, d.code, d.name, d.building, d.floor, d.location,
+        d.fire_interlock_zone_id, d.fire_interlock_alarm_level,
+        'doors' as source_system, 'pcf' as equipment_type,
+        pos.id as position_id, pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+      FROM fd_doors d
+      LEFT JOIN fd_door_positions pos ON pos.door_id = d.id
+      WHERE d.fire_interlock = true
+        ${plan_logical_name ? `AND pos.plan_logical_name = $1` : ''}
+        ${plan_logical_name ? `AND pos.page_index = $2` : ''}
+    `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
+
+    for (const door of doorsQuery.rows) {
+      allEquipment.push({
+        id: door.id,
+        code: door.code || door.name,
+        name: door.name,
+        building: door.building,
+        floor: door.floor,
+        location: door.location,
+        equipment_type: door.equipment_type,
+        source_system: door.source_system,
+        zone_id: door.fire_interlock_zone_id,
+        alarm_level: door.fire_interlock_alarm_level || 1,
+        position_id: door.position_id,
+        plan_logical_name: door.plan_logical_name,
+        page_index: door.page_index,
+        x_frac: door.x_frac,
+        y_frac: door.y_frac,
+        check_status: null, // Will be filled if zone_check_id provided
+      });
+    }
+
+    // 2. If zone_check_id provided, fetch equipment results to get check status
+    if (zone_check_id) {
+      const resultsQuery = await pool.query(`
+        SELECT er.*, e.external_system, e.external_id
+        FROM fc_equipment_results er
+        JOIN fc_equipment e ON e.id = er.equipment_id
+        WHERE er.zone_check_id = $1
+      `, [zone_check_id]);
+
+      const resultsMap = new Map();
+      for (const r of resultsQuery.rows) {
+        if (r.external_system && r.external_id) {
+          resultsMap.set(`${r.external_system}:${r.external_id}`, r.result);
+        }
+      }
+
+      // Update equipment with check status
+      for (const eq of allEquipment) {
+        const key = `${eq.source_system}:${eq.id}`;
+        if (resultsMap.has(key)) {
+          eq.check_status = resultsMap.get(key);
+        }
+      }
+    }
+
+    // TODO: Add switchboard equipment when needed
+    // const switchQuery = await pool.query(...)
+
+    res.json({
+      equipment: allEquipment,
+      sources: ['doors'], // Add more as we implement
+      count: allEquipment.length,
+    });
+  } catch (err) {
+    console.error("[FireControl] GET cross-system-equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get plans from doors system (shared plans)
+app.get("/api/fire-control/shared-plans", async (req, res) => {
+  try {
+    // Get plans from fd_plans (doors system)
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (p.logical_name, p.page_count)
+        p.id, p.logical_name, p.version, p.filename, p.page_count, p.created_at,
+        pn.display_name
+      FROM fd_plans p
+      LEFT JOIN fd_plan_names pn ON pn.logical_name = p.logical_name
+      ORDER BY p.logical_name, p.page_count, p.created_at DESC
+    `);
+
+    const plans = rows.map(p => ({
+      id: p.id,
+      logical_name: p.logical_name,
+      display_name: p.display_name || p.logical_name,
+      version: p.version,
+      filename: p.filename,
+      page_count: p.page_count || 1,
+      created_at: p.created_at,
+      source: 'doors',
+    }));
+
+    res.json({ plans });
+  } catch (err) {
+    console.error("[FireControl] GET shared-plans error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get plan file from doors system
+app.get("/api/fire-control/shared-plans/:logicalName/file", async (req, res) => {
+  try {
+    const { logicalName } = req.params;
+    const { page } = req.query;
+
+    const { rows } = await pool.query(`
+      SELECT filename, content, file_path
+      FROM fd_plans
+      WHERE logical_name = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [logicalName]);
+
+    if (!rows.length) return res.status(404).json({ error: "Plan not found" });
+
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
+    }
+    if (!buffer) return res.status(404).json({ error: "File not found" });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("[FireControl] GET shared-plan file error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get equipment positions for a zone check (with blinking status)
+app.get("/api/fire-control/zone-checks/:id/equipment-map", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get zone check with zone info
+    const { rows: checkRows } = await pool.query(`
+      SELECT zc.*, z.code as zone_code, z.name as zone_name, z.building, z.floor
+      FROM fc_zone_checks zc
+      JOIN fc_zones z ON z.id = zc.zone_id
+      WHERE zc.id = $1
+    `, [id]);
+
+    if (!checkRows.length) return res.status(404).json({ error: "Zone check not found" });
+    const zoneCheck = checkRows[0];
+
+    // Get equipment results for this check
+    const { rows: resultRows } = await pool.query(`
+      SELECT er.*, e.code, e.name, e.equipment_type, e.building, e.location,
+        e.external_system, e.external_id
+      FROM fc_equipment_results er
+      JOIN fc_equipment e ON e.id = er.equipment_id
+      WHERE er.zone_check_id = $1
+    `, [id]);
+
+    // Get cross-system equipment positions
+    const crossSystemEquipment = [];
+
+    for (const result of resultRows) {
+      if (result.external_system === 'doors' && result.external_id) {
+        const { rows: doorPos } = await pool.query(`
+          SELECT pos.*, d.name, d.code, d.building, d.floor
+          FROM fd_door_positions pos
+          JOIN fd_doors d ON d.id = pos.door_id
+          WHERE d.id = $1
+        `, [result.external_id]);
+
+        if (doorPos.length) {
+          crossSystemEquipment.push({
+            result_id: result.id,
+            equipment_id: result.equipment_id,
+            code: result.code,
+            name: result.name,
+            equipment_type: result.equipment_type,
+            alarm_level: result.alarm_level,
+            result: result.result,
+            source_system: 'doors',
+            external_id: result.external_id,
+            plan_logical_name: doorPos[0].plan_logical_name,
+            page_index: doorPos[0].page_index,
+            x_frac: doorPos[0].x_frac,
+            y_frac: doorPos[0].y_frac,
+            building: doorPos[0].building,
+            floor: doorPos[0].floor,
+          });
+        }
+      }
+    }
+
+    res.json({
+      zone_check: zoneCheck,
+      equipment_positions: crossSystemEquipment,
+      summary: {
+        total: crossSystemEquipment.length,
+        pending: crossSystemEquipment.filter(e => e.result === 'pending').length,
+        ok: crossSystemEquipment.filter(e => e.result === 'ok').length,
+        nok: crossSystemEquipment.filter(e => e.result === 'nok').length,
+        na: crossSystemEquipment.filter(e => e.result === 'na').length,
+      }
+    });
+  } catch (err) {
+    console.error("[FireControl] GET zone-check equipment-map error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
 // Health check
 // ------------------------------
 app.get("/api/fire-control/health", (req, res) => {
