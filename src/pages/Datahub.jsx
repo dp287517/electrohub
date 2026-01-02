@@ -538,7 +538,7 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
 
   // Auto-save draft for new items only (don't overwrite existing items)
   const draftKey = isNew ? 'datahub_new' : null;
-  const initialFormData = { name: '', code: '', category_id: '', building: '', floor: '', location: '', description: '', notes: '' };
+  const initialFormData = { name: '', code: '', category_id: '', building: '', floor: '', location: '', description: '', notes: '', fire_interlock: false };
 
   const {
     formData: draftData,
@@ -580,7 +580,7 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
       setFormInternal({
         name: item.name || '', code: item.code || '', category_id: item.category_id || '',
         building: item.building || '', floor: item.floor || '', location: item.location || '',
-        description: item.description || '', notes: item.notes || ''
+        description: item.description || '', notes: item.notes || '', fire_interlock: item.fire_interlock || false
       });
       api.datahub.listFiles(item.id).then(res => setExistingFiles(res?.files || [])).catch(() => {});
     } else if (isNew && hasDraft) {
@@ -797,6 +797,18 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
               <input type="text" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
                 className="w-full px-4 py-2.5 border border-gray-300 rounded-xl" /></div>
           </div>
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Flame size={16} className="text-orange-500" />Asservissement incendie</h3>
+          <label className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-orange-300 hover:bg-orange-50/50 transition-colors cursor-pointer">
+            <input type="checkbox" checked={form.fire_interlock} onChange={e => setForm(f => ({ ...f, fire_interlock: e.target.checked }))}
+              className="w-5 h-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+            <div>
+              <span className="font-medium text-gray-900">Inclure dans le contrôle incendie</span>
+              <p className="text-sm text-gray-500">Cet équipement apparaîtra dans le système d'asservissement incendie</p>
+            </div>
+          </label>
         </div>
 
         <div className="space-y-4">
