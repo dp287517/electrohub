@@ -886,8 +886,8 @@ export default function FireControlMap() {
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
     if (!stableSelectedPlan) return null;
-    // Use shared plan file URL
-    return api.fireControlMaps.sharedPlanFileUrl(stableSelectedPlan.logical_name, { bust: true });
+    // Use unified VSD plan system (same as all other map pages)
+    return api.vsdMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
   }, [stableSelectedPlan]);
 
   const selectedEquipmentId = useMemo(() => selectedPosition?.equipment_id || null, [selectedPosition]);
@@ -948,9 +948,9 @@ export default function FireControlMap() {
   const loadPlans = async () => {
     setLoadingPlans(true);
     try {
-      // Use shared plans from admin (doors system)
-      const res = await api.fireControlMaps.listSharedPlans();
-      const plansList = res?.plans || res?.items || [];
+      // Use unified VSD plan system (same as all other map pages)
+      const res = await api.vsdMaps.listPlans();
+      const plansList = res?.plans || res || [];
       setPlans(plansList);
     } catch (err) {
       console.error("Erreur chargement plans:", err);

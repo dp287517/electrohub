@@ -40,7 +40,6 @@ import {
   Crosshair,
   Target,
   ArrowLeft,
-  Upload,
   Plus,
 } from "lucide-react";
 
@@ -921,12 +920,12 @@ export default function DoorsMap() {
   const [confirmState, setConfirmState] = useState({ open: false, position: null });
 
   const viewerRef = useRef(null);
-  const zipInputRef = useRef(null);
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
     if (!stableSelectedPlan) return null;
-    return api.doorsMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
+    // Use unified VSD plan system (same as all other map pages)
+    return api.vsdMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
   }, [stableSelectedPlan]);
 
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
@@ -1040,10 +1039,11 @@ export default function DoorsMap() {
   const loadPlans = async () => {
     setLoadingPlans(true);
     try {
-      const res = await api.doorsMaps.listPlans();
-      setPlans(res?.plans || res?.items || []);
+      // Use unified VSD plan system (same as all other map pages)
+      const res = await api.vsdMaps.listPlans();
+      setPlans(res?.plans || res || []);
     } catch (err) {
-      console.error("Erreur chargement plans portes:", err);
+      console.error("Erreur chargement plans:", err);
     } finally {
       setLoadingPlans(false);
     }
@@ -1219,17 +1219,8 @@ export default function DoorsMap() {
     }
   };
 
-  const handleZipUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await api.doorsMaps.uploadZip(file);
-      await loadPlans();
-    } catch (err) {
-      console.error("Erreur upload ZIP:", err);
-    }
-    e.target.value = "";
-  };
+  // Plans are now managed through VSD - redirect users there for uploads
+  const goToVsdMaps = () => navigate('/app/vsd-map');
 
   // Filter doors
   const filteredDoors = useMemo(() => {
@@ -1314,13 +1305,13 @@ export default function DoorsMap() {
             </div>
 
 <button
-              onClick={() => zipInputRef.current?.click()}
+              onClick={goToVsdMaps}
               className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 flex items-center gap-2"
+              title="Les plans sont gérés depuis VSD"
             >
-              <Upload size={16} />
-              Import ZIP
+              <ExternalLink size={16} />
+              Gérer plans
             </button>
-            <input ref={zipInputRef} type="file" accept=".zip" className="hidden" onChange={handleZipUpload} />
 
             {!isMobile && (
               <button
@@ -1445,12 +1436,12 @@ export default function DoorsMap() {
           {!selectedPlan ? (
             <EmptyState
               icon={MapPin}
-              title="Aucun plan sélectionné"
-              description="Importez un fichier ZIP contenant des plans PDF"
+              title="Aucun plan disponible"
+              description="Importez des plans via la page VSD"
               action={
-                <Btn onClick={() => zipInputRef.current?.click()}>
-                  <Upload size={16} className="mr-2" />
-                  Importer des plans
+                <Btn onClick={goToVsdMaps}>
+                  <ExternalLink size={16} className="mr-2" />
+                  Aller sur VSD
                 </Btn>
               }
             />
