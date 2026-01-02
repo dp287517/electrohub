@@ -3496,8 +3496,8 @@ app.use("/api/vsd", mkProxy(vsdTarget, { withRestream: true }));
 // >>> Doors (photos + pièces jointes) : re-stream INDISPENSABLE  ✅ AJOUT
 app.use("/api/doors", mkProxy(doorsTarget, { withRestream: true }));
 
-// >>> Fire Control (contrôle asservissements incendie) : re-stream pour uploads PDF/photos
-app.use("/api/fire-control", mkProxy(fireControlTarget, { withRestream: true }));
+// >>> Fire Control (contrôle asservissements incendie) : timeout étendu pour analyse IA de matrices PDF
+app.use("/api/fire-control", mkProxy(fireControlTarget, { withRestream: true, timeoutMs: 180000 }));
 
 // >>> Meca (Maintenance Mécanique) : re-stream nécessaire pour upload
 app.use("/api/meca", mkProxy(mecaTarget, { withRestream: true }));

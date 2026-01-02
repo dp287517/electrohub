@@ -19,9 +19,8 @@ import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notify } from "./lib/push-notify.js";
 import OpenAI from "openai";
-import { createCanvas } from "canvas";
 
-// OpenAI client for Vision AI
+// OpenAI client for AI analysis
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // PDF parsing
@@ -1379,11 +1378,13 @@ app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
   }
 });
 
-// AI-powered matrix PDF parsing - Extract equipment data using Vision AI
+// AI-powered matrix PDF parsing - Extract equipment data using AI
 app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
   try {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
+
+    console.log(`[FireControl] Starting AI parse for matrix ${id}`);
 
     // Get matrix file path
     const { rows: matrixRows } = await pool.query(
@@ -1400,49 +1401,49 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
 
     // Get PDF content from database or file
     if (matrix.content) {
-      pdfBuffer = matrix.content;
+      pdfBuffer = Buffer.isBuffer(matrix.content) ? matrix.content : Buffer.from(matrix.content);
     } else if (matrix.file_path) {
       pdfBuffer = await fsp.readFile(matrix.file_path);
     } else {
       return res.status(400).json({ error: "No PDF content available" });
     }
 
-    // Load PDF with pdf.js
+    console.log(`[FireControl] PDF buffer size: ${pdfBuffer.length} bytes`);
+
+    // Extract text from PDF using pdf.js
     const pdfDoc = await pdfjsLib.getDocument({ data: pdfBuffer }).promise;
     const numPages = pdfDoc.numPages;
-    console.log(`[FireControl] Parsing matrix "${matrix.name}" with ${numPages} pages...`);
+    console.log(`[FireControl] PDF has ${numPages} pages`);
 
-    // Render each page to image and analyze with Vision AI
-    const allEquipment = [];
-    const allZones = [];
-    const allLinks = [];
+    let fullText = "";
+    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+      try {
+        const page = await pdfDoc.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(" ");
+        fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
+      } catch (pageError) {
+        console.warn(`[FireControl] Could not extract text from page ${pageNum}:`, pageError.message);
+      }
+    }
 
-    for (let pageNum = 1; pageNum <= Math.min(numPages, 10); pageNum++) {
-      const page = await pdfDoc.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 2.0 }); // Higher resolution
+    console.log(`[FireControl] Extracted ${fullText.length} characters of text`);
 
-      // Create canvas and render page
-      const canvas = createCanvas(viewport.width, viewport.height);
-      const context = canvas.getContext('2d');
+    if (fullText.trim().length < 50) {
+      return res.status(400).json({
+        error: "Le PDF ne contient pas de texte extractible. Veuillez utiliser un PDF avec du texte (pas une image scannée)."
+      });
+    }
 
-      await page.render({
-        canvasContext: context,
-        viewport: viewport,
-      }).promise;
+    console.log(`[FireControl] Calling OpenAI API for matrix "${matrix.name}"...`);
 
-      // Convert to base64
-      const imageBuffer = canvas.toBuffer('image/png');
-      const base64Image = imageBuffer.toString('base64');
-
-      console.log(`[FireControl] Analyzing page ${pageNum}/${numPages} with Vision AI...`);
-
-      // Call OpenAI Vision to extract equipment data
-      const visionResponse = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `Tu es un expert en matrices d'asservissement incendie. Analyse cette page de matrice et extrais les données.
+    // Call OpenAI to analyze the extracted text
+    const aiResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte extrait de cette matrice et extrais TOUTES les données.
 
 Retourne UNIQUEMENT du JSON valide avec cette structure exacte:
 {
@@ -1457,53 +1458,54 @@ Retourne UNIQUEMENT du JSON valide avec cette structure exacte:
   ]
 }
 
-Types d'équipements: pcf (porte coupe-feu), vmc (ventilation), extincteur, desenfumage, alarme, coupure_elec, autre
-Niveaux d'alarme: 1 (pré-alarme), 2 (alarme feu confirmée)
+Types d'équipements: pcf (porte coupe-feu), vmc (ventilation), extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
+Niveaux d'alarme: 1 (pré-alarme/alarme restreinte), 2 (alarme feu confirmée/alarme générale)
 
-Si la page ne contient pas de données d'asservissement, retourne: {"zones": [], "equipment": [], "links": []}`
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/png;base64,${base64Image}`,
-                  detail: "high"
-                }
-              },
-              {
-                type: "text",
-                text: `Page ${pageNum} de la matrice d'asservissement "${matrix.name}". Extrais toutes les zones de détection, équipements asservis, et leurs liaisons.`
-              }
-            ]
-          }
-        ],
-        max_tokens: 4096,
-        temperature: 0.1
-      });
+Cherche les patterns typiques:
+- Zones de détection: ZD, ZDI, Zone, Boucle, Secteur
+- Équipements: PCF, Porte, VMC, Clapet, Volet, Exutoire, Sirène, Flash, Coupure, Désenfumage
+- Liaisons zone-équipement: généralement présentées dans un tableau
 
-      const content = visionResponse.choices[0]?.message?.content || "";
-
-      // Parse JSON from response
-      try {
-        // Extract JSON from response (may have markdown code blocks)
-        let jsonStr = content;
-        const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (jsonMatch) {
-          jsonStr = jsonMatch[1].trim();
+Extrais TOUS les équipements listés, même si les informations sont partielles.
+Si aucune donnée d'asservissement n'est trouvée, retourne: {"zones": [], "equipment": [], "links": []}`
+        },
+        {
+          role: "user",
+          content: `Analyse ce texte extrait d'une matrice d'asservissement incendie "${matrix.name}":\n\n${fullText.substring(0, 30000)}`
         }
+      ],
+      max_tokens: 16384,
+      temperature: 0.1
+    });
 
-        const parsed = JSON.parse(jsonStr);
+    console.log(`[FireControl] OpenAI response received`);
 
-        if (parsed.zones?.length) allZones.push(...parsed.zones);
-        if (parsed.equipment?.length) allEquipment.push(...parsed.equipment);
-        if (parsed.links?.length) allLinks.push(...parsed.links);
+    const content = aiResponse.choices[0]?.message?.content || "";
 
-        console.log(`[FireControl] Page ${pageNum}: Found ${parsed.zones?.length || 0} zones, ${parsed.equipment?.length || 0} equipment, ${parsed.links?.length || 0} links`);
-      } catch (parseError) {
-        console.warn(`[FireControl] Page ${pageNum}: Could not parse AI response:`, parseError.message);
+    // Parse JSON from response
+    const allZones = [];
+    const allEquipment = [];
+    const allLinks = [];
+
+    try {
+      // Extract JSON from response (may have markdown code blocks)
+      let jsonStr = content;
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
       }
+
+      const parsed = JSON.parse(jsonStr);
+
+      if (parsed.zones?.length) allZones.push(...parsed.zones);
+      if (parsed.equipment?.length) allEquipment.push(...parsed.equipment);
+      if (parsed.links?.length) allLinks.push(...parsed.links);
+
+      console.log(`[FireControl] Parsed: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
+    } catch (parseError) {
+      console.warn(`[FireControl] Could not parse AI response:`, parseError.message);
+      console.log(`[FireControl] Raw response:`, content.substring(0, 500));
+      return res.status(500).json({ error: "Impossible de parser la réponse de l'IA. Réessayez." });
     }
 
     console.log(`[FireControl] Total extracted: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
