@@ -387,8 +387,97 @@ async function ensureSchema() {
     );
   `);
 
+  // 13. Matrix Parse Jobs (background AI analysis)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fc_matrix_parse_jobs (
+      id TEXT PRIMARY KEY,
+      matrix_id UUID REFERENCES fc_matrices(id) ON DELETE CASCADE,
+      site TEXT NOT NULL,
+      user_email TEXT,
+      status TEXT DEFAULT 'pending',
+      progress INTEGER DEFAULT 0,
+      message TEXT,
+      result JSONB,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      notified BOOLEAN DEFAULT FALSE,
+      company_id INT,
+      site_id INT
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_matrix_parse_jobs_status ON fc_matrix_parse_jobs(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_matrix_parse_jobs_matrix ON fc_matrix_parse_jobs(matrix_id);`);
+
   await audit.ensureTable();
   console.log("[FireControl] Schema v2.0 ensured (zone-centric)");
+}
+
+// In-memory cache for matrix parse jobs
+const matrixParseJobs = new Map();
+
+// Save job to database
+async function saveMatrixParseJob(job) {
+  try {
+    await pool.query(`
+      INSERT INTO fc_matrix_parse_jobs (id, matrix_id, site, user_email, status, progress, message, result, error, created_at, completed_at, notified, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10::double precision / 1000), $11, $12, $13, $14)
+      ON CONFLICT (id) DO UPDATE SET
+        status = $5,
+        progress = $6,
+        message = $7,
+        result = $8,
+        error = $9,
+        completed_at = $11,
+        notified = $12
+    `, [
+      job.id,
+      job.matrix_id,
+      job.site,
+      job.user_email,
+      job.status,
+      job.progress,
+      job.message,
+      job.result ? JSON.stringify(job.result) : null,
+      job.error || null,
+      job.created_at,
+      job.completed_at ? new Date(job.completed_at) : null,
+      job.notified || false,
+      job.company_id,
+      job.site_id
+    ]);
+  } catch (e) {
+    console.warn(`[FireControl] Failed to save parse job: ${e.message}`);
+  }
+}
+
+// Get job from memory or database
+async function getMatrixParseJob(jobId) {
+  let job = matrixParseJobs.get(jobId);
+  if (job) return job;
+
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, matrix_id, site, user_email, status, progress, message, result, error,
+             EXTRACT(EPOCH FROM created_at) * 1000 as created_at,
+             EXTRACT(EPOCH FROM completed_at) * 1000 as completed_at,
+             notified, company_id, site_id
+      FROM fc_matrix_parse_jobs WHERE id = $1
+    `, [jobId]);
+
+    if (rows.length > 0) {
+      job = {
+        ...rows[0],
+        created_at: parseInt(rows[0].created_at),
+        completed_at: rows[0].completed_at ? parseInt(rows[0].completed_at) : null
+      };
+      matrixParseJobs.set(jobId, job);
+      return job;
+    }
+  } catch (e) {
+    console.warn(`[FireControl] Failed to load parse job: ${e.message}`);
+  }
+  return null;
 }
 
 // ------------------------------
@@ -1378,42 +1467,55 @@ app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
   }
 });
 
-// AI-powered matrix PDF parsing - Extract equipment data using AI
-app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
+// Background worker for matrix parsing
+async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
+  const job = matrixParseJobs.get(jobId);
+  if (!job) return;
+
+  if (job.status === 'completed' || job.status === 'failed') {
+    console.log(`[FireControl] Job ${jobId}: Already ${job.status}, skipping`);
+    return;
+  }
+
+  const saveProgress = async () => {
+    try { await saveMatrixParseJob(job); } catch (e) { console.warn(`[FireControl] Save job error: ${e.message}`); }
+  };
+
   try {
-    const { id } = req.params;
-    const tenant = extractTenantFromRequest(req);
+    job.status = 'analyzing';
+    job.progress = 5;
+    job.message = 'Lecture du PDF...';
+    await saveProgress();
 
-    console.log(`[FireControl] Starting AI parse for matrix ${id}`);
-
-    // Get matrix file path
+    // Get matrix
     const { rows: matrixRows } = await pool.query(
-      `SELECT file_path, content, name FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
-      [id, tenant.companyId, tenant.siteId]
+      `SELECT file_path, content, name FROM fc_matrices WHERE id = $1`,
+      [matrixId]
     );
 
     if (!matrixRows.length) {
-      return res.status(404).json({ error: "Matrix not found" });
+      throw new Error("Matrix not found");
     }
 
     const matrix = matrixRows[0];
     let pdfBuffer;
 
-    // Get PDF content from database or file
     if (matrix.content) {
       pdfBuffer = Buffer.isBuffer(matrix.content) ? matrix.content : Buffer.from(matrix.content);
     } else if (matrix.file_path) {
       pdfBuffer = await fsp.readFile(matrix.file_path);
     } else {
-      return res.status(400).json({ error: "No PDF content available" });
+      throw new Error("No PDF content available");
     }
 
-    console.log(`[FireControl] PDF buffer size: ${pdfBuffer.length} bytes`);
+    job.progress = 15;
+    job.message = 'Extraction du texte...';
+    await saveProgress();
 
-    // Extract text from PDF using pdf.js
+    // Extract text
     const pdfDoc = await pdfjsLib.getDocument({ data: pdfBuffer }).promise;
     const numPages = pdfDoc.numPages;
-    console.log(`[FireControl] PDF has ${numPages} pages`);
+    console.log(`[FireControl] Job ${jobId}: PDF has ${numPages} pages`);
 
     let fullText = "";
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
@@ -1422,184 +1524,254 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
         const textContent = await page.getTextContent();
         const pageText = textContent.items.map(item => item.str).join(" ");
         fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
-      } catch (pageError) {
-        console.warn(`[FireControl] Could not extract text from page ${pageNum}:`, pageError.message);
+      } catch (e) {
+        console.warn(`[FireControl] Job ${jobId}: Page ${pageNum} error: ${e.message}`);
       }
+      job.progress = 15 + Math.round((pageNum / numPages) * 20);
+      await saveProgress();
     }
-
-    console.log(`[FireControl] Extracted ${fullText.length} characters of text`);
 
     if (fullText.trim().length < 50) {
-      return res.status(400).json({
-        error: "Le PDF ne contient pas de texte extractible. Veuillez utiliser un PDF avec du texte (pas une image scannée)."
-      });
+      throw new Error("Le PDF ne contient pas de texte extractible (image scannée?)");
     }
 
-    console.log(`[FireControl] Calling OpenAI API for matrix "${matrix.name}"...`);
+    job.progress = 40;
+    job.message = 'Analyse IA en cours...';
+    await saveProgress();
 
-    // Call OpenAI to analyze the extracted text
+    console.log(`[FireControl] Job ${jobId}: Calling OpenAI...`);
+
+    // Call OpenAI
     const aiResponse = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         {
           role: "system",
-          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte extrait de cette matrice et extrais TOUTES les données.
+          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte et extrais les données.
 
-Retourne UNIQUEMENT du JSON valide avec cette structure exacte:
+Retourne UNIQUEMENT du JSON valide:
 {
-  "zones": [
-    {"code": "ZD-01", "name": "Zone Détection 01", "building": "A", "floor": "RDC", "detector_numbers": "1-10", "detector_type": "smoke"}
-  ],
-  "equipment": [
-    {"code": "PCF-01", "name": "Porte coupe-feu 01", "type": "pcf", "building": "A", "floor": "RDC", "location": "Couloir", "fdcio_module": "M1", "fdcio_output": "S1"}
-  ],
-  "links": [
-    {"zone_code": "ZD-01", "equipment_code": "PCF-01", "alarm_level": 1, "action": "fermeture"}
-  ]
+  "zones": [{"code": "ZD-01", "name": "Zone 01", "building": "A", "floor": "RDC", "detector_numbers": "1-10", "detector_type": "smoke"}],
+  "equipment": [{"code": "PCF-01", "name": "Porte coupe-feu 01", "type": "pcf", "building": "A", "floor": "RDC", "location": "Couloir", "fdcio_module": "M1", "fdcio_output": "S1"}],
+  "links": [{"zone_code": "ZD-01", "equipment_code": "PCF-01", "alarm_level": 1, "action": "fermeture"}]
 }
 
-Types d'équipements: pcf (porte coupe-feu), vmc (ventilation), extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
-Niveaux d'alarme: 1 (pré-alarme/alarme restreinte), 2 (alarme feu confirmée/alarme générale)
+Types: pcf, vmc, extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
+Niveaux alarme: 1 (pré-alarme), 2 (alarme générale)
 
-Cherche les patterns typiques:
-- Zones de détection: ZD, ZDI, Zone, Boucle, Secteur
-- Équipements: PCF, Porte, VMC, Clapet, Volet, Exutoire, Sirène, Flash, Coupure, Désenfumage
-- Liaisons zone-équipement: généralement présentées dans un tableau
-
-Extrais TOUS les équipements listés, même si les informations sont partielles.
-Si aucune donnée d'asservissement n'est trouvée, retourne: {"zones": [], "equipment": [], "links": []}`
+Si rien trouvé: {"zones": [], "equipment": [], "links": []}`
         },
         {
           role: "user",
-          content: `Analyse ce texte extrait d'une matrice d'asservissement incendie "${matrix.name}":\n\n${fullText.substring(0, 30000)}`
+          content: `Matrice "${matrix.name}":\n\n${fullText.substring(0, 30000)}`
         }
       ],
       max_tokens: 16384,
       temperature: 0.1
     });
 
-    console.log(`[FireControl] OpenAI response received`);
+    job.progress = 70;
+    job.message = 'Traitement des résultats...';
+    await saveProgress();
 
     const content = aiResponse.choices[0]?.message?.content || "";
+    let jsonStr = content;
+    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) jsonStr = jsonMatch[1].trim();
 
-    // Parse JSON from response
-    const allZones = [];
-    const allEquipment = [];
-    const allLinks = [];
+    const parsed = JSON.parse(jsonStr);
+    const allZones = parsed.zones || [];
+    const allEquipment = parsed.equipment || [];
+    const allLinks = parsed.links || [];
 
-    try {
-      // Extract JSON from response (may have markdown code blocks)
-      let jsonStr = content;
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[1].trim();
-      }
+    console.log(`[FireControl] Job ${jobId}: Found ${allZones.length} zones, ${allEquipment.length} equipment`);
 
-      const parsed = JSON.parse(jsonStr);
-
-      if (parsed.zones?.length) allZones.push(...parsed.zones);
-      if (parsed.equipment?.length) allEquipment.push(...parsed.equipment);
-      if (parsed.links?.length) allLinks.push(...parsed.links);
-
-      console.log(`[FireControl] Parsed: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
-    } catch (parseError) {
-      console.warn(`[FireControl] Could not parse AI response:`, parseError.message);
-      console.log(`[FireControl] Raw response:`, content.substring(0, 500));
-      return res.status(500).json({ error: "Impossible de parser la réponse de l'IA. Réessayez." });
-    }
-
-    console.log(`[FireControl] Total extracted: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
-
-    // Deduplicate by code
-    const uniqueZones = [...new Map(allZones.map(z => [z.code, z])).values()];
-    const uniqueEquipment = [...new Map(allEquipment.map(e => [e.code, e])).values()];
+    job.progress = 80;
+    job.message = 'Enregistrement en base...';
+    await saveProgress();
 
     // Save to database
     let zonesCreated = 0, equipmentCreated = 0, linksCreated = 0;
 
-    for (const z of uniqueZones) {
+    for (const z of allZones) {
       try {
         await pool.query(`
           INSERT INTO fc_zones (code, name, description, building, floor, detector_numbers, detector_type, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
-            name = EXCLUDED.name, building = EXCLUDED.building, floor = EXCLUDED.floor,
-            detector_numbers = EXCLUDED.detector_numbers, matrix_id = EXCLUDED.matrix_id, updated_at = now()
-        `, [z.code, z.name, z.description || '', z.building, z.floor, z.detector_numbers, z.detector_type || 'smoke', id, tenant.companyId, tenant.siteId]);
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET name = EXCLUDED.name, matrix_id = EXCLUDED.matrix_id, updated_at = now()
+        `, [z.code, z.name, z.description || '', z.building, z.floor, z.detector_numbers, z.detector_type || 'smoke', matrixId, tenant.companyId, tenant.siteId]);
         zonesCreated++;
-      } catch (e) {
-        console.warn(`[FireControl] Failed to insert zone ${z.code}:`, e.message);
-      }
+      } catch (e) { console.warn(`[FireControl] Zone error: ${e.message}`); }
     }
 
-    for (const e of uniqueEquipment) {
+    for (const e of allEquipment) {
       try {
         await pool.query(`
           INSERT INTO fc_equipment (code, name, equipment_type, building, floor, location, fdcio_module, fdcio_output, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
-            name = EXCLUDED.name, equipment_type = EXCLUDED.equipment_type,
-            building = EXCLUDED.building, location = EXCLUDED.location,
-            fdcio_module = EXCLUDED.fdcio_module, fdcio_output = EXCLUDED.fdcio_output,
-            matrix_id = EXCLUDED.matrix_id, updated_at = now()
-        `, [e.code, e.name, e.type || 'autre', e.building, e.floor, e.location, e.fdcio_module, e.fdcio_output, id, tenant.companyId, tenant.siteId]);
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET name = EXCLUDED.name, matrix_id = EXCLUDED.matrix_id, updated_at = now()
+        `, [e.code, e.name, e.type || 'autre', e.building, e.floor, e.location, e.fdcio_module, e.fdcio_output, matrixId, tenant.companyId, tenant.siteId]);
         equipmentCreated++;
-      } catch (err) {
-        console.warn(`[FireControl] Failed to insert equipment ${e.code}:`, err.message);
-      }
+      } catch (err) { console.warn(`[FireControl] Equipment error: ${err.message}`); }
     }
 
-    // Create links
     for (const link of allLinks) {
       try {
-        const { rows: zoneRows } = await pool.query(
-          `SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`,
-          [link.zone_code, tenant.companyId, tenant.siteId]
-        );
-        const { rows: equipRows } = await pool.query(
-          `SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`,
-          [link.equipment_code, tenant.companyId, tenant.siteId]
-        );
-
+        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.zone_code, tenant.companyId, tenant.siteId]);
+        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.equipment_code, tenant.companyId, tenant.siteId]);
         if (zoneRows.length && equipRows.length) {
-          await pool.query(`
-            INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (zone_id, equipment_id, alarm_level) DO UPDATE SET action_type = EXCLUDED.action_type
-          `, [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action || 'activate', id]);
+          await pool.query(`INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+            [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action || 'activate', matrixId]);
           linksCreated++;
         }
-      } catch (err) {
-        console.warn(`[FireControl] Failed to create link:`, err.message);
+      } catch (err) { console.warn(`[FireControl] Link error: ${err.message}`); }
+    }
+
+    // Store parsed data
+    await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`,
+      [JSON.stringify({ zones: allZones, equipment: allEquipment, links: allLinks, parsed_at: new Date().toISOString() }), matrixId]);
+
+    job.status = 'completed';
+    job.progress = 100;
+    job.message = 'Analyse terminée';
+    job.completed_at = Date.now();
+    job.result = { zones_created: zonesCreated, equipment_created: equipmentCreated, links_created: linksCreated };
+    await saveProgress();
+
+    console.log(`[FireControl] Job ${jobId}: Completed - ${zonesCreated} zones, ${equipmentCreated} equipment, ${linksCreated} links`);
+
+    // Send push notification
+    try {
+      await notify({
+        tag: `matrix-parse-${jobId}`,
+        title: '✅ Analyse matrice terminée',
+        body: `${equipmentCreated} équipements extraits de "${matrix.name}"`,
+        data: { type: 'matrix_parse_complete', job_id: jobId, matrix_id: matrixId },
+        userEmail: userEmail
+      });
+    } catch (notifErr) {
+      console.warn(`[FireControl] Notification error: ${notifErr.message}`);
+    }
+
+  } catch (err) {
+    console.error(`[FireControl] Job ${jobId} failed:`, err.message);
+    job.status = 'failed';
+    job.error = err.message;
+    job.completed_at = Date.now();
+    await saveProgress();
+
+    try {
+      await notify({
+        tag: `matrix-parse-${jobId}`,
+        title: '❌ Analyse matrice échouée',
+        body: err.message.substring(0, 100),
+        data: { type: 'matrix_parse_failed', job_id: jobId },
+        userEmail: userEmail
+      });
+    } catch (e) {}
+  }
+}
+
+// Start AI matrix parsing (background job)
+app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = extractTenantFromRequest(req);
+    const userEmail = req.headers['x-user-email'] || 'unknown';
+
+    // Check if matrix exists
+    const { rows } = await pool.query(
+      `SELECT id, name FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
+      [id, tenant.companyId, tenant.siteId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: "Matrix not found" });
+    }
+
+    // Check for existing active job
+    for (const [existingJobId, existingJob] of matrixParseJobs) {
+      if (existingJob.matrix_id === id && (existingJob.status === 'pending' || existingJob.status === 'analyzing')) {
+        return res.json({
+          job_id: existingJobId,
+          status: existingJob.status,
+          progress: existingJob.progress,
+          message: existingJob.message,
+          poll_url: `/api/fire-control/matrix-parse-job/${existingJobId}`,
+          reused: true
+        });
       }
     }
 
-    // Store parsed data in matrix
-    await pool.query(
-      `UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`,
-      [JSON.stringify({ zones: uniqueZones, equipment: uniqueEquipment, links: allLinks, parsed_at: new Date().toISOString() }), id]
-    );
+    // Create job
+    const jobId = `mp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const job = {
+      id: jobId,
+      matrix_id: id,
+      site: req.headers['x-site'] || 'default',
+      user_email: userEmail,
+      status: 'pending',
+      progress: 0,
+      message: 'En file d\'attente...',
+      created_at: Date.now(),
+      company_id: tenant.companyId,
+      site_id: tenant.siteId
+    };
+    matrixParseJobs.set(jobId, job);
+    await saveMatrixParseJob(job);
 
-    await audit.log(req, AUDIT_ACTIONS.UPDATED, {
-      entityType: "matrix",
-      entityId: id,
-      details: { action: "ai_parsed", zones: zonesCreated, equipment: equipmentCreated, links: linksCreated },
+    console.log(`[FireControl] Created parse job ${jobId} for matrix ${id}`);
+
+    // Return immediately
+    res.json({
+      job_id: jobId,
+      status: 'pending',
+      message: 'Analyse démarrée en arrière-plan',
+      poll_url: `/api/fire-control/matrix-parse-job/${jobId}`
     });
 
-    res.json({
-      success: true,
-      zones_created: zonesCreated,
-      equipment_created: equipmentCreated,
-      links_created: linksCreated,
-      raw_extracted: {
-        zones: uniqueZones.length,
-        equipment: uniqueEquipment.length,
-        links: allLinks.length
+    // Start background processing
+    setImmediate(async () => {
+      try {
+        await processMatrixParse(jobId, id, tenant, userEmail);
+      } catch (bgError) {
+        console.error(`[FireControl] Background error for ${jobId}:`, bgError.message);
+        const failedJob = matrixParseJobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'failed';
+          failedJob.error = bgError.message;
+          failedJob.completed_at = Date.now();
+          await saveMatrixParseJob(failedJob);
+        }
       }
     });
 
   } catch (err) {
-    console.error("[FireControl] AI parse matrix error:", err);
+    console.error("[FireControl] AI parse start error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get matrix parse job status
+app.get("/api/fire-control/matrix-parse-job/:jobId", async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = await getMatrixParseJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+
+    res.json({
+      job_id: job.id,
+      status: job.status,
+      progress: job.progress,
+      message: job.message,
+      result: job.result,
+      error: job.error,
+      created_at: job.created_at,
+      completed_at: job.completed_at
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

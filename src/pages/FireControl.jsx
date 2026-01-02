@@ -274,36 +274,85 @@ export default function FireControl() {
     }
   };
 
-  // AI-powered matrix parsing - extracts equipment from PDF using Vision AI
+  // AI-powered matrix parsing - extracts equipment from PDF using Vision AI (background job)
   const handleAiParseMatrix = async (matrix) => {
     setParsingMatrixId(matrix.id);
     try {
-      showToast("Analyse IA en cours... Cela peut prendre quelques minutes.");
-      const result = await api.fireControl.aiParseMatrix(matrix.id);
+      // Start background job
+      const startResult = await api.fireControl.aiParseMatrix(matrix.id);
 
-      showToast(
-        `Analyse terminée: ${result.zones_created} zones, ${result.equipment_created} équipements, ${result.links_created} liens`,
-        "success"
-      );
-
-      // Reload matrices to show parsed status
-      loadMatrices();
-
-      // If equipment was found, trigger auto-matching
-      if (result.equipment_created > 0) {
-        showToast("Lancement de la correspondance automatique...");
-        const response = await api.fireControl.getMatrixEquipment(matrix.id);
-        const matrixEquipment = response?.equipment || [];
-        if (matrixEquipment.length > 0) {
-          await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrix.id });
-        }
+      if (startResult.reused) {
+        showToast("Analyse déjà en cours...");
+      } else {
+        showToast("🚀 Analyse IA lancée en arrière-plan. Vous serez notifié quand ce sera terminé.");
       }
+
+      // Clear the spinner after a short delay - the job runs in background
+      setTimeout(() => {
+        setParsingMatrixId(null);
+      }, 2000);
+
+      // Optional: Poll for completion (for immediate feedback without leaving the page)
+      if (startResult.job_id) {
+        pollMatrixParseJob(startResult.job_id, matrix.id);
+      }
+
     } catch (err) {
       console.error("AI parse error:", err);
-      showToast(err.message || "Erreur lors de l'analyse IA", "error");
-    } finally {
+      showToast(err.message || "Erreur lors du lancement de l'analyse", "error");
       setParsingMatrixId(null);
     }
+  };
+
+  // Poll matrix parse job status
+  const pollMatrixParseJob = async (jobId, matrixId) => {
+    let attempts = 0;
+    const maxAttempts = 120; // 10 minutes max (5s intervals)
+
+    const poll = async () => {
+      try {
+        const job = await api.fireControl.getMatrixParseJob(jobId);
+
+        if (job.status === 'completed') {
+          showToast(
+            `✅ Analyse terminée: ${job.result?.equipment_created || 0} équipements extraits`,
+            "success"
+          );
+          loadMatrices();
+
+          // Trigger auto-matching if equipment found
+          if (job.result?.equipment_created > 0) {
+            const response = await api.fireControl.getMatrixEquipment(matrixId);
+            const matrixEquipment = response?.equipment || [];
+            if (matrixEquipment.length > 0) {
+              showToast("Lancement de la correspondance automatique...");
+              await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrixId });
+            }
+          }
+          return; // Stop polling
+        }
+
+        if (job.status === 'failed') {
+          showToast(`❌ Analyse échouée: ${job.error}`, "error");
+          return; // Stop polling
+        }
+
+        // Still processing - continue polling
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 5000); // Poll every 5 seconds
+        }
+      } catch (err) {
+        console.warn("Poll error:", err.message);
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 5000);
+        }
+      }
+    };
+
+    // Start polling after a short delay
+    setTimeout(poll, 3000);
   };
 
   const handleGenerateChecks = async (campaignId) => {
