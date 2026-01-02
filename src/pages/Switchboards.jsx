@@ -6,7 +6,7 @@ import {
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock
+  MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock, Flame
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
@@ -1112,7 +1112,7 @@ export default function Switchboards() {
   const [showDeviceForm, setShowDeviceForm] = useState(false);
   const [showPanelScan, setShowPanelScan] = useState(false);
   const [preloadedScanResult, setPreloadedScanResult] = useState(null);
-  const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false });
+  const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false });
   const [deviceForm, setDeviceForm] = useState({
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
     in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
@@ -1452,7 +1452,8 @@ export default function Switchboards() {
         code: boardForm.code,
         meta: { building_code: boardForm.building_code, floor: boardForm.floor, room: boardForm.room },
         regime_neutral: boardForm.regime_neutral,
-        is_principal: boardForm.is_principal
+        is_principal: boardForm.is_principal,
+        fire_interlock: boardForm.fire_interlock
       };
       
       let savedBoard;
@@ -1709,7 +1710,7 @@ export default function Switchboards() {
 
   // Form reset
   const resetBoardForm = () => {
-    setBoardForm({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false });
+    setBoardForm({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false });
     setEditingBoardId(null);
     setShowBoardForm(false);
   };
@@ -1738,7 +1739,8 @@ export default function Switchboards() {
       floor: board.meta?.floor || '',
       room: board.meta?.room || '',
       regime_neutral: board.regime_neutral || 'TN-S',
-      is_principal: board.is_principal || false
+      is_principal: board.is_principal || false,
+      fire_interlock: board.fire_interlock || false
     });
     setEditingBoardId(board.id);
     setShowBoardForm(true);
@@ -2159,8 +2161,24 @@ export default function Switchboards() {
             />
             <span className="font-medium text-emerald-700">Tableau principal</span>
           </label>
+
+          <label className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-orange-300 hover:bg-orange-50/50 transition-colors cursor-pointer">
+            <input
+              type="checkbox"
+              checked={boardForm.fire_interlock}
+              onChange={(e) => setBoardForm(prev => ({ ...prev, fire_interlock: e.target.checked }))}
+              className="w-5 h-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <Flame size={16} className="text-orange-500" />
+                <span className="font-medium text-gray-900">Asservissement incendie</span>
+              </div>
+              <p className="text-sm text-gray-500">Ce tableau apparaîtra dans le système d'asservissement incendie</p>
+            </div>
+          </label>
         </div>
-        
+
         <div className="border-t p-4 flex gap-3">
           <button onClick={resetBoardForm} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
             Annuler

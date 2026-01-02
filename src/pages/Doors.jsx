@@ -7,7 +7,7 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Upload, RefreshCw, Eye, AlertCircle, Menu, Share2, ExternalLink,
   MapPin, Tag, Hash, Info, Calendar, Clock, FileText, Download, Check,
-  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode
+  XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Flame
 } from 'lucide-react';
 import { api } from '../lib/api';
 import MiniElectro from '../components/MiniElectro';
@@ -1001,7 +1001,7 @@ const DetailPanel = ({
 
 const EditForm = ({ door, onSave, onCancel, showToast }) => {
   const isNew = !door?.id;
-  const initialFormData = { name: '', building: '', floor: '', location: '' };
+  const initialFormData = { name: '', building: '', floor: '', location: '', fire_interlock: false };
 
   // Auto-save draft for new items only
   const {
@@ -1035,7 +1035,8 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
         name: door.name || '',
         building: door.building || '',
         floor: door.floor || '',
-        location: door.location || ''
+        location: door.location || '',
+        fire_interlock: door.fire_interlock || false
       });
     } else if (isNew && hasDraft) {
       // New door - restore from draft
@@ -1134,6 +1135,26 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
               />
             </div>
           </div>
+        </div>
+
+        {/* Fire Control */}
+        <div className="space-y-4">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Flame size={16} className="text-orange-500" />
+            Asservissement incendie
+          </h3>
+          <label className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:border-orange-300 hover:bg-orange-50/50 transition-colors cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.fire_interlock}
+              onChange={e => setForm(f => ({ ...f, fire_interlock: e.target.checked }))}
+              className="w-5 h-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+            />
+            <div>
+              <span className="font-medium text-gray-900">Inclure dans le contrôle incendie</span>
+              <p className="text-sm text-gray-500">Cette porte apparaîtra dans le système d'asservissement incendie</p>
+            </div>
+          </label>
         </div>
       </div>
 
