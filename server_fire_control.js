@@ -1373,6 +1373,38 @@ app.get("/api/fire-control/matrices/:id/file", async (req, res) => {
   }
 });
 
+// Delete a matrix
+app.delete("/api/fire-control/matrices/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = extractTenantFromRequest(req);
+
+    // Check if matrix exists
+    const { rows } = await pool.query(
+      `SELECT id, name, file_path FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
+      [id, tenant.companyId, tenant.siteId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Matrix not found" });
+    }
+
+    // Delete file if exists
+    if (rows[0].file_path) {
+      try { await fsp.unlink(rows[0].file_path); } catch {}
+    }
+
+    // Delete from database (cascades to fc_matrix_parse_jobs)
+    await pool.query(`DELETE FROM fc_matrices WHERE id = $1`, [id]);
+
+    await audit.log(req, AUDIT_ACTIONS.FILE_DELETED, { entityType: "matrix", entityId: id, name: rows[0].name });
+    res.json({ success: true, message: "Matrix deleted" });
+  } catch (err) {
+    console.error("[FireControl] DELETE matrix error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Parse matrix and create zones + equipment
 app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
   try {

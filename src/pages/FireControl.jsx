@@ -304,6 +304,19 @@ export default function FireControl() {
     }
   };
 
+  // Delete matrix
+  const handleDeleteMatrix = async (matrix) => {
+    if (!window.confirm(`Supprimer la matrice "${matrix.name}" ?`)) return;
+    try {
+      await api.fireControl.deleteMatrix(matrix.id);
+      showToast("Matrice supprimée");
+      refreshData();
+    } catch (err) {
+      console.error("Delete matrix error:", err);
+      showToast(err.message || "Erreur lors de la suppression", "error");
+    }
+  };
+
   // Poll matrix parse job status
   const pollMatrixParseJob = async (jobId, matrixId) => {
     let attempts = 0;
@@ -689,6 +702,7 @@ export default function FireControl() {
                   loadPlans();
                 }}
                 onAiParse={handleAiParseMatrix}
+                onDeleteMatrix={handleDeleteMatrix}
                 parsingMatrixId={parsingMatrixId}
                 onLinkEquipment={async (matrix) => {
                   // Fetch equipment from this matrix and run auto-matching
@@ -1082,7 +1096,7 @@ function CampaignsTab({
 // =============================================================================
 // DOCUMENTS TAB
 // =============================================================================
-function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipment, onAiParse, parsingMatrixId }) {
+function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipment, onAiParse, onDeleteMatrix, parsingMatrixId }) {
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Matrices */}
@@ -1156,6 +1170,15 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipm
                   >
                     <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
                   </a>
+                  {onDeleteMatrix && (
+                    <button
+                      onClick={() => onDeleteMatrix(matrix)}
+                      className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
+                      title="Supprimer"
+                    >
+                      <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
