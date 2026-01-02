@@ -23,6 +23,7 @@ export const ALL_APPS = [
   { id: 'comp-ext', name: 'External Contractors', icon: '🤝', category: 'Utilities', route: '/app/comp-ext' },
   { id: 'ask-veeva', name: 'Ask Veeva', icon: '💬', category: 'Utilities', route: '/app/ask-veeva' },
   { id: 'doors', name: 'Fire Doors', icon: '🚪', category: 'Utilities', route: '/app/doors' },
+  { id: 'fire-control', name: 'Contrôle Asservissements Incendie', icon: '🔥', category: 'Utilities', route: '/app/fire-control' },
   { id: 'dcf', name: 'Dcf', icon: '📊', category: 'Utilities', route: '/app/dcf' },
   { id: 'learn_ex', name: 'Formation ATEX', icon: '📊', category: 'Utilities', route: '/app/learn_ex' },
   { id: 'mobile-equipments', name: 'Mobile Equipments', icon: '🔌', category: 'Electrical', route: '/app/mobile-equipments' },
