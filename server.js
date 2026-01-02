@@ -3452,9 +3452,11 @@ function mkProxy(target, { withRestream = false, timeoutMs = 20000 } = {}) {
     },
 
     // Re-stream du body si déjà parsé en amont (sécurité)
+    // IMPORTANT: On doit toujours envoyer quelque chose si req.body existe,
+    // même pour {} vide, sinon le backend attend des données qui n'arrivent jamais
     onProxyReq: withRestream
       ? (proxyReq, req) => {
-          if (!req.body || !Object.keys(req.body).length) return;
+          if (!req.body) return;
           const bodyData = JSON.stringify(req.body);
           proxyReq.setHeader("Content-Type", "application/json");
           proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
