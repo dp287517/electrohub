@@ -2773,6 +2773,37 @@ export const api = {
     // ========================= REPORTS =========================
     listReports: (params) => get("/api/fire-control/reports", params),
     reportFileUrl: (id) => `${API_BASE}/api/fire-control/reports/${encodeURIComponent(id)}/file?site=${currentSite()}`,
+
+    // ========================= ALERTS =========================
+    listAlerts: () => get("/api/fire-control/alerts"),
+  },
+
+  // ========== FIRE CONTROL MAPS (Leaflet visualization) ==========
+  fireControlMaps: {
+    // List plans for map display
+    listPlans: () => get("/api/fire-control/maps/listPlans"),
+
+    // Get plan file URL for PDF display
+    planFileUrl: (plan, { bust = false } = {}) => {
+      const key = plan?.id || plan?.logical_name || plan;
+      const idParam = typeof key === 'number' ? `id=${key}` : `logical_name=${encodeURIComponent(key)}`;
+      return withBust(`${API_BASE}/api/fire-control/maps/planFile?${idParam}&site=${currentSite()}`, bust);
+    },
+
+    // Get positions for a plan (markers on map)
+    positions: (planKey, pageIndex = 0) => {
+      const idParam = typeof planKey === 'number' ? `id=${planKey}` : `logical_name=${encodeURIComponent(planKey)}`;
+      return get(`/api/fire-control/maps/positions?${idParam}&page_index=${pageIndex}`);
+    },
+
+    // Set position for a detector on a plan
+    setPosition: (detectorId, payload) => post("/api/fire-control/maps/setPosition", { detector_id: detectorId, ...payload }),
+
+    // Delete a position
+    deletePosition: (positionId) => del(`/api/fire-control/maps/positions/${encodeURIComponent(positionId)}`),
+
+    // Get all placed detector IDs
+    placedIds: () => get("/api/fire-control/maps/placed-ids"),
   },
 };
 

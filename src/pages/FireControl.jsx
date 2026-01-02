@@ -3,7 +3,7 @@
 // VERSION 1.0
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
@@ -56,6 +56,7 @@ import {
 // MAIN COMPONENT
 // =============================================================================
 export default function FireControl() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = searchParams.get("tab") || "dashboard";
 
@@ -391,6 +392,16 @@ export default function FireControl() {
             </div>
 
             <div className="flex items-center gap-3">
+              {/* Map view button */}
+              <button
+                onClick={() => navigate("/app/fire-control/map")}
+                className="flex items-center gap-2 px-3 py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg text-sm font-medium hover:bg-orange-100 transition-colors"
+                title="Voir sur le plan"
+              >
+                <MapPin className="w-4 h-4" />
+                <span className="hidden sm:inline">Voir sur le plan</span>
+              </button>
+
               {/* Year selector */}
               <select
                 value={selectedYear}
