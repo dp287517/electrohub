@@ -154,6 +154,12 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS data JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS photo_file_id UUID;`);
 
+  // Fire interlock columns - link to fire control system
+  await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock_zone_id UUID;`);
+  await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock_alarm_level INTEGER DEFAULT 1;`);
+  await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock_code TEXT;`);
+
   // Files attached to items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dh_files (
