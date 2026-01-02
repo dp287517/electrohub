@@ -1215,16 +1215,19 @@ async function ensureSchema() {
     FOR EACH ROW EXECUTE FUNCTION update_switchboard_counts();
 
     -- =======================================================
-    -- RECALCULER TOUS LES COUNTS EXISTANTS (migration one-time)
-    -- Note: s'exécute à chaque démarrage mais très rapide si déjà correct
+    -- RECALCULER TOUS LES COUNTS EXISTANTS
+    -- Note: vérifie et corrige les compteurs désynchronisés à chaque démarrage
     -- =======================================================
     UPDATE switchboards s SET
       device_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id), 0),
       complete_count = COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0)
-    WHERE device_count IS NULL 
+    WHERE device_count IS NULL
        OR complete_count IS NULL
-       OR device_count < 0 
-       OR complete_count < 0;
+       OR device_count < 0
+       OR complete_count < 0
+       OR complete_count > device_count
+       OR device_count != COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id), 0)
+       OR complete_count != COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0);
   `);
   
   console.log('[SWITCHBOARD SCHEMA] Initialized with O(1) auto-count triggers v2');
@@ -4644,6 +4647,15 @@ Réponds en JSON:
     }
 
     console.log(`[LISTING SCAN] Created ${devicesCreated}, updated ${devicesUpdated} devices from listing`);
+
+    // Recalculer les compteurs du tableau après les opérations bulk
+    await quickQuery(`
+      UPDATE switchboards SET
+        device_count = (SELECT COUNT(*) FROM devices WHERE switchboard_id = $1),
+        complete_count = (SELECT COUNT(*) FROM devices WHERE switchboard_id = $1 AND is_complete = true),
+        updated_at = NOW()
+      WHERE id = $1
+    `, [switchboard_id]);
 
     res.json({
       success: true,
