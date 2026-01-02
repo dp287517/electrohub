@@ -1346,6 +1346,34 @@ app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
   }
 });
 
+// Get equipment from a matrix (for auto-matching)
+app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = extractTenantFromRequest(req);
+
+    // Get equipment associated with this matrix
+    const { rows: equipment } = await pool.query(`
+      SELECT
+        e.id, e.code, e.name, e.equipment_type, e.category, e.building, e.floor, e.location,
+        e.external_system, e.external_id, e.fdcio_module, e.fdcio_output,
+        ARRAY_AGG(DISTINCT ze.alarm_level) FILTER (WHERE ze.alarm_level IS NOT NULL) as alarm_levels,
+        ARRAY_AGG(DISTINCT z.code) FILTER (WHERE z.code IS NOT NULL) as zone_codes
+      FROM fc_equipment e
+      LEFT JOIN fc_zone_equipment ze ON ze.equipment_id = e.id
+      LEFT JOIN fc_zones z ON z.id = ze.zone_id
+      WHERE e.matrix_id = $1 AND e.company_id = $2 AND e.site_id = $3
+      GROUP BY e.id
+      ORDER BY e.code
+    `, [id, tenant.companyId, tenant.siteId]);
+
+    res.json({ equipment });
+  } catch (err) {
+    console.error("[FireControl] Get matrix equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ------------------------------
 // ROUTES: Building Plans
 // ------------------------------
