@@ -50,6 +50,11 @@ import {
   Building,
   CircleDot,
   Info,
+  HelpCircle,
+  Link2,
+  ThumbsUp,
+  ThumbsDown,
+  ListChecks,
 } from "lucide-react";
 
 // =============================================================================
@@ -88,8 +93,11 @@ export default function FireControl() {
   const [showUploadPlanModal, setShowUploadPlanModal] = useState(false);
   const [showZoneCheckModal, setShowZoneCheckModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [showEquipmentMatchingModal, setShowEquipmentMatchingModal] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState(null);
   const [selectedZoneCheck, setSelectedZoneCheck] = useState(null);
+  const [uncertainMatches, setUncertainMatches] = useState([]);
+  const [matchingContext, setMatchingContext] = useState(null); // campaign/matrix info
 
   // =============================================================================
   // DATA LOADING
@@ -335,6 +343,90 @@ export default function FireControl() {
     }
   };
 
+  // Handler for auto-matching equipment from matrix
+  const handleAutoMatchEquipment = async (matrixEquipment, context = {}) => {
+    try {
+      const results = await api.fireControlMaps.autoMatchEquipment(matrixEquipment);
+
+      // Separate confident matches (auto-link) from uncertain matches (need confirmation)
+      const confident = results.filter(r => r.status === "confident" && r.best_match);
+      const uncertain = results.filter(r => r.status === "uncertain" && r.best_match);
+      const noMatch = results.filter(r => r.status === "no_match");
+
+      // Auto-link confident matches
+      let autoLinked = 0;
+      for (const match of confident) {
+        try {
+          await api.fireControlMaps.confirmEquipmentMatch({
+            matrix_code: match.matrix_item.code,
+            matrix_name: match.matrix_item.name,
+            source_system: match.best_match.source_system,
+            source_id: match.best_match.id,
+            zone_id: context.zone_id,
+            alarm_level: match.matrix_item.alarm_level || 1,
+          });
+          autoLinked++;
+        } catch (e) {
+          console.error("Failed to auto-link:", e);
+        }
+      }
+
+      if (autoLinked > 0) {
+        showToast(`${autoLinked} équipement(s) lié(s) automatiquement`);
+      }
+
+      // If there are uncertain matches, show the modal
+      if (uncertain.length > 0) {
+        setUncertainMatches(uncertain);
+        setMatchingContext(context);
+        setShowEquipmentMatchingModal(true);
+      } else if (noMatch.length > 0) {
+        showToast(`${noMatch.length} équipement(s) sans correspondance`, "error");
+      }
+
+      return { confident: confident.length, uncertain: uncertain.length, noMatch: noMatch.length };
+    } catch (err) {
+      showToast(err.message, "error");
+      return { confident: 0, uncertain: 0, noMatch: 0 };
+    }
+  };
+
+  const handleConfirmEquipmentMatch = async (matchResult, selectedEquipment) => {
+    try {
+      await api.fireControlMaps.confirmEquipmentMatch({
+        matrix_code: matchResult.matrix_item.code,
+        matrix_name: matchResult.matrix_item.name,
+        source_system: selectedEquipment.source_system,
+        source_id: selectedEquipment.id,
+        zone_id: matchingContext?.zone_id,
+        alarm_level: matchResult.matrix_item.alarm_level || 1,
+      });
+
+      // Remove from uncertain list
+      setUncertainMatches(prev => prev.filter(m => m.matrix_item.code !== matchResult.matrix_item.code));
+      showToast("Équipement lié avec succès");
+
+      // Close modal if no more uncertain matches
+      if (uncertainMatches.length <= 1) {
+        setShowEquipmentMatchingModal(false);
+        setUncertainMatches([]);
+        setMatchingContext(null);
+      }
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  const handleSkipEquipmentMatch = (matchResult) => {
+    setUncertainMatches(prev => prev.filter(m => m.matrix_item.code !== matchResult.matrix_item.code));
+
+    if (uncertainMatches.length <= 1) {
+      setShowEquipmentMatchingModal(false);
+      setUncertainMatches([]);
+      setMatchingContext(null);
+    }
+  };
+
   // =============================================================================
   // COMPUTED VALUES
   // =============================================================================
@@ -526,6 +618,20 @@ export default function FireControl() {
                   loadMatrices();
                   loadPlans();
                 }}
+                onLinkEquipment={async (matrix) => {
+                  // Fetch equipment from this matrix and run auto-matching
+                  try {
+                    const response = await api.fireControl.getMatrixEquipment(matrix.id);
+                    const matrixEquipment = response?.equipment || [];
+                    if (matrixEquipment.length === 0) {
+                      showToast("Aucun équipement trouvé dans cette matrice", "error");
+                      return;
+                    }
+                    await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrix.id });
+                  } catch (err) {
+                    showToast(err.message, "error");
+                  }
+                }}
               />
             )}
 
@@ -615,6 +721,20 @@ export default function FireControl() {
           buildings={buildingOptions}
           onSave={handleCreateSchedule}
           onClose={() => setShowScheduleModal(false)}
+        />
+      )}
+
+      {showEquipmentMatchingModal && uncertainMatches.length > 0 && (
+        <EquipmentMatchingModal
+          uncertainMatches={uncertainMatches}
+          context={matchingContext}
+          onConfirm={handleConfirmEquipmentMatch}
+          onSkip={handleSkipEquipmentMatch}
+          onClose={() => {
+            setShowEquipmentMatchingModal(false);
+            setUncertainMatches([]);
+            setMatchingContext(null);
+          }}
         />
       )}
     </div>
@@ -898,7 +1018,7 @@ function CampaignsTab({
 // =============================================================================
 // DOCUMENTS TAB
 // =============================================================================
-function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh }) {
+function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh, onLinkEquipment }) {
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Matrices */}
@@ -940,14 +1060,25 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
                     </p>
                   </div>
                 </div>
-                <a
-                  href={api.fireControl.matrixFileUrl(matrix.id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex-shrink-0"
-                >
-                  <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
-                </a>
+                <div className="flex items-center gap-1">
+                  {onLinkEquipment && (
+                    <button
+                      onClick={() => onLinkEquipment(matrix)}
+                      className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded flex-shrink-0"
+                      title="Lier les équipements"
+                    >
+                      <Link2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                    </button>
+                  )}
+                  <a
+                    href={api.fireControl.matrixFileUrl(matrix.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex-shrink-0"
+                  >
+                    <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </a>
+                </div>
               </div>
             ))}
           </div>
@@ -2188,6 +2319,257 @@ function ScheduleModal({ campaigns, buildings, onSave, onClose }) {
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// =============================================================================
+// EQUIPMENT MATCHING MODAL - Résolution des doutes sur les équipements
+// =============================================================================
+function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, onClose }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [showAlternatives, setShowAlternatives] = useState(false);
+  const [processing, setProcessing] = useState(false);
+
+  const currentMatch = uncertainMatches[currentIndex];
+  const progress = uncertainMatches.length > 0 ? ((currentIndex + 1) / uncertainMatches.length) * 100 : 0;
+
+  if (!currentMatch) return null;
+
+  const handleConfirmBestMatch = async () => {
+    if (!currentMatch.best_match) return;
+    setProcessing(true);
+    try {
+      await onConfirm(currentMatch, currentMatch.best_match);
+      if (currentIndex < uncertainMatches.length - 1) {
+        setCurrentIndex(prev => prev + 1);
+        setShowAlternatives(false);
+      }
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleSelectAlternative = async (equipment) => {
+    setProcessing(true);
+    try {
+      await onConfirm(currentMatch, equipment);
+      setShowAlternatives(false);
+      if (currentIndex < uncertainMatches.length - 1) {
+        setCurrentIndex(prev => prev + 1);
+      }
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleSkip = () => {
+    onSkip(currentMatch);
+    if (currentIndex < uncertainMatches.length - 1) {
+      setCurrentIndex(prev => prev + 1);
+      setShowAlternatives(false);
+    }
+  };
+
+  const getSourceSystemLabel = (system) => {
+    const labels = {
+      doors: "Portes (Doors)",
+      switchboard: "Tableau Électrique",
+      datahub: "DataHub",
+    };
+    return labels[system] || system;
+  };
+
+  const getSourceSystemColor = (system) => {
+    const colors = {
+      doors: "bg-purple-100 text-purple-700",
+      switchboard: "bg-blue-100 text-blue-700",
+      datahub: "bg-green-100 text-green-700",
+    };
+    return colors[system] || "bg-gray-100 text-gray-700";
+  };
+
+  return (
+    <Modal title="Résolution des équipements" onClose={onClose} size="lg">
+      <div className="space-y-4">
+        {/* Progress bar */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+            <span>Équipement {currentIndex + 1} sur {uncertainMatches.length}</span>
+            <span>{Math.round(progress)}%</span>
+          </div>
+          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-orange-500 transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Question card */}
+        <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-yellow-100 rounded-lg">
+              <HelpCircle className="w-6 h-6 text-yellow-600" />
+            </div>
+            <div className="flex-1">
+              <h4 className="font-semibold text-yellow-800 mb-2">
+                {currentMatch.question || "J'ai un doute sur cet équipement"}
+              </h4>
+              <div className="bg-white rounded-lg p-3 border border-yellow-200">
+                <p className="text-sm font-medium text-gray-900">
+                  Code matrice: <span className="font-bold text-orange-600">{currentMatch.matrix_item?.code}</span>
+                </p>
+                <p className="text-sm text-gray-600">
+                  Nom: {currentMatch.matrix_item?.name || "-"}
+                </p>
+                {currentMatch.matrix_item?.building && (
+                  <p className="text-sm text-gray-600">
+                    Bâtiment: {currentMatch.matrix_item.building}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Best match suggestion */}
+        {currentMatch.best_match && (
+          <div className="bg-white border-2 border-green-200 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <ThumbsUp className="w-5 h-5 text-green-600" />
+              <h4 className="font-semibold text-green-800">
+                Meilleure correspondance ({Math.round(currentMatch.best_match.score * 100)}% de confiance)
+              </h4>
+            </div>
+
+            <div className="flex items-start gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${getSourceSystemColor(currentMatch.best_match.source_system)}`}>
+                    {getSourceSystemLabel(currentMatch.best_match.source_system)}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    ID: {currentMatch.best_match.id?.substring(0, 8)}...
+                  </span>
+                </div>
+                <p className="font-medium text-gray-900">
+                  {currentMatch.best_match.code || currentMatch.best_match.name}
+                </p>
+                {currentMatch.best_match.name && currentMatch.best_match.code && (
+                  <p className="text-sm text-gray-600">{currentMatch.best_match.name}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-2 text-xs text-gray-500">
+                  {currentMatch.best_match.building && (
+                    <span className="flex items-center gap-1">
+                      <Building className="w-3 h-3" />
+                      {currentMatch.best_match.building}
+                    </span>
+                  )}
+                  {currentMatch.best_match.floor && (
+                    <span>Étage: {currentMatch.best_match.floor}</span>
+                  )}
+                  {currentMatch.best_match.location && (
+                    <span>📍 {currentMatch.best_match.location}</span>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={handleConfirmBestMatch}
+                disabled={processing}
+                className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 transition-colors"
+              >
+                {processing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Oui, c'est lui
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Alternatives toggle */}
+        {currentMatch.alternatives && currentMatch.alternatives.length > 0 && (
+          <div>
+            <button
+              onClick={() => setShowAlternatives(!showAlternatives)}
+              className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            >
+              <ChevronRight className={`w-4 h-4 transition-transform ${showAlternatives ? "rotate-90" : ""}`} />
+              <ListChecks className="w-4 h-4" />
+              Voir {currentMatch.alternatives.length} autre(s) suggestion(s)
+            </button>
+
+            {showAlternatives && (
+              <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
+                {currentMatch.alternatives.map((alt, idx) => (
+                  <div
+                    key={alt.id || idx}
+                    className="flex items-center justify-between p-3 border rounded-lg hover:border-orange-300 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${getSourceSystemColor(alt.source_system)}`}>
+                          {getSourceSystemLabel(alt.source_system)}
+                        </span>
+                        <span className="text-xs text-gray-400">
+                          {Math.round(alt.score * 100)}%
+                        </span>
+                      </div>
+                      <p className="text-sm font-medium truncate">{alt.code || alt.name}</p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {alt.building} {alt.floor && `- ${alt.floor}`}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleSelectAlternative(alt)}
+                      disabled={processing}
+                      className="ml-2 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 hover:bg-orange-100 hover:text-orange-700 rounded-lg transition-colors"
+                    >
+                      Choisir
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center justify-between pt-4 border-t">
+          <button
+            onClick={handleSkip}
+            className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <ThumbsDown className="w-4 h-4" />
+            <span className="hidden sm:inline">Ce n'est pas dans la liste</span>
+            <span className="sm:hidden">Passer</span>
+          </button>
+
+          <div className="flex gap-2">
+            {currentIndex > 0 && (
+              <button
+                onClick={() => {
+                  setCurrentIndex(prev => prev - 1);
+                  setShowAlternatives(false);
+                }}
+                className="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
+              >
+                Précédent
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-gray-700 border rounded-lg hover:bg-gray-50"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      </div>
     </Modal>
   );
 }
