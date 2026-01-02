@@ -2933,24 +2933,24 @@ export default function Switchboards() {
                           {showBoardActionsMenu && (
                             <>
                               <div className="fixed inset-0 z-40" onClick={() => setShowBoardActionsMenu(false)} />
-                              <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border z-50 py-1 min-w-[160px]">
-                                <button onClick={() => { setShowShareModal(true); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
-                                  <Link size={16} className="text-gray-400" />
-                                  Partager
+                              <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border z-50 py-1 min-w-[180px]">
+                                <button onClick={() => { navigate(`/app/switchboards/${selectedBoard.id}/diagram`); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <GitBranch size={16} className="text-violet-500" />
+                                  Schéma unifilaire
                                 </button>
                                 <button onClick={() => { handlePrintPDF(); setShowBoardActionsMenu(false); }} disabled={isPrinting} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 disabled:opacity-50">
                                   <Printer size={16} className="text-gray-400" />
                                   Imprimer PDF
                                 </button>
-                                <button onClick={() => { navigate(`/app/switchboards/${selectedBoard.id}/diagram`); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
-                                  <GitBranch size={16} className="text-gray-400" />
-                                  Schéma
+                                <button onClick={() => { setShowShareModal(true); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <Link size={16} className="text-gray-400" />
+                                  Partager
                                 </button>
+                                <hr className="my-1" />
                                 <button onClick={() => { boardPhotoRef.current?.click(); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
                                   <Camera size={16} className="text-gray-400" />
                                   Changer la photo
                                 </button>
-                                <hr className="my-1" />
                                 <button onClick={() => { startEditBoard(selectedBoard); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
                                   <Edit3 size={16} className="text-blue-500" />
                                   Modifier
