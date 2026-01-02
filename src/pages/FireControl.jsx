@@ -55,6 +55,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   ListChecks,
+  Sparkles,
 } from "lucide-react";
 
 // =============================================================================
@@ -97,6 +98,7 @@ export default function FireControl() {
   const [selectedZoneCheck, setSelectedZoneCheck] = useState(null);
   const [uncertainMatches, setUncertainMatches] = useState([]);
   const [matchingContext, setMatchingContext] = useState(null); // campaign/matrix info
+  const [parsingMatrixId, setParsingMatrixId] = useState(null); // Track which matrix is being AI-parsed
 
   // =============================================================================
   // DATA LOADING
@@ -269,6 +271,38 @@ export default function FireControl() {
       loadMatrices();
     } catch (err) {
       showToast(err.message, "error");
+    }
+  };
+
+  // AI-powered matrix parsing - extracts equipment from PDF using Vision AI
+  const handleAiParseMatrix = async (matrix) => {
+    setParsingMatrixId(matrix.id);
+    try {
+      showToast("Analyse IA en cours... Cela peut prendre quelques minutes.");
+      const result = await api.fireControl.aiParseMatrix(matrix.id);
+
+      showToast(
+        `Analyse terminée: ${result.zones_created} zones, ${result.equipment_created} équipements, ${result.links_created} liens`,
+        "success"
+      );
+
+      // Reload matrices to show parsed status
+      loadMatrices();
+
+      // If equipment was found, trigger auto-matching
+      if (result.equipment_created > 0) {
+        showToast("Lancement de la correspondance automatique...");
+        const response = await api.fireControl.getMatrixEquipment(matrix.id);
+        const matrixEquipment = response?.equipment || [];
+        if (matrixEquipment.length > 0) {
+          await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrix.id });
+        }
+      }
+    } catch (err) {
+      console.error("AI parse error:", err);
+      showToast(err.message || "Erreur lors de l'analyse IA", "error");
+    } finally {
+      setParsingMatrixId(null);
     }
   };
 
@@ -605,13 +639,15 @@ export default function FireControl() {
                   loadMatrices();
                   loadPlans();
                 }}
+                onAiParse={handleAiParseMatrix}
+                parsingMatrixId={parsingMatrixId}
                 onLinkEquipment={async (matrix) => {
                   // Fetch equipment from this matrix and run auto-matching
                   try {
                     const response = await api.fireControl.getMatrixEquipment(matrix.id);
                     const matrixEquipment = response?.equipment || [];
                     if (matrixEquipment.length === 0) {
-                      showToast("Aucun équipement trouvé dans cette matrice", "error");
+                      showToast("Aucun équipement trouvé dans cette matrice. Utilisez l'analyse IA d'abord.", "error");
                       return;
                     }
                     await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrix.id });
@@ -997,7 +1033,7 @@ function CampaignsTab({
 // =============================================================================
 // DOCUMENTS TAB
 // =============================================================================
-function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipment }) {
+function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipment, onAiParse, parsingMatrixId }) {
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Matrices */}
@@ -1040,6 +1076,20 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipm
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {onAiParse && (
+                    <button
+                      onClick={() => onAiParse(matrix)}
+                      disabled={parsingMatrixId === matrix.id}
+                      className="p-2 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded flex-shrink-0 disabled:opacity-50"
+                      title="Analyser avec IA"
+                    >
+                      {parsingMatrixId === matrix.id ? (
+                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
+                      )}
+                    </button>
+                  )}
                   {onLinkEquipment && (
                     <button
                       onClick={() => onLinkEquipment(matrix)}
