@@ -477,7 +477,6 @@ const EquipmentLeafletViewer = forwardRef(({
   }, []);
 
   useEffect(() => {
-    if (disabled) return;
     if (!fileUrl || !wrapRef.current) return;
 
     let cancelled = false;
@@ -644,7 +643,7 @@ const EquipmentLeafletViewer = forwardRef(({
       cleanupMap();
       cleanupPdf();
     };
-  }, [fileUrl, pageIndex, disabled]);
+  }, [fileUrl, pageIndex]);
 
   useEffect(() => {
     pointsRef.current = initialPoints;
