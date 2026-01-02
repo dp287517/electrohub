@@ -1,4 +1,5 @@
-// src/pages/FireControl_map.jsx - Map view for Fire Control Detectors
+// src/pages/FireControl_map.jsx - Map view for Fire Control Equipment
+// Uses shared plans from Admin and shows equipment linked via fire_interlock
 import React, {
   useEffect,
   useMemo,
@@ -40,10 +41,10 @@ import {
   Crosshair,
   Target,
   ArrowLeft,
-  Upload,
-  Plus,
-  Bell,
-  Clock,
+  Layers,
+  Zap,
+  DoorOpen,
+  Database,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -70,14 +71,6 @@ function getIdentity() {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
         if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
-      } catch {}
-    }
-    if ((!email || !name) && localStorage.getItem("eh_user")) {
-      try {
-        const eu = JSON.parse(localStorage.getItem("eh_user"));
-        const x = eu?.user || eu?.profile || eu;
-        if (!email && x?.email) email = String(x.email);
-        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
       } catch {}
     }
   } catch {}
@@ -125,6 +118,7 @@ const Badge = ({ children, variant = "default", className = "" }) => {
     danger: "bg-red-100 text-red-700",
     info: "bg-blue-100 text-blue-700",
     orange: "bg-orange-100 text-orange-700",
+    purple: "bg-purple-100 text-purple-700",
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>
@@ -177,7 +171,7 @@ function ConfirmModal({ open, title = "Confirmation", message, confirmText = "Co
     <div className="fixed inset-0 z-[7000] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
       <div className="relative w-[92vw] max-w-md bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp">
-        <div className={`px-4 py-3 ${danger ? "bg-gradient-to-r from-orange-500 to-red-600 text-white" : "bg-gradient-to-r from-orange-500 to-red-600 text-white"}`}>
+        <div className="px-4 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white">
           <h3 className="font-semibold">{title}</h3>
         </div>
         <div className="p-4 text-sm text-gray-700">{message}</div>
@@ -220,15 +214,25 @@ function ContextMenu({ x, y, onDelete, onClose }) {
   );
 }
 
+/* ----------------------------- Source System Icon ----------------------------- */
+const SourceSystemIcon = ({ source }) => {
+  switch (source) {
+    case 'doors': return <DoorOpen size={12} className="text-purple-500" />;
+    case 'switchboard': return <Zap size={12} className="text-blue-500" />;
+    case 'datahub': return <Database size={12} className="text-green-500" />;
+    default: return <Flame size={12} className="text-orange-500" />;
+  }
+};
+
 /* ----------------------------- Sidebar Card ----------------------------- */
-const DetectorCard = ({ detector, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
-  const getStatusBadge = () => {
-    const status = detector.check_status || detector.status;
-    if (status === 'conforme' || status === 'ok') return <Badge variant="success">Conforme</Badge>;
-    if (status === 'non_conforme' || status === 'ko') return <Badge variant="danger">Non conforme</Badge>;
-    if (status === 'en_retard') return <Badge variant="danger">En retard</Badge>;
-    if (status === 'a_controler') return <Badge variant="warning">A controler</Badge>;
-    return <Badge variant="default">En attente</Badge>;
+const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
+  const getSourceBadge = () => {
+    switch (equipment.source_system) {
+      case 'doors': return <Badge variant="purple">Porte</Badge>;
+      case 'switchboard': return <Badge variant="info">Tableau</Badge>;
+      case 'datahub': return <Badge variant="success">DataHub</Badge>;
+      default: return <Badge variant="orange">Équipement</Badge>;
+    }
   };
 
   return (
@@ -240,22 +244,23 @@ const DetectorCard = ({ detector, isPlacedHere, isPlacedSomewhere, isPlacedElsew
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
+            <SourceSystemIcon source={equipment.source_system} />
             <span className={`font-semibold text-sm ${isSelected ? "text-orange-700" : "text-gray-900"}`}>
-              {detector.code || detector.name || `Detecteur #${detector.id}`}
+              {equipment.code || equipment.name || `Équipement #${equipment.id?.substring(0, 8)}`}
             </span>
             {isPlacedElsewhere && <Badge variant="orange">Autre plan</Badge>}
           </div>
           <p className={`text-xs truncate mt-0.5 ${isSelected ? "text-orange-600" : "text-gray-500"}`}>
-            {detector.zone || detector.location || "-"}
+            {equipment.name || equipment.location || "-"}
           </p>
           <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
             <span className="flex items-center gap-0.5">
               <Building2 size={10} />
-              {detector.building || "-"} / {detector.floor || "-"}
+              {equipment.building || "-"} / {equipment.floor || "-"}
             </span>
           </div>
           <div className="mt-1">
-            {getStatusBadge()}
+            {getSourceBadge()}
           </div>
         </div>
 
@@ -263,7 +268,7 @@ const DetectorCard = ({ detector, isPlacedHere, isPlacedSomewhere, isPlacedElsew
           {isPlacedHere ? (
             <span className="flex items-center gap-1 text-emerald-600 text-xs">
               <CheckCircle size={14} />
-              Place
+              Placé
             </span>
           ) : isPlacedSomewhere ? (
             <span className="flex items-center gap-1 text-orange-600 text-xs">
@@ -273,17 +278,17 @@ const DetectorCard = ({ detector, isPlacedHere, isPlacedSomewhere, isPlacedElsew
           ) : (
             <span className="flex items-center gap-1 text-amber-600 text-xs">
               <AlertCircle size={14} />
-              Non place
+              Non placé
             </span>
           )}
 
           <button
-            onClick={(e) => { e.stopPropagation(); onPlace(detector); }}
+            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
             className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-orange-600 transition-colors"
-            title={isPlacedSomewhere ? "Deplacer sur ce plan" : "Placer sur ce plan"}
+            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
           >
             <Target size={12} />
-            {isPlacedSomewhere ? "Deplacer" : "Placer"}
+            {isPlacedSomewhere ? "Déplacer" : "Placer"}
           </button>
         </div>
       </div>
@@ -292,16 +297,8 @@ const DetectorCard = ({ detector, isPlacedHere, isPlacedSomewhere, isPlacedElsew
 };
 
 /* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, detector, onClose, onNavigate, onDelete }) => {
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
   if (!position) return null;
-
-  const getStatusColor = () => {
-    const status = position.check_status || detector?.check_status;
-    if (status === 'conforme' || status === 'ok') return 'text-emerald-100';
-    if (status === 'non_conforme' || status === 'ko') return 'text-red-100';
-    if (status === 'en_retard') return 'text-red-100';
-    return 'text-orange-100';
-  };
 
   return (
     <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
@@ -312,8 +309,8 @@ const DetailPanel = ({ position, detector, onClose, onNavigate, onDelete }) => {
               <Flame size={20} />
             </div>
             <div>
-              <h3 className="font-bold">{position.detector_code || detector?.code || "Detecteur"}</h3>
-              <p className={`text-sm ${getStatusColor()}`}>{position.building || detector?.building || "-"}</p>
+              <h3 className="font-bold">{position.equipment_code || equipment?.code || "Équipement"}</h3>
+              <p className="text-sm text-orange-100">{position.building || equipment?.building || "-"}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
@@ -325,19 +322,19 @@ const DetailPanel = ({ position, detector, onClose, onNavigate, onDelete }) => {
       <div className="p-4 space-y-3">
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Batiment</span>
-            <span className="font-semibold text-gray-900">{position.building || detector?.building || "-"}</span>
+            <span className="text-gray-500 text-xs block">Bâtiment</span>
+            <span className="font-semibold text-gray-900">{position.building || equipment?.building || "-"}</span>
           </div>
           <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Etage</span>
-            <span className="font-semibold text-gray-900">{position.floor || detector?.floor || "-"}</span>
+            <span className="text-gray-500 text-xs block">Étage</span>
+            <span className="font-semibold text-gray-900">{position.floor || equipment?.floor || "-"}</span>
           </div>
         </div>
 
-        {(position.zone || detector?.zone) && (
+        {(position.location || equipment?.location) && (
           <div className="bg-gray-50 rounded-lg p-2 text-sm">
-            <span className="text-gray-500 text-xs block">Zone</span>
-            <span className="font-semibold text-gray-900">{position.zone || detector?.zone}</span>
+            <span className="text-gray-500 text-xs block">Localisation</span>
+            <span className="font-semibold text-gray-900">{position.location || equipment?.location}</span>
           </div>
         )}
 
@@ -348,11 +345,11 @@ const DetailPanel = ({ position, detector, onClose, onNavigate, onDelete }) => {
 
         <div className="flex gap-2 pt-2">
           <button
-            onClick={() => onNavigate(position.detector_id)}
+            onClick={() => onNavigate(position.equipment_id || equipment?.id)}
             className="flex-1 py-2.5 px-4 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-red-700 transition-all flex items-center justify-center gap-2"
           >
             <ExternalLink size={16} />
-            Voir les controles
+            Voir les contrôles
           </button>
 
           <button
@@ -369,7 +366,7 @@ const DetailPanel = ({ position, detector, onClose, onNavigate, onDelete }) => {
 };
 
 /* ----------------------------- Placement Mode Indicator ----------------------------- */
-const PlacementModeIndicator = ({ detector, onCancel }) => (
+const PlacementModeIndicator = ({ equipment, onCancel }) => (
   <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30">
     <div className="bg-orange-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
       <div className="p-2 bg-white/20 rounded-lg">
@@ -378,7 +375,7 @@ const PlacementModeIndicator = ({ detector, onCancel }) => (
       <div>
         <p className="font-semibold">Mode placement actif</p>
         <p className="text-orange-200 text-sm">
-          Cliquez sur le plan pour placer <span className="font-semibold">{detector.code || detector.name || "Detecteur"}</span>
+          Cliquez sur le plan pour placer <span className="font-semibold">{equipment.code || equipment.name || "Équipement"}</span>
         </p>
       </div>
       <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
@@ -389,7 +386,7 @@ const PlacementModeIndicator = ({ detector, onCancel }) => (
 );
 
 /* ----------------------------- Leaflet Viewer ----------------------------- */
-const DetectorLeafletViewer = forwardRef(({
+const EquipmentLeafletViewer = forwardRef(({
   fileUrl,
   pageIndex = 0,
   initialPoints = [],
@@ -441,23 +438,21 @@ const DetectorLeafletViewer = forwardRef(({
     }
   }, [selectedId]);
 
-  // Color mapping based on detector check status
-  const STATUS_COLORS = {
-    en_retard: { gradient: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)", label: "En retard" },
-    non_conforme: { gradient: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)", label: "Non conforme" },
-    a_controler: { gradient: "radial-gradient(circle at 30% 30%, #fbbf24, #f59e0b)", label: "A controler" },
-    conforme: { gradient: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)", label: "Conforme" },
-    ok: { gradient: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)", label: "OK" },
+  // Color mapping based on source system
+  const SOURCE_COLORS = {
+    doors: { gradient: "radial-gradient(circle at 30% 30%, #a855f7, #9333ea)" },
+    switchboard: { gradient: "radial-gradient(circle at 30% 30%, #60a5fa, #3b82f6)" },
+    datahub: { gradient: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)" },
   };
-  const DEFAULT_STATUS_COLOR = { gradient: "radial-gradient(circle at 30% 30%, #60a5fa, #3b82f6)" };
+  const DEFAULT_COLOR = { gradient: "radial-gradient(circle at 30% 30%, #fb923c, #ea580c)" };
 
-  function makeDetectorIcon(isSelected = false, status = null) {
+  function makeEquipmentIcon(isSelected = false, sourceSystem = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
-    const statusColor = STATUS_COLORS[status] || DEFAULT_STATUS_COLOR;
+    const sourceColor = SOURCE_COLORS[sourceSystem] || DEFAULT_COLOR;
     const bg = isSelected
       ? "background: radial-gradient(circle at 30% 30%, #fb923c, #ea580c);"
-      : `background: ${statusColor.gradient};`;
-    const animClass = isSelected ? "detector-marker-selected" : "";
+      : `background: ${sourceColor.gradient};`;
+    const animClass = isSelected ? "fc-marker-pending" : "";
 
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
@@ -466,7 +461,7 @@ const DetectorLeafletViewer = forwardRef(({
         </svg>
       </div>`;
     return L.divIcon({
-      className: "detector-marker-inline",
+      className: "fc-marker-inline",
       html,
       iconSize: [s, s],
       iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
@@ -489,8 +484,8 @@ const DetectorLeafletViewer = forwardRef(({
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       const latlng = L.latLng(y, x);
-      const isSelected = p.detector_id === selectedIdRef.current;
-      const icon = makeDetectorIcon(isSelected, p.check_status || p.status);
+      const isSelected = p.equipment_id === selectedIdRef.current;
+      const icon = makeEquipmentIcon(isSelected, p.source_system);
 
       const mk = L.marker(latlng, {
         icon,
@@ -503,16 +498,16 @@ const DetectorLeafletViewer = forwardRef(({
 
       mk.__meta = {
         id: p.id,
-        detector_id: p.detector_id,
-        detector_code: p.detector_code || p.code,
+        equipment_id: p.equipment_id,
+        equipment_code: p.equipment_code || p.code,
         x_frac: p.x_frac ?? p.x,
         y_frac: p.y_frac ?? p.y,
         x: p.x_frac ?? p.x,
         y: p.y_frac ?? p.y,
         building: p.building,
         floor: p.floor,
-        zone: p.zone,
-        check_status: p.check_status || p.status,
+        location: p.location,
+        source_system: p.source_system,
       };
 
       mk.on("click", (e) => {
@@ -530,7 +525,7 @@ const DetectorLeafletViewer = forwardRef(({
         const ll = mk.getLatLng();
         const xFrac = clamp(ll.lng / w, 0, 1);
         const yFrac = clamp(ll.lat / h, 0, 1);
-        onMovePoint(mk.__meta.detector_id, { x: Math.round(xFrac * 1e6) / 1e6, y: Math.round(yFrac * 1e6) / 1e6 });
+        onMovePoint(mk.__meta.equipment_id, { x: Math.round(xFrac * 1e6) / 1e6, y: Math.round(yFrac * 1e6) / 1e6 });
       });
 
       mk.on("contextmenu", (e) => {
@@ -542,7 +537,7 @@ const DetectorLeafletViewer = forwardRef(({
       });
 
       mk.addTo(g);
-      markersMapRef.current.set(p.detector_id, mk);
+      markersMapRef.current.set(p.equipment_id, mk);
 
       // Long press for mobile
       setTimeout(() => {
@@ -576,10 +571,9 @@ const DetectorLeafletViewer = forwardRef(({
     });
   }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
 
-  const highlightMarker = useCallback((detectorId) => {
-    let mk = markersMapRef.current.get(detectorId);
-    if (!mk) mk = markersMapRef.current.get(String(detectorId));
-    if (!mk) mk = markersMapRef.current.get(Number(detectorId));
+  const highlightMarker = useCallback((equipmentId) => {
+    let mk = markersMapRef.current.get(equipmentId);
+    if (!mk) mk = markersMapRef.current.get(String(equipmentId));
     if (!mk || !mapRef.current) return;
 
     const ll = mk.getLatLng();
@@ -587,8 +581,8 @@ const DetectorLeafletViewer = forwardRef(({
 
     const el = mk.getElement();
     if (el) {
-      el.classList.add("detector-marker-flash");
-      setTimeout(() => el.classList.remove("detector-marker-flash"), 2000);
+      el.classList.add("fc-marker-pending");
+      setTimeout(() => el.classList.remove("fc-marker-pending"), 2000);
     }
   }, []);
 
@@ -798,7 +792,7 @@ const DetectorLeafletViewer = forwardRef(({
     highlightMarker,
   }));
 
-  const onPickDetector = useCallback((it) => {
+  const onPickEquipment = useCallback((it) => {
     setPicker(null);
     onClickPoint?.(it);
   }, [onClickPoint]);
@@ -818,11 +812,11 @@ const DetectorLeafletViewer = forwardRef(({
         >
           {picker.items.slice(0, 8).map((it) => (
             <button
-              key={it.detector_id || it.id}
+              key={it.equipment_id || it.id}
               className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 rounded-lg truncate"
-              onClick={() => onPickDetector(it)}
+              onClick={() => onPickEquipment(it)}
             >
-              {it.detector_code || it.detector_id}
+              {it.equipment_code || it.equipment_id}
             </button>
           ))}
           {picker.items.length > 8 && <div className="text-xs text-gray-500 px-3 py-1">...</div>}
@@ -831,90 +825,32 @@ const DetectorLeafletViewer = forwardRef(({
 
       <div className="flex items-center gap-3 p-2 text-xs text-gray-600 border-t bg-white flex-wrap">
         <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #a855f7, #9333ea)" }} />
+          Porte
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #60a5fa, #3b82f6)" }} />
+          Tableau
+        </span>
+        <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #4ade80, #22c55e)" }} />
-          Conforme
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fbbf24, #f59e0b)" }} />
-          A controler
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #f87171, #dc2626)" }} />
-          Non conforme
+          DataHub
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: "radial-gradient(circle at 30% 30%, #fb923c, #ea580c)" }} />
-          Selectionne
+          Sélectionné
         </span>
       </div>
     </div>
   );
 });
 
-/* ----------------------------- Hook de gestion des positions ----------------------------- */
-function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
-  const reloadPositionsRef = useRef(null);
-  const latestPositionsRef = useRef([]);
-
-  const loadPositions = useCallback(async (plan, pageIdx = 0) => {
-    if (!plan) return [];
-    const key = plan.id || plan.logical_name || "";
-    try {
-      const r = await api.fireControlMaps.positions(key, pageIdx).catch(() => ({}));
-      const list = Array.isArray(r?.positions) ? r.positions : (Array.isArray(r?.items) ? r.items : []);
-      const mapped = list.map((item) => ({
-        id: item.id,
-        detector_id: item.detector_id,
-        detector_code: item.detector_code || item.code || `DET-${item.detector_id}`,
-        x_frac: Number(item.x_frac ?? item.x ?? 0),
-        y_frac: Number(item.y_frac ?? item.y ?? 0),
-        x: Number(item.x_frac ?? item.x ?? 0),
-        y: Number(item.y_frac ?? item.y ?? 0),
-        building: item.building || "",
-        floor: item.floor || "",
-        zone: item.zone || "",
-        check_status: item.check_status || item.status || "",
-      }));
-
-      latestPositionsRef.current = mapped;
-      viewerRef.current?.drawMarkers(mapped);
-      return mapped;
-    } catch (e) {
-      console.error("Erreur chargement positions detecteurs", e);
-      latestPositionsRef.current = [];
-      viewerRef.current?.drawMarkers([]);
-      return [];
-    }
-  }, [viewerRef]);
-
-  useEffect(() => { reloadPositionsRef.current = loadPositions; }, [loadPositions]);
-
-  useEffect(() => {
-    if (!stableSelectedPlan) return;
-    const tick = () => reloadPositionsRef.current?.(stableSelectedPlan, pageIndex);
-    tick();
-    const iv = setInterval(tick, 8000);
-    const onVis = () => { if (!document.hidden) tick(); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
-  }, [stableSelectedPlan, pageIndex]);
-
-  const refreshPositions = useCallback((p, idx = 0) => reloadPositionsRef.current?.(p, idx), []);
-  const getLatestPositions = useCallback(() => latestPositionsRef.current, []);
-
-  return { refreshPositions, getLatestPositions };
-}
-
 /* ----------------------------- Main Page ----------------------------- */
 export default function FireControlMap() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const urlParamsHandledRef = useRef(false);
-  const targetDetectorIdRef = useRef(null);
-  const allPositionsRef = useRef({});
-
-  // Plans
+  // Plans (from shared admin plans)
   const [plans, setPlans] = useState([]);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [pageIndex, setPageIndex] = useState(0);
@@ -925,14 +861,14 @@ export default function FireControlMap() {
   const [initialPoints, setInitialPoints] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
 
-  // Detectors
-  const [detectors, setDetectors] = useState([]);
-  const [loadingDetectors, setLoadingDetectors] = useState(false);
+  // Equipment (from cross-system with fire_interlock)
+  const [equipment, setEquipment] = useState([]);
+  const [loadingEquipment, setLoadingEquipment] = useState(false);
   const [placedIds, setPlacedIds] = useState(new Set());
 
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
-  const [selectedDetector, setSelectedDetector] = useState(null);
+  const [selectedEquipment, setSelectedEquipment] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
@@ -950,12 +886,11 @@ export default function FireControlMap() {
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
     if (!stableSelectedPlan) return null;
-    return api.fireControlMaps.planFileUrl(stableSelectedPlan, { bust: true });
+    // Use shared plan file URL
+    return api.fireControlMaps.sharedPlanFileUrl(stableSelectedPlan.logical_name, { bust: true });
   }, [stableSelectedPlan]);
 
-  const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef);
-
-  const selectedDetectorId = useMemo(() => selectedPosition?.detector_id || null, [selectedPosition]);
+  const selectedEquipmentId = useMemo(() => selectedPosition?.equipment_id || null, [selectedPosition]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -969,127 +904,124 @@ export default function FireControlMap() {
 
   useEffect(() => {
     loadPlans();
-    loadDetectors();
+    loadEquipment();
   }, []);
 
-  // Restore plan from URL params or localStorage
+  // Restore plan from localStorage
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const urlDetectorId = searchParams.get('detector');
-      const urlPlanKey = searchParams.get('plan');
+      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
 
       let planToSelect = null;
       let pageIdx = 0;
 
-      if ((urlDetectorId || urlPlanKey) && !urlParamsHandledRef.current) {
-        urlParamsHandledRef.current = true;
-        setSearchParams({}, { replace: true });
+      if (savedPlanKey) {
+        planToSelect = plans.find(p => p.logical_name === savedPlanKey);
       }
-
-      if (urlPlanKey) {
-        planToSelect = plans.find(p => p.logical_name === urlPlanKey);
-        if (urlDetectorId) targetDetectorIdRef.current = urlDetectorId;
+      if (planToSelect && savedPageIndex) {
+        pageIdx = Number(savedPageIndex) || 0;
       }
-
-      if (urlDetectorId && !urlPlanKey) {
-        targetDetectorIdRef.current = urlDetectorId;
-      }
-
       if (!planToSelect) {
-        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-        if (savedPlanKey) planToSelect = plans.find(p => p.logical_name === savedPlanKey);
-        if (planToSelect && savedPageIndex) pageIdx = Number(savedPageIndex) || 0;
+        planToSelect = plans[0];
       }
-
-      if (!planToSelect) planToSelect = plans[0];
 
       setSelectedPlan(planToSelect);
       setPageIndex(pageIdx);
 
       if (planToSelect) {
-        refreshPositions(planToSelect, pageIdx).then(positions => setInitialPoints(positions || []));
+        loadPositions(planToSelect, pageIdx);
       }
     }
-  }, [plans, searchParams, setSearchParams]);
+  }, [plans]);
 
   useEffect(() => {
-    if (selectedPlan?.logical_name) localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);
+    if (selectedPlan?.logical_name) {
+      localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name);
+    }
   }, [selectedPlan]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
   }, [pageIndex]);
 
-  useEffect(() => {
-    if (!pdfReady || !targetDetectorIdRef.current) return;
-    const targetId = targetDetectorIdRef.current;
-
-    const isOnCurrentPlan = initialPoints.some(p => p.detector_id === targetId || String(p.detector_id) === String(targetId));
-
-    if (isOnCurrentPlan) {
-      targetDetectorIdRef.current = null;
-      setTimeout(() => viewerRef.current?.highlightMarker(targetId), 300);
-    }
-  }, [pdfReady, initialPoints]);
-
   const loadPlans = async () => {
     setLoadingPlans(true);
     try {
-      const res = await api.fireControlMaps.listPlans();
-      setPlans(res?.plans || res?.items || []);
+      // Use shared plans from admin (doors system)
+      const res = await api.fireControlMaps.listSharedPlans();
+      const plansList = res?.plans || res?.items || [];
+      setPlans(plansList);
     } catch (err) {
-      console.error("Erreur chargement plans fire control:", err);
+      console.error("Erreur chargement plans:", err);
     } finally {
       setLoadingPlans(false);
     }
   };
 
-  const refreshPlacedIds = async () => {
+  const loadEquipment = async () => {
+    setLoadingEquipment(true);
     try {
-      const res = await api.fireControlMaps.placedIds();
-      const ids = res?.detector_ids || res?.ids || [];
-      setPlacedIds(new Set(ids));
-    } catch (e) {
-      console.error("Erreur chargement placed IDs:", e);
-    }
-  };
-
-  const loadDetectors = async () => {
-    setLoadingDetectors(true);
-    try {
-      const res = await api.fireControl.listDetectors({});
-      const list = res?.items || res?.detectors || [];
-      setDetectors(Array.isArray(list) ? list : []);
+      // Get equipment from doors, switchboard, datahub with fire_interlock=true
+      const res = await api.fireControlMaps.crossSystemEquipment({ fire_interlock: true });
+      const list = res?.equipment || [];
+      setEquipment(Array.isArray(list) ? list : []);
     } catch (err) {
-      console.error("Erreur chargement detecteurs:", err);
+      console.error("Erreur chargement équipements:", err);
     } finally {
-      setLoadingDetectors(false);
+      setLoadingEquipment(false);
     }
   };
 
-  useEffect(() => {
-    if (plans.length > 0 && detectors.length > 0) {
-      refreshPlacedIds();
-    }
-  }, [plans, detectors]);
-
-  const handleSetPosition = async (detector, xFrac, yFrac) => {
-    if (!stableSelectedPlan || !detector) return;
+  const loadPositions = async (plan, pageIdx = 0) => {
+    if (!plan) return [];
     try {
-      await api.fireControlMaps.setPosition(detector.id, {
+      const res = await api.fireControlMaps.positions(plan.logical_name, pageIdx).catch(() => ({}));
+      const list = Array.isArray(res?.positions) ? res.positions : (Array.isArray(res?.items) ? res.items : []);
+      const mapped = list.map((item) => ({
+        id: item.id,
+        equipment_id: item.equipment_id || item.detector_id,
+        equipment_code: item.equipment_code || item.detector_code || item.code,
+        x_frac: Number(item.x_frac ?? item.x ?? 0),
+        y_frac: Number(item.y_frac ?? item.y ?? 0),
+        x: Number(item.x_frac ?? item.x ?? 0),
+        y: Number(item.y_frac ?? item.y ?? 0),
+        building: item.building || "",
+        floor: item.floor || "",
+        location: item.location || "",
+        source_system: item.source_system || "",
+      }));
+
+      setInitialPoints(mapped);
+
+      // Update placed IDs
+      const ids = new Set(mapped.map(m => m.equipment_id).filter(Boolean));
+      setPlacedIds(ids);
+
+      viewerRef.current?.drawMarkers(mapped);
+      return mapped;
+    } catch (e) {
+      console.error("Erreur chargement positions:", e);
+      setInitialPoints([]);
+      return [];
+    }
+  };
+
+  const handleSetPosition = async (equip, xFrac, yFrac) => {
+    if (!stableSelectedPlan || !equip) return;
+    try {
+      await api.fireControlMaps.setPosition(equip.id, {
         logical_name: stableSelectedPlan.logical_name,
         plan_id: stableSelectedPlan.id || null,
         page_index: pageIndex,
         x_frac: xFrac,
         y_frac: yFrac,
+        source_system: equip.source_system,
       });
-      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
-      setInitialPoints(positions || []);
-      await refreshPlacedIds();
+      await loadPositions(stableSelectedPlan, pageIndex);
       setPlacementMode(null);
     } catch (err) {
-      console.error("Erreur placement detecteur:", err);
+      console.error("Erreur placement équipement:", err);
     }
   };
 
@@ -1101,9 +1033,7 @@ export default function FireControlMap() {
   const handleDeletePosition = async (position) => {
     try {
       await api.fireControlMaps.deletePosition(position.id);
-      const positions = await refreshPositions(stableSelectedPlan, pageIndex);
-      setInitialPoints(positions || []);
-      await refreshPlacedIds();
+      await loadPositions(stableSelectedPlan, pageIndex);
       setSelectedPosition(null);
       setConfirmState({ open: false, position: null });
     } catch (err) {
@@ -1111,39 +1041,39 @@ export default function FireControlMap() {
     }
   };
 
-  // Filter detectors
-  const filteredDetectors = useMemo(() => {
-    let list = detectors;
+  // Filter equipment
+  const filteredEquipment = useMemo(() => {
+    let list = equipment;
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(d =>
-        d.code?.toLowerCase().includes(q) ||
-        d.name?.toLowerCase().includes(q) ||
-        d.building?.toLowerCase().includes(q) ||
-        d.floor?.toLowerCase().includes(q) ||
-        d.zone?.toLowerCase().includes(q)
+      list = list.filter(e =>
+        e.code?.toLowerCase().includes(q) ||
+        e.name?.toLowerCase().includes(q) ||
+        e.building?.toLowerCase().includes(q) ||
+        e.floor?.toLowerCase().includes(q) ||
+        e.location?.toLowerCase().includes(q)
       );
     }
 
     if (filterMode === "placed") {
-      list = list.filter(d => placedIds.has(d.id));
+      list = list.filter(e => placedIds.has(e.id));
     } else if (filterMode === "unplaced") {
-      list = list.filter(d => !placedIds.has(d.id));
+      list = list.filter(e => !placedIds.has(e.id));
     }
 
     return list;
-  }, [detectors, searchQuery, filterMode, placedIds]);
+  }, [equipment, searchQuery, filterMode, placedIds]);
 
-  const isPlacedHere = (detectorId) => {
-    return initialPoints.some(p => p.detector_id === detectorId);
+  const isPlacedHere = (equipId) => {
+    return initialPoints.some(p => p.equipment_id === equipId);
   };
 
   const stats = useMemo(() => ({
-    total: detectors.length,
-    placed: detectors.filter(d => placedIds.has(d.id)).length,
-    unplaced: detectors.filter(d => !placedIds.has(d.id)).length,
-  }), [detectors, placedIds]);
+    total: equipment.length,
+    placed: equipment.filter(e => placedIds.has(e.id)).length,
+    unplaced: equipment.filter(e => !placedIds.has(e.id)).length,
+  }), [equipment, placedIds]);
 
   return (
     <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
@@ -1152,20 +1082,7 @@ export default function FireControlMap() {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes flash-marker {
-          0%, 100% { transform: scale(1); filter: brightness(1); }
-          25% { transform: scale(1.3); filter: brightness(1.3); }
-          50% { transform: scale(1); filter: brightness(1); }
-          75% { transform: scale(1.3); filter: brightness(1.3); }
-        }
-        @keyframes pulse-selected {
-          0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.7); }
-          50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(234, 88, 12, 0); }
-        }
         .animate-slideUp { animation: slideUp .3s ease-out forwards; }
-        .detector-marker-flash > div { animation: flash-marker 2s ease-in-out; }
-        .detector-marker-selected > div { animation: pulse-selected 1.5s ease-in-out infinite; }
-        .detector-marker-inline { background: transparent !important; border: none !important; }
       `}</style>
 
       {/* Header */}
@@ -1181,7 +1098,7 @@ export default function FireControlMap() {
               </div>
               <div>
                 <h1 className="font-bold text-gray-900">Plans Asservissements Incendie</h1>
-                <p className="text-xs text-gray-500">Localisation des detecteurs</p>
+                <p className="text-xs text-gray-500">Équipements liés au contrôle incendie</p>
               </div>
             </div>
           </div>
@@ -1189,8 +1106,8 @@ export default function FireControlMap() {
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1 text-xs">
               <Badge variant="default">Total: {stats.total}</Badge>
-              <Badge variant="success">Localises: {stats.placed}</Badge>
-              <Badge variant="warning">Non localises: {stats.unplaced}</Badge>
+              <Badge variant="success">Placés: {stats.placed}</Badge>
+              <Badge variant="warning">Non placés: {stats.unplaced}</Badge>
             </div>
 
             {!isMobile && (
@@ -1214,8 +1131,7 @@ export default function FireControlMap() {
                 setSelectedPlan(plan);
                 setPageIndex(0);
                 setPdfReady(false);
-                const positions = await refreshPositions(plan, 0);
-                setInitialPoints(positions || []);
+                await loadPositions(plan, 0);
               }
             }}
             className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg text-sm bg-white"
@@ -1262,42 +1178,46 @@ export default function FireControlMap() {
                   Tous
                 </Btn>
                 <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non places
+                  Non placés
                 </Btn>
                 <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Places
+                  Placés
                 </Btn>
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingDetectors ? (
+              {loadingEquipment ? (
                 <div className="flex items-center justify-center py-8">
                   <RefreshCw size={24} className="animate-spin text-gray-400" />
                 </div>
-              ) : filteredDetectors.length === 0 ? (
-                <EmptyState icon={Flame} title="Aucun detecteur" description="Creez des detecteurs pour les placer sur le plan" />
+              ) : filteredEquipment.length === 0 ? (
+                <EmptyState
+                  icon={Flame}
+                  title="Aucun équipement"
+                  description="Liez des équipements au contrôle incendie depuis les pages Portes, Tableaux ou DataHub"
+                />
               ) : (
-                filteredDetectors.map(d => (
-                  <DetectorCard
-                    key={d.id}
-                    detector={d}
-                    isPlacedHere={isPlacedHere(d.id)}
-                    isPlacedSomewhere={placedIds.has(d.id)}
-                    isPlacedElsewhere={placedIds.has(d.id) && !isPlacedHere(d.id)}
-                    isSelected={selectedDetectorId === d.id}
+                filteredEquipment.map(e => (
+                  <EquipmentCard
+                    key={e.id}
+                    equipment={e}
+                    isPlacedHere={isPlacedHere(e.id)}
+                    isPlacedSomewhere={placedIds.has(e.id)}
+                    isPlacedElsewhere={placedIds.has(e.id) && !isPlacedHere(e.id)}
+                    isSelected={selectedEquipmentId === e.id}
                     onClick={() => {
-                      const pos = initialPoints.find(p => p.detector_id === d.id);
+                      const pos = initialPoints.find(p => p.equipment_id === e.id);
                       if (pos) {
                         setSelectedPosition(pos);
-                        setSelectedDetector(d);
-                        viewerRef.current?.highlightMarker(d.id);
+                        setSelectedEquipment(e);
+                        viewerRef.current?.highlightMarker(e.id);
                       } else {
-                        setSelectedDetector(d);
+                        setSelectedEquipment(e);
                         setSelectedPosition(null);
                       }
                     }}
-                    onPlace={(detector) => setPlacementMode(detector)}
+                    onPlace={(equip) => setPlacementMode(equip)}
                   />
                 ))
               )}
@@ -1307,16 +1227,22 @@ export default function FireControlMap() {
 
         {/* Map */}
         <div className="flex-1 flex flex-col relative">
-          {!selectedPlan ? (
+          {plans.length === 0 && !loadingPlans ? (
             <EmptyState
               icon={MapPin}
               title="Aucun plan disponible"
-              description="Uploadez des plans de batiment dans la section Documents"
+              description="Uploadez des plans depuis la page Admin > Plans"
               action={
-                <Btn onClick={() => navigate('/app/fire-control')}>
-                  Aller aux Documents
+                <Btn onClick={() => navigate('/app/plans')}>
+                  Aller aux Plans
                 </Btn>
               }
+            />
+          ) : !selectedPlan ? (
+            <EmptyState
+              icon={Layers}
+              title="Sélectionnez un plan"
+              description="Choisissez un plan dans la liste déroulante"
             />
           ) : (
             <>
@@ -1329,30 +1255,31 @@ export default function FireControlMap() {
                 </div>
               )}
 
-              <DetectorLeafletViewer
+              <EquipmentLeafletViewer
                 ref={viewerRef}
                 key={selectedPlan.logical_name}
                 fileUrl={stableFileUrl}
                 pageIndex={pageIndex}
                 initialPoints={initialPoints}
-                selectedId={selectedDetectorId}
+                selectedId={selectedEquipmentId}
                 onReady={() => setPdfReady(true)}
-                onMovePoint={async (detectorId, xy) => {
+                onMovePoint={async (equipmentId, xy) => {
                   if (!stableSelectedPlan) return;
-                  await api.fireControlMaps.setPosition(detectorId, {
+                  const equip = equipment.find(e => e.id === equipmentId);
+                  await api.fireControlMaps.setPosition(equipmentId, {
                     logical_name: stableSelectedPlan.logical_name,
                     plan_id: stableSelectedPlan.id,
                     page_index: pageIndex,
                     x_frac: xy.x,
                     y_frac: xy.y,
+                    source_system: equip?.source_system,
                   });
-                  const positions = await refreshPositions(stableSelectedPlan, pageIndex);
-                  setInitialPoints(positions || []);
+                  await loadPositions(stableSelectedPlan, pageIndex);
                 }}
                 onClickPoint={(meta) => {
-                  const d = detectors.find(det => det.id === meta.detector_id);
+                  const e = equipment.find(eq => eq.id === meta.equipment_id);
                   setSelectedPosition(meta);
-                  setSelectedDetector(d || null);
+                  setSelectedEquipment(e || null);
                 }}
                 onCreatePoint={(xFrac, yFrac) => {
                   if (placementMode) {
@@ -1367,16 +1294,16 @@ export default function FireControlMap() {
 
           {/* Placement mode indicator */}
           {placementMode && (
-            <PlacementModeIndicator detector={placementMode} onCancel={() => setPlacementMode(null)} />
+            <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />
           )}
 
           {/* Detail panel */}
           {selectedPosition && !placementMode && (
             <DetailPanel
               position={selectedPosition}
-              detector={selectedDetector}
-              onClose={() => { setSelectedPosition(null); setSelectedDetector(null); }}
-              onNavigate={(id) => navigate(`/app/fire-control?detector=${id}`)}
+              equipment={selectedEquipment}
+              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); }}
+              onNavigate={(id) => navigate(`/app/fire-control?equipment=${id}`)}
               onDelete={askDeletePosition}
             />
           )}
@@ -1409,7 +1336,7 @@ export default function FireControlMap() {
           <div className="absolute inset-0 bg-black/50" onClick={() => setShowSidebar(false)} />
           <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl flex flex-col">
             <div className="p-4 border-b bg-gradient-to-r from-orange-500 to-red-600 text-white flex items-center justify-between">
-              <h2 className="font-bold">Detecteurs Incendie</h2>
+              <h2 className="font-bold">Équipements Incendie</h2>
               <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-white/20 rounded-lg">
                 <X size={20} />
               </button>
@@ -1429,42 +1356,46 @@ export default function FireControlMap() {
                   Tous
                 </Btn>
                 <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non places
+                  Non placés
                 </Btn>
                 <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Places
+                  Placés
                 </Btn>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingDetectors ? (
+              {loadingEquipment ? (
                 <div className="flex items-center justify-center py-8">
                   <RefreshCw size={24} className="animate-spin text-gray-400" />
                 </div>
-              ) : filteredDetectors.length === 0 ? (
-                <EmptyState icon={Flame} title="Aucun detecteur" description="Creez des detecteurs pour les placer sur le plan" />
+              ) : filteredEquipment.length === 0 ? (
+                <EmptyState
+                  icon={Flame}
+                  title="Aucun équipement"
+                  description="Liez des équipements au contrôle incendie"
+                />
               ) : (
-                filteredDetectors.map(d => (
-                  <DetectorCard
-                    key={d.id}
-                    detector={d}
-                    isPlacedHere={isPlacedHere(d.id)}
-                    isPlacedSomewhere={placedIds.has(d.id)}
-                    isPlacedElsewhere={placedIds.has(d.id) && !isPlacedHere(d.id)}
-                    isSelected={selectedDetectorId === d.id}
+                filteredEquipment.map(e => (
+                  <EquipmentCard
+                    key={e.id}
+                    equipment={e}
+                    isPlacedHere={isPlacedHere(e.id)}
+                    isPlacedSomewhere={placedIds.has(e.id)}
+                    isPlacedElsewhere={placedIds.has(e.id) && !isPlacedHere(e.id)}
+                    isSelected={selectedEquipmentId === e.id}
                     onClick={() => {
-                      const pos = initialPoints.find(p => p.detector_id === d.id);
+                      const pos = initialPoints.find(p => p.equipment_id === e.id);
                       if (pos) {
                         setSelectedPosition(pos);
-                        setSelectedDetector(d);
-                        viewerRef.current?.highlightMarker(d.id);
+                        setSelectedEquipment(e);
+                        viewerRef.current?.highlightMarker(e.id);
                       } else {
-                        setSelectedDetector(d);
+                        setSelectedEquipment(e);
                         setSelectedPosition(null);
                       }
                       setShowSidebar(false);
                     }}
-                    onPlace={(detector) => { setPlacementMode(detector); setShowSidebar(false); }}
+                    onPlace={(equip) => { setPlacementMode(equip); setShowSidebar(false); }}
                   />
                 ))
               )}
@@ -1477,7 +1408,7 @@ export default function FireControlMap() {
       <ConfirmModal
         open={confirmState.open}
         title="Retirer du plan"
-        message={`Voulez-vous retirer "${confirmState.position?.detector_code || "ce detecteur"}" du plan ?`}
+        message={`Voulez-vous retirer "${confirmState.position?.equipment_code || "cet équipement"}" du plan ?`}
         confirmText="Retirer"
         onConfirm={() => handleDeletePosition(confirmState.position)}
         onCancel={() => setConfirmState({ open: false, position: null })}

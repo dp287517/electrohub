@@ -90,7 +90,6 @@ export default function FireControl() {
   // Modal states
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [showUploadMatrixModal, setShowUploadMatrixModal] = useState(false);
-  const [showUploadPlanModal, setShowUploadPlanModal] = useState(false);
   const [showZoneCheckModal, setShowZoneCheckModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showEquipmentMatchingModal, setShowEquipmentMatchingModal] = useState(false);
@@ -131,10 +130,11 @@ export default function FireControl() {
 
   const loadPlans = useCallback(async () => {
     try {
-      const data = await api.fireControl.listPlans({ active_only: "true" });
-      setPlans(data || []);
+      // Load shared plans from admin (doors system)
+      const data = await api.fireControlMaps.listSharedPlans();
+      setPlans(data?.plans || data?.items || []);
     } catch (err) {
-      console.error("Failed to load plans:", err);
+      console.error("Failed to load shared plans:", err);
     }
   }, []);
 
@@ -267,18 +267,6 @@ export default function FireControl() {
       showToast("Matrice uploadée");
       setShowUploadMatrixModal(false);
       loadMatrices();
-    } catch (err) {
-      showToast(err.message, "error");
-    }
-  };
-
-  const handleUploadPlan = async (file, extra) => {
-    try {
-      await api.fireControl.uploadPlan(file, extra);
-      showToast("Plan uploadé");
-      setShowUploadPlanModal(false);
-      loadPlans();
-      loadBuildings();
     } catch (err) {
       showToast(err.message, "error");
     }
@@ -613,7 +601,6 @@ export default function FireControl() {
                 matrices={matrices}
                 plans={plans}
                 onUploadMatrix={() => setShowUploadMatrixModal(true)}
-                onUploadPlan={() => setShowUploadPlanModal(true)}
                 onRefresh={() => {
                   loadMatrices();
                   loadPlans();
@@ -688,14 +675,6 @@ export default function FireControl() {
           campaigns={campaigns}
           onUpload={handleUploadMatrix}
           onClose={() => setShowUploadMatrixModal(false)}
-        />
-      )}
-
-      {showUploadPlanModal && (
-        <UploadPlanModal
-          buildings={buildingOptions}
-          onUpload={handleUploadPlan}
-          onClose={() => setShowUploadPlanModal(false)}
         />
       )}
 
@@ -1018,7 +997,7 @@ function CampaignsTab({
 // =============================================================================
 // DOCUMENTS TAB
 // =============================================================================
-function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh, onLinkEquipment }) {
+function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipment }) {
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Matrices */}
@@ -1085,58 +1064,37 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
         )}
       </div>
 
-      {/* Plans */}
+      {/* Plans - Link to admin shared plans */}
       <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
           <h3 className="text-base sm:text-lg font-semibold flex items-center gap-2">
             <Map className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
             Plans de bâtiments
           </h3>
-          <button
-            onClick={onUploadPlan}
-            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
+          <a
+            href="/app/plans"
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm"
           >
-            <Upload className="w-4 h-4" />
-            Uploader
-          </button>
+            <Settings className="w-4 h-4" />
+            Gérer dans Admin
+          </a>
         </div>
 
-        {plans.length === 0 ? (
-          <div className="text-center py-6 sm:py-8 text-gray-500">
-            <Map className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-3" />
-            <p className="text-sm sm:text-base">Aucun plan uploadé</p>
-            <p className="text-xs sm:text-sm">Uploadez vos plans de bâtiments PDF</p>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <Info className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-blue-800 mb-1">Plans partagés depuis Admin</p>
+              <p className="text-blue-600">
+                Les plans utilisés pour le contrôle incendie sont ceux uploadés dans la page Admin &gt; Plans.
+                Cela permet d'utiliser les mêmes plans pour toutes les applications (Portes, Tableaux, DataHub, etc.).
+              </p>
+              <p className="text-blue-600 mt-2">
+                <strong>{plans.length} plan(s)</strong> disponible(s) pour la visualisation des équipements.
+              </p>
+            </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            {plans.map((plan) => (
-              <div
-                key={plan.id}
-                className="p-3 sm:p-4 border rounded-lg hover:border-orange-300"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-sm sm:text-base truncate">{plan.name}</p>
-                    <p className="text-xs sm:text-sm text-gray-500">
-                      {plan.building} {plan.floor && `- ${plan.floor}`}
-                    </p>
-                  </div>
-                  <a
-                    href={api.fireControl.planFileUrl(plan.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-1.5 sm:p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex-shrink-0"
-                  >
-                    <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </a>
-                </div>
-                <p className="text-xs text-gray-400">
-                  {plan.page_count} page(s) - v{plan.version}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
