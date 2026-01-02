@@ -375,38 +375,39 @@ export default function FireControl() {
 
       {/* Header */}
       <div className="bg-white border-b sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-orange-100 rounded-lg">
-                <Flame className="w-6 h-6 text-orange-600" />
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          {/* Mobile: Stack vertically, Desktop: Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="p-1.5 sm:p-2 bg-orange-100 rounded-lg">
+                <Flame className="w-5 h-5 sm:w-6 sm:h-6 text-orange-600" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">
-                  Contrôle Asservissements Incendie
+                <h1 className="text-base sm:text-xl font-bold text-gray-900">
+                  Contrôle Incendie
                 </h1>
-                <p className="text-sm text-gray-500">
+                <p className="text-xs sm:text-sm text-gray-500 hidden sm:block">
                   Gestion des tests d'alarmes et asservissements
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               {/* Map view button */}
               <button
                 onClick={() => navigate("/app/fire-control/map")}
-                className="flex items-center gap-2 px-3 py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg text-sm font-medium hover:bg-orange-100 transition-colors"
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg text-xs sm:text-sm font-medium hover:bg-orange-100 transition-colors"
                 title="Voir sur le plan"
               >
                 <MapPin className="w-4 h-4" />
-                <span className="hidden sm:inline">Voir sur le plan</span>
+                <span className="hidden xs:inline">Plan</span>
               </button>
 
               {/* Year selector */}
               <select
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(Number(e.target.value))}
-                className="px-3 py-2 border rounded-lg text-sm"
+                className="px-2 sm:px-3 py-1.5 sm:py-2 border rounded-lg text-xs sm:text-sm"
               >
                 {[2024, 2025, 2026, 2027].map((y) => (
                   <option key={y} value={y}>
@@ -417,34 +418,35 @@ export default function FireControl() {
 
               <button
                 onClick={loadAll}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+                className="p-1.5 sm:p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
                 title="Actualiser"
               >
-                <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${loading ? "animate-spin" : ""}`} />
               </button>
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex gap-1 mt-4 overflow-x-auto">
+          {/* Tabs - Horizontal scroll on mobile */}
+          <div className="flex gap-1 mt-3 sm:mt-4 overflow-x-auto pb-1 -mx-3 px-3 sm:mx-0 sm:px-0 scrollbar-hide">
             {[
-              { id: "dashboard", label: "Tableau de bord", icon: BarChart3 },
-              { id: "campaigns", label: "Campagnes", icon: Calendar },
-              { id: "documents", label: "Documents", icon: FileText },
-              { id: "controls", label: "Contrôles", icon: ClipboardCheck },
-              { id: "schedule", label: "Calendrier", icon: CalendarDays },
+              { id: "dashboard", label: "Dashboard", mobileLabel: "Accueil", icon: BarChart3 },
+              { id: "campaigns", label: "Campagnes", mobileLabel: "Camp.", icon: Calendar },
+              { id: "documents", label: "Documents", mobileLabel: "Docs", icon: FileText },
+              { id: "controls", label: "Contrôles", mobileLabel: "Ctrl", icon: ClipboardCheck },
+              { id: "schedule", label: "Calendrier", mobileLabel: "Cal.", icon: CalendarDays },
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-t-lg text-sm font-medium transition-colors ${
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-t-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0 ${
                   activeTab === tab.id
                     ? "bg-orange-50 text-orange-700 border-b-2 border-orange-500"
                     : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
                 }`}
               >
                 <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="sm:hidden">{tab.mobileLabel}</span>
               </button>
             ))}
           </div>
@@ -452,7 +454,7 @@ export default function FireControl() {
       </div>
 
       {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {loading && !dashboard ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
@@ -605,12 +607,13 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
   const { checks, buildings, upcoming_schedule } = dashboard;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Stats cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
         <StatCard
           icon={ClipboardCheck}
-          label="Total Contrôles"
+          label="Total"
+          labelFull="Total Contrôles"
           value={checks?.total_checks || 0}
           color="blue"
         />
@@ -627,26 +630,28 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
         />
         <StatCard
           icon={XCircle}
-          label="Non-conformes"
+          label="Non-conf."
+          labelFull="Non-conformes"
           value={checks?.failed || 0}
           color="red"
         />
         <StatCard
           icon={Clock}
-          label="En attente"
+          label="Attente"
+          labelFull="En attente"
           value={checks?.pending || 0}
           color="yellow"
         />
       </div>
 
       {/* Buildings overview */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Building2 className="w-5 h-5 text-gray-500" />
+      <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+        <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+          <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
           Vue par bâtiment
         </h3>
         {buildings && buildings.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {buildings.map((bld) => (
               <div
                 key={bld.building}
@@ -676,17 +681,17 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
             ))}
           </div>
         ) : (
-          <p className="text-gray-500 text-center py-8">
+          <p className="text-gray-500 text-center py-6 sm:py-8 text-sm sm:text-base">
             Aucun bâtiment configuré. Uploadez des plans pour commencer.
           </p>
         )}
       </div>
 
       {/* Active campaigns */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border p-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-gray-500" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+            <Calendar className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
             Campagnes actives
           </h3>
           {campaigns && campaigns.length > 0 ? (
@@ -713,17 +718,18 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
                 ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-center py-8">
+            <p className="text-gray-500 text-center py-6 sm:py-8 text-sm sm:text-base">
               Aucune campagne active
             </p>
           )}
         </div>
 
         {/* Upcoming schedule */}
-        <div className="bg-white rounded-xl shadow-sm border p-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Bell className="w-5 h-5 text-gray-500" />
-            Prochains contrôles planifiés
+        <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+          <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 flex items-center gap-2">
+            <Bell className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
+            <span className="hidden sm:inline">Prochains contrôles planifiés</span>
+            <span className="sm:hidden">Prochains contrôles</span>
           </h3>
           {upcoming_schedule && upcoming_schedule.length > 0 ? (
             <div className="space-y-3">
@@ -742,7 +748,7 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
               ))}
             </div>
           ) : (
-            <p className="text-gray-500 text-center py-8">
+            <p className="text-gray-500 text-center py-6 sm:py-8 text-sm sm:text-base">
               Aucun contrôle planifié
             </p>
           )}
@@ -765,12 +771,12 @@ function CampaignsTab({
   onSelectCampaign,
 }) {
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">Campagnes de contrôle</h2>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h2 className="text-base sm:text-lg font-semibold">Campagnes de contrôle</h2>
         <button
           onClick={onCreateCampaign}
-          className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
         >
           <Plus className="w-4 h-4" />
           Nouvelle campagne
@@ -778,39 +784,39 @@ function CampaignsTab({
       </div>
 
       {campaigns.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border p-12 text-center">
-          <Calendar className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
+        <div className="bg-white rounded-xl shadow-sm border p-8 sm:p-12 text-center">
+          <Calendar className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-4" />
+          <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
             Aucune campagne
           </h3>
-          <p className="text-gray-500 mb-4">
+          <p className="text-sm text-gray-500 mb-4">
             Créez une campagne de contrôle annuelle pour commencer
           </p>
           <button
             onClick={onCreateCampaign}
-            className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+            className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
           >
             Créer une campagne
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {campaigns.map((campaign) => (
             <div
               key={campaign.id}
-              className="bg-white rounded-xl shadow-sm border p-6 hover:border-orange-300 transition-colors"
+              className="bg-white rounded-xl shadow-sm border p-4 sm:p-6 hover:border-orange-300 transition-colors"
             >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <h3 className="font-semibold text-gray-900">{campaign.name}</h3>
-                  <p className="text-sm text-gray-500">Année {campaign.year}</p>
+              <div className="flex items-start justify-between mb-2 sm:mb-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-semibold text-gray-900 text-sm sm:text-base truncate">{campaign.name}</h3>
+                  <p className="text-xs sm:text-sm text-gray-500">Année {campaign.year}</p>
                 </div>
                 <StatusBadge status={campaign.status} />
               </div>
 
               {campaign.start_date && (
-                <p className="text-sm text-gray-600 mb-3">
-                  <Calendar className="w-4 h-4 inline mr-1" />
+                <p className="text-xs sm:text-sm text-gray-600 mb-2 sm:mb-3">
+                  <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1" />
                   {dayjs(campaign.start_date).format("DD/MM/YYYY")}
                   {campaign.end_date &&
                     ` - ${dayjs(campaign.end_date).format("DD/MM/YYYY")}`}
@@ -818,44 +824,44 @@ function CampaignsTab({
               )}
 
               {campaign.notes && (
-                <p className="text-sm text-gray-500 mb-3 line-clamp-2">
+                <p className="text-xs sm:text-sm text-gray-500 mb-2 sm:mb-3 line-clamp-2">
                   {campaign.notes}
                 </p>
               )}
 
-              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-3 sm:mt-4 pt-3 sm:pt-4 border-t">
                 <button
                   onClick={() => onSelectCampaign(campaign)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg"
+                  className="flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-gray-100 hover:bg-gray-200 rounded-lg"
                 >
-                  <Eye className="w-4 h-4" />
+                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   Voir
                 </button>
                 <button
                   onClick={() => onGenerateChecks(campaign.id)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg"
+                  className="flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg"
                 >
-                  <Play className="w-4 h-4" />
-                  Générer
+                  <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="hidden xs:inline">Générer</span>
                 </button>
                 <button
                   onClick={() => onGenerateReport(campaign.id)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg"
+                  className="flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg"
                 >
-                  <Download className="w-4 h-4" />
-                  Rapport
+                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="hidden xs:inline">Rapport</span>
                 </button>
                 <button
                   onClick={() => onEditCampaign(campaign)}
-                  className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
+                  className="p-1 sm:p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
                 >
-                  <Edit className="w-4 h-4" />
+                  <Edit className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
                 <button
                   onClick={() => onDeleteCampaign(campaign.id)}
-                  className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+                  className="p-1 sm:p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
               </div>
             </div>
@@ -871,17 +877,18 @@ function CampaignsTab({
 // =============================================================================
 function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Matrices */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <FileSpreadsheet className="w-5 h-5 text-gray-500" />
-            Matrices d'asservissement
+      <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
+          <h3 className="text-base sm:text-lg font-semibold flex items-center gap-2">
+            <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
+            <span className="hidden sm:inline">Matrices d'asservissement</span>
+            <span className="sm:hidden">Matrices</span>
           </h3>
           <button
             onClick={onUploadMatrix}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
           >
             <Upload className="w-4 h-4" />
             Uploader
@@ -889,38 +896,35 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
         </div>
 
         {matrices.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <FileSpreadsheet className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-            <p>Aucune matrice uploadée</p>
-            <p className="text-sm">Uploadez votre matrice d'asservissement PDF</p>
+          <div className="text-center py-6 sm:py-8 text-gray-500">
+            <FileSpreadsheet className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-3" />
+            <p className="text-sm sm:text-base">Aucune matrice uploadée</p>
+            <p className="text-xs sm:text-sm">Uploadez votre matrice d'asservissement PDF</p>
           </div>
         ) : (
           <div className="space-y-3">
             {matrices.map((matrix) => (
               <div
                 key={matrix.id}
-                className="flex items-center justify-between p-4 border rounded-lg hover:border-orange-300"
+                className="flex items-center justify-between p-3 sm:p-4 border rounded-lg hover:border-orange-300"
               >
-                <div className="flex items-center gap-3">
-                  <FileText className="w-8 h-8 text-orange-500" />
-                  <div>
-                    <p className="font-medium">{matrix.name}</p>
-                    <p className="text-sm text-gray-500">
-                      Version {matrix.version} -{" "}
-                      {dayjs(matrix.upload_date).format("DD/MM/YYYY")}
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                  <FileText className="w-6 h-6 sm:w-8 sm:h-8 text-orange-500 flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-sm sm:text-base truncate">{matrix.name}</p>
+                    <p className="text-xs sm:text-sm text-gray-500">
+                      v{matrix.version} - {dayjs(matrix.upload_date).format("DD/MM/YY")}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={api.fireControl.matrixFileUrl(matrix.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
-                  >
-                    <Eye className="w-5 h-5" />
-                  </a>
-                </div>
+                <a
+                  href={api.fireControl.matrixFileUrl(matrix.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex-shrink-0"
+                >
+                  <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
+                </a>
               </div>
             ))}
           </div>
@@ -928,15 +932,15 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
       </div>
 
       {/* Plans */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <Map className="w-5 h-5 text-gray-500" />
+      <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
+          <h3 className="text-base sm:text-lg font-semibold flex items-center gap-2">
+            <Map className="w-4 h-4 sm:w-5 sm:h-5 text-gray-500" />
             Plans de bâtiments
           </h3>
           <button
             onClick={onUploadPlan}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
           >
             <Upload className="w-4 h-4" />
             Uploader
@@ -944,22 +948,22 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
         </div>
 
         {plans.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <Map className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-            <p>Aucun plan uploadé</p>
-            <p className="text-sm">Uploadez vos plans de bâtiments PDF</p>
+          <div className="text-center py-6 sm:py-8 text-gray-500">
+            <Map className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-3" />
+            <p className="text-sm sm:text-base">Aucun plan uploadé</p>
+            <p className="text-xs sm:text-sm">Uploadez vos plans de bâtiments PDF</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {plans.map((plan) => (
               <div
                 key={plan.id}
-                className="p-4 border rounded-lg hover:border-orange-300"
+                className="p-3 sm:p-4 border rounded-lg hover:border-orange-300"
               >
                 <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="font-medium">{plan.name}</p>
-                    <p className="text-sm text-gray-500">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-sm sm:text-base truncate">{plan.name}</p>
+                    <p className="text-xs sm:text-sm text-gray-500">
                       {plan.building} {plan.floor && `- ${plan.floor}`}
                     </p>
                   </div>
@@ -967,9 +971,9 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
                     href={api.fireControl.planFileUrl(plan.id)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
+                    className="p-1.5 sm:p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded flex-shrink-0"
                   >
-                    <Eye className="w-5 h-5" />
+                    <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
                   </a>
                 </div>
                 <p className="text-xs text-gray-400">
@@ -1006,194 +1010,246 @@ function ControlsTab({
   onRefresh,
 }) {
   return (
-    <div className="space-y-6">
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border p-4">
-        <div className="flex flex-wrap gap-4 items-center">
-          <div className="flex-1 min-w-[200px]">
+    <div className="space-y-4 sm:space-y-6">
+      {/* Filters - Stack on mobile */}
+      <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-4 sm:items-center">
+          <div className="w-full sm:flex-1 sm:min-w-[200px]">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                placeholder="Rechercher un détecteur..."
+                placeholder="Rechercher..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border rounded-lg"
+                className="w-full pl-10 pr-4 py-2 border rounded-lg text-sm"
               />
             </div>
           </div>
 
-          <select
-            value={selectedCampaign || ""}
-            onChange={(e) => onSelectCampaign(e.target.value || null)}
-            className="px-3 py-2 border rounded-lg"
-          >
-            <option value="">Toutes les campagnes</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={selectedBuilding}
-            onChange={(e) => {
-              onSelectBuilding(e.target.value);
-              onSelectFloor("");
-            }}
-            className="px-3 py-2 border rounded-lg"
-          >
-            <option value="">Tous les bâtiments</option>
-            {buildingOptions.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-
-          {selectedBuilding && floorOptions.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto">
             <select
-              value={selectedFloor}
-              onChange={(e) => onSelectFloor(e.target.value)}
-              className="px-3 py-2 border rounded-lg"
+              value={selectedCampaign || ""}
+              onChange={(e) => onSelectCampaign(e.target.value || null)}
+              className="px-2 sm:px-3 py-2 border rounded-lg text-xs sm:text-sm min-w-0 flex-shrink"
             >
-              <option value="">Tous les étages</option>
-              {floorOptions.map((f) => (
-                <option key={f} value={f}>
-                  {f}
+              <option value="">Campagnes</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
                 </option>
               ))}
             </select>
-          )}
 
-          <button
-            onClick={onRefresh}
-            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
+            <select
+              value={selectedBuilding}
+              onChange={(e) => {
+                onSelectBuilding(e.target.value);
+                onSelectFloor("");
+              }}
+              className="px-2 sm:px-3 py-2 border rounded-lg text-xs sm:text-sm min-w-0 flex-shrink"
+            >
+              <option value="">Bâtiment</option>
+              {buildingOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+
+            {selectedBuilding && floorOptions.length > 0 && (
+              <select
+                value={selectedFloor}
+                onChange={(e) => onSelectFloor(e.target.value)}
+                className="px-2 sm:px-3 py-2 border rounded-lg text-xs sm:text-sm min-w-0 flex-shrink"
+              >
+                <option value="">Étage</option>
+                {floorOptions.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              onClick={onRefresh}
+              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg flex-shrink-0"
+            >
+              <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Stats bar */}
-      <div className="flex gap-4 flex-wrap">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg text-sm">
+      {/* Stats bar - Compact on mobile */}
+      <div className="flex gap-2 sm:gap-4 flex-wrap">
+        <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-gray-100 rounded-lg text-xs sm:text-sm">
           <span className="text-gray-600">Total:</span>
           <span className="font-semibold">{checkStats.total}</span>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-green-100 rounded-lg text-sm">
-          <CheckCircle2 className="w-4 h-4 text-green-600" />
+        <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 bg-green-100 rounded-lg text-xs sm:text-sm">
+          <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-green-600" />
           <span className="font-semibold text-green-700">{checkStats.passed}</span>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-red-100 rounded-lg text-sm">
-          <XCircle className="w-4 h-4 text-red-600" />
+        <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 bg-red-100 rounded-lg text-xs sm:text-sm">
+          <XCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600" />
           <span className="font-semibold text-red-700">{checkStats.failed}</span>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-100 rounded-lg text-sm">
-          <Clock className="w-4 h-4 text-yellow-600" />
+        <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 bg-yellow-100 rounded-lg text-xs sm:text-sm">
+          <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-600" />
           <span className="font-semibold text-yellow-700">{checkStats.pending}</span>
         </div>
       </div>
 
-      {/* Checks list */}
+      {/* Checks list - Cards on mobile, Table on desktop */}
       {checks.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border p-12 text-center">
-          <ClipboardCheck className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
+        <div className="bg-white rounded-xl shadow-sm border p-8 sm:p-12 text-center">
+          <ClipboardCheck className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-4" />
+          <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
             Aucun contrôle
           </h3>
-          <p className="text-gray-500">
+          <p className="text-sm text-gray-500">
             Sélectionnez une campagne et générez les contrôles
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
-                  Détecteur
-                </th>
-                <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
-                  Localisation
-                </th>
-                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                  Alarme 1
-                </th>
-                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                  Alarme 2
-                </th>
-                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                  Status
-                </th>
-                <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {checks.map((check) => (
-                <tr
-                  key={check.id}
-                  className="hover:bg-gray-50 cursor-pointer"
-                  onClick={() => onSelectCheck(check)}
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <CircleDot className="w-4 h-4 text-orange-500" />
-                      <span className="font-medium">{check.detector_number}</span>
+        <>
+          {/* Mobile: Cards */}
+          <div className="sm:hidden space-y-3">
+            {checks.map((check) => (
+              <div
+                key={check.id}
+                onClick={() => onSelectCheck(check)}
+                className="bg-white rounded-xl shadow-sm border p-4 cursor-pointer active:bg-gray-50"
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <CircleDot className="w-4 h-4 text-orange-500" />
+                    <span className="font-semibold text-sm">{check.detector_number}</span>
+                  </div>
+                  <CheckStatusBadge status={check.status} />
+                </div>
+                <p className="text-xs text-gray-500 mb-3">
+                  {check.building} - {check.floor} {check.zone && `- ${check.zone}`}
+                </p>
+                <div className="flex items-center justify-between">
+                  <div className="flex gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-500">AL1:</span>
+                      {check.alarm1_ok === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                      {check.alarm1_ok === false && <XCircle className="w-4 h-4 text-red-500" />}
+                      {check.alarm1_ok === null && <span className="text-gray-300 text-xs">-</span>}
                     </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="text-sm">
-                      <p>{check.building}</p>
-                      <p className="text-gray-500">
-                        {check.floor} {check.zone && `- ${check.zone}`}
-                      </p>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-500">AL2:</span>
+                      {check.alarm2_ok === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                      {check.alarm2_ok === false && <XCircle className="w-4 h-4 text-red-500" />}
+                      {check.alarm2_ok === null && <span className="text-gray-300 text-xs">-</span>}
                     </div>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {check.alarm1_ok === true && (
-                      <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
-                    )}
-                    {check.alarm1_ok === false && (
-                      <XCircle className="w-5 h-5 text-red-500 mx-auto" />
-                    )}
-                    {check.alarm1_ok === null && (
-                      <span className="text-gray-300">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {check.alarm2_ok === true && (
-                      <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
-                    )}
-                    {check.alarm2_ok === false && (
-                      <XCircle className="w-5 h-5 text-red-500 mx-auto" />
-                    )}
-                    {check.alarm2_ok === null && (
-                      <span className="text-gray-300">-</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <CheckStatusBadge status={check.status} />
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectCheck(check);
-                      }}
-                      className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                  </td>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectCheck(check);
+                    }}
+                    className="p-2 text-orange-600 bg-orange-50 rounded-lg"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop: Table */}
+          <div className="hidden sm:block bg-white rounded-xl shadow-sm border overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
+                    Détecteur
+                  </th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
+                    Localisation
+                  </th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
+                    Alarme 1
+                  </th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
+                    Alarme 2
+                  </th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
+                    Status
+                  </th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
+                    Actions
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y">
+                {checks.map((check) => (
+                  <tr
+                    key={check.id}
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => onSelectCheck(check)}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <CircleDot className="w-4 h-4 text-orange-500" />
+                        <span className="font-medium">{check.detector_number}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm">
+                        <p>{check.building}</p>
+                        <p className="text-gray-500">
+                          {check.floor} {check.zone && `- ${check.zone}`}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {check.alarm1_ok === true && (
+                        <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
+                      )}
+                      {check.alarm1_ok === false && (
+                        <XCircle className="w-5 h-5 text-red-500 mx-auto" />
+                      )}
+                      {check.alarm1_ok === null && (
+                        <span className="text-gray-300">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {check.alarm2_ok === true && (
+                        <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
+                      )}
+                      {check.alarm2_ok === false && (
+                        <XCircle className="w-5 h-5 text-red-500 mx-auto" />
+                      )}
+                      {check.alarm2_ok === null && (
+                        <span className="text-gray-300">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <CheckStatusBadge status={check.status} />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectCheck(check);
+                        }}
+                        className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -1215,12 +1271,12 @@ function ScheduleTab({ schedule, campaigns, buildings, onCreateSchedule, onRefre
   }, [schedule]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-lg font-semibold">Calendrier des contrôles</h2>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h2 className="text-base sm:text-lg font-semibold">Calendrier des contrôles</h2>
         <button
           onClick={onCreateSchedule}
-          className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
         >
           <Plus className="w-4 h-4" />
           Planifier
@@ -1228,39 +1284,39 @@ function ScheduleTab({ schedule, campaigns, buildings, onCreateSchedule, onRefre
       </div>
 
       {schedule.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border p-12 text-center">
-          <CalendarDays className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
+        <div className="bg-white rounded-xl shadow-sm border p-8 sm:p-12 text-center">
+          <CalendarDays className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-4" />
+          <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
             Aucune planification
           </h3>
-          <p className="text-gray-500 mb-4">
+          <p className="text-sm text-gray-500 mb-4">
             Planifiez vos contrôles annuels par bâtiment
           </p>
           <button
             onClick={onCreateSchedule}
-            className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600"
+            className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm"
           >
             Créer une planification
           </button>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
           {Object.entries(groupedSchedule)
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([month, items]) => (
-              <div key={month} className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-lg font-semibold mb-4">
+              <div key={month} className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
+                <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 capitalize">
                   {dayjs(month).format("MMMM YYYY")}
                 </h3>
                 <div className="space-y-3">
                   {items.map((item) => (
                     <div
                       key={item.id}
-                      className="flex items-center justify-between p-4 border rounded-lg"
+                      className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 sm:p-4 border rounded-lg gap-3"
                     >
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3">
                         <div
-                          className={`p-2 rounded-lg ${
+                          className={`p-2 rounded-lg flex-shrink-0 ${
                             item.status === "completed"
                               ? "bg-green-100"
                               : item.status === "in_progress"
@@ -1269,7 +1325,7 @@ function ScheduleTab({ schedule, campaigns, buildings, onCreateSchedule, onRefre
                           }`}
                         >
                           <Building2
-                            className={`w-5 h-5 ${
+                            className={`w-4 h-4 sm:w-5 sm:h-5 ${
                               item.status === "completed"
                                 ? "text-green-600"
                                 : item.status === "in_progress"
@@ -1279,16 +1335,16 @@ function ScheduleTab({ schedule, campaigns, buildings, onCreateSchedule, onRefre
                           />
                         </div>
                         <div>
-                          <p className="font-medium">{item.building}</p>
+                          <p className="font-medium text-sm sm:text-base">{item.building}</p>
                           {item.campaign_name && (
-                            <p className="text-sm text-gray-500">
+                            <p className="text-xs sm:text-sm text-gray-500">
                               {item.campaign_name}
                             </p>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-sm text-gray-500">
+                      <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 pl-11 sm:pl-0">
+                        <span className="text-xs sm:text-sm text-gray-500">
                           {dayjs(item.scheduled_date).format("DD/MM/YYYY")}
                         </span>
                         <StatusBadge status={item.status} />
@@ -1342,11 +1398,11 @@ function CampaignModal({ campaign, year, onSave, onClose }) {
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full px-3 py-2 border rounded-lg"
+            className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Année
@@ -1355,7 +1411,7 @@ function CampaignModal({ campaign, year, onSave, onClose }) {
               type="number"
               value={form.year}
               onChange={(e) => setForm({ ...form, year: Number(e.target.value) })}
-              className="w-full px-3 py-2 border rounded-lg"
+              className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
             />
           </div>
           <div>
@@ -1365,7 +1421,7 @@ function CampaignModal({ campaign, year, onSave, onClose }) {
             <select
               value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg"
+              className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
             >
               <option value="planned">Planifié</option>
               <option value="in_progress">En cours</option>
@@ -1375,27 +1431,27 @@ function CampaignModal({ campaign, year, onSave, onClose }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Date de début
+              Date début
             </label>
             <input
               type="date"
               value={form.start_date}
               onChange={(e) => setForm({ ...form, start_date: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg"
+              className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Date de fin
+              Date fin
             </label>
             <input
               type="date"
               value={form.end_date}
               onChange={(e) => setForm({ ...form, end_date: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg"
+              className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
             />
           </div>
         </div>
@@ -1760,11 +1816,11 @@ function CheckModal({ check, onSave, onClose }) {
   };
 
   return (
-    <Modal title={`Contrôle - Détecteur ${check.detector_number}`} onClose={onClose} size="lg">
-      <form onSubmit={handleSubmit} className="space-y-6">
+    <Modal title={`Détecteur ${check.detector_number}`} onClose={onClose} size="lg">
+      <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
         {/* Detector info */}
-        <div className="bg-gray-50 rounded-lg p-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="bg-gray-50 rounded-lg p-3 sm:p-4">
+          <div className="grid grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm">
             <div>
               <span className="text-gray-500">Bâtiment:</span>{" "}
               <span className="font-medium">{check.building || "-"}</span>
@@ -1786,11 +1842,11 @@ function CheckModal({ check, onSave, onClose }) {
 
         {/* Alarm tests */}
         <div>
-          <h4 className="font-medium mb-3">Résultats des tests</h4>
-          <div className="grid grid-cols-2 gap-4">
+          <h4 className="font-medium mb-2 sm:mb-3 text-sm sm:text-base">Résultats des tests</h4>
+          <div className="grid grid-cols-2 gap-2 sm:gap-4">
             <div
               onClick={() => toggleAlarm("alarm1_ok")}
-              className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+              className={`p-3 sm:p-4 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
                 form.alarm1_ok === true
                   ? "border-green-500 bg-green-50"
                   : form.alarm1_ok === false
@@ -1798,26 +1854,26 @@ function CheckModal({ check, onSave, onClose }) {
                   : "border-gray-200 hover:border-gray-300"
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium">Alarme 1</span>
+              <div className="flex items-center justify-between mb-1 sm:mb-2">
+                <span className="font-medium text-sm sm:text-base">AL 1</span>
                 {form.alarm1_ok === true && (
-                  <CheckCircle2 className="w-6 h-6 text-green-500" />
+                  <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
                 )}
                 {form.alarm1_ok === false && (
-                  <XCircle className="w-6 h-6 text-red-500" />
+                  <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-500" />
                 )}
                 {form.alarm1_ok === null && (
-                  <span className="text-sm text-gray-400">Non testé</span>
+                  <span className="text-xs sm:text-sm text-gray-400">-</span>
                 )}
               </div>
-              <p className="text-xs text-gray-500">
-                Cliquez pour changer: OK → NOK → Non testé
+              <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">
+                Cliquez: OK → NOK → Non testé
               </p>
             </div>
 
             <div
               onClick={() => toggleAlarm("alarm2_ok")}
-              className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+              className={`p-3 sm:p-4 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
                 form.alarm2_ok === true
                   ? "border-green-500 bg-green-50"
                   : form.alarm2_ok === false
@@ -1825,23 +1881,26 @@ function CheckModal({ check, onSave, onClose }) {
                   : "border-gray-200 hover:border-gray-300"
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium">Alarme 2</span>
+              <div className="flex items-center justify-between mb-1 sm:mb-2">
+                <span className="font-medium text-sm sm:text-base">AL 2</span>
                 {form.alarm2_ok === true && (
-                  <CheckCircle2 className="w-6 h-6 text-green-500" />
+                  <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
                 )}
                 {form.alarm2_ok === false && (
-                  <XCircle className="w-6 h-6 text-red-500" />
+                  <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-500" />
                 )}
                 {form.alarm2_ok === null && (
-                  <span className="text-sm text-gray-400">Non testé</span>
+                  <span className="text-xs sm:text-sm text-gray-400">-</span>
                 )}
               </div>
-              <p className="text-xs text-gray-500">
-                Cliquez pour changer: OK → NOK → Non testé
+              <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">
+                Cliquez: OK → NOK → Non testé
               </p>
             </div>
           </div>
+          <p className="text-[10px] text-gray-400 mt-2 text-center sm:hidden">
+            Appuyez pour basculer: OK → NOK → Non testé
+          </p>
         </div>
 
         {/* Notes */}
@@ -1852,9 +1911,9 @@ function CheckModal({ check, onSave, onClose }) {
           <textarea
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            rows={3}
+            rows={2}
             placeholder="Ajoutez vos observations..."
-            className="w-full px-3 py-2 border rounded-lg"
+            className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
           />
         </div>
 
@@ -1869,12 +1928,12 @@ function CheckModal({ check, onSave, onClose }) {
                 <img
                   src={URL.createObjectURL(f)}
                   alt=""
-                  className="w-20 h-20 object-cover rounded-lg"
+                  className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg"
                 />
                 <button
                   type="button"
                   onClick={() => setFiles(files.filter((_, j) => j !== i))}
-                  className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full"
+                  className="absolute -top-1.5 -right-1.5 p-1 bg-red-500 text-white rounded-full"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -1883,15 +1942,16 @@ function CheckModal({ check, onSave, onClose }) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="w-20 h-20 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center hover:border-orange-300"
+              className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center hover:border-orange-300 active:bg-gray-50"
             >
-              <Camera className="w-6 h-6 text-gray-400" />
+              <Camera className="w-5 h-5 sm:w-6 sm:h-6 text-gray-400" />
             </button>
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               multiple
+              capture="environment"
               onChange={(e) => {
                 const newFiles = Array.from(e.target.files || []);
                 setFiles([...files, ...newFiles]);
@@ -1901,18 +1961,18 @@ function CheckModal({ check, onSave, onClose }) {
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 pt-4 border-t">
+        <div className="flex gap-3 pt-4 border-t">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-gray-700 border rounded-lg hover:bg-gray-50"
+            className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 text-gray-700 border rounded-lg hover:bg-gray-50 text-sm"
           >
             Annuler
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 sm:py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 text-sm"
           >
             {saving && <Loader2 className="w-4 h-4 animate-spin" />}
             Enregistrer
@@ -2050,14 +2110,14 @@ function ScheduleModal({ campaigns, buildings, onSave, onClose }) {
 
 function Modal({ title, children, onClose, size = "md" }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/50">
       <div
-        className={`bg-white rounded-xl shadow-xl w-full ${
-          size === "lg" ? "max-w-2xl" : "max-w-lg"
-        }`}
+        className={`bg-white w-full rounded-t-xl sm:rounded-xl shadow-xl ${
+          size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg"
+        } max-h-[90vh] sm:max-h-[85vh] flex flex-col`}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h3 className="text-lg font-semibold">{title}</h3>
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b flex-shrink-0">
+          <h3 className="text-base sm:text-lg font-semibold">{title}</h3>
           <button
             onClick={onClose}
             className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
@@ -2065,13 +2125,13 @@ function Modal({ title, children, onClose, size = "md" }) {
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="px-6 py-4 max-h-[70vh] overflow-y-auto">{children}</div>
+        <div className="px-4 sm:px-6 py-4 overflow-y-auto flex-1">{children}</div>
       </div>
     </div>
   );
 }
 
-function StatCard({ icon: Icon, label, value, color = "gray", subtext }) {
+function StatCard({ icon: Icon, label, labelFull, value, color = "gray", subtext }) {
   const colors = {
     blue: "bg-blue-50 text-blue-600",
     green: "bg-green-50 text-green-600",
@@ -2082,15 +2142,18 @@ function StatCard({ icon: Icon, label, value, color = "gray", subtext }) {
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border p-6">
-      <div className="flex items-center gap-4">
-        <div className={`p-3 rounded-lg ${colors[color]}`}>
-          <Icon className="w-6 h-6" />
+    <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-6">
+      <div className="flex items-center gap-2 sm:gap-4">
+        <div className={`p-2 sm:p-3 rounded-lg ${colors[color]}`}>
+          <Icon className="w-4 h-4 sm:w-6 sm:h-6" />
         </div>
-        <div>
-          <p className="text-sm text-gray-500">{label}</p>
-          <p className="text-2xl font-bold">{value}</p>
-          {subtext && <p className="text-sm text-gray-400">{subtext}</p>}
+        <div className="min-w-0 flex-1">
+          <p className="text-xs sm:text-sm text-gray-500 truncate">
+            <span className="sm:hidden">{label}</span>
+            <span className="hidden sm:inline">{labelFull || label}</span>
+          </p>
+          <p className="text-lg sm:text-2xl font-bold">{value}</p>
+          {subtext && <p className="text-xs sm:text-sm text-gray-400">{subtext}</p>}
         </div>
       </div>
     </div>
