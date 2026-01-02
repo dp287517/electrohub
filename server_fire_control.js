@@ -1523,6 +1523,271 @@ app.get("/api/fire-control/interlocks", async (req, res) => {
 });
 
 // ------------------------------
+// ROUTES: Alerts (retards de contrôle)
+// ------------------------------
+
+app.get("/api/fire-control/alerts", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    // Get overdue scheduled controls (date passed, not completed)
+    const overdueSchedule = await pool.query(`
+      SELECT s.*, c.name as campaign_name
+      FROM fc_schedule s
+      LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
+      WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}
+        AND s.scheduled_date < CURRENT_DATE
+        AND s.status NOT IN ('completed', 'cancelled')
+      ORDER BY s.scheduled_date
+    `, filter.params);
+
+    // Get pending checks from active campaigns that should be done (campaign end_date passed)
+    const overdueChecks = await pool.query(`
+      SELECT
+        c.id as campaign_id,
+        c.name as campaign_name,
+        c.end_date,
+        COUNT(*) FILTER (WHERE ch.status = 'pending') as pending_count,
+        COUNT(*) as total_checks
+      FROM fc_campaigns c
+      LEFT JOIN fc_checks ch ON ch.campaign_id = c.id
+      WHERE ${filter.where.replace(/company_id/g, 'c.company_id').replace(/site_id/g, 'c.site_id')}
+        AND c.end_date < CURRENT_DATE
+        AND c.status = 'in_progress'
+      GROUP BY c.id, c.name, c.end_date
+      HAVING COUNT(*) FILTER (WHERE ch.status = 'pending') > 0
+    `, filter.params);
+
+    // Get upcoming controls (next 30 days)
+    const upcomingSchedule = await pool.query(`
+      SELECT s.*, c.name as campaign_name
+      FROM fc_schedule s
+      LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
+      WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}
+        AND s.scheduled_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+        AND s.status = 'scheduled'
+      ORDER BY s.scheduled_date
+    `, filter.params);
+
+    res.json({
+      overdue_schedule: overdueSchedule.rows,
+      overdue_campaigns: overdueChecks.rows,
+      upcoming: upcomingSchedule.rows,
+      summary: {
+        overdue_count: overdueSchedule.rows.length + overdueChecks.rows.length,
+        upcoming_count: upcomingSchedule.rows.length,
+      }
+    });
+  } catch (err) {
+    console.error("[FireControl] GET alerts error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Maps (for Leaflet visualization)
+// ------------------------------
+
+// List plans for maps
+app.get("/api/fire-control/maps/listPlans", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT id, building, floor, name, filename, version, page_count, is_active, created_at
+      FROM fc_building_plans
+      WHERE ${filter.where} AND is_active = true
+      ORDER BY building, floor
+    `, filter.params);
+
+    // Format for compatibility with other map views
+    const plans = rows.map(p => ({
+      ...p,
+      logical_name: `${p.building}_${p.floor || 'all'}`.replace(/\s+/g, '_'),
+      display_name: `${p.building} - ${p.floor || 'Tous niveaux'}`,
+    }));
+
+    res.json({ plans });
+  } catch (err) {
+    console.error("[FireControl] GET maps/listPlans error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get plan file for map display
+app.get("/api/fire-control/maps/planFile", async (req, res) => {
+  try {
+    const { id, logical_name } = req.query;
+
+    let rows;
+    if (id) {
+      ({ rows } = await pool.query(`SELECT filename, content, file_path FROM fc_building_plans WHERE id = $1`, [id]));
+    } else if (logical_name) {
+      // Parse logical_name to get building and floor
+      const parts = logical_name.split('_');
+      const building = parts[0];
+      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
+
+      ({ rows } = await pool.query(`
+        SELECT filename, content, file_path FROM fc_building_plans
+        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
+        ORDER BY created_at DESC LIMIT 1
+      `, [building, floor === 'all' ? null : floor]));
+    }
+
+    if (!rows || !rows.length) return res.status(404).json({ error: "Plan not found" });
+
+    const plan = rows[0];
+    let buffer = plan.content;
+
+    if (!buffer && plan.file_path) {
+      try {
+        buffer = await fsp.readFile(plan.file_path);
+      } catch {}
+    }
+
+    if (!buffer) return res.status(404).json({ error: "File not found" });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${plan.filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("[FireControl] GET maps/planFile error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get positions for a plan (for map markers)
+app.get("/api/fire-control/maps/positions", async (req, res) => {
+  try {
+    const { id, logical_name, page_index = 0 } = req.query;
+
+    let planId = id;
+
+    // If logical_name provided, find the plan ID
+    if (!planId && logical_name) {
+      const parts = logical_name.split('_');
+      const building = parts[0];
+      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
+
+      const { rows: planRows } = await pool.query(`
+        SELECT id FROM fc_building_plans
+        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
+        ORDER BY created_at DESC LIMIT 1
+      `, [building, floor === 'all' ? null : floor]);
+
+      if (planRows.length) planId = planRows[0].id;
+    }
+
+    if (!planId) return res.json({ positions: [] });
+
+    const { rows } = await pool.query(`
+      SELECT
+        dp.id as position_id,
+        dp.detector_id,
+        dp.x_frac,
+        dp.y_frac,
+        dp.page_index,
+        d.detector_number,
+        d.detector_type,
+        d.building,
+        d.floor,
+        d.zone,
+        d.access_point,
+        d.location_description
+      FROM fc_detector_positions dp
+      JOIN fc_detectors d ON d.id = dp.detector_id
+      WHERE dp.plan_id = $1 AND dp.page_index = $2
+    `, [planId, Number(page_index)]);
+
+    res.json({ positions: rows });
+  } catch (err) {
+    console.error("[FireControl] GET maps/positions error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set position for a detector on a plan
+app.post("/api/fire-control/maps/setPosition", async (req, res) => {
+  try {
+    const { detector_id, plan_id, logical_name, page_index = 0, x_frac, y_frac } = req.body;
+    const { email, name } = getIdentityFromReq(req);
+
+    let finalPlanId = plan_id;
+
+    // If logical_name provided, find the plan ID
+    if (!finalPlanId && logical_name) {
+      const parts = logical_name.split('_');
+      const building = parts[0];
+      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
+
+      const { rows: planRows } = await pool.query(`
+        SELECT id FROM fc_building_plans
+        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
+        ORDER BY created_at DESC LIMIT 1
+      `, [building, floor === 'all' ? null : floor]);
+
+      if (planRows.length) finalPlanId = planRows[0].id;
+    }
+
+    if (!finalPlanId) return res.status(400).json({ error: "Plan not found" });
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_detector_positions (detector_id, plan_id, page_index, x_frac, y_frac)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (detector_id, plan_id, page_index)
+      DO UPDATE SET x_frac = $4, y_frac = $5, updated_at = now()
+      RETURNING *
+    `, [detector_id, finalPlanId, page_index, x_frac, y_frac]);
+
+    await audit.log(req, AUDIT_ACTIONS.POSITION_SET, {
+      entityType: "detector_position",
+      entityId: rows[0].id,
+      details: { detector_id, plan_id: finalPlanId, x_frac, y_frac },
+    });
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST maps/setPosition error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete position
+app.delete("/api/fire-control/maps/positions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM fc_detector_positions WHERE id = $1`, [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[FireControl] DELETE position error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get placed detector IDs (for map highlighting)
+app.get("/api/fire-control/maps/placed-ids", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT DISTINCT dp.detector_id
+      FROM fc_detector_positions dp
+      JOIN fc_detectors d ON d.id = dp.detector_id
+      WHERE ${filter.where.replace(/company_id/g, 'd.company_id').replace(/site_id/g, 'd.site_id')}
+    `, filter.params);
+
+    res.json({ placed_ids: rows.map(r => r.detector_id) });
+  } catch (err) {
+    console.error("[FireControl] GET placed-ids error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
 // Health check
 // ------------------------------
 app.get("/api/fire-control/health", (req, res) => {
