@@ -2823,11 +2823,17 @@ export const api = {
     // Delete a position
     deletePosition: (positionId) => del(`/api/fire-control/maps/positions/${encodeURIComponent(positionId)}`),
 
-    // Get cross-system equipment (doors, switchboard with fire_interlock=true)
+    // Get cross-system equipment (doors, switchboard, datahub with fire_interlock=true)
     crossSystemEquipment: (params) => get("/api/fire-control/cross-system-equipment", params),
 
     // Get equipment positions for a specific zone check (with check status)
     zoneCheckEquipmentMap: (zoneCheckId) => get(`/api/fire-control/zone-checks/${encodeURIComponent(zoneCheckId)}/equipment-map`),
+
+    // Auto-match matrix equipment to existing equipment
+    autoMatchEquipment: (matrixEquipment) => post("/api/fire-control/auto-match-equipment", { matrix_equipment: matrixEquipment }),
+
+    // Confirm equipment match and link to fire control system
+    confirmEquipmentMatch: (payload) => post("/api/fire-control/confirm-equipment-match", payload),
   },
 };
 

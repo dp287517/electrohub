@@ -2032,7 +2032,83 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
       });
     }
 
-    // 2. If zone_check_id provided, fetch equipment results to get check status
+    // 2. Fetch switchboards with fire_interlock=true
+    try {
+      const switchQuery = await pool.query(`
+        SELECT
+          s.id, s.code, s.name, s.building_code as building, s.floor, s.room as location,
+          s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
+          'switchboard' as source_system, 'interlock' as equipment_type,
+          pos.id as position_id, pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+        FROM switchboards s
+        LEFT JOIN switchboard_positions pos ON pos.switchboard_id = s.id
+        WHERE s.fire_interlock = true
+          ${plan_logical_name ? `AND pos.plan_logical_name = $1 AND pos.page_index = $2` : ''}
+      `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
+
+      for (const sw of switchQuery.rows) {
+        allEquipment.push({
+          id: sw.id,
+          code: sw.fire_interlock_code || sw.code || sw.name,
+          name: sw.name,
+          building: sw.building,
+          floor: sw.floor,
+          location: sw.location,
+          equipment_type: sw.equipment_type,
+          source_system: sw.source_system,
+          zone_id: sw.fire_interlock_zone_id,
+          alarm_level: sw.fire_interlock_alarm_level || 1,
+          position_id: sw.position_id,
+          plan_logical_name: sw.plan_logical_name,
+          page_index: sw.page_index,
+          x_frac: sw.x_frac,
+          y_frac: sw.y_frac,
+          check_status: null,
+        });
+      }
+    } catch (e) { console.warn("[FireControl] Switchboard query failed:", e.message); }
+
+    // 3. Fetch datahub items with fire_interlock=true
+    try {
+      const datahubQuery = await pool.query(`
+        SELECT
+          i.id, i.code, i.name, i.building, i.floor, i.location,
+          i.fire_interlock_zone_id, i.fire_interlock_alarm_level, i.fire_interlock_code,
+          c.name as category_name, c.color as category_color, c.icon as category_icon,
+          'datahub' as source_system,
+          pos.id as position_id, pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+        FROM dh_items i
+        LEFT JOIN dh_categories c ON c.id = i.category_id
+        LEFT JOIN dh_positions pos ON pos.item_id = i.id
+        WHERE i.fire_interlock = true
+          ${plan_logical_name ? `AND pos.logical_name = $1 AND pos.page_index = $2` : ''}
+      `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
+
+      for (const dh of datahubQuery.rows) {
+        allEquipment.push({
+          id: dh.id,
+          code: dh.fire_interlock_code || dh.code || dh.name,
+          name: dh.name,
+          building: dh.building,
+          floor: dh.floor,
+          location: dh.location,
+          equipment_type: dh.category_name || 'datahub',
+          category_color: dh.category_color,
+          category_icon: dh.category_icon,
+          source_system: dh.source_system,
+          zone_id: dh.fire_interlock_zone_id,
+          alarm_level: dh.fire_interlock_alarm_level || 1,
+          position_id: dh.position_id,
+          plan_logical_name: dh.plan_logical_name,
+          page_index: dh.page_index,
+          x_frac: dh.x_frac,
+          y_frac: dh.y_frac,
+          check_status: null,
+        });
+      }
+    } catch (e) { console.warn("[FireControl] Datahub query failed:", e.message); }
+
+    // 4. If zone_check_id provided, fetch equipment results to get check status
     if (zone_check_id) {
       const resultsQuery = await pool.query(`
         SELECT er.*, e.external_system, e.external_id
@@ -2057,12 +2133,9 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
       }
     }
 
-    // TODO: Add switchboard equipment when needed
-    // const switchQuery = await pool.query(...)
-
     res.json({
       equipment: allEquipment,
-      sources: ['doors'], // Add more as we implement
+      sources: ['doors', 'switchboard', 'datahub'],
       count: allEquipment.length,
     });
   } catch (err) {
@@ -2205,6 +2278,219 @@ app.get("/api/fire-control/zone-checks/:id/equipment-map", async (req, res) => {
     });
   } catch (err) {
     console.error("[FireControl] GET zone-check equipment-map error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Intelligent Equipment Auto-Matching
+// ------------------------------
+
+// Calculate similarity score between two strings (Levenshtein-based)
+function stringSimilarity(s1, s2) {
+  if (!s1 || !s2) return 0;
+  s1 = s1.toLowerCase().replace(/[^a-z0-9]/g, '');
+  s2 = s2.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (s1 === s2) return 1;
+  if (s1.length === 0 || s2.length === 0) return 0;
+
+  // Check if one contains the other
+  if (s1.includes(s2) || s2.includes(s1)) return 0.8;
+
+  // Simple Levenshtein
+  const len1 = s1.length, len2 = s2.length;
+  const matrix = [];
+  for (let i = 0; i <= len1; i++) matrix[i] = [i];
+  for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+  for (let i = 1; i <= len1; i++) {
+    for (let j = 1; j <= len2; j++) {
+      const cost = s1[i-1] === s2[j-1] ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i-1][j] + 1, matrix[i][j-1] + 1, matrix[i-1][j-1] + cost);
+    }
+  }
+  const maxLen = Math.max(len1, len2);
+  return 1 - (matrix[len1][len2] / maxLen);
+}
+
+// Auto-match matrix equipment to existing equipment
+app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
+  try {
+    const { matrix_equipment } = req.body;
+    // matrix_equipment: array of { code, name, type, building, floor, location }
+
+    if (!Array.isArray(matrix_equipment)) {
+      return res.status(400).json({ error: "matrix_equipment array required" });
+    }
+
+    // Fetch all potential matches from all systems
+    const allCandidates = [];
+
+    // 1. Doors
+    try {
+      const { rows: doors } = await pool.query(`
+        SELECT id, code, name, building, floor, location, 'doors' as source, 'pcf' as eq_type,
+          fire_interlock, fire_interlock_zone_id
+        FROM fd_doors
+      `);
+      allCandidates.push(...doors);
+    } catch (e) {}
+
+    // 2. Switchboards
+    try {
+      const { rows: switches } = await pool.query(`
+        SELECT id::text, code, name, building_code as building, floor, room as location,
+          'switchboard' as source, 'interlock' as eq_type,
+          fire_interlock, fire_interlock_zone_id
+        FROM switchboards
+      `);
+      allCandidates.push(...switches);
+    } catch (e) {}
+
+    // 3. Datahub items
+    try {
+      const { rows: items } = await pool.query(`
+        SELECT i.id::text, i.code, i.name, i.building, i.floor, i.location,
+          'datahub' as source, c.name as eq_type,
+          i.fire_interlock, i.fire_interlock_zone_id
+        FROM dh_items i
+        LEFT JOIN dh_categories c ON c.id = i.category_id
+      `);
+      allCandidates.push(...items);
+    } catch (e) {}
+
+    const results = [];
+    const CONFIDENT_THRESHOLD = 0.85;
+    const UNCERTAIN_THRESHOLD = 0.5;
+
+    for (const matrixEq of matrix_equipment) {
+      const matches = [];
+
+      for (const candidate of allCandidates) {
+        // Calculate match scores
+        const codeScore = stringSimilarity(matrixEq.code, candidate.code) * 0.4;
+        const nameScore = stringSimilarity(matrixEq.name, candidate.name) * 0.3;
+        const buildingScore = (matrixEq.building && candidate.building &&
+          matrixEq.building.toLowerCase() === candidate.building.toLowerCase()) ? 0.15 : 0;
+        const floorScore = (matrixEq.floor && candidate.floor &&
+          matrixEq.floor.toLowerCase() === candidate.floor.toLowerCase()) ? 0.1 : 0;
+        const locationScore = stringSimilarity(matrixEq.location, candidate.location) * 0.05;
+
+        const totalScore = codeScore + nameScore + buildingScore + floorScore + locationScore;
+
+        if (totalScore >= UNCERTAIN_THRESHOLD) {
+          matches.push({
+            candidate_id: candidate.id,
+            candidate_code: candidate.code,
+            candidate_name: candidate.name,
+            candidate_building: candidate.building,
+            candidate_floor: candidate.floor,
+            candidate_location: candidate.location,
+            source_system: candidate.source,
+            equipment_type: candidate.eq_type,
+            already_linked: candidate.fire_interlock || false,
+            linked_zone_id: candidate.fire_interlock_zone_id,
+            score: Math.round(totalScore * 100),
+          });
+        }
+      }
+
+      // Sort by score descending
+      matches.sort((a, b) => b.score - a.score);
+
+      const topMatch = matches[0];
+      const isConfident = topMatch && topMatch.score >= CONFIDENT_THRESHOLD * 100;
+      const hasMultipleGoodMatches = matches.filter(m => m.score >= UNCERTAIN_THRESHOLD * 100).length > 1;
+
+      results.push({
+        matrix_code: matrixEq.code,
+        matrix_name: matrixEq.name,
+        matrix_type: matrixEq.type,
+        matrix_building: matrixEq.building,
+        matrix_floor: matrixEq.floor,
+        status: isConfident && !hasMultipleGoodMatches ? 'confident' :
+                matches.length > 0 ? 'uncertain' : 'no_match',
+        best_match: topMatch || null,
+        alternatives: matches.slice(1, 5), // Max 4 alternatives
+        needs_confirmation: !isConfident || hasMultipleGoodMatches,
+        question: !isConfident && matches.length > 0 ?
+          `L'équipement "${matrixEq.code}" de la matrice correspond-il à "${topMatch?.candidate_code}" (${topMatch?.source_system}) ?` : null,
+      });
+    }
+
+    const stats = {
+      total: results.length,
+      confident: results.filter(r => r.status === 'confident').length,
+      uncertain: results.filter(r => r.status === 'uncertain').length,
+      no_match: results.filter(r => r.status === 'no_match').length,
+    };
+
+    res.json({ matches: results, stats });
+  } catch (err) {
+    console.error("[FireControl] Auto-match error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Confirm equipment match and link to fire control
+app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
+  try {
+    const { source_system, equipment_id, zone_id, alarm_level = 1, fire_interlock_code } = req.body;
+
+    if (!source_system || !equipment_id) {
+      return res.status(400).json({ error: "source_system and equipment_id required" });
+    }
+
+    let updated = false;
+
+    if (source_system === 'doors') {
+      await pool.query(`
+        UPDATE fd_doors SET
+          fire_interlock = true,
+          fire_interlock_zone_id = $1,
+          fire_interlock_alarm_level = $2,
+          code = COALESCE(code, $3)
+        WHERE id = $4
+      `, [zone_id, alarm_level, fire_interlock_code, equipment_id]);
+      updated = true;
+    } else if (source_system === 'switchboard') {
+      await pool.query(`
+        UPDATE switchboards SET
+          fire_interlock = true,
+          fire_interlock_zone_id = $1,
+          fire_interlock_alarm_level = $2,
+          fire_interlock_code = $3
+        WHERE id = $4
+      `, [zone_id, alarm_level, fire_interlock_code, equipment_id]);
+      updated = true;
+    } else if (source_system === 'datahub') {
+      await pool.query(`
+        UPDATE dh_items SET
+          fire_interlock = true,
+          fire_interlock_zone_id = $1,
+          fire_interlock_alarm_level = $2,
+          fire_interlock_code = $3
+        WHERE id = $4
+      `, [zone_id, alarm_level, fire_interlock_code, equipment_id]);
+      updated = true;
+    }
+
+    if (!updated) {
+      return res.status(400).json({ error: "Unknown source_system" });
+    }
+
+    // Also create/link in fc_equipment table
+    const { rows } = await pool.query(`
+      INSERT INTO fc_equipment (code, name, equipment_type, external_system, external_id)
+      SELECT $1, $1, $2, $3, $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM fc_equipment WHERE external_system = $3 AND external_id = $4
+      )
+      RETURNING *
+    `, [fire_interlock_code || equipment_id, source_system, source_system, equipment_id]);
+
+    res.json({ success: true, updated, fc_equipment: rows[0] || null });
+  } catch (err) {
+    console.error("[FireControl] Confirm match error:", err);
     res.status(500).json({ error: err.message });
   }
 });

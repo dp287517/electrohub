@@ -1104,6 +1104,22 @@ async function ensureSchema() {
       END IF;
 
       -- =====================================================
+      -- FIRE INTERLOCK: Lien avec système asservissement incendie
+      -- =====================================================
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'fire_interlock') THEN
+        ALTER TABLE switchboards ADD COLUMN fire_interlock BOOLEAN DEFAULT FALSE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'fire_interlock_zone_id') THEN
+        ALTER TABLE switchboards ADD COLUMN fire_interlock_zone_id UUID;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'fire_interlock_alarm_level') THEN
+        ALTER TABLE switchboards ADD COLUMN fire_interlock_alarm_level INTEGER DEFAULT 1;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'fire_interlock_code') THEN
+        ALTER TABLE switchboards ADD COLUMN fire_interlock_code TEXT;
+      END IF;
+
+      -- =====================================================
       -- DEVICES: Colonnes additionnelles pour scan complet
       -- =====================================================
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'curve_type') THEN
