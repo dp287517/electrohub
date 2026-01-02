@@ -1684,28 +1684,39 @@ Si rien trouvé: {"zones": [], "equipment": [], "links": []}`
 
 // Start AI matrix parsing (background job)
 app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
+  const startTime = Date.now();
+  console.log(`[FireControl] AI parse request received at ${new Date().toISOString()}`);
+
   try {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
     const userEmail = req.headers['x-user-email'] || 'unknown';
+    console.log(`[FireControl] AI parse - tenant extracted: ${Date.now() - startTime}ms`);
 
     // Check if OpenAI is available
     if (!openai) {
+      console.log(`[FireControl] AI parse - OpenAI not available, returning 503`);
       return res.status(503).json({ error: "Service IA non disponible. Vérifiez la configuration OPENAI_API_KEY." });
     }
+    console.log(`[FireControl] AI parse - OpenAI check passed: ${Date.now() - startTime}ms`);
 
     // Check if matrix exists
+    console.log(`[FireControl] AI parse - checking matrix exists...`);
     const { rows } = await pool.query(
       `SELECT id, name FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
       [id, tenant.companyId, tenant.siteId]
     );
+    console.log(`[FireControl] AI parse - matrix query done: ${Date.now() - startTime}ms, found: ${rows.length}`);
+
     if (!rows.length) {
+      console.log(`[FireControl] AI parse - matrix not found, returning 404`);
       return res.status(404).json({ error: "Matrix not found" });
     }
 
     // Check for existing active job
     for (const [existingJobId, existingJob] of matrixParseJobs) {
       if (existingJob.matrix_id === id && (existingJob.status === 'pending' || existingJob.status === 'analyzing')) {
+        console.log(`[FireControl] AI parse - reusing existing job ${existingJobId}: ${Date.now() - startTime}ms`);
         return res.json({
           job_id: existingJobId,
           status: existingJob.status,
@@ -1732,20 +1743,25 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
       site_id: tenant.siteId
     };
     matrixParseJobs.set(jobId, job);
-    await saveMatrixParseJob(job);
+    console.log(`[FireControl] AI parse - job created in memory: ${Date.now() - startTime}ms`);
 
-    console.log(`[FireControl] Created parse job ${jobId} for matrix ${id}`);
+    // Save to DB (non-blocking - don't await)
+    saveMatrixParseJob(job).catch(e => console.warn(`[FireControl] Failed to save initial job: ${e.message}`));
+    console.log(`[FireControl] AI parse - job save initiated (non-blocking): ${Date.now() - startTime}ms`);
 
-    // Return immediately
+    // Return immediately BEFORE any heavy processing
+    console.log(`[FireControl] AI parse - sending response NOW: ${Date.now() - startTime}ms`);
     res.json({
       job_id: jobId,
       status: 'pending',
       message: 'Analyse démarrée en arrière-plan',
       poll_url: `/api/fire-control/matrix-parse-job/${jobId}`
     });
+    console.log(`[FireControl] AI parse - response sent: ${Date.now() - startTime}ms`);
 
-    // Start background processing
+    // Start background processing AFTER response is sent
     setImmediate(async () => {
+      console.log(`[FireControl] AI parse - starting background processing for ${jobId}`);
       try {
         await processMatrixParse(jobId, id, tenant, userEmail);
       } catch (bgError) {
