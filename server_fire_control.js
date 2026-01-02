@@ -20,8 +20,18 @@ import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.j
 import { notifyEquipmentCreated, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notify } from "./lib/push-notify.js";
 import OpenAI from "openai";
 
-// OpenAI client for AI analysis
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// OpenAI client for AI analysis (optional - only if API key is configured)
+let openai = null;
+try {
+  if (process.env.OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log("[FireControl] OpenAI client initialized");
+  } else {
+    console.warn("[FireControl] OPENAI_API_KEY not set - AI parsing disabled");
+  }
+} catch (e) {
+  console.warn("[FireControl] OpenAI init error:", e.message);
+}
 
 // PDF parsing
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -1678,6 +1688,11 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
     const userEmail = req.headers['x-user-email'] || 'unknown';
+
+    // Check if OpenAI is available
+    if (!openai) {
+      return res.status(503).json({ error: "Service IA non disponible. Vérifiez la configuration OPENAI_API_KEY." });
+    }
 
     // Check if matrix exists
     const { rows } = await pool.query(
