@@ -1,6 +1,6 @@
 // src/pages/FireControl.jsx
 // Fire Control - Contrôle des asservissements incendie
-// VERSION 1.0
+// VERSION 2.0 - Architecture ZONE-CENTRIC (pas détecteur-centric)
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
@@ -69,10 +69,11 @@ export default function FireControl() {
   const [campaigns, setCampaigns] = useState([]);
   const [matrices, setMatrices] = useState([]);
   const [plans, setPlans] = useState([]);
-  const [detectors, setDetectors] = useState([]);
-  const [checks, setChecks] = useState([]);
+  const [zones, setZones] = useState([]);
+  const [zoneChecks, setZoneChecks] = useState([]);
   const [schedule, setSchedule] = useState([]);
   const [buildings, setBuildings] = useState([]);
+  const [equipmentTypes, setEquipmentTypes] = useState({});
 
   // Filter states
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -85,11 +86,10 @@ export default function FireControl() {
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [showUploadMatrixModal, setShowUploadMatrixModal] = useState(false);
   const [showUploadPlanModal, setShowUploadPlanModal] = useState(false);
-  const [showCheckModal, setShowCheckModal] = useState(false);
+  const [showZoneCheckModal, setShowZoneCheckModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState(null);
-  const [selectedCheck, setSelectedCheck] = useState(null);
-  const [selectedDetector, setSelectedDetector] = useState(null);
+  const [selectedZoneCheck, setSelectedZoneCheck] = useState(null);
 
   // =============================================================================
   // DATA LOADING
@@ -139,30 +139,38 @@ export default function FireControl() {
     }
   }, []);
 
-  const loadDetectors = useCallback(async () => {
+  const loadZones = useCallback(async () => {
     try {
       const params = {};
       if (selectedBuilding) params.building = selectedBuilding;
       if (selectedFloor) params.floor = selectedFloor;
-      const data = await api.fireControl.listDetectors(params);
-      setDetectors(data || []);
+      const data = await api.fireControl.listZones(params);
+      setZones(data || []);
     } catch (err) {
-      console.error("Failed to load detectors:", err);
+      console.error("Failed to load zones:", err);
     }
   }, [selectedBuilding, selectedFloor]);
 
-  const loadChecks = useCallback(async () => {
+  const loadZoneChecks = useCallback(async () => {
     try {
       const params = {};
       if (selectedCampaign) params.campaign_id = selectedCampaign;
       if (selectedBuilding) params.building = selectedBuilding;
-      if (selectedFloor) params.floor = selectedFloor;
-      const data = await api.fireControl.listChecks(params);
-      setChecks(data || []);
+      const data = await api.fireControl.listZoneChecks(params);
+      setZoneChecks(data || []);
     } catch (err) {
-      console.error("Failed to load checks:", err);
+      console.error("Failed to load zone checks:", err);
     }
-  }, [selectedCampaign, selectedBuilding, selectedFloor]);
+  }, [selectedCampaign, selectedBuilding]);
+
+  const loadEquipmentTypes = useCallback(async () => {
+    try {
+      const data = await api.fireControl.getEquipmentTypes();
+      setEquipmentTypes(data || {});
+    } catch (err) {
+      console.error("Failed to load equipment types:", err);
+    }
+  }, []);
 
   const loadSchedule = useCallback(async () => {
     try {
@@ -182,11 +190,12 @@ export default function FireControl() {
         loadMatrices(),
         loadPlans(),
         loadBuildings(),
+        loadEquipmentTypes(),
       ]);
     } finally {
       setLoading(false);
     }
-  }, [loadDashboard, loadCampaigns, loadMatrices, loadPlans, loadBuildings]);
+  }, [loadDashboard, loadCampaigns, loadMatrices, loadPlans, loadBuildings, loadEquipmentTypes]);
 
   useEffect(() => {
     loadAll();
@@ -194,12 +203,12 @@ export default function FireControl() {
 
   useEffect(() => {
     if (activeTab === "controls") {
-      loadDetectors();
-      loadChecks();
+      loadZones();
+      loadZoneChecks();
     } else if (activeTab === "schedule") {
       loadSchedule();
     }
-  }, [activeTab, loadDetectors, loadChecks, loadSchedule]);
+  }, [activeTab, loadZones, loadZoneChecks, loadSchedule]);
 
   // Update URL when tab changes
   useEffect(() => {
@@ -271,22 +280,34 @@ export default function FireControl() {
     try {
       const result = await api.fireControl.generateChecks(campaignId, {
         building: selectedBuilding || undefined,
-        floor: selectedFloor || undefined,
       });
-      showToast(`${result.created_count} contrôles générés`);
-      loadChecks();
+      showToast(`${result.created_count} zone(s) à contrôler`);
+      loadZoneChecks();
       loadDashboard();
     } catch (err) {
       showToast(err.message, "error");
     }
   };
 
-  const handleUpdateCheck = async (checkId, data) => {
+  const handleUpdateZoneCheck = async (zoneCheckId, data) => {
     try {
-      await api.fireControl.updateCheck(checkId, data);
+      await api.fireControl.updateZoneCheckResults(zoneCheckId, data);
       showToast("Contrôle mis à jour");
-      loadChecks();
+      loadZoneChecks();
       loadDashboard();
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  const handleUpdateEquipmentResult = async (resultId, data) => {
+    try {
+      await api.fireControl.updateEquipmentResult(resultId, data);
+      // Reload the current zone check
+      if (selectedZoneCheck) {
+        const updated = await api.fireControl.getZoneCheck(selectedZoneCheck.id);
+        setSelectedZoneCheck(updated);
+      }
     } catch (err) {
       showToast(err.message, "error");
     }
@@ -317,26 +338,28 @@ export default function FireControl() {
   // =============================================================================
   // COMPUTED VALUES
   // =============================================================================
-  const filteredChecks = useMemo(() => {
-    if (!searchQuery) return checks;
+  const filteredZoneChecks = useMemo(() => {
+    if (!searchQuery) return zoneChecks;
     const q = searchQuery.toLowerCase();
-    return checks.filter(
+    return zoneChecks.filter(
       (c) =>
-        c.detector_number?.toLowerCase().includes(q) ||
+        c.zone_code?.toLowerCase().includes(q) ||
+        c.zone_name?.toLowerCase().includes(q) ||
         c.building?.toLowerCase().includes(q) ||
         c.floor?.toLowerCase().includes(q) ||
-        c.zone?.toLowerCase().includes(q)
+        c.access_point?.toLowerCase().includes(q)
     );
-  }, [checks, searchQuery]);
+  }, [zoneChecks, searchQuery]);
 
   const checkStats = useMemo(() => {
-    const total = checks.length;
-    const passed = checks.filter((c) => c.status === "passed").length;
-    const failed = checks.filter((c) => c.status === "failed").length;
-    const pending = checks.filter((c) => c.status === "pending").length;
-    const partial = checks.filter((c) => c.status === "partial").length;
-    return { total, passed, failed, pending, partial };
-  }, [checks]);
+    const total = zoneChecks.length;
+    const passed = zoneChecks.filter((c) => c.status === "passed").length;
+    const failed = zoneChecks.filter((c) => c.status === "failed").length;
+    const pending = zoneChecks.filter((c) => c.status === "pending").length;
+    const partial = zoneChecks.filter((c) => c.status === "partial").length;
+    const inProgress = zoneChecks.filter((c) => c.status === "in_progress").length;
+    return { total, passed, failed, pending, partial, inProgress };
+  }, [zoneChecks]);
 
   const buildingOptions = useMemo(() => {
     const unique = [...new Set(plans.map((p) => p.building).filter(Boolean))];
@@ -508,25 +531,23 @@ export default function FireControl() {
 
             {activeTab === "controls" && (
               <ControlsTab
-                checks={filteredChecks}
+                zoneChecks={filteredZoneChecks}
                 checkStats={checkStats}
                 campaigns={campaigns}
                 selectedCampaign={selectedCampaign}
                 onSelectCampaign={setSelectedCampaign}
                 selectedBuilding={selectedBuilding}
                 onSelectBuilding={setSelectedBuilding}
-                selectedFloor={selectedFloor}
-                onSelectFloor={setSelectedFloor}
                 buildingOptions={buildingOptions}
-                floorOptions={floorOptions}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
-                onUpdateCheck={handleUpdateCheck}
-                onSelectCheck={(c) => {
-                  setSelectedCheck(c);
-                  setShowCheckModal(true);
+                onSelectZoneCheck={async (c) => {
+                  // Load full zone check with equipment results
+                  const fullCheck = await api.fireControl.getZoneCheck(c.id);
+                  setSelectedZoneCheck(fullCheck);
+                  setShowZoneCheckModal(true);
                 }}
-                onRefresh={loadChecks}
+                onRefresh={loadZoneChecks}
               />
             )}
 
@@ -572,16 +593,18 @@ export default function FireControl() {
         />
       )}
 
-      {showCheckModal && selectedCheck && (
-        <CheckModal
-          check={selectedCheck}
+      {showZoneCheckModal && selectedZoneCheck && (
+        <ZoneCheckModal
+          zoneCheck={selectedZoneCheck}
+          equipmentTypes={equipmentTypes}
+          onUpdateResult={handleUpdateEquipmentResult}
           onSave={(data) => {
-            handleUpdateCheck(selectedCheck.id, data);
-            setShowCheckModal(false);
+            handleUpdateZoneCheck(selectedZoneCheck.id, data);
+            setShowZoneCheckModal(false);
           }}
           onClose={() => {
-            setShowCheckModal(false);
-            setSelectedCheck(null);
+            setShowZoneCheckModal(false);
+            setSelectedZoneCheck(null);
           }}
         />
       )}
@@ -660,7 +683,7 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-medium">{bld.building || "Non défini"}</span>
                   <span className="text-sm text-gray-500">
-                    {bld.detector_count} détecteurs
+                    {bld.zone_count || 0} zones
                   </span>
                 </div>
                 <div className="flex gap-2 text-sm">
@@ -682,7 +705,7 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
           </div>
         ) : (
           <p className="text-gray-500 text-center py-6 sm:py-8 text-sm sm:text-base">
-            Aucun bâtiment configuré. Uploadez des plans pour commencer.
+            Aucun bâtiment configuré. Uploadez des plans et configurez les zones.
           </p>
         )}
       </div>
@@ -989,29 +1012,25 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onUploadPlan, onRefresh
 }
 
 // =============================================================================
-// CONTROLS TAB
+// CONTROLS TAB - Zone-centric
 // =============================================================================
 function ControlsTab({
-  checks,
+  zoneChecks,
   checkStats,
   campaigns,
   selectedCampaign,
   onSelectCampaign,
   selectedBuilding,
   onSelectBuilding,
-  selectedFloor,
-  onSelectFloor,
   buildingOptions,
-  floorOptions,
   searchQuery,
   onSearchChange,
-  onUpdateCheck,
-  onSelectCheck,
+  onSelectZoneCheck,
   onRefresh,
 }) {
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Filters - Stack on mobile */}
+      {/* Filters */}
       <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4">
         <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-4 sm:items-center">
           <div className="w-full sm:flex-1 sm:min-w-[200px]">
@@ -1019,7 +1038,7 @@ function ControlsTab({
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                placeholder="Rechercher..."
+                placeholder="Rechercher zone, bâtiment..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border rounded-lg text-sm"
@@ -1043,10 +1062,7 @@ function ControlsTab({
 
             <select
               value={selectedBuilding}
-              onChange={(e) => {
-                onSelectBuilding(e.target.value);
-                onSelectFloor("");
-              }}
+              onChange={(e) => onSelectBuilding(e.target.value)}
               className="px-2 sm:px-3 py-2 border rounded-lg text-xs sm:text-sm min-w-0 flex-shrink"
             >
               <option value="">Bâtiment</option>
@@ -1056,21 +1072,6 @@ function ControlsTab({
                 </option>
               ))}
             </select>
-
-            {selectedBuilding && floorOptions.length > 0 && (
-              <select
-                value={selectedFloor}
-                onChange={(e) => onSelectFloor(e.target.value)}
-                className="px-2 sm:px-3 py-2 border rounded-lg text-xs sm:text-sm min-w-0 flex-shrink"
-              >
-                <option value="">Étage</option>
-                {floorOptions.map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
-            )}
 
             <button
               onClick={onRefresh}
@@ -1082,10 +1083,10 @@ function ControlsTab({
         </div>
       </div>
 
-      {/* Stats bar - Compact on mobile */}
+      {/* Stats bar */}
       <div className="flex gap-2 sm:gap-4 flex-wrap">
         <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-gray-100 rounded-lg text-xs sm:text-sm">
-          <span className="text-gray-600">Total:</span>
+          <span className="text-gray-600">Zones:</span>
           <span className="font-semibold">{checkStats.total}</span>
         </div>
         <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 bg-green-100 rounded-lg text-xs sm:text-sm">
@@ -1100,62 +1101,71 @@ function ControlsTab({
           <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-600" />
           <span className="font-semibold text-yellow-700">{checkStats.pending}</span>
         </div>
+        {checkStats.inProgress > 0 && (
+          <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 bg-blue-100 rounded-lg text-xs sm:text-sm">
+            <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600" />
+            <span className="font-semibold text-blue-700">{checkStats.inProgress}</span>
+          </div>
+        )}
       </div>
 
-      {/* Checks list - Cards on mobile, Table on desktop */}
-      {checks.length === 0 ? (
+      {/* Zone checks list */}
+      {zoneChecks.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border p-8 sm:p-12 text-center">
           <ClipboardCheck className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-gray-300 mb-4" />
           <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
-            Aucun contrôle
+            Aucun contrôle de zone
           </h3>
           <p className="text-sm text-gray-500">
-            Sélectionnez une campagne et générez les contrôles
+            Sélectionnez une campagne et générez les contrôles par zone
           </p>
         </div>
       ) : (
         <>
           {/* Mobile: Cards */}
           <div className="sm:hidden space-y-3">
-            {checks.map((check) => (
+            {zoneChecks.map((check) => (
               <div
                 key={check.id}
-                onClick={() => onSelectCheck(check)}
+                onClick={() => onSelectZoneCheck(check)}
                 className="bg-white rounded-xl shadow-sm border p-4 cursor-pointer active:bg-gray-50"
               >
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <CircleDot className="w-4 h-4 text-orange-500" />
-                    <span className="font-semibold text-sm">{check.detector_number}</span>
+                    <Layers className="w-4 h-4 text-orange-500" />
+                    <span className="font-semibold text-sm">{check.zone_code}</span>
                   </div>
                   <CheckStatusBadge status={check.status} />
                 </div>
+                <p className="text-xs text-gray-700 mb-1">{check.zone_name}</p>
                 <p className="text-xs text-gray-500 mb-3">
-                  {check.building} - {check.floor} {check.zone && `- ${check.zone}`}
+                  {check.building} {check.floor && `- ${check.floor}`} {check.access_point && `- ${check.access_point}`}
                 </p>
                 <div className="flex items-center justify-between">
-                  <div className="flex gap-4">
+                  <div className="flex gap-4 text-xs">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-500">AL1:</span>
-                      {check.alarm1_ok === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                      {check.alarm1_ok === false && <XCircle className="w-4 h-4 text-red-500" />}
-                      {check.alarm1_ok === null && <span className="text-gray-300 text-xs">-</span>}
+                      <span className="text-gray-500">AL1:</span>
+                      {check.alarm1_triggered === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                      {check.alarm1_triggered === false && <XCircle className="w-4 h-4 text-red-500" />}
+                      {check.alarm1_triggered == null && <span className="text-gray-300">-</span>}
+                      <span className="text-gray-400">({check.equipment_count_al1 || 0})</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-500">AL2:</span>
-                      {check.alarm2_ok === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                      {check.alarm2_ok === false && <XCircle className="w-4 h-4 text-red-500" />}
-                      {check.alarm2_ok === null && <span className="text-gray-300 text-xs">-</span>}
+                      <span className="text-gray-500">AL2:</span>
+                      {check.alarm2_triggered === true && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                      {check.alarm2_triggered === false && <XCircle className="w-4 h-4 text-red-500" />}
+                      {check.alarm2_triggered == null && <span className="text-gray-300">-</span>}
+                      <span className="text-gray-400">({check.equipment_count_al2 || 0})</span>
                     </div>
                   </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelectCheck(check);
+                      onSelectZoneCheck(check);
                     }}
                     className="p-2 text-orange-600 bg-orange-50 rounded-lg"
                   >
-                    <Edit className="w-4 h-4" />
+                    <Play className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -1168,16 +1178,19 @@ function ControlsTab({
               <thead className="bg-gray-50 border-b">
                 <tr>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
-                    Détecteur
+                    Zone
                   </th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-500">
                     Localisation
                   </th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                    Alarme 1
+                    AL1 (Équip.)
                   </th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
-                    Alarme 2
+                    AL2 (Équip.)
+                  </th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
+                    Résultat
                   </th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-500">
                     Status
@@ -1188,47 +1201,62 @@ function ControlsTab({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {checks.map((check) => (
+                {zoneChecks.map((check) => (
                   <tr
                     key={check.id}
                     className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => onSelectCheck(check)}
+                    onClick={() => onSelectZoneCheck(check)}
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <CircleDot className="w-4 h-4 text-orange-500" />
-                        <span className="font-medium">{check.detector_number}</span>
+                        <Layers className="w-4 h-4 text-orange-500" />
+                        <div>
+                          <span className="font-medium">{check.zone_code}</span>
+                          <p className="text-xs text-gray-500">{check.zone_name}</p>
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-sm">
                         <p>{check.building}</p>
                         <p className="text-gray-500">
-                          {check.floor} {check.zone && `- ${check.zone}`}
+                          {check.floor} {check.access_point && `- ${check.access_point}`}
                         </p>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {check.alarm1_ok === true && (
-                        <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
-                      )}
-                      {check.alarm1_ok === false && (
-                        <XCircle className="w-5 h-5 text-red-500 mx-auto" />
-                      )}
-                      {check.alarm1_ok === null && (
-                        <span className="text-gray-300">-</span>
-                      )}
+                      <div className="flex items-center justify-center gap-1">
+                        {check.alarm1_triggered === true && (
+                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                        )}
+                        {check.alarm1_triggered === false && (
+                          <XCircle className="w-4 h-4 text-red-500" />
+                        )}
+                        {check.alarm1_triggered == null && (
+                          <span className="text-gray-300">-</span>
+                        )}
+                        <span className="text-xs text-gray-400">({check.equipment_count_al1 || 0})</span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {check.alarm2_ok === true && (
-                        <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto" />
-                      )}
-                      {check.alarm2_ok === false && (
-                        <XCircle className="w-5 h-5 text-red-500 mx-auto" />
-                      )}
-                      {check.alarm2_ok === null && (
-                        <span className="text-gray-300">-</span>
-                      )}
+                      <div className="flex items-center justify-center gap-1">
+                        {check.alarm2_triggered === true && (
+                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                        )}
+                        {check.alarm2_triggered === false && (
+                          <XCircle className="w-4 h-4 text-red-500" />
+                        )}
+                        {check.alarm2_triggered == null && (
+                          <span className="text-gray-300">-</span>
+                        )}
+                        <span className="text-xs text-gray-400">({check.equipment_count_al2 || 0})</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-2 text-xs">
+                        <span className="text-green-600">{check.ok_count || 0} OK</span>
+                        <span className="text-red-600">{check.nok_count || 0} NOK</span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <CheckStatusBadge status={check.status} />
@@ -1237,11 +1265,12 @@ function ControlsTab({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          onSelectCheck(check);
+                          onSelectZoneCheck(check);
                         }}
                         className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded"
+                        title="Effectuer le contrôle"
                       >
-                        <Edit className="w-4 h-4" />
+                        <Play className="w-4 h-4" />
                       </button>
                     </td>
                   </tr>
@@ -1787,17 +1816,50 @@ function UploadPlanModal({ buildings, onUpload, onClose }) {
   );
 }
 
-// Check Modal (for recording test results)
-function CheckModal({ check, onSave, onClose }) {
+// Zone Check Modal (for recording test results with equipment checklist)
+function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onClose }) {
   const [form, setForm] = useState({
-    alarm1_ok: check.alarm1_ok,
-    alarm2_ok: check.alarm2_ok,
-    notes: check.notes || "",
-    interlocks_checked: check.interlocks_checked || [],
+    alarm1_triggered: zoneCheck.alarm1_triggered,
+    alarm2_triggered: zoneCheck.alarm2_triggered,
+    detector_used: zoneCheck.detector_used || "",
+    notes: zoneCheck.notes || "",
   });
-  const [files, setFiles] = useState([]);
+  const [activeTab, setActiveTab] = useState("al1");
   const [saving, setSaving] = useState(false);
-  const fileInputRef = useRef(null);
+
+  const equipmentAL1 = zoneCheck.equipment_results_alarm1 || [];
+  const equipmentAL2 = zoneCheck.equipment_results_alarm2 || [];
+
+  const getEquipmentTypeLabel = (type) => {
+    const labels = {
+      pcf: "Porte CF",
+      rideau: "Rideau CF",
+      hvac: "HVAC",
+      elevator: "Ascenseur",
+      lift: "Monte-charge",
+      evacuation: "Évacuation",
+      flash: "Feu flash",
+      siren: "Sirène",
+      damper: "Clapet CF",
+      interlock: "Asservissement",
+      other: "Autre",
+    };
+    return labels[type] || type;
+  };
+
+  const getResultColor = (result) => {
+    if (result === "ok") return "bg-green-100 border-green-500 text-green-700";
+    if (result === "nok") return "bg-red-100 border-red-500 text-red-700";
+    if (result === "na") return "bg-gray-100 border-gray-400 text-gray-600";
+    return "bg-white border-gray-200";
+  };
+
+  const cycleResult = async (item) => {
+    const order = ["pending", "ok", "nok", "na"];
+    const currentIndex = order.indexOf(item.result);
+    const nextResult = order[(currentIndex + 1) % order.length];
+    await onUpdateResult(item.id, { result: nextResult });
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1816,90 +1878,159 @@ function CheckModal({ check, onSave, onClose }) {
   };
 
   return (
-    <Modal title={`Détecteur ${check.detector_number}`} onClose={onClose} size="lg">
-      <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
-        {/* Detector info */}
+    <Modal title={`Zone ${zoneCheck.zone_code}`} onClose={onClose} size="lg">
+      <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
+        {/* Zone info */}
         <div className="bg-gray-50 rounded-lg p-3 sm:p-4">
-          <div className="grid grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm">
+          <h4 className="font-medium text-sm mb-2">{zoneCheck.zone_name}</h4>
+          <div className="grid grid-cols-2 gap-2 text-xs sm:text-sm">
             <div>
               <span className="text-gray-500">Bâtiment:</span>{" "}
-              <span className="font-medium">{check.building || "-"}</span>
+              <span className="font-medium">{zoneCheck.building || "-"}</span>
             </div>
             <div>
               <span className="text-gray-500">Étage:</span>{" "}
-              <span className="font-medium">{check.floor || "-"}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Zone:</span>{" "}
-              <span className="font-medium">{check.zone || "-"}</span>
+              <span className="font-medium">{zoneCheck.floor || "-"}</span>
             </div>
             <div>
               <span className="text-gray-500">Accès:</span>{" "}
-              <span className="font-medium">{check.access_point || "-"}</span>
+              <span className="font-medium">{zoneCheck.access_point || "-"}</span>
+            </div>
+            <div>
+              <span className="text-gray-500">Détecteurs:</span>{" "}
+              <span className="font-medium">{zoneCheck.detector_numbers || "-"}</span>
             </div>
           </div>
         </div>
 
-        {/* Alarm tests */}
+        {/* Detector used for test */}
         <div>
-          <h4 className="font-medium mb-2 sm:mb-3 text-sm sm:text-base">Résultats des tests</h4>
-          <div className="grid grid-cols-2 gap-2 sm:gap-4">
-            <div
-              onClick={() => toggleAlarm("alarm1_ok")}
-              className={`p-3 sm:p-4 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
-                form.alarm1_ok === true
-                  ? "border-green-500 bg-green-50"
-                  : form.alarm1_ok === false
-                  ? "border-red-500 bg-red-50"
-                  : "border-gray-200 hover:border-gray-300"
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1 sm:mb-2">
-                <span className="font-medium text-sm sm:text-base">AL 1</span>
-                {form.alarm1_ok === true && (
-                  <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
-                )}
-                {form.alarm1_ok === false && (
-                  <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-500" />
-                )}
-                {form.alarm1_ok === null && (
-                  <span className="text-xs sm:text-sm text-gray-400">-</span>
-                )}
-              </div>
-              <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">
-                Cliquez: OK → NOK → Non testé
-              </p>
-            </div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Détecteur utilisé pour le test
+          </label>
+          <input
+            type="text"
+            value={form.detector_used}
+            onChange={(e) => setForm({ ...form, detector_used: e.target.value })}
+            placeholder="Ex: 20003"
+            className="w-full px-3 py-2 border rounded-lg text-sm"
+          />
+        </div>
 
-            <div
-              onClick={() => toggleAlarm("alarm2_ok")}
-              className={`p-3 sm:p-4 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
-                form.alarm2_ok === true
-                  ? "border-green-500 bg-green-50"
-                  : form.alarm2_ok === false
-                  ? "border-red-500 bg-red-50"
-                  : "border-gray-200 hover:border-gray-300"
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1 sm:mb-2">
-                <span className="font-medium text-sm sm:text-base">AL 2</span>
-                {form.alarm2_ok === true && (
-                  <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
-                )}
-                {form.alarm2_ok === false && (
-                  <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-500" />
-                )}
-                {form.alarm2_ok === null && (
-                  <span className="text-xs sm:text-sm text-gray-400">-</span>
-                )}
-              </div>
-              <p className="text-[10px] sm:text-xs text-gray-500 hidden sm:block">
-                Cliquez: OK → NOK → Non testé
-              </p>
+        {/* Alarm toggle buttons */}
+        <div className="grid grid-cols-2 gap-3">
+          <div
+            onClick={() => toggleAlarm("alarm1_triggered")}
+            className={`p-3 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
+              form.alarm1_triggered === true
+                ? "border-green-500 bg-green-50"
+                : form.alarm1_triggered === false
+                ? "border-red-500 bg-red-50"
+                : "border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-sm">AL 1 déclenché</span>
+              {form.alarm1_triggered === true && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+              {form.alarm1_triggered === false && <XCircle className="w-5 h-5 text-red-500" />}
+              {form.alarm1_triggered == null && <span className="text-xs text-gray-400">-</span>}
             </div>
           </div>
-          <p className="text-[10px] text-gray-400 mt-2 text-center sm:hidden">
-            Appuyez pour basculer: OK → NOK → Non testé
+          <div
+            onClick={() => toggleAlarm("alarm2_triggered")}
+            className={`p-3 border-2 rounded-lg cursor-pointer transition-all active:scale-[0.98] ${
+              form.alarm2_triggered === true
+                ? "border-green-500 bg-green-50"
+                : form.alarm2_triggered === false
+                ? "border-red-500 bg-red-50"
+                : "border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-sm">AL 2 déclenché</span>
+              {form.alarm2_triggered === true && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+              {form.alarm2_triggered === false && <XCircle className="w-5 h-5 text-red-500" />}
+              {form.alarm2_triggered == null && <span className="text-xs text-gray-400">-</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Equipment tabs */}
+        <div>
+          <div className="flex border-b">
+            <button
+              type="button"
+              onClick={() => setActiveTab("al1")}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "al1"
+                  ? "border-orange-500 text-orange-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Alarme 1 ({equipmentAL1.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("al2")}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "al2"
+                  ? "border-orange-500 text-orange-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Alarme 2 ({equipmentAL2.length})
+            </button>
+          </div>
+
+          {/* Equipment checklist */}
+          <div className="mt-3 max-h-[40vh] overflow-y-auto">
+            {activeTab === "al1" && equipmentAL1.length === 0 && (
+              <p className="text-sm text-gray-500 text-center py-4">Aucun équipement pour AL1</p>
+            )}
+            {activeTab === "al2" && equipmentAL2.length === 0 && (
+              <p className="text-sm text-gray-500 text-center py-4">Aucun équipement pour AL2</p>
+            )}
+
+            <div className="space-y-2">
+              {(activeTab === "al1" ? equipmentAL1 : equipmentAL2).map((item) => (
+                <div
+                  key={item.id}
+                  onClick={() => cycleResult(item)}
+                  className={`p-3 border rounded-lg cursor-pointer transition-all active:scale-[0.99] ${getResultColor(item.result)}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">
+                          {getEquipmentTypeLabel(item.equipment_type)}
+                        </span>
+                        <span className="font-medium text-sm truncate">{item.equipment_code}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 truncate mt-0.5">
+                        {item.equipment_name} {item.location && `- ${item.location}`}
+                      </p>
+                      {item.external_system && (
+                        <p className="text-xs text-blue-500 mt-0.5">
+                          Lié: {item.external_system} #{item.external_id}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-2">
+                      {item.result === "ok" && <CheckCircle2 className="w-6 h-6 text-green-500" />}
+                      {item.result === "nok" && <XCircle className="w-6 h-6 text-red-500" />}
+                      {item.result === "na" && <span className="text-xs font-medium text-gray-500">N/A</span>}
+                      {item.result === "pending" && (
+                        <div className="w-6 h-6 border-2 border-dashed border-gray-300 rounded-full" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-[10px] text-gray-400 mt-2 text-center">
+            Appuyez sur un équipement pour changer: - → OK → NOK → N/A
           </p>
         </div>
 
@@ -1913,61 +2044,18 @@ function CheckModal({ check, onSave, onClose }) {
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
             rows={2}
             placeholder="Ajoutez vos observations..."
-            className="w-full px-3 py-2 border rounded-lg text-sm sm:text-base"
+            className="w-full px-3 py-2 border rounded-lg text-sm"
           />
         </div>
 
-        {/* Photos */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Photos
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {files.map((f, i) => (
-              <div key={i} className="relative">
-                <img
-                  src={URL.createObjectURL(f)}
-                  alt=""
-                  className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg"
-                />
-                <button
-                  type="button"
-                  onClick={() => setFiles(files.filter((_, j) => j !== i))}
-                  className="absolute -top-1.5 -right-1.5 p-1 bg-red-500 text-white rounded-full"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="w-16 h-16 sm:w-20 sm:h-20 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center hover:border-orange-300 active:bg-gray-50"
-            >
-              <Camera className="w-5 h-5 sm:w-6 sm:h-6 text-gray-400" />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              capture="environment"
-              onChange={(e) => {
-                const newFiles = Array.from(e.target.files || []);
-                setFiles([...files, ...newFiles]);
-              }}
-              className="hidden"
-            />
-          </div>
-        </div>
-
+        {/* Actions */}
         <div className="flex gap-3 pt-4 border-t">
           <button
             type="button"
             onClick={onClose}
             className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 text-gray-700 border rounded-lg hover:bg-gray-50 text-sm"
           >
-            Annuler
+            Fermer
           </button>
           <button
             type="submit"
@@ -2181,6 +2269,7 @@ function StatusBadge({ status }) {
 function CheckStatusBadge({ status }) {
   const config = {
     pending: { label: "En attente", class: "bg-gray-100 text-gray-700" },
+    in_progress: { label: "En cours", class: "bg-blue-100 text-blue-700" },
     passed: { label: "Conforme", class: "bg-green-100 text-green-700" },
     failed: { label: "Non-conforme", class: "bg-red-100 text-red-700" },
     partial: { label: "Partiel", class: "bg-yellow-100 text-yellow-700" },

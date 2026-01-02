@@ -2742,26 +2742,43 @@ export const api = {
       withBust(`${API_BASE}/api/fire-control/plans/${encodeURIComponent(id)}/file?site=${currentSite()}`, bust),
     getPlanPositions: (planId, pageIndex = 0) => get(`/api/fire-control/plans/${encodeURIComponent(planId)}/positions`, { page_index: pageIndex }),
 
-    // ========================= DETECTORS =========================
-    listDetectors: (params) => get("/api/fire-control/detectors", params),
-    getDetector: (id) => get(`/api/fire-control/detectors/${encodeURIComponent(id)}`),
-    createDetector: (payload) => post("/api/fire-control/detectors", payload),
-    setDetectorPosition: (detectorId, payload) => post(`/api/fire-control/detectors/${encodeURIComponent(detectorId)}/position`, payload),
+    // ========================= ZONES (groupes de détecteurs) =========================
+    listZones: (params) => get("/api/fire-control/zones", params),
+    getZone: (id) => get(`/api/fire-control/zones/${encodeURIComponent(id)}`),
+    createZone: (payload) => post("/api/fire-control/zones", payload),
+    updateZone: (id, payload) => put(`/api/fire-control/zones/${encodeURIComponent(id)}`, payload),
+    deleteZone: (id) => del(`/api/fire-control/zones/${encodeURIComponent(id)}`),
 
-    // ========================= INTERLOCKS =========================
-    listInterlocks: (params) => get("/api/fire-control/interlocks", params),
+    // ========================= EQUIPMENT (asservissements) =========================
+    listEquipment: (params) => get("/api/fire-control/equipment", params),
+    getEquipment: (id) => get(`/api/fire-control/equipment/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post("/api/fire-control/equipment", payload),
+    getEquipmentTypes: () => get("/api/fire-control/equipment-types"),
+    getEquipmentByExternal: (system, externalId) => get("/api/fire-control/equipment/by-external", { system, id: externalId }),
+    linkEquipmentExternal: (id, payload) => post(`/api/fire-control/equipment/${encodeURIComponent(id)}/link-external`, payload),
 
-    // ========================= CHECKS (Controls) =========================
-    listChecks: (params) => get("/api/fire-control/checks", params),
-    createCheck: (payload) => post("/api/fire-control/checks", payload),
-    updateCheck: (id, payload) => put(`/api/fire-control/checks/${encodeURIComponent(id)}`, payload),
-    listCheckFiles: (checkId) => get(`/api/fire-control/checks/${encodeURIComponent(checkId)}/files`),
-    uploadCheckFile: (checkId, file, fileType = 'photo') => {
+    // ========================= ZONE-EQUIPMENT LINKS =========================
+    linkZoneEquipment: (payload) => post("/api/fire-control/zone-equipment", payload),
+    unlinkZoneEquipment: (zoneId, equipmentId, alarmLevel) =>
+      del(`/api/fire-control/zone-equipment/${encodeURIComponent(zoneId)}/${encodeURIComponent(equipmentId)}/${alarmLevel}`),
+
+    // ========================= ZONE CHECKS (Contrôles par zone) =========================
+    listZoneChecks: (params) => get("/api/fire-control/zone-checks", params),
+    getZoneCheck: (id) => get(`/api/fire-control/zone-checks/${encodeURIComponent(id)}`),
+    startZoneCheck: (id, payload) => post(`/api/fire-control/zone-checks/${encodeURIComponent(id)}/start`, payload),
+    updateZoneCheckResults: (id, payload) => put(`/api/fire-control/zone-checks/${encodeURIComponent(id)}/results`, payload),
+    uploadZoneCheckFile: (zoneCheckId, file, extra = {}) => {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("file_type", fileType);
-      return upload(`/api/fire-control/checks/${encodeURIComponent(checkId)}/files`, fd);
+      if (extra.file_type) fd.append("file_type", extra.file_type);
+      if (extra.equipment_result_id) fd.append("equipment_result_id", extra.equipment_result_id);
+      return upload(`/api/fire-control/zone-checks/${encodeURIComponent(zoneCheckId)}/files`, fd);
     },
+
+    // ========================= EQUIPMENT RESULTS =========================
+    updateEquipmentResult: (id, payload) => put(`/api/fire-control/equipment-results/${encodeURIComponent(id)}`, payload),
+
+    // ========================= FILES =========================
     fileUrl: (fileId, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/fire-control/files/${encodeURIComponent(fileId)}?site=${currentSite()}`, bust),
 
@@ -2786,24 +2803,18 @@ export const api = {
     // Get plan file URL for PDF display
     planFileUrl: (plan, { bust = false } = {}) => {
       const key = plan?.id || plan?.logical_name || plan;
-      const idParam = typeof key === 'number' ? `id=${key}` : `logical_name=${encodeURIComponent(key)}`;
+      const idParam = typeof key === 'string' && key.match(/^[0-9a-f-]{36}$/i) ? `id=${key}` : `logical_name=${encodeURIComponent(key)}`;
       return withBust(`${API_BASE}/api/fire-control/maps/planFile?${idParam}&site=${currentSite()}`, bust);
     },
 
-    // Get positions for a plan (markers on map)
-    positions: (planKey, pageIndex = 0) => {
-      const idParam = typeof planKey === 'number' ? `id=${planKey}` : `logical_name=${encodeURIComponent(planKey)}`;
-      return get(`/api/fire-control/maps/positions?${idParam}&page_index=${pageIndex}`);
-    },
+    // Get positions for a plan (zones and equipment markers)
+    positions: (planId, pageIndex = 0) => get("/api/fire-control/maps/positions", { plan_id: planId, page_index: pageIndex }),
 
-    // Set position for a detector on a plan
-    setPosition: (detectorId, payload) => post("/api/fire-control/maps/setPosition", { detector_id: detectorId, ...payload }),
+    // Set position for a zone or equipment on a plan
+    setPosition: (payload) => post("/api/fire-control/maps/setPosition", payload),
 
     // Delete a position
     deletePosition: (positionId) => del(`/api/fire-control/maps/positions/${encodeURIComponent(positionId)}`),
-
-    // Get all placed detector IDs
-    placedIds: () => get("/api/fire-control/maps/placed-ids"),
   },
 };
 

@@ -1,7 +1,7 @@
 // ==============================
 // server_fire_control.js — Fire Control Interlocking Tests microservice (ESM)
 // Port: 3018
-// ✅ VERSION 1.0 - Contrôle des asservissements incendie
+// ✅ VERSION 2.0 - Architecture ZONE-CENTRIC (pas détecteur-centric)
 // ==============================
 
 import express from "express";
@@ -17,7 +17,7 @@ import pg from "pg";
 import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
 import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
-import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notifyUser, notify } from "./lib/push-notify.js";
+import { notifyEquipmentCreated, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notify } from "./lib/push-notify.js";
 
 // PDF parsing
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -65,13 +65,7 @@ app.use(
   cors({
     origin: true,
     credentials: true,
-    allowedHeaders: [
-      "Content-Type",
-      "X-User-Email",
-      "X-User-Name",
-      "X-Site",
-      "Authorization",
-    ],
+    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name", "X-Site", "Authorization"],
     exposedHeaders: [],
   })
 );
@@ -129,7 +123,6 @@ const pool = new Pool({
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
 
-// Audit trail
 const audit = createAuditTrail(pool, "fire_control");
 
 async function ensureSchema() {
@@ -154,7 +147,6 @@ async function ensureSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_campaigns_year ON fc_campaigns(year);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_campaigns_company ON fc_campaigns(company_id);`);
 
   // 2. Matrices d'asservissement (PDFs uploadés)
   await pool.query(`
@@ -174,7 +166,6 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_matrices_campaign ON fc_matrices(campaign_id);`);
 
   // 3. Plans de bâtiments (PDFs)
   await pool.query(`
@@ -195,89 +186,120 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_plans_building ON fc_building_plans(building);`);
 
-  // 4. Détecteurs (extraits des matrices ou créés manuellement)
+  // 4. ZONES DE DÉTECTION (nouveau modèle - groupes de détecteurs)
+  // Une zone = un groupe de détecteurs qui déclenchent les mêmes asservissements
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS fc_detectors (
+    CREATE TABLE IF NOT EXISTS fc_zones (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      detector_number TEXT NOT NULL,
-      detector_type TEXT DEFAULT 'smoke',
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
       building TEXT,
       floor TEXT,
-      zone TEXT,
       access_point TEXT,
-      location_description TEXT,
       station INT,
+      detector_numbers TEXT,
+      detector_type TEXT DEFAULT 'smoke',
       matrix_id UUID REFERENCES fc_matrices(id) ON DELETE SET NULL,
       company_id INT,
       site_id INT,
       created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(code, company_id, site_id)
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_detectors_building ON fc_detectors(building, floor);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_detectors_number ON fc_detectors(detector_number);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_zones_building ON fc_zones(building, floor);`);
 
-  // 5. Asservissements (actions déclenchées par les détecteurs)
+  // 5. ÉQUIPEMENTS / INTERLOCKS (asservissements)
+  // Avec liens vers systèmes externes (Doors, Switchboard, DataHub)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS fc_interlocks (
+    CREATE TABLE IF NOT EXISTS fc_equipment (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code TEXT NOT NULL,
       name TEXT NOT NULL,
-      interlock_type TEXT,
-      command TEXT,
-      action TEXT,
+      equipment_type TEXT NOT NULL,
+      category TEXT,
+      building TEXT,
+      floor TEXT,
       location TEXT,
-      fdcio_info TEXT,
-      station INT,
+      fdcio_module TEXT,
+      fdcio_output TEXT,
+      external_system TEXT,
+      external_id TEXT,
       matrix_id UUID REFERENCES fc_matrices(id) ON DELETE SET NULL,
       company_id INT,
       site_id INT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(code, company_id, site_id)
     );
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_equipment_type ON fc_equipment(equipment_type);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_equipment_external ON fc_equipment(external_system, external_id);`);
 
-  // 6. Liens détecteur <-> asservissement (matrice)
+  // 6. ZONE <-> EQUIPMENT mapping (quel équipement est activé par quelle zone)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS fc_detector_interlocks (
+    CREATE TABLE IF NOT EXISTS fc_zone_equipment (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      detector_id UUID REFERENCES fc_detectors(id) ON DELETE CASCADE,
-      interlock_id UUID REFERENCES fc_interlocks(id) ON DELETE CASCADE,
-      alarm_type TEXT,
+      zone_id UUID REFERENCES fc_zones(id) ON DELETE CASCADE,
+      equipment_id UUID REFERENCES fc_equipment(id) ON DELETE CASCADE,
+      alarm_level INT NOT NULL DEFAULT 1,
+      action_type TEXT DEFAULT 'activate',
+      notes TEXT,
       matrix_id UUID REFERENCES fc_matrices(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT now(),
-      UNIQUE(detector_id, interlock_id, alarm_type)
+      UNIQUE(zone_id, equipment_id, alarm_level)
     );
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_zone_equipment_zone ON fc_zone_equipment(zone_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_zone_equipment_alarm ON fc_zone_equipment(alarm_level);`);
 
-  // 7. Contrôles (checklist items)
+  // 7. CONTRÔLES PAR ZONE (pas par détecteur!)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS fc_checks (
+    CREATE TABLE IF NOT EXISTS fc_zone_checks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       campaign_id UUID REFERENCES fc_campaigns(id) ON DELETE CASCADE,
-      detector_id UUID REFERENCES fc_detectors(id) ON DELETE CASCADE,
+      zone_id UUID REFERENCES fc_zones(id) ON DELETE CASCADE,
       check_date TIMESTAMPTZ,
       status TEXT DEFAULT 'pending',
-      alarm1_ok BOOLEAN,
-      alarm2_ok BOOLEAN,
-      interlocks_checked JSONB DEFAULT '[]'::jsonb,
+      alarm1_triggered BOOLEAN,
+      alarm2_triggered BOOLEAN,
+      detector_used TEXT,
       notes TEXT,
       checked_by_email TEXT,
       checked_by_name TEXT,
       company_id INT,
       site_id INT,
       created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(campaign_id, zone_id)
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_checks_campaign ON fc_checks(campaign_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_checks_detector ON fc_checks(detector_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_zone_checks_campaign ON fc_zone_checks(campaign_id);`);
 
-  // 8. Photos et fichiers attachés aux contrôles
+  // 8. RÉSULTATS PAR ÉQUIPEMENT (pour chaque contrôle de zone)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fc_equipment_results (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      zone_check_id UUID REFERENCES fc_zone_checks(id) ON DELETE CASCADE,
+      equipment_id UUID REFERENCES fc_equipment(id) ON DELETE CASCADE,
+      alarm_level INT NOT NULL,
+      result TEXT DEFAULT 'pending',
+      response_time_ms INT,
+      notes TEXT,
+      checked_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(zone_check_id, equipment_id, alarm_level)
+    );
+  `);
+
+  // 9. Photos et fichiers attachés aux contrôles
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fc_check_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      check_id UUID REFERENCES fc_checks(id) ON DELETE CASCADE,
+      zone_check_id UUID REFERENCES fc_zone_checks(id) ON DELETE CASCADE,
+      equipment_result_id UUID REFERENCES fc_equipment_results(id) ON DELETE SET NULL,
       filename TEXT,
       file_path TEXT,
       content BYTEA,
@@ -289,22 +311,23 @@ async function ensureSchema() {
     );
   `);
 
-  // 9. Positions des détecteurs sur les plans
+  // 10. Positions des zones/équipements sur les plans
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS fc_detector_positions (
+    CREATE TABLE IF NOT EXISTS fc_map_positions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      detector_id UUID REFERENCES fc_detectors(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL,
+      entity_id UUID NOT NULL,
       plan_id UUID REFERENCES fc_building_plans(id) ON DELETE CASCADE,
       page_index INT DEFAULT 0,
       x_frac NUMERIC,
       y_frac NUMERIC,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now(),
-      UNIQUE(detector_id, plan_id, page_index)
+      UNIQUE(entity_type, entity_id, plan_id, page_index)
     );
   `);
 
-  // 10. Rapports générés
+  // 11. Rapports générés
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fc_reports (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,7 +344,7 @@ async function ensureSchema() {
     );
   `);
 
-  // 11. Calendrier de suivi
+  // 12. Calendrier de suivi
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fc_schedule (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -339,10 +362,29 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fc_schedule_date ON fc_schedule(scheduled_date);`);
 
-  // Ensure audit table
-  await audit.ensureTable();
+  // Legacy tables for migration (keep fc_detectors, fc_checks for now)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fc_detectors (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      detector_number TEXT NOT NULL,
+      detector_type TEXT DEFAULT 'smoke',
+      building TEXT,
+      floor TEXT,
+      zone TEXT,
+      access_point TEXT,
+      location_description TEXT,
+      station INT,
+      zone_id UUID REFERENCES fc_zones(id) ON DELETE SET NULL,
+      matrix_id UUID REFERENCES fc_matrices(id) ON DELETE SET NULL,
+      company_id INT,
+      site_id INT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
 
-  console.log("[FireControl] Schema ensured");
+  await audit.ensureTable();
+  console.log("[FireControl] Schema v2.0 ensured (zone-centric)");
 }
 
 // ------------------------------
@@ -355,7 +397,38 @@ function getIdentityFromReq(req) {
   };
 }
 
-// Parse detector ranges like "20001-20005,20009" into individual numbers
+// Equipment types
+const EQUIPMENT_TYPES = {
+  PCF: 'pcf',           // Porte Coupe-Feu
+  RIDEAU_CF: 'rideau',  // Rideau coupe-feu
+  HVAC: 'hvac',         // Ventilation/Climatisation
+  ASCENSEUR: 'elevator',
+  MONTE_CHARGE: 'lift',
+  EVACUATION: 'evacuation',
+  FLASH: 'flash',       // Feu flash
+  SIRENE: 'siren',
+  CLAPET: 'damper',     // Clapet CF
+  INTERLOCK: 'interlock',
+  OTHER: 'other'
+};
+
+// Status helpers
+const CHECK_STATUS = {
+  PENDING: "pending",
+  IN_PROGRESS: "in_progress",
+  PASSED: "passed",
+  FAILED: "failed",
+  PARTIAL: "partial",
+};
+
+const RESULT_STATUS = {
+  PENDING: "pending",
+  OK: "ok",
+  NOK: "nok",
+  NA: "na",  // Not applicable
+};
+
+// Parse detector ranges like "20001-20005,20009" into array
 function parseDetectorRange(rangeStr) {
   if (!rangeStr) return [];
   const detectors = [];
@@ -376,32 +449,34 @@ function parseDetectorRange(rangeStr) {
   return detectors;
 }
 
-// Status helpers
-const CAMPAIGN_STATUS = {
-  PLANNED: "planned",
-  IN_PROGRESS: "in_progress",
-  COMPLETED: "completed",
-  CANCELLED: "cancelled",
-};
+// Calculate zone check status based on equipment results
+function calculateZoneCheckStatus(results) {
+  if (!results || results.length === 0) return CHECK_STATUS.PENDING;
 
-const CHECK_STATUS = {
-  PENDING: "pending",
-  PASSED: "passed",
-  FAILED: "failed",
-  PARTIAL: "partial",
-};
+  const pending = results.filter(r => r.result === RESULT_STATUS.PENDING).length;
+  const ok = results.filter(r => r.result === RESULT_STATUS.OK).length;
+  const nok = results.filter(r => r.result === RESULT_STATUS.NOK).length;
+  const na = results.filter(r => r.result === RESULT_STATUS.NA).length;
+
+  const relevant = results.length - na;
+
+  if (pending === results.length) return CHECK_STATUS.PENDING;
+  if (pending > 0) return CHECK_STATUS.IN_PROGRESS;
+  if (nok === 0 && ok === relevant) return CHECK_STATUS.PASSED;
+  if (ok === 0) return CHECK_STATUS.FAILED;
+  return CHECK_STATUS.PARTIAL;
+}
 
 // ------------------------------
 // ROUTES: Campaigns
 // ------------------------------
 
-// List campaigns
 app.get("/api/fire-control/campaigns", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
-
     const { year, status } = req.query;
+
     let sql = `SELECT * FROM fc_campaigns WHERE ${filter.where}`;
     const params = [...filter.params];
 
@@ -415,7 +490,6 @@ app.get("/api/fire-control/campaigns", async (req, res) => {
     }
 
     sql += ` ORDER BY year DESC, created_at DESC`;
-
     const { rows } = await pool.query(sql, params);
     res.json(rows);
   } catch (err) {
@@ -424,21 +498,21 @@ app.get("/api/fire-control/campaigns", async (req, res) => {
   }
 });
 
-// Get campaign by ID with stats
 app.get("/api/fire-control/campaigns/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`SELECT * FROM fc_campaigns WHERE id = $1`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Campaign not found" });
 
-    // Get check stats
+    // Get zone check stats
     const statsRes = await pool.query(`
       SELECT
-        COUNT(*) as total_checks,
+        COUNT(*) as total_zones,
         COUNT(*) FILTER (WHERE status = 'passed') as passed,
         COUNT(*) FILTER (WHERE status = 'failed') as failed,
+        COUNT(*) FILTER (WHERE status = 'partial') as partial,
         COUNT(*) FILTER (WHERE status = 'pending') as pending
-      FROM fc_checks WHERE campaign_id = $1
+      FROM fc_zone_checks WHERE campaign_id = $1
     `, [id]);
 
     res.json({ ...rows[0], stats: statsRes.rows[0] });
@@ -448,7 +522,6 @@ app.get("/api/fire-control/campaigns/:id", async (req, res) => {
   }
 });
 
-// Create campaign
 app.post("/api/fire-control/campaigns", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
@@ -467,7 +540,6 @@ app.post("/api/fire-control/campaigns", async (req, res) => {
       details: { name: campName, year },
     });
 
-    // Send push notification
     notifyEquipmentCreated('fire_campaign', { id: rows[0].id, name: campName, code: campName }, email)
       .catch(err => console.log('[FireControl] Push notify error:', err.message));
 
@@ -478,7 +550,6 @@ app.post("/api/fire-control/campaigns", async (req, res) => {
   }
 });
 
-// Update campaign
 app.put("/api/fire-control/campaigns/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -500,13 +571,8 @@ app.put("/api/fire-control/campaigns/:id", async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: "Campaign not found" });
 
     const { email } = getIdentityFromReq(req);
-    await audit.log(req, AUDIT_ACTIONS.UPDATED, {
-      entityType: "campaign",
-      entityId: id,
-      details: { name, status },
-    });
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, { entityType: "campaign", entityId: id });
 
-    // Notify status change if status was updated
     if (status) {
       notifyStatusChanged('fire_campaign', { id: rows[0].id, name: rows[0].name, code: rows[0].name }, status, email)
         .catch(err => console.log('[FireControl] Push notify error:', err.message));
@@ -519,17 +585,11 @@ app.put("/api/fire-control/campaigns/:id", async (req, res) => {
   }
 });
 
-// Delete campaign
 app.delete("/api/fire-control/campaigns/:id", async (req, res) => {
   try {
     const { id } = req.params;
     await pool.query(`DELETE FROM fc_campaigns WHERE id = $1`, [id]);
-
-    await audit.log(req, AUDIT_ACTIONS.DELETED, {
-      entityType: "campaign",
-      entityId: id,
-    });
-
+    await audit.log(req, AUDIT_ACTIONS.DELETED, { entityType: "campaign", entityId: id });
     res.json({ success: true });
   } catch (err) {
     console.error("[FireControl] DELETE campaign error:", err);
@@ -538,14 +598,610 @@ app.delete("/api/fire-control/campaigns/:id", async (req, res) => {
 });
 
 // ------------------------------
+// ROUTES: Zones
+// ------------------------------
+
+// List zones
+app.get("/api/fire-control/zones", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+    const { building, floor, station } = req.query;
+
+    let sql = `
+      SELECT z.*,
+        (SELECT COUNT(*) FROM fc_zone_equipment ze WHERE ze.zone_id = z.id AND ze.alarm_level = 1) as equipment_count_al1,
+        (SELECT COUNT(*) FROM fc_zone_equipment ze WHERE ze.zone_id = z.id AND ze.alarm_level = 2) as equipment_count_al2
+      FROM fc_zones z
+      WHERE ${filter.where.replace(/company_id/g, 'z.company_id').replace(/site_id/g, 'z.site_id')}
+    `;
+    const params = [...filter.params];
+
+    if (building) {
+      params.push(building);
+      sql += ` AND z.building = $${params.length}`;
+    }
+    if (floor) {
+      params.push(floor);
+      sql += ` AND z.floor = $${params.length}`;
+    }
+    if (station) {
+      params.push(Number(station));
+      sql += ` AND z.station = $${params.length}`;
+    }
+
+    sql += ` ORDER BY z.building, z.floor, z.code`;
+
+    const { rows } = await pool.query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error("[FireControl] GET zones error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get zone with all equipment
+app.get("/api/fire-control/zones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(`SELECT * FROM fc_zones WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: "Zone not found" });
+
+    // Get linked equipment grouped by alarm level
+    const { rows: equipmentAL1 } = await pool.query(`
+      SELECT e.*, ze.action_type, ze.notes as link_notes
+      FROM fc_equipment e
+      JOIN fc_zone_equipment ze ON ze.equipment_id = e.id
+      WHERE ze.zone_id = $1 AND ze.alarm_level = 1
+      ORDER BY e.equipment_type, e.name
+    `, [id]);
+
+    const { rows: equipmentAL2 } = await pool.query(`
+      SELECT e.*, ze.action_type, ze.notes as link_notes
+      FROM fc_equipment e
+      JOIN fc_zone_equipment ze ON ze.equipment_id = e.id
+      WHERE ze.zone_id = $1 AND ze.alarm_level = 2
+      ORDER BY e.equipment_type, e.name
+    `, [id]);
+
+    res.json({
+      ...rows[0],
+      equipment_alarm1: equipmentAL1,
+      equipment_alarm2: equipmentAL2,
+    });
+  } catch (err) {
+    console.error("[FireControl] GET zone error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create zone
+app.post("/api/fire-control/zones", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const { code, name, description, building, floor, access_point, station, detector_numbers, detector_type } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_zones (code, name, description, building, floor, access_point, station, detector_numbers, detector_type, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        description = EXCLUDED.description,
+        building = EXCLUDED.building,
+        floor = EXCLUDED.floor,
+        access_point = EXCLUDED.access_point,
+        station = EXCLUDED.station,
+        detector_numbers = EXCLUDED.detector_numbers,
+        detector_type = EXCLUDED.detector_type,
+        updated_at = now()
+      RETURNING *
+    `, [code, name, description, building, floor, access_point, station, detector_numbers, detector_type || 'smoke', tenant.companyId, tenant.siteId]);
+
+    await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: "zone", entityId: rows[0].id });
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST zone error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update zone
+app.put("/api/fire-control/zones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { code, name, description, building, floor, access_point, station, detector_numbers, detector_type } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE fc_zones SET
+        code = COALESCE($1, code),
+        name = COALESCE($2, name),
+        description = COALESCE($3, description),
+        building = COALESCE($4, building),
+        floor = COALESCE($5, floor),
+        access_point = COALESCE($6, access_point),
+        station = COALESCE($7, station),
+        detector_numbers = COALESCE($8, detector_numbers),
+        detector_type = COALESCE($9, detector_type),
+        updated_at = now()
+      WHERE id = $10
+      RETURNING *
+    `, [code, name, description, building, floor, access_point, station, detector_numbers, detector_type, id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Zone not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] PUT zone error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete zone
+app.delete("/api/fire-control/zones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM fc_zones WHERE id = $1`, [id]);
+    await audit.log(req, AUDIT_ACTIONS.DELETED, { entityType: "zone", entityId: id });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[FireControl] DELETE zone error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Equipment
+// ------------------------------
+
+// List equipment
+app.get("/api/fire-control/equipment", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+    const { type, building, external_system } = req.query;
+
+    let sql = `SELECT * FROM fc_equipment WHERE ${filter.where}`;
+    const params = [...filter.params];
+
+    if (type) {
+      params.push(type);
+      sql += ` AND equipment_type = $${params.length}`;
+    }
+    if (building) {
+      params.push(building);
+      sql += ` AND building = $${params.length}`;
+    }
+    if (external_system) {
+      params.push(external_system);
+      sql += ` AND external_system = $${params.length}`;
+    }
+
+    sql += ` ORDER BY equipment_type, building, name`;
+
+    const { rows } = await pool.query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error("[FireControl] GET equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get equipment types list
+app.get("/api/fire-control/equipment-types", (req, res) => {
+  res.json(EQUIPMENT_TYPES);
+});
+
+// Get single equipment with zones it's linked to
+app.get("/api/fire-control/equipment/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(`SELECT * FROM fc_equipment WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: "Equipment not found" });
+
+    // Get zones that trigger this equipment
+    const { rows: zones } = await pool.query(`
+      SELECT z.*, ze.alarm_level, ze.action_type
+      FROM fc_zones z
+      JOIN fc_zone_equipment ze ON ze.zone_id = z.id
+      WHERE ze.equipment_id = $1
+      ORDER BY ze.alarm_level, z.building, z.code
+    `, [id]);
+
+    res.json({ ...rows[0], triggered_by_zones: zones });
+  } catch (err) {
+    console.error("[FireControl] GET equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create equipment
+app.post("/api/fire-control/equipment", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const { code, name, equipment_type, category, building, floor, location, fdcio_module, fdcio_output, external_system, external_id } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_equipment (code, name, equipment_type, category, building, floor, location, fdcio_module, fdcio_output, external_system, external_id, company_id, site_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        equipment_type = EXCLUDED.equipment_type,
+        category = EXCLUDED.category,
+        building = EXCLUDED.building,
+        floor = EXCLUDED.floor,
+        location = EXCLUDED.location,
+        fdcio_module = EXCLUDED.fdcio_module,
+        fdcio_output = EXCLUDED.fdcio_output,
+        external_system = EXCLUDED.external_system,
+        external_id = EXCLUDED.external_id,
+        updated_at = now()
+      RETURNING *
+    `, [code, name, equipment_type, category, building, floor, location, fdcio_module, fdcio_output, external_system, external_id, tenant.companyId, tenant.siteId]);
+
+    await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: "equipment", entityId: rows[0].id });
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Link equipment to zone
+app.post("/api/fire-control/zone-equipment", async (req, res) => {
+  try {
+    const { zone_id, equipment_id, alarm_level, action_type, notes } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, notes)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (zone_id, equipment_id, alarm_level) DO UPDATE SET
+        action_type = EXCLUDED.action_type,
+        notes = EXCLUDED.notes
+      RETURNING *
+    `, [zone_id, equipment_id, alarm_level || 1, action_type || 'activate', notes]);
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST zone-equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove equipment from zone
+app.delete("/api/fire-control/zone-equipment/:zone_id/:equipment_id/:alarm_level", async (req, res) => {
+  try {
+    const { zone_id, equipment_id, alarm_level } = req.params;
+    await pool.query(`DELETE FROM fc_zone_equipment WHERE zone_id = $1 AND equipment_id = $2 AND alarm_level = $3`, [zone_id, equipment_id, alarm_level]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[FireControl] DELETE zone-equipment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Zone Checks
+// ------------------------------
+
+// List zone checks for a campaign
+app.get("/api/fire-control/zone-checks", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+    const { campaign_id, status, building } = req.query;
+
+    let sql = `
+      SELECT zc.*, z.code as zone_code, z.name as zone_name, z.building, z.floor, z.access_point, z.detector_numbers,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.alarm_level = 1) as equipment_count_al1,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.alarm_level = 2) as equipment_count_al2,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'ok') as ok_count,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'nok') as nok_count
+      FROM fc_zone_checks zc
+      JOIN fc_zones z ON z.id = zc.zone_id
+      WHERE ${filter.where.replace(/company_id/g, 'zc.company_id').replace(/site_id/g, 'zc.site_id')}
+    `;
+    const params = [...filter.params];
+
+    if (campaign_id) {
+      params.push(campaign_id);
+      sql += ` AND zc.campaign_id = $${params.length}`;
+    }
+    if (status) {
+      params.push(status);
+      sql += ` AND zc.status = $${params.length}`;
+    }
+    if (building) {
+      params.push(building);
+      sql += ` AND z.building = $${params.length}`;
+    }
+
+    sql += ` ORDER BY z.building, z.floor, z.code`;
+
+    const { rows } = await pool.query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    console.error("[FireControl] GET zone-checks error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single zone check with all equipment results
+app.get("/api/fire-control/zone-checks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { rows } = await pool.query(`
+      SELECT zc.*, z.code as zone_code, z.name as zone_name, z.building, z.floor, z.access_point, z.detector_numbers, z.station
+      FROM fc_zone_checks zc
+      JOIN fc_zones z ON z.id = zc.zone_id
+      WHERE zc.id = $1
+    `, [id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Zone check not found" });
+
+    // Get equipment results for Alarm 1
+    const { rows: resultsAL1 } = await pool.query(`
+      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location, e.external_system, e.external_id
+      FROM fc_equipment_results er
+      JOIN fc_equipment e ON e.id = er.equipment_id
+      WHERE er.zone_check_id = $1 AND er.alarm_level = 1
+      ORDER BY e.equipment_type, e.name
+    `, [id]);
+
+    // Get equipment results for Alarm 2
+    const { rows: resultsAL2 } = await pool.query(`
+      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location, e.external_system, e.external_id
+      FROM fc_equipment_results er
+      JOIN fc_equipment e ON e.id = er.equipment_id
+      WHERE er.zone_check_id = $1 AND er.alarm_level = 2
+      ORDER BY e.equipment_type, e.name
+    `, [id]);
+
+    // Get attached files
+    const { rows: files } = await pool.query(`
+      SELECT * FROM fc_check_files WHERE zone_check_id = $1 ORDER BY uploaded_at DESC
+    `, [id]);
+
+    res.json({
+      ...rows[0],
+      equipment_results_alarm1: resultsAL1,
+      equipment_results_alarm2: resultsAL2,
+      files,
+    });
+  } catch (err) {
+    console.error("[FireControl] GET zone-check error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate zone checks for a campaign (creates checks for all zones)
+app.post("/api/fire-control/campaigns/:id/generate-checks", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tenant = extractTenantFromRequest(req);
+    const { building } = req.body;
+    const { email } = getIdentityFromReq(req);
+
+    // Get all zones
+    let sql = `SELECT id FROM fc_zones WHERE company_id = $1 AND site_id = $2`;
+    const params = [tenant.companyId, tenant.siteId];
+
+    if (building) {
+      params.push(building);
+      sql += ` AND building = $${params.length}`;
+    }
+
+    const { rows: zones } = await pool.query(sql, params);
+
+    let created = 0;
+    for (const zone of zones) {
+      // Check if already exists
+      const { rows: existing } = await pool.query(
+        `SELECT id FROM fc_zone_checks WHERE campaign_id = $1 AND zone_id = $2`,
+        [id, zone.id]
+      );
+
+      if (!existing.length) {
+        // Create zone check
+        const { rows: checkRows } = await pool.query(`
+          INSERT INTO fc_zone_checks (campaign_id, zone_id, company_id, site_id)
+          VALUES ($1, $2, $3, $4)
+          RETURNING id
+        `, [id, zone.id, tenant.companyId, tenant.siteId]);
+
+        const zoneCheckId = checkRows[0].id;
+
+        // Create equipment results for all linked equipment
+        await pool.query(`
+          INSERT INTO fc_equipment_results (zone_check_id, equipment_id, alarm_level)
+          SELECT $1, ze.equipment_id, ze.alarm_level
+          FROM fc_zone_equipment ze
+          WHERE ze.zone_id = $2
+        `, [zoneCheckId, zone.id]);
+
+        created++;
+      }
+    }
+
+    await audit.log(req, AUDIT_ACTIONS.CREATED, {
+      entityType: "zone_checks_batch",
+      entityId: id,
+      details: { created_count: created, building },
+    });
+
+    if (created > 0) {
+      notify(`🔥 Contrôles générés`, `${created} zone(s) à contrôler`, {
+        type: 'fire_control_checks_generated',
+        excludeUserId: email,
+      }).catch(() => {});
+    }
+
+    res.json({ success: true, created_count: created, total_zones: zones.length });
+  } catch (err) {
+    console.error("[FireControl] Generate zone checks error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start zone check (mark as in progress)
+app.post("/api/fire-control/zone-checks/:id/start", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name } = getIdentityFromReq(req);
+    const { detector_used } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE fc_zone_checks SET
+        status = 'in_progress',
+        detector_used = $1,
+        checked_by_email = $2,
+        checked_by_name = $3,
+        check_date = now(),
+        updated_at = now()
+      WHERE id = $4
+      RETURNING *
+    `, [detector_used, email, name, id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Zone check not found" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST zone-check start error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update equipment result
+app.put("/api/fire-control/equipment-results/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { result, response_time_ms, notes } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE fc_equipment_results SET
+        result = COALESCE($1, result),
+        response_time_ms = COALESCE($2, response_time_ms),
+        notes = COALESCE($3, notes),
+        checked_at = CASE WHEN $1 IS NOT NULL AND $1 != 'pending' THEN now() ELSE checked_at END
+      WHERE id = $4
+      RETURNING *
+    `, [result, response_time_ms, notes, id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Equipment result not found" });
+
+    // Recalculate zone check status
+    const zoneCheckId = rows[0].zone_check_id;
+    const { rows: allResults } = await pool.query(
+      `SELECT result FROM fc_equipment_results WHERE zone_check_id = $1`,
+      [zoneCheckId]
+    );
+
+    const newStatus = calculateZoneCheckStatus(allResults);
+    await pool.query(`UPDATE fc_zone_checks SET status = $1, updated_at = now() WHERE id = $2`, [newStatus, zoneCheckId]);
+
+    res.json({ ...rows[0], zone_check_status: newStatus });
+  } catch (err) {
+    console.error("[FireControl] PUT equipment-result error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch update equipment results for a zone check
+app.put("/api/fire-control/zone-checks/:id/results", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name } = getIdentityFromReq(req);
+    const { alarm1_triggered, alarm2_triggered, notes, results } = req.body;
+
+    // Update zone check
+    await pool.query(`
+      UPDATE fc_zone_checks SET
+        alarm1_triggered = COALESCE($1, alarm1_triggered),
+        alarm2_triggered = COALESCE($2, alarm2_triggered),
+        notes = COALESCE($3, notes),
+        checked_by_email = $4,
+        checked_by_name = $5,
+        check_date = now(),
+        updated_at = now()
+      WHERE id = $6
+    `, [alarm1_triggered, alarm2_triggered, notes, email, name, id]);
+
+    // Update individual equipment results
+    if (results && Array.isArray(results)) {
+      for (const r of results) {
+        await pool.query(`
+          UPDATE fc_equipment_results SET
+            result = $1,
+            response_time_ms = $2,
+            notes = $3,
+            checked_at = CASE WHEN $1 != 'pending' THEN now() ELSE checked_at END
+          WHERE id = $4
+        `, [r.result, r.response_time_ms, r.notes, r.id]);
+      }
+    }
+
+    // Recalculate status
+    const { rows: allResults } = await pool.query(
+      `SELECT result FROM fc_equipment_results WHERE zone_check_id = $1`,
+      [id]
+    );
+
+    const newStatus = calculateZoneCheckStatus(allResults);
+    const { rows } = await pool.query(
+      `UPDATE fc_zone_checks SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
+      [newStatus, id]
+    );
+
+    await audit.log(req, AUDIT_ACTIONS.CHECK_COMPLETED, {
+      entityType: "zone_check",
+      entityId: id,
+      details: { status: newStatus, alarm1_triggered, alarm2_triggered },
+    });
+
+    // Send notification
+    if (newStatus === 'passed') {
+      notifyMaintenanceCompleted('fire_control', { id, name: `Zone check ${id}` }, { status: newStatus }, email).catch(() => {});
+    } else if (newStatus === 'failed' || newStatus === 'partial') {
+      notifyNonConformity('fire_control', { id, name: `Zone check ${id}` }, `Status: ${newStatus}`).catch(() => {});
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] PUT zone-check results error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload file for zone check
+app.post("/api/fire-control/zone-checks/:id/files", uploadFile.single("file"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, name } = getIdentityFromReq(req);
+    const { file_type, equipment_result_id } = req.body;
+
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const filePath = req.file.path;
+    const fileContent = await fsp.readFile(filePath);
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_check_files (zone_check_id, equipment_result_id, filename, file_path, content, mime, file_type, uploaded_by_email, uploaded_by_name)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [id, equipment_result_id, req.file.originalname, filePath, fileContent, req.file.mimetype, file_type || 'photo', email, name]);
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] Upload zone-check file error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
 // ROUTES: Matrices
 // ------------------------------
 
-// Upload matrix PDF
 app.post("/api/fire-control/matrices/upload", uploadMatrix.single("file"), async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
-    const { email, name } = getIdentityFromReq(req);
     const { campaign_id, matrix_name, version } = req.body;
 
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -553,7 +1209,6 @@ app.post("/api/fire-control/matrices/upload", uploadMatrix.single("file"), async
     const filePath = req.file.path;
     const fileContent = await fsp.readFile(filePath);
 
-    // Deactivate previous matrices with same name
     if (matrix_name) {
       await pool.query(`
         UPDATE fc_matrices SET is_active = false
@@ -567,12 +1222,7 @@ app.post("/api/fire-control/matrices/upload", uploadMatrix.single("file"), async
       RETURNING *
     `, [campaign_id, matrix_name || req.file.originalname, req.file.filename, filePath, fileContent, version || "1.0", tenant.companyId, tenant.siteId]);
 
-    await audit.log(req, AUDIT_ACTIONS.FILE_UPLOADED, {
-      entityType: "matrix",
-      entityId: rows[0].id,
-      details: { filename: req.file.originalname },
-    });
-
+    await audit.log(req, AUDIT_ACTIONS.FILE_UPLOADED, { entityType: "matrix", entityId: rows[0].id });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("[FireControl] Upload matrix error:", err);
@@ -580,28 +1230,17 @@ app.post("/api/fire-control/matrices/upload", uploadMatrix.single("file"), async
   }
 });
 
-// List matrices
 app.get("/api/fire-control/matrices", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
-    const { active_only, campaign_id } = req.query;
+    const { active_only } = req.query;
 
-    let sql = `SELECT id, campaign_id, name, filename, version, upload_date, is_active, created_at
-               FROM fc_matrices WHERE ${filter.where}`;
-    const params = [...filter.params];
-
-    if (active_only === "true") {
-      sql += ` AND is_active = true`;
-    }
-    if (campaign_id) {
-      params.push(campaign_id);
-      sql += ` AND campaign_id = $${params.length}`;
-    }
-
+    let sql = `SELECT id, campaign_id, name, filename, version, upload_date, is_active, created_at FROM fc_matrices WHERE ${filter.where}`;
+    if (active_only === "true") sql += ` AND is_active = true`;
     sql += ` ORDER BY created_at DESC`;
 
-    const { rows } = await pool.query(sql, params);
+    const { rows } = await pool.query(sql, filter.params);
     res.json(rows);
   } catch (err) {
     console.error("[FireControl] GET matrices error:", err);
@@ -609,7 +1248,6 @@ app.get("/api/fire-control/matrices", async (req, res) => {
   }
 });
 
-// Get matrix file
 app.get("/api/fire-control/matrices/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
@@ -617,19 +1255,14 @@ app.get("/api/fire-control/matrices/:id/file", async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: "Matrix not found" });
 
-    const matrix = rows[0];
-    let buffer = matrix.content;
-
-    if (!buffer && matrix.file_path) {
-      try {
-        buffer = await fsp.readFile(matrix.file_path);
-      } catch {}
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
     }
-
     if (!buffer) return res.status(404).json({ error: "File not found" });
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${matrix.filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
     res.send(buffer);
   } catch (err) {
     console.error("[FireControl] GET matrix file error:", err);
@@ -637,53 +1270,76 @@ app.get("/api/fire-control/matrices/:id/file", async (req, res) => {
   }
 });
 
-// Parse matrix and extract detectors/interlocks
+// Parse matrix and create zones + equipment
 app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
   try {
     const { id } = req.params;
-    const { parsed_data } = req.body;
+    const tenant = extractTenantFromRequest(req);
+    const { zones, equipment, zone_equipment_links } = req.body;
 
-    // Store parsed data
-    await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`, [JSON.stringify(parsed_data), id]);
+    await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`, [JSON.stringify(req.body), id]);
 
-    // Get matrix info for tenant
-    const { rows: matrixRows } = await pool.query(`SELECT company_id, site_id FROM fc_matrices WHERE id = $1`, [id]);
-    if (!matrixRows.length) return res.status(404).json({ error: "Matrix not found" });
+    let zonesCreated = 0;
+    let equipmentCreated = 0;
+    let linksCreated = 0;
 
-    const { company_id, site_id } = matrixRows[0];
-
-    // Insert detectors from parsed data
-    if (parsed_data.detectors && Array.isArray(parsed_data.detectors)) {
-      for (const det of parsed_data.detectors) {
-        const detectorNumbers = parseDetectorRange(det.numbers);
-        for (const num of detectorNumbers) {
-          await pool.query(`
-            INSERT INTO fc_detectors (detector_number, detector_type, building, floor, zone, access_point, location_description, station, matrix_id, company_id, site_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ON CONFLICT DO NOTHING
-          `, [num, det.type || 'smoke', det.building, det.floor, det.zone, det.access_point, det.location, det.station, id, company_id, site_id]);
-        }
+    // Create zones
+    if (zones && Array.isArray(zones)) {
+      for (const z of zones) {
+        const { rows } = await pool.query(`
+          INSERT INTO fc_zones (code, name, description, building, floor, access_point, station, detector_numbers, detector_type, matrix_id, company_id, site_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = EXCLUDED.name, description = EXCLUDED.description, building = EXCLUDED.building,
+            floor = EXCLUDED.floor, access_point = EXCLUDED.access_point, station = EXCLUDED.station,
+            detector_numbers = EXCLUDED.detector_numbers, matrix_id = EXCLUDED.matrix_id, updated_at = now()
+          RETURNING id
+        `, [z.code, z.name, z.description, z.building, z.floor, z.access_point, z.station, z.detector_numbers, z.detector_type || 'smoke', id, tenant.companyId, tenant.siteId]);
+        if (rows.length) zonesCreated++;
       }
     }
 
-    // Insert interlocks
-    if (parsed_data.interlocks && Array.isArray(parsed_data.interlocks)) {
-      for (const intl of parsed_data.interlocks) {
-        await pool.query(`
-          INSERT INTO fc_interlocks (name, interlock_type, command, action, location, fdcio_info, station, matrix_id, company_id, site_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          ON CONFLICT DO NOTHING
-        `, [intl.name, intl.type, intl.command, intl.action, intl.location, intl.fdcio_info, intl.station, id, company_id, site_id]);
+    // Create equipment
+    if (equipment && Array.isArray(equipment)) {
+      for (const e of equipment) {
+        const { rows } = await pool.query(`
+          INSERT INTO fc_equipment (code, name, equipment_type, category, building, floor, location, fdcio_module, fdcio_output, matrix_id, company_id, site_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = EXCLUDED.name, equipment_type = EXCLUDED.equipment_type, category = EXCLUDED.category,
+            building = EXCLUDED.building, location = EXCLUDED.location, fdcio_module = EXCLUDED.fdcio_module,
+            fdcio_output = EXCLUDED.fdcio_output, matrix_id = EXCLUDED.matrix_id, updated_at = now()
+          RETURNING id
+        `, [e.code, e.name, e.equipment_type, e.category, e.building, e.floor, e.location, e.fdcio_module, e.fdcio_output, id, tenant.companyId, tenant.siteId]);
+        if (rows.length) equipmentCreated++;
+      }
+    }
+
+    // Create zone-equipment links
+    if (zone_equipment_links && Array.isArray(zone_equipment_links)) {
+      for (const link of zone_equipment_links) {
+        // Get zone and equipment IDs by code
+        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.zone_code, tenant.companyId, tenant.siteId]);
+        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.equipment_code, tenant.companyId, tenant.siteId]);
+
+        if (zoneRows.length && equipRows.length) {
+          await pool.query(`
+            INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (zone_id, equipment_id, alarm_level) DO NOTHING
+          `, [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action_type || 'activate', id]);
+          linksCreated++;
+        }
       }
     }
 
     await audit.log(req, AUDIT_ACTIONS.UPDATED, {
       entityType: "matrix",
       entityId: id,
-      details: { action: "parsed" },
+      details: { action: "parsed", zones: zonesCreated, equipment: equipmentCreated, links: linksCreated },
     });
 
-    res.json({ success: true, detectors_count: parsed_data.detectors?.length || 0, interlocks_count: parsed_data.interlocks?.length || 0 });
+    res.json({ success: true, zones_created: zonesCreated, equipment_created: equipmentCreated, links_created: linksCreated });
   } catch (err) {
     console.error("[FireControl] Parse matrix error:", err);
     res.status(500).json({ error: err.message });
@@ -694,7 +1350,6 @@ app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
 // ROUTES: Building Plans
 // ------------------------------
 
-// Upload building plan
 app.post("/api/fire-control/plans/upload", uploadPlan.single("file"), async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
@@ -705,14 +1360,12 @@ app.post("/api/fire-control/plans/upload", uploadPlan.single("file"), async (req
     const filePath = req.file.path;
     const fileContent = await fsp.readFile(filePath);
 
-    // Count PDF pages
     let pageCount = 1;
     try {
       const pdfDoc = await pdfjsLib.getDocument({ data: fileContent }).promise;
       pageCount = pdfDoc.numPages;
     } catch {}
 
-    // Deactivate previous plans for same building/floor
     if (building) {
       await pool.query(`
         UPDATE fc_building_plans SET is_active = false
@@ -726,12 +1379,7 @@ app.post("/api/fire-control/plans/upload", uploadPlan.single("file"), async (req
       RETURNING *
     `, [building, floor, plan_name || req.file.originalname, req.file.filename, filePath, fileContent, version || "1.0", pageCount, tenant.companyId, tenant.siteId]);
 
-    await audit.log(req, AUDIT_ACTIONS.FILE_UPLOADED, {
-      entityType: "building_plan",
-      entityId: rows[0].id,
-      details: { building, floor, filename: req.file.originalname },
-    });
-
+    await audit.log(req, AUDIT_ACTIONS.FILE_UPLOADED, { entityType: "building_plan", entityId: rows[0].id });
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("[FireControl] Upload plan error:", err);
@@ -739,25 +1387,20 @@ app.post("/api/fire-control/plans/upload", uploadPlan.single("file"), async (req
   }
 });
 
-// List building plans
 app.get("/api/fire-control/plans", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
     const { building, active_only } = req.query;
 
-    let sql = `SELECT id, building, floor, name, filename, version, page_count, is_active, created_at
-               FROM fc_building_plans WHERE ${filter.where}`;
+    let sql = `SELECT id, building, floor, name, filename, version, page_count, is_active, created_at FROM fc_building_plans WHERE ${filter.where}`;
     const params = [...filter.params];
 
-    if (active_only === "true") {
-      sql += ` AND is_active = true`;
-    }
+    if (active_only === "true") sql += ` AND is_active = true`;
     if (building) {
       params.push(building);
       sql += ` AND building = $${params.length}`;
     }
-
     sql += ` ORDER BY building, floor, created_at DESC`;
 
     const { rows } = await pool.query(sql, params);
@@ -768,7 +1411,6 @@ app.get("/api/fire-control/plans", async (req, res) => {
   }
 });
 
-// Get plan file
 app.get("/api/fire-control/plans/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
@@ -776,19 +1418,14 @@ app.get("/api/fire-control/plans/:id/file", async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: "Plan not found" });
 
-    const plan = rows[0];
-    let buffer = plan.content;
-
-    if (!buffer && plan.file_path) {
-      try {
-        buffer = await fsp.readFile(plan.file_path);
-      } catch {}
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
     }
-
     if (!buffer) return res.status(404).json({ error: "File not found" });
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${plan.filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
     res.send(buffer);
   } catch (err) {
     console.error("[FireControl] GET plan file error:", err);
@@ -796,7 +1433,6 @@ app.get("/api/fire-control/plans/:id/file", async (req, res) => {
   }
 });
 
-// Get list of buildings
 app.get("/api/fire-control/buildings", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
@@ -818,401 +1454,80 @@ app.get("/api/fire-control/buildings", async (req, res) => {
 });
 
 // ------------------------------
-// ROUTES: Detectors
+// ROUTES: Dashboard
 // ------------------------------
 
-// List detectors
-app.get("/api/fire-control/detectors", async (req, res) => {
+app.get("/api/fire-control/dashboard", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
-    const { building, floor, station } = req.query;
+    const year = req.query.year || new Date().getFullYear();
 
-    let sql = `SELECT * FROM fc_detectors WHERE ${filter.where}`;
-    const params = [...filter.params];
+    // Campaign stats
+    const campaignStats = await pool.query(`
+      SELECT COUNT(*) as total_campaigns,
+        COUNT(*) FILTER (WHERE status = 'completed') as completed,
+        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress
+      FROM fc_campaigns
+      WHERE ${filter.where} AND year = $${filter.params.length + 1}
+    `, [...filter.params, year]);
 
-    if (building) {
-      params.push(building);
-      sql += ` AND building = $${params.length}`;
-    }
-    if (floor) {
-      params.push(floor);
-      sql += ` AND floor = $${params.length}`;
-    }
-    if (station) {
-      params.push(Number(station));
-      sql += ` AND station = $${params.length}`;
-    }
+    // Zone check stats
+    const checkStats = await pool.query(`
+      SELECT COUNT(*) as total_checks,
+        COUNT(*) FILTER (WHERE zc.status = 'passed') as passed,
+        COUNT(*) FILTER (WHERE zc.status = 'failed') as failed,
+        COUNT(*) FILTER (WHERE zc.status = 'partial') as partial,
+        COUNT(*) FILTER (WHERE zc.status = 'pending') as pending
+      FROM fc_zone_checks zc
+      JOIN fc_campaigns camp ON camp.id = zc.campaign_id
+      WHERE ${filter.where.replace(/company_id/g, 'zc.company_id').replace(/site_id/g, 'zc.site_id')} AND camp.year = $${filter.params.length + 1}
+    `, [...filter.params, year]);
 
-    sql += ` ORDER BY building, floor, detector_number`;
+    // Building summary
+    const buildingStats = await pool.query(`
+      SELECT z.building,
+        COUNT(DISTINCT z.id) as zone_count,
+        COUNT(DISTINCT zc.id) as check_count,
+        COUNT(*) FILTER (WHERE zc.status = 'passed') as passed,
+        COUNT(*) FILTER (WHERE zc.status = 'failed') as failed
+      FROM fc_zones z
+      LEFT JOIN fc_zone_checks zc ON zc.zone_id = z.id
+      LEFT JOIN fc_campaigns camp ON camp.id = zc.campaign_id AND camp.year = $${filter.params.length + 1}
+      WHERE ${filter.where.replace(/company_id/g, 'z.company_id').replace(/site_id/g, 'z.site_id')}
+      GROUP BY z.building
+      ORDER BY z.building
+    `, [...filter.params, year]);
 
-    const { rows } = await pool.query(sql, params);
-    res.json(rows);
-  } catch (err) {
-    console.error("[FireControl] GET detectors error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
+    // Equipment summary by type
+    const equipmentStats = await pool.query(`
+      SELECT equipment_type, COUNT(*) as count
+      FROM fc_equipment
+      WHERE ${filter.where}
+      GROUP BY equipment_type
+      ORDER BY count DESC
+    `, filter.params);
 
-// Get detector with interlocks
-app.get("/api/fire-control/detectors/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rows } = await pool.query(`SELECT * FROM fc_detectors WHERE id = $1`, [id]);
-    if (!rows.length) return res.status(404).json({ error: "Detector not found" });
+    // Upcoming schedule
+    const upcoming = await pool.query(`
+      SELECT s.*, c.name as campaign_name
+      FROM fc_schedule s
+      LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
+      WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}
+        AND s.scheduled_date >= CURRENT_DATE AND s.status != 'completed'
+      ORDER BY s.scheduled_date LIMIT 10
+    `, filter.params);
 
-    // Get linked interlocks
-    const { rows: interlocks } = await pool.query(`
-      SELECT i.*, di.alarm_type
-      FROM fc_interlocks i
-      JOIN fc_detector_interlocks di ON di.interlock_id = i.id
-      WHERE di.detector_id = $1
-    `, [id]);
-
-    res.json({ ...rows[0], interlocks });
-  } catch (err) {
-    console.error("[FireControl] GET detector error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Create detector manually
-app.post("/api/fire-control/detectors", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const { detector_number, detector_type, building, floor, zone, access_point, location_description, station } = req.body;
-
-    const { rows } = await pool.query(`
-      INSERT INTO fc_detectors (detector_number, detector_type, building, floor, zone, access_point, location_description, station, company_id, site_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING *
-    `, [detector_number, detector_type || 'smoke', building, floor, zone, access_point, location_description, station, tenant.companyId, tenant.siteId]);
-
-    await audit.log(req, AUDIT_ACTIONS.CREATED, {
-      entityType: "detector",
-      entityId: rows[0].id,
-      details: { detector_number, building, floor },
+    res.json({
+      year: Number(year),
+      campaigns: campaignStats.rows[0],
+      checks: checkStats.rows[0],
+      buildings: buildingStats.rows,
+      equipment_by_type: equipmentStats.rows,
+      upcoming_schedule: upcoming.rows,
     });
-
-    res.status(201).json(rows[0]);
   } catch (err) {
-    console.error("[FireControl] POST detector error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update detector position on plan
-app.post("/api/fire-control/detectors/:id/position", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { plan_id, page_index, x_frac, y_frac } = req.body;
-
-    await pool.query(`
-      INSERT INTO fc_detector_positions (detector_id, plan_id, page_index, x_frac, y_frac)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (detector_id, plan_id, page_index)
-      DO UPDATE SET x_frac = $4, y_frac = $5, updated_at = now()
-    `, [id, plan_id, page_index || 0, x_frac, y_frac]);
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[FireControl] POST detector position error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get detector positions for a plan
-app.get("/api/fire-control/plans/:id/positions", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { page_index } = req.query;
-
-    let sql = `
-      SELECT dp.*, d.detector_number, d.detector_type, d.building, d.floor, d.zone
-      FROM fc_detector_positions dp
-      JOIN fc_detectors d ON d.id = dp.detector_id
-      WHERE dp.plan_id = $1
-    `;
-    const params = [id];
-
-    if (page_index !== undefined) {
-      params.push(Number(page_index));
-      sql += ` AND dp.page_index = $${params.length}`;
-    }
-
-    const { rows } = await pool.query(sql, params);
-    res.json(rows);
-  } catch (err) {
-    console.error("[FireControl] GET plan positions error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ------------------------------
-// ROUTES: Checks (Controls)
-// ------------------------------
-
-// List checks for a campaign
-app.get("/api/fire-control/checks", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
-    const { campaign_id, status, building, floor } = req.query;
-
-    let sql = `
-      SELECT c.*, d.detector_number, d.building, d.floor, d.zone, d.access_point
-      FROM fc_checks c
-      JOIN fc_detectors d ON d.id = c.detector_id
-      WHERE ${filter.where.replace(/company_id/g, 'c.company_id').replace(/site_id/g, 'c.site_id')}
-    `;
-    const params = [...filter.params];
-
-    if (campaign_id) {
-      params.push(campaign_id);
-      sql += ` AND c.campaign_id = $${params.length}`;
-    }
-    if (status) {
-      params.push(status);
-      sql += ` AND c.status = $${params.length}`;
-    }
-    if (building) {
-      params.push(building);
-      sql += ` AND d.building = $${params.length}`;
-    }
-    if (floor) {
-      params.push(floor);
-      sql += ` AND d.floor = $${params.length}`;
-    }
-
-    sql += ` ORDER BY d.building, d.floor, d.detector_number`;
-
-    const { rows } = await pool.query(sql, params);
-    res.json(rows);
-  } catch (err) {
-    console.error("[FireControl] GET checks error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Create check for detector
-app.post("/api/fire-control/checks", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const { campaign_id, detector_id } = req.body;
-
-    const { rows } = await pool.query(`
-      INSERT INTO fc_checks (campaign_id, detector_id, company_id, site_id)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `, [campaign_id, detector_id, tenant.companyId, tenant.siteId]);
-
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error("[FireControl] POST check error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Generate checks for all detectors in a campaign
-app.post("/api/fire-control/campaigns/:id/generate-checks", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const tenant = extractTenantFromRequest(req);
-    const { building, floor } = req.body;
-
-    // Get all detectors matching filter
-    let sql = `SELECT id FROM fc_detectors WHERE company_id = $1 AND site_id = $2`;
-    const params = [tenant.companyId, tenant.siteId];
-
-    if (building) {
-      params.push(building);
-      sql += ` AND building = $${params.length}`;
-    }
-    if (floor) {
-      params.push(floor);
-      sql += ` AND floor = $${params.length}`;
-    }
-
-    const { rows: detectors } = await pool.query(sql, params);
-
-    // Create check for each detector
-    let created = 0;
-    for (const det of detectors) {
-      // Check if already exists
-      const { rows: existing } = await pool.query(
-        `SELECT id FROM fc_checks WHERE campaign_id = $1 AND detector_id = $2`,
-        [id, det.id]
-      );
-
-      if (!existing.length) {
-        await pool.query(`
-          INSERT INTO fc_checks (campaign_id, detector_id, company_id, site_id)
-          VALUES ($1, $2, $3, $4)
-        `, [id, det.id, tenant.companyId, tenant.siteId]);
-        created++;
-      }
-    }
-
-    const { email } = getIdentityFromReq(req);
-    await audit.log(req, AUDIT_ACTIONS.CREATED, {
-      entityType: "checks_batch",
-      entityId: id,
-      details: { created_count: created, building, floor },
-    });
-
-    // Notify user that checks were generated
-    if (created > 0) {
-      notify(`🔥 Contrôles générés`, `${created} contrôle(s) créé(s) pour la campagne`, {
-        type: 'fire_control_checks_generated',
-        excludeUserId: email,
-        data: { campaignId: id, url: `/app/fire-control?tab=controls&campaign=${id}` }
-      }).catch(err => console.log('[FireControl] Push notify error:', err.message));
-    }
-
-    res.json({ success: true, created_count: created, total_detectors: detectors.length });
-  } catch (err) {
-    console.error("[FireControl] Generate checks error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update check (record test result)
-app.put("/api/fire-control/checks/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { email, name } = getIdentityFromReq(req);
-    const { alarm1_ok, alarm2_ok, interlocks_checked, notes, status } = req.body;
-
-    // Determine status based on results
-    let finalStatus = status;
-    if (!finalStatus && (alarm1_ok !== undefined || alarm2_ok !== undefined)) {
-      if (alarm1_ok && alarm2_ok) {
-        finalStatus = CHECK_STATUS.PASSED;
-      } else if (!alarm1_ok && !alarm2_ok) {
-        finalStatus = CHECK_STATUS.FAILED;
-      } else {
-        finalStatus = CHECK_STATUS.PARTIAL;
-      }
-    }
-
-    const { rows } = await pool.query(`
-      UPDATE fc_checks
-      SET alarm1_ok = COALESCE($1, alarm1_ok),
-          alarm2_ok = COALESCE($2, alarm2_ok),
-          interlocks_checked = COALESCE($3, interlocks_checked),
-          notes = COALESCE($4, notes),
-          status = COALESCE($5, status),
-          check_date = CASE WHEN $5 IS NOT NULL AND $5 != 'pending' THEN now() ELSE check_date END,
-          checked_by_email = CASE WHEN $5 IS NOT NULL AND $5 != 'pending' THEN $6 ELSE checked_by_email END,
-          checked_by_name = CASE WHEN $5 IS NOT NULL AND $5 != 'pending' THEN $7 ELSE checked_by_name END,
-          updated_at = now()
-      WHERE id = $8
-      RETURNING *
-    `, [alarm1_ok, alarm2_ok, JSON.stringify(interlocks_checked), notes, finalStatus, email, name, id]);
-
-    if (!rows.length) return res.status(404).json({ error: "Check not found" });
-
-    await audit.log(req, AUDIT_ACTIONS.CHECK_COMPLETED, {
-      entityType: "check",
-      entityId: id,
-      details: { alarm1_ok, alarm2_ok, status: finalStatus },
-    });
-
-    // Send notification for completed check
-    if (finalStatus && finalStatus !== 'pending') {
-      // Get detector info for notification
-      const detResult = await pool.query(`SELECT code, name, building, floor FROM fc_detectors WHERE id = $1`, [rows[0].detector_id]);
-      const detector = detResult.rows[0] || {};
-      const detectorName = detector.code || detector.name || `Détecteur #${rows[0].detector_id}`;
-
-      if (finalStatus === 'failed' || finalStatus === 'partial') {
-        // Non-conformity detected
-        notifyNonConformity('fire_detector',
-          { id: rows[0].detector_id, name: detectorName, code: detectorName },
-          `Alarme 1: ${alarm1_ok ? 'OK' : 'KO'}, Alarme 2: ${alarm2_ok ? 'OK' : 'KO'}`
-        ).catch(err => console.log('[FireControl] Push notify error:', err.message));
-      } else {
-        // Maintenance completed successfully
-        notifyMaintenanceCompleted('fire_detector',
-          { id: rows[0].detector_id, name: detectorName, code: detectorName },
-          { id: rows[0].id, status: finalStatus },
-          email
-        ).catch(err => console.log('[FireControl] Push notify error:', err.message));
-      }
-    }
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("[FireControl] PUT check error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Upload photo/file for a check
-app.post("/api/fire-control/checks/:id/files", uploadFile.single("file"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { email, name } = getIdentityFromReq(req);
-    const { file_type } = req.body;
-
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const filePath = req.file.path;
-    const fileContent = await fsp.readFile(filePath);
-
-    const { rows } = await pool.query(`
-      INSERT INTO fc_check_files (check_id, filename, file_path, content, mime, file_type, uploaded_by_email, uploaded_by_name)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *
-    `, [id, req.file.originalname, filePath, fileContent, req.file.mimetype, file_type || 'photo', email, name]);
-
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error("[FireControl] Upload check file error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get files for a check
-app.get("/api/fire-control/checks/:id/files", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rows } = await pool.query(`
-      SELECT id, filename, mime, file_type, uploaded_by_name, uploaded_at
-      FROM fc_check_files WHERE check_id = $1
-      ORDER BY uploaded_at DESC
-    `, [id]);
-    res.json(rows);
-  } catch (err) {
-    console.error("[FireControl] GET check files error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get file content
-app.get("/api/fire-control/files/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rows } = await pool.query(`SELECT filename, content, file_path, mime FROM fc_check_files WHERE id = $1`, [id]);
-
-    if (!rows.length) return res.status(404).json({ error: "File not found" });
-
-    const file = rows[0];
-    let buffer = file.content;
-
-    if (!buffer && file.file_path) {
-      try {
-        buffer = await fsp.readFile(file.file_path);
-      } catch {}
-    }
-
-    if (!buffer) return res.status(404).json({ error: "File not found" });
-
-    res.setHeader("Content-Type", file.mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${file.filename}"`);
-    res.send(buffer);
-  } catch (err) {
-    console.error("[FireControl] GET file error:", err);
+    console.error("[FireControl] GET dashboard error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1221,32 +1536,23 @@ app.get("/api/fire-control/files/:id", async (req, res) => {
 // ROUTES: Schedule
 // ------------------------------
 
-// Get schedule
 app.get("/api/fire-control/schedule", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
-    const { year, month, building } = req.query;
+    const { year, building } = req.query;
 
-    let sql = `SELECT s.*, c.name as campaign_name
-               FROM fc_schedule s
-               LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
-               WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}`;
+    let sql = `SELECT s.*, c.name as campaign_name FROM fc_schedule s LEFT JOIN fc_campaigns c ON c.id = s.campaign_id WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}`;
     const params = [...filter.params];
 
     if (year) {
       params.push(Number(year));
       sql += ` AND EXTRACT(YEAR FROM s.scheduled_date) = $${params.length}`;
     }
-    if (month) {
-      params.push(Number(month));
-      sql += ` AND EXTRACT(MONTH FROM s.scheduled_date) = $${params.length}`;
-    }
     if (building) {
       params.push(building);
       sql += ` AND s.building = $${params.length}`;
     }
-
     sql += ` ORDER BY s.scheduled_date`;
 
     const { rows } = await pool.query(sql, params);
@@ -1257,7 +1563,6 @@ app.get("/api/fire-control/schedule", async (req, res) => {
   }
 });
 
-// Create schedule entry
 app.post("/api/fire-control/schedule", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
@@ -1276,21 +1581,19 @@ app.post("/api/fire-control/schedule", async (req, res) => {
   }
 });
 
-// Update schedule entry
 app.put("/api/fire-control/schedule/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { scheduled_date, status, assigned_to, notes } = req.body;
 
     const { rows } = await pool.query(`
-      UPDATE fc_schedule
-      SET scheduled_date = COALESCE($1, scheduled_date),
-          status = COALESCE($2, status),
-          assigned_to = COALESCE($3, assigned_to),
-          notes = COALESCE($4, notes),
-          updated_at = now()
-      WHERE id = $5
-      RETURNING *
+      UPDATE fc_schedule SET
+        scheduled_date = COALESCE($1, scheduled_date),
+        status = COALESCE($2, status),
+        assigned_to = COALESCE($3, assigned_to),
+        notes = COALESCE($4, notes),
+        updated_at = now()
+      WHERE id = $5 RETURNING *
     `, [scheduled_date, status, assigned_to, notes, id]);
 
     if (!rows.length) return res.status(404).json({ error: "Schedule entry not found" });
@@ -1302,81 +1605,7 @@ app.put("/api/fire-control/schedule/:id", async (req, res) => {
 });
 
 // ------------------------------
-// ROUTES: Dashboard / Stats
-// ------------------------------
-
-app.get("/api/fire-control/dashboard", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
-    const year = req.query.year || new Date().getFullYear();
-
-    // Get current year campaign stats
-    const campaignStats = await pool.query(`
-      SELECT
-        COUNT(*) as total_campaigns,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress
-      FROM fc_campaigns
-      WHERE ${filter.where} AND year = $${filter.params.length + 1}
-    `, [...filter.params, year]);
-
-    // Get check stats
-    const checkStats = await pool.query(`
-      SELECT
-        COUNT(*) as total_checks,
-        COUNT(*) FILTER (WHERE c.status = 'passed') as passed,
-        COUNT(*) FILTER (WHERE c.status = 'failed') as failed,
-        COUNT(*) FILTER (WHERE c.status = 'pending') as pending
-      FROM fc_checks c
-      JOIN fc_campaigns camp ON camp.id = c.campaign_id
-      WHERE ${filter.where.replace(/company_id/g, 'c.company_id').replace(/site_id/g, 'c.site_id')}
-        AND camp.year = $${filter.params.length + 1}
-    `, [...filter.params, year]);
-
-    // Get building summary
-    const buildingStats = await pool.query(`
-      SELECT
-        d.building,
-        COUNT(DISTINCT d.id) as detector_count,
-        COUNT(DISTINCT c.id) as check_count,
-        COUNT(*) FILTER (WHERE c.status = 'passed') as passed,
-        COUNT(*) FILTER (WHERE c.status = 'failed') as failed
-      FROM fc_detectors d
-      LEFT JOIN fc_checks c ON c.detector_id = d.id
-      LEFT JOIN fc_campaigns camp ON camp.id = c.campaign_id AND camp.year = $${filter.params.length + 1}
-      WHERE ${filter.where.replace(/company_id/g, 'd.company_id').replace(/site_id/g, 'd.site_id')}
-      GROUP BY d.building
-      ORDER BY d.building
-    `, [...filter.params, year]);
-
-    // Get upcoming schedule
-    const upcoming = await pool.query(`
-      SELECT s.*, c.name as campaign_name
-      FROM fc_schedule s
-      LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
-      WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}
-        AND s.scheduled_date >= CURRENT_DATE
-        AND s.status != 'completed'
-      ORDER BY s.scheduled_date
-      LIMIT 10
-    `, filter.params);
-
-    res.json({
-      year: Number(year),
-      campaigns: campaignStats.rows[0],
-      checks: checkStats.rows[0],
-      buildings: buildingStats.rows,
-      upcoming_schedule: upcoming.rows,
-    });
-  } catch (err) {
-    console.error("[FireControl] GET dashboard error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ------------------------------
-// ROUTES: Report Generation
+// ROUTES: Reports
 // ------------------------------
 
 app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
@@ -1385,18 +1614,17 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
     const tenant = extractTenantFromRequest(req);
     const { email, name } = getIdentityFromReq(req);
 
-    // Get campaign
     const { rows: campRows } = await pool.query(`SELECT * FROM fc_campaigns WHERE id = $1`, [id]);
     if (!campRows.length) return res.status(404).json({ error: "Campaign not found" });
     const campaign = campRows[0];
 
-    // Get all checks with details
-    const { rows: checks } = await pool.query(`
-      SELECT c.*, d.detector_number, d.building, d.floor, d.zone, d.access_point, d.location_description
-      FROM fc_checks c
-      JOIN fc_detectors d ON d.id = c.detector_id
-      WHERE c.campaign_id = $1
-      ORDER BY d.building, d.floor, d.detector_number
+    // Get all zone checks with results
+    const { rows: zoneChecks } = await pool.query(`
+      SELECT zc.*, z.code as zone_code, z.name as zone_name, z.building, z.floor
+      FROM fc_zone_checks zc
+      JOIN fc_zones z ON z.id = zc.zone_id
+      WHERE zc.campaign_id = $1
+      ORDER BY z.building, z.floor, z.code
     `, [id]);
 
     // Generate PDF
@@ -1406,7 +1634,6 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
     const writeStream = fs.createWriteStream(filePath);
     doc.pipe(writeStream);
 
-    // Header
     doc.fontSize(20).text("Rapport de Contrôle des Asservissements Incendie", { align: "center" });
     doc.moveDown();
     doc.fontSize(14).text(`Campagne: ${campaign.name}`, { align: "center" });
@@ -1414,22 +1641,23 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
     doc.text(`Date du rapport: ${new Date().toLocaleDateString("fr-FR")}`, { align: "center" });
     doc.moveDown(2);
 
-    // Summary
-    const passed = checks.filter(c => c.status === "passed").length;
-    const failed = checks.filter(c => c.status === "failed").length;
-    const pending = checks.filter(c => c.status === "pending").length;
+    const passed = zoneChecks.filter(c => c.status === "passed").length;
+    const failed = zoneChecks.filter(c => c.status === "failed").length;
+    const partial = zoneChecks.filter(c => c.status === "partial").length;
+    const pending = zoneChecks.filter(c => c.status === "pending").length;
 
     doc.fontSize(14).text("Résumé", { underline: true });
     doc.fontSize(11);
-    doc.text(`Total des contrôles: ${checks.length}`);
-    doc.text(`Conformes: ${passed}`, { continued: false });
+    doc.text(`Total des zones: ${zoneChecks.length}`);
+    doc.text(`Conformes: ${passed}`);
     doc.text(`Non-conformes: ${failed}`);
+    doc.text(`Partiels: ${partial}`);
     doc.text(`En attente: ${pending}`);
     doc.moveDown(2);
 
-    // Details by building
+    // Group by building
     const byBuilding = {};
-    for (const check of checks) {
+    for (const check of zoneChecks) {
       const bld = check.building || "Non défini";
       if (!byBuilding[bld]) byBuilding[bld] = [];
       byBuilding[bld].push(check);
@@ -1440,26 +1668,19 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
       doc.moveDown(0.5);
 
       for (const check of buildingChecks) {
-        const statusIcon = check.status === "passed" ? "✓" : check.status === "failed" ? "✗" : "○";
-        doc.fontSize(10).text(
-          `${statusIcon} Détecteur ${check.detector_number} - ${check.floor || ""} ${check.zone || ""} - Alarme 1: ${check.alarm1_ok ? "OK" : "NOK"} | Alarme 2: ${check.alarm2_ok ? "OK" : "NOK"}`
-        );
-        if (check.notes) {
-          doc.fontSize(9).text(`   Notes: ${check.notes}`, { indent: 20 });
-        }
+        const statusIcon = check.status === "passed" ? "✓" : check.status === "failed" ? "✗" : check.status === "partial" ? "◐" : "○";
+        doc.fontSize(10).text(`${statusIcon} Zone ${check.zone_code} - ${check.zone_name} - AL1: ${check.alarm1_triggered ? "OK" : "-"} | AL2: ${check.alarm2_triggered ? "OK" : "-"}`);
+        if (check.notes) doc.fontSize(9).text(`   Notes: ${check.notes}`, { indent: 20 });
       }
       doc.moveDown();
     }
 
-    // Footer
     doc.moveDown(2);
     doc.fontSize(9).text(`Généré par: ${name || email || "Système"}`, { align: "right" });
-
     doc.end();
 
     await new Promise((resolve) => writeStream.on("finish", resolve));
 
-    // Store report reference
     const fileContent = await fsp.readFile(filePath);
     const { rows: reportRows } = await pool.query(`
       INSERT INTO fc_reports (campaign_id, report_type, filename, file_path, content, generated_by_email, generated_by_name, company_id, site_id)
@@ -1467,12 +1688,7 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
       RETURNING *
     `, [id, filename, filePath, fileContent, email, name, tenant.companyId, tenant.siteId]);
 
-    await audit.log(req, AUDIT_ACTIONS.EXPORTED, {
-      entityType: "report",
-      entityId: reportRows[0].id,
-      details: { campaign_id: id, filename },
-    });
-
+    await audit.log(req, AUDIT_ACTIONS.EXPORTED, { entityType: "report", entityId: reportRows[0].id });
     res.json({ success: true, report_id: reportRows[0].id, filename });
   } catch (err) {
     console.error("[FireControl] Generate report error:", err);
@@ -1480,7 +1696,6 @@ app.post("/api/fire-control/campaigns/:id/report", async (req, res) => {
   }
 });
 
-// Get report file
 app.get("/api/fire-control/reports/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
@@ -1488,19 +1703,14 @@ app.get("/api/fire-control/reports/:id/file", async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: "Report not found" });
 
-    const report = rows[0];
-    let buffer = report.content;
-
-    if (!buffer && report.file_path) {
-      try {
-        buffer = await fsp.readFile(report.file_path);
-      } catch {}
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
     }
-
     if (!buffer) return res.status(404).json({ error: "File not found" });
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${report.filename}"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${rows[0].filename}"`);
     res.send(buffer);
   } catch (err) {
     console.error("[FireControl] GET report file error:", err);
@@ -1508,22 +1718,19 @@ app.get("/api/fire-control/reports/:id/file", async (req, res) => {
   }
 });
 
-// List reports
 app.get("/api/fire-control/reports", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
     const { campaign_id } = req.query;
 
-    let sql = `SELECT id, campaign_id, report_type, filename, generated_by_name, created_at
-               FROM fc_reports WHERE ${filter.where}`;
+    let sql = `SELECT id, campaign_id, report_type, filename, generated_by_name, created_at FROM fc_reports WHERE ${filter.where}`;
     const params = [...filter.params];
 
     if (campaign_id) {
       params.push(campaign_id);
       sql += ` AND campaign_id = $${params.length}`;
     }
-
     sql += ` ORDER BY created_at DESC`;
 
     const { rows } = await pool.query(sql, params);
@@ -1535,40 +1742,198 @@ app.get("/api/fire-control/reports", async (req, res) => {
 });
 
 // ------------------------------
-// ROUTES: Interlocks
+// ROUTES: External System Links
 // ------------------------------
 
-// List interlocks
-app.get("/api/fire-control/interlocks", async (req, res) => {
+// Link equipment to external system (Doors, Switchboard, etc.)
+app.post("/api/fire-control/equipment/:id/link-external", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { external_system, external_id } = req.body;
+
+    const { rows } = await pool.query(`
+      UPDATE fc_equipment SET
+        external_system = $1,
+        external_id = $2,
+        updated_at = now()
+      WHERE id = $3
+      RETURNING *
+    `, [external_system, external_id, id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Equipment not found" });
+
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, {
+      entityType: "equipment",
+      entityId: id,
+      details: { external_system, external_id },
+    });
+
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] Link external error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get equipment linked to a specific external system/id
+app.get("/api/fire-control/equipment/by-external", async (req, res) => {
   try {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
-    const { station, type } = req.query;
+    const { system, id: externalId } = req.query;
 
-    let sql = `SELECT * FROM fc_interlocks WHERE ${filter.where}`;
+    let sql = `SELECT * FROM fc_equipment WHERE ${filter.where}`;
     const params = [...filter.params];
 
-    if (station) {
-      params.push(Number(station));
-      sql += ` AND station = $${params.length}`;
+    if (system) {
+      params.push(system);
+      sql += ` AND external_system = $${params.length}`;
     }
-    if (type) {
-      params.push(type);
-      sql += ` AND interlock_type = $${params.length}`;
+    if (externalId) {
+      params.push(externalId);
+      sql += ` AND external_id = $${params.length}`;
     }
-
-    sql += ` ORDER BY station, name`;
 
     const { rows } = await pool.query(sql, params);
     res.json(rows);
   } catch (err) {
-    console.error("[FireControl] GET interlocks error:", err);
+    console.error("[FireControl] GET equipment by external error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ------------------------------
-// ROUTES: Alerts (retards de contrôle)
+// ROUTES: Maps
+// ------------------------------
+
+app.get("/api/fire-control/maps/listPlans", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
+
+    const { rows } = await pool.query(`
+      SELECT id, building, floor, name, filename, version, page_count, is_active, created_at
+      FROM fc_building_plans WHERE ${filter.where} AND is_active = true
+      ORDER BY building, floor
+    `, filter.params);
+
+    const plans = rows.map(p => ({
+      ...p,
+      logical_name: `${p.building}_${p.floor || 'all'}`.replace(/\s+/g, '_'),
+      display_name: `${p.building} - ${p.floor || 'Tous niveaux'}`,
+    }));
+
+    res.json({ plans });
+  } catch (err) {
+    console.error("[FireControl] GET maps/listPlans error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/fire-control/maps/planFile", async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    const { rows } = await pool.query(`SELECT filename, content, file_path FROM fc_building_plans WHERE id = $1`, [id]);
+
+    if (!rows.length) return res.status(404).json({ error: "Plan not found" });
+
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
+    }
+    if (!buffer) return res.status(404).json({ error: "File not found" });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("[FireControl] GET maps/planFile error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/fire-control/maps/positions", async (req, res) => {
+  try {
+    const { plan_id, page_index = 0 } = req.query;
+    if (!plan_id) return res.json({ positions: [] });
+
+    const { rows } = await pool.query(`
+      SELECT mp.*,
+        CASE mp.entity_type WHEN 'zone' THEN z.code WHEN 'equipment' THEN e.code END as entity_code,
+        CASE mp.entity_type WHEN 'zone' THEN z.name WHEN 'equipment' THEN e.name END as entity_name
+      FROM fc_map_positions mp
+      LEFT JOIN fc_zones z ON mp.entity_type = 'zone' AND mp.entity_id = z.id
+      LEFT JOIN fc_equipment e ON mp.entity_type = 'equipment' AND mp.entity_id = e.id
+      WHERE mp.plan_id = $1 AND mp.page_index = $2
+    `, [plan_id, Number(page_index)]);
+
+    res.json({ positions: rows });
+  } catch (err) {
+    console.error("[FireControl] GET maps/positions error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/fire-control/maps/setPosition", async (req, res) => {
+  try {
+    const { entity_type, entity_id, plan_id, page_index = 0, x_frac, y_frac } = req.body;
+
+    const { rows } = await pool.query(`
+      INSERT INTO fc_map_positions (entity_type, entity_id, plan_id, page_index, x_frac, y_frac)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (entity_type, entity_id, plan_id, page_index)
+      DO UPDATE SET x_frac = $5, y_frac = $6, updated_at = now()
+      RETURNING *
+    `, [entity_type, entity_id, plan_id, page_index, x_frac, y_frac]);
+
+    await audit.log(req, AUDIT_ACTIONS.POSITION_SET, { entityType: "map_position", entityId: rows[0].id });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("[FireControl] POST maps/setPosition error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/fire-control/maps/positions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM fc_map_positions WHERE id = $1`, [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[FireControl] DELETE position error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Files
+// ------------------------------
+
+app.get("/api/fire-control/files/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(`SELECT filename, content, file_path, mime FROM fc_check_files WHERE id = $1`, [id]);
+
+    if (!rows.length) return res.status(404).json({ error: "File not found" });
+
+    let buffer = rows[0].content;
+    if (!buffer && rows[0].file_path) {
+      try { buffer = await fsp.readFile(rows[0].file_path); } catch {}
+    }
+    if (!buffer) return res.status(404).json({ error: "File not found" });
+
+    res.setHeader("Content-Type", rows[0].mime || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${rows[0].filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("[FireControl] GET file error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
+// ROUTES: Alerts
 // ------------------------------
 
 app.get("/api/fire-control/alerts", async (req, res) => {
@@ -1576,35 +1941,27 @@ app.get("/api/fire-control/alerts", async (req, res) => {
     const tenant = extractTenantFromRequest(req);
     const filter = getTenantFilter(tenant);
 
-    // Get overdue scheduled controls (date passed, not completed)
     const overdueSchedule = await pool.query(`
       SELECT s.*, c.name as campaign_name
       FROM fc_schedule s
       LEFT JOIN fc_campaigns c ON c.id = s.campaign_id
       WHERE ${filter.where.replace(/company_id/g, 's.company_id').replace(/site_id/g, 's.site_id')}
-        AND s.scheduled_date < CURRENT_DATE
-        AND s.status NOT IN ('completed', 'cancelled')
+        AND s.scheduled_date < CURRENT_DATE AND s.status NOT IN ('completed', 'cancelled')
       ORDER BY s.scheduled_date
     `, filter.params);
 
-    // Get pending checks from active campaigns that should be done (campaign end_date passed)
     const overdueChecks = await pool.query(`
-      SELECT
-        c.id as campaign_id,
-        c.name as campaign_name,
-        c.end_date,
-        COUNT(*) FILTER (WHERE ch.status = 'pending') as pending_count,
+      SELECT c.id as campaign_id, c.name as campaign_name, c.end_date,
+        COUNT(*) FILTER (WHERE zc.status = 'pending') as pending_count,
         COUNT(*) as total_checks
       FROM fc_campaigns c
-      LEFT JOIN fc_checks ch ON ch.campaign_id = c.id
+      LEFT JOIN fc_zone_checks zc ON zc.campaign_id = c.id
       WHERE ${filter.where.replace(/company_id/g, 'c.company_id').replace(/site_id/g, 'c.site_id')}
-        AND c.end_date < CURRENT_DATE
-        AND c.status = 'in_progress'
+        AND c.end_date < CURRENT_DATE AND c.status = 'in_progress'
       GROUP BY c.id, c.name, c.end_date
-      HAVING COUNT(*) FILTER (WHERE ch.status = 'pending') > 0
+      HAVING COUNT(*) FILTER (WHERE zc.status = 'pending') > 0
     `, filter.params);
 
-    // Get upcoming controls (next 30 days)
     const upcomingSchedule = await pool.query(`
       SELECT s.*, c.name as campaign_name
       FROM fc_schedule s
@@ -1631,212 +1988,10 @@ app.get("/api/fire-control/alerts", async (req, res) => {
 });
 
 // ------------------------------
-// ROUTES: Maps (for Leaflet visualization)
-// ------------------------------
-
-// List plans for maps
-app.get("/api/fire-control/maps/listPlans", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
-
-    const { rows } = await pool.query(`
-      SELECT id, building, floor, name, filename, version, page_count, is_active, created_at
-      FROM fc_building_plans
-      WHERE ${filter.where} AND is_active = true
-      ORDER BY building, floor
-    `, filter.params);
-
-    // Format for compatibility with other map views
-    const plans = rows.map(p => ({
-      ...p,
-      logical_name: `${p.building}_${p.floor || 'all'}`.replace(/\s+/g, '_'),
-      display_name: `${p.building} - ${p.floor || 'Tous niveaux'}`,
-    }));
-
-    res.json({ plans });
-  } catch (err) {
-    console.error("[FireControl] GET maps/listPlans error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get plan file for map display
-app.get("/api/fire-control/maps/planFile", async (req, res) => {
-  try {
-    const { id, logical_name } = req.query;
-
-    let rows;
-    if (id) {
-      ({ rows } = await pool.query(`SELECT filename, content, file_path FROM fc_building_plans WHERE id = $1`, [id]));
-    } else if (logical_name) {
-      // Parse logical_name to get building and floor
-      const parts = logical_name.split('_');
-      const building = parts[0];
-      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
-
-      ({ rows } = await pool.query(`
-        SELECT filename, content, file_path FROM fc_building_plans
-        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
-        ORDER BY created_at DESC LIMIT 1
-      `, [building, floor === 'all' ? null : floor]));
-    }
-
-    if (!rows || !rows.length) return res.status(404).json({ error: "Plan not found" });
-
-    const plan = rows[0];
-    let buffer = plan.content;
-
-    if (!buffer && plan.file_path) {
-      try {
-        buffer = await fsp.readFile(plan.file_path);
-      } catch {}
-    }
-
-    if (!buffer) return res.status(404).json({ error: "File not found" });
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${plan.filename}"`);
-    res.send(buffer);
-  } catch (err) {
-    console.error("[FireControl] GET maps/planFile error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get positions for a plan (for map markers)
-app.get("/api/fire-control/maps/positions", async (req, res) => {
-  try {
-    const { id, logical_name, page_index = 0 } = req.query;
-
-    let planId = id;
-
-    // If logical_name provided, find the plan ID
-    if (!planId && logical_name) {
-      const parts = logical_name.split('_');
-      const building = parts[0];
-      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
-
-      const { rows: planRows } = await pool.query(`
-        SELECT id FROM fc_building_plans
-        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
-        ORDER BY created_at DESC LIMIT 1
-      `, [building, floor === 'all' ? null : floor]);
-
-      if (planRows.length) planId = planRows[0].id;
-    }
-
-    if (!planId) return res.json({ positions: [] });
-
-    const { rows } = await pool.query(`
-      SELECT
-        dp.id as position_id,
-        dp.detector_id,
-        dp.x_frac,
-        dp.y_frac,
-        dp.page_index,
-        d.detector_number,
-        d.detector_type,
-        d.building,
-        d.floor,
-        d.zone,
-        d.access_point,
-        d.location_description
-      FROM fc_detector_positions dp
-      JOIN fc_detectors d ON d.id = dp.detector_id
-      WHERE dp.plan_id = $1 AND dp.page_index = $2
-    `, [planId, Number(page_index)]);
-
-    res.json({ positions: rows });
-  } catch (err) {
-    console.error("[FireControl] GET maps/positions error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Set position for a detector on a plan
-app.post("/api/fire-control/maps/setPosition", async (req, res) => {
-  try {
-    const { detector_id, plan_id, logical_name, page_index = 0, x_frac, y_frac } = req.body;
-    const { email, name } = getIdentityFromReq(req);
-
-    let finalPlanId = plan_id;
-
-    // If logical_name provided, find the plan ID
-    if (!finalPlanId && logical_name) {
-      const parts = logical_name.split('_');
-      const building = parts[0];
-      const floor = parts.slice(1).join('_').replace(/_/g, ' ') || null;
-
-      const { rows: planRows } = await pool.query(`
-        SELECT id FROM fc_building_plans
-        WHERE building = $1 AND (floor = $2 OR ($2 IS NULL AND floor IS NULL)) AND is_active = true
-        ORDER BY created_at DESC LIMIT 1
-      `, [building, floor === 'all' ? null : floor]);
-
-      if (planRows.length) finalPlanId = planRows[0].id;
-    }
-
-    if (!finalPlanId) return res.status(400).json({ error: "Plan not found" });
-
-    const { rows } = await pool.query(`
-      INSERT INTO fc_detector_positions (detector_id, plan_id, page_index, x_frac, y_frac)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (detector_id, plan_id, page_index)
-      DO UPDATE SET x_frac = $4, y_frac = $5, updated_at = now()
-      RETURNING *
-    `, [detector_id, finalPlanId, page_index, x_frac, y_frac]);
-
-    await audit.log(req, AUDIT_ACTIONS.POSITION_SET, {
-      entityType: "detector_position",
-      entityId: rows[0].id,
-      details: { detector_id, plan_id: finalPlanId, x_frac, y_frac },
-    });
-
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("[FireControl] POST maps/setPosition error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Delete position
-app.delete("/api/fire-control/maps/positions/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    await pool.query(`DELETE FROM fc_detector_positions WHERE id = $1`, [id]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[FireControl] DELETE position error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get placed detector IDs (for map highlighting)
-app.get("/api/fire-control/maps/placed-ids", async (req, res) => {
-  try {
-    const tenant = extractTenantFromRequest(req);
-    const filter = getTenantFilter(tenant);
-
-    const { rows } = await pool.query(`
-      SELECT DISTINCT dp.detector_id
-      FROM fc_detector_positions dp
-      JOIN fc_detectors d ON d.id = dp.detector_id
-      WHERE ${filter.where.replace(/company_id/g, 'd.company_id').replace(/site_id/g, 'd.site_id')}
-    `, filter.params);
-
-    res.json({ placed_ids: rows.map(r => r.detector_id) });
-  } catch (err) {
-    console.error("[FireControl] GET placed-ids error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ------------------------------
 // Health check
 // ------------------------------
 app.get("/api/fire-control/health", (req, res) => {
-  res.json({ status: "ok", service: "fire-control", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", service: "fire-control-v2", timestamp: new Date().toISOString() });
 });
 
 // ------------------------------
@@ -1846,7 +2001,7 @@ async function start() {
   try {
     await ensureSchema();
     app.listen(PORT, HOST, () => {
-      console.log(`[FireControl] Server running on http://${HOST}:${PORT}`);
+      console.log(`[FireControl v2.0] Server running on http://${HOST}:${PORT}`);
     });
   } catch (err) {
     console.error("[FireControl] Failed to start:", err);
