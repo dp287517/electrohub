@@ -1135,6 +1135,8 @@ export default function Switchboards() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showBoardActionsMenu, setShowBoardActionsMenu] = useState(false);
+  const [showPhotoGallery, setShowPhotoGallery] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showAIWizard, setShowAIWizard] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -1156,8 +1158,12 @@ export default function Switchboards() {
 
   // Photo state - FIXED: stable timestamp for caching
   const [photoVersion, setPhotoVersion] = useState({});
+  const [galleryPhotos, setGalleryPhotos] = useState([]);
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
+  const [loadingGallery, setLoadingGallery] = useState(false);
 
   const boardPhotoRef = useRef(null);
+  const galleryPhotoRef = useRef(null);
 
   // Effects
   useEffect(() => {
@@ -1193,6 +1199,23 @@ export default function Switchboards() {
       setSelectedBoard(null);
     }
   }, [searchParams, showPanelScan]);
+
+  // Load gallery photos when modal opens
+  useEffect(() => {
+    if (showPhotoGallery && selectedBoard) {
+      setLoadingGallery(true);
+      setSelectedPhotoIndex(0);
+      api.switchboard.getBoardPhotos(selectedBoard.id)
+        .then(res => {
+          setGalleryPhotos(res.photos || []);
+        })
+        .catch(err => {
+          console.error('Failed to load gallery photos:', err);
+          setGalleryPhotos([]);
+        })
+        .finally(() => setLoadingGallery(false));
+    }
+  }, [showPhotoGallery, selectedBoard?.id]);
 
   // Handle scan job URL params (from notification click)
   useEffect(() => {
@@ -1382,6 +1405,8 @@ export default function Switchboards() {
 
   const handleSelectBoard = async (board) => {
     setSearchParams({ board: board.id.toString() });
+    setShowBoardActionsMenu(false);
+    setShowPhotoGallery(false);
     try {
       const fullBoard = await api.switchboard.getBoard(board.id);
       setSelectedBoard(fullBoard);
@@ -2779,9 +2804,10 @@ export default function Switchboards() {
             <AnimatedCard>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
                 <div className="flex flex-col sm:flex-row">
+                  {/* Photo du tableau - cliquable pour voir en grand */}
                   <div
-                    onClick={() => boardPhotoRef.current?.click()}
-                    className="w-full sm:w-32 h-24 sm:h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
+                    onClick={() => selectedBoard.has_photo ? setShowPhotoGallery(true) : boardPhotoRef.current?.click()}
+                    className="w-full sm:w-32 h-32 sm:h-32 bg-gray-100 flex-shrink-0 relative group cursor-pointer"
                   >
                     <input ref={boardPhotoRef} type="file" accept="image/*" onChange={handleBoardPhotoUpload} className="hidden" />
                     {selectedBoard.has_photo ? (
@@ -2791,29 +2817,44 @@ export default function Switchboards() {
                         <ImagePlus size={32} />
                       </div>
                     )}
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Camera size={24} className="text-white" />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      {selectedBoard.has_photo ? (
+                        <>
+                          <Eye size={20} className="text-white" />
+                          <span className="text-white text-sm">Voir</span>
+                        </>
+                      ) : (
+                        <Camera size={24} className="text-white" />
+                      )}
                     </div>
+                    {/* Badge photo count */}
+                    {(selectedBoard.photos_count || 0) > 1 && (
+                      <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-0.5 rounded-full">
+                        {selectedBoard.photos_count} photos
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex-1 p-4">
-                    <div className="flex items-start justify-between">
-                      <div>
+                  <div className="flex-1 p-3 sm:p-4">
+                    {/* Header mobile: code + boutons sur une ligne */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           {selectedBoard.is_principal && (
                             <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">Principal</span>
                           )}
                           <span className="text-lg font-mono font-bold text-gray-900">{selectedBoard.code}</span>
                           {!isBoardPlacedOnMap(selectedBoard) && (
-                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-1">
-                              <MapPin size={10} />Non placé
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full flex items-center gap-0.5">
+                              <MapPin size={10} />
+                              <span className="hidden xs:inline">Non placé</span>
                             </span>
                           )}
                         </div>
-                        <h2 className="text-base text-gray-600 mt-1">{selectedBoard.name}</h2>
-                        
+                        <h2 className="text-sm sm:text-base text-gray-600 mt-0.5 truncate">{selectedBoard.name}</h2>
+
                         {selectedBoard.upstream_sources?.length > 0 && (
-                          <div className="mt-1">
+                          <div className="mt-1 flex flex-wrap gap-1">
                             {selectedBoard.upstream_sources.map(source => (
                               <button
                                 key={source.id}
@@ -2824,7 +2865,7 @@ export default function Switchboards() {
                                     return next;
                                   });
                                 }}
-                                className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2 hover:bg-amber-100 transition-colors cursor-pointer"
+                                className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-md hover:bg-amber-100 transition-colors cursor-pointer"
                                 title={`Aller vers ${source.source_board_name}`}
                               >
                                 ← {source.source_board_code}
@@ -2835,46 +2876,97 @@ export default function Switchboards() {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      {/* Boutons - version mobile compacte */}
+                      <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+                        {/* Bouton AI - toujours visible */}
                         <button
                           onClick={() => setShowAIChat(true)}
-                          className={`p-1.5 sm:p-2 rounded-lg sm:rounded-xl flex items-center gap-1 ${
+                          className={`p-1.5 sm:p-2 rounded-lg flex items-center ${
                             controlStatuses[selectedBoard.id]?.status === 'overdue'
                               ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
                               : 'text-gray-400 hover:text-purple-500 hover:bg-purple-50'
                           }`}
                           title="Assistant IA"
                         >
-                          <Sparkles size={16} className="sm:w-[18px] sm:h-[18px]" />
+                          <Sparkles size={16} />
                         </button>
-                        <button onClick={() => setShowShareModal(true)} className="p-1.5 sm:p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg sm:rounded-xl" title="Partager">
-                          <Link size={16} className="sm:w-[18px] sm:h-[18px]" />
-                        </button>
+
+                        {/* Plans - visible si important */}
                         <button
                           onClick={() => handleNavigateToMap(selectedBoard)}
-                          className={`p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-sm font-medium flex items-center gap-1.5 ${
+                          className={`p-1.5 sm:p-2 rounded-lg flex items-center gap-1 ${
                             isBoardPlacedOnMap(selectedBoard) ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
                           }`}
                           title="Plans"
                         >
                           <MapPin size={16} />
-                          <span className="hidden sm:inline">Plans</span>
+                          <span className="hidden sm:inline text-sm">Plans</span>
                         </button>
-                        <button onClick={handlePrintPDF} disabled={isPrinting} className="p-1.5 sm:p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg sm:rounded-xl disabled:opacity-50" title="Imprimer PDF">
-                          {isPrinting ? <RefreshCw size={16} className="sm:w-[18px] sm:h-[18px] animate-spin" /> : <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />}
-                        </button>
-                        <button onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)} className="hidden sm:block p-1.5 sm:p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-lg sm:rounded-xl" title="Schéma">
-                          <GitBranch size={16} className="sm:w-[18px] sm:h-[18px]" />
-                        </button>
-                        <button onClick={() => startEditBoard(selectedBoard)} className="p-1.5 sm:p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg sm:rounded-xl" title="Modifier">
-                          <Edit3 size={16} className="sm:w-[18px] sm:h-[18px]" />
-                        </button>
-                        <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-1.5 sm:p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg sm:rounded-xl" title="Supprimer">
-                          <Trash2 size={16} className="sm:w-[18px] sm:h-[18px]" />
-                        </button>
+
+                        {/* Menu actions - caché sur mobile, visible sur desktop */}
+                        <div className="hidden sm:flex items-center gap-1">
+                          <button onClick={() => setShowShareModal(true)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg" title="Partager">
+                            <Link size={18} />
+                          </button>
+                          <button onClick={handlePrintPDF} disabled={isPrinting} className="p-2 text-gray-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg disabled:opacity-50" title="Imprimer PDF">
+                            {isPrinting ? <RefreshCw size={18} className="animate-spin" /> : <Printer size={18} />}
+                          </button>
+                          <button onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)} className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-lg" title="Schéma">
+                            <GitBranch size={18} />
+                          </button>
+                          <button onClick={() => startEditBoard(selectedBoard)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg" title="Modifier">
+                            <Edit3 size={18} />
+                          </button>
+                          <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Supprimer">
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+
+                        {/* Menu burger sur mobile */}
+                        <div className="relative sm:hidden">
+                          <button
+                            onClick={() => setShowBoardActionsMenu(!showBoardActionsMenu)}
+                            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+                          >
+                            <MoreVertical size={18} />
+                          </button>
+                          {showBoardActionsMenu && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setShowBoardActionsMenu(false)} />
+                              <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border z-50 py-1 min-w-[160px]">
+                                <button onClick={() => { setShowShareModal(true); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <Link size={16} className="text-gray-400" />
+                                  Partager
+                                </button>
+                                <button onClick={() => { handlePrintPDF(); setShowBoardActionsMenu(false); }} disabled={isPrinting} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 disabled:opacity-50">
+                                  <Printer size={16} className="text-gray-400" />
+                                  Imprimer PDF
+                                </button>
+                                <button onClick={() => { navigate(`/app/switchboards/${selectedBoard.id}/diagram`); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <GitBranch size={16} className="text-gray-400" />
+                                  Schéma
+                                </button>
+                                <button onClick={() => { boardPhotoRef.current?.click(); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <Camera size={16} className="text-gray-400" />
+                                  Changer la photo
+                                </button>
+                                <hr className="my-1" />
+                                <button onClick={() => { startEditBoard(selectedBoard); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3">
+                                  <Edit3 size={16} className="text-blue-500" />
+                                  Modifier
+                                </button>
+                                <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3">
+                                  <Trash2 size={16} />
+                                  Supprimer
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
 
+                    {/* Barre de progression */}
                     {(selectedBoard.device_count || 0) > 0 && (
                       <div className="mt-3">
                         <div className="flex items-center justify-between text-sm mb-1">
@@ -3083,10 +3175,9 @@ export default function Switchboards() {
                   <Camera size={16} className="sm:w-[18px] sm:h-[18px]" />
                   <span className="hidden sm:inline">Scan Tableau</span>
                 </button>
-                <button onClick={() => setShowDeviceForm(true)} className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base">
+                <button onClick={() => setShowDeviceForm(true)} className="px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium flex items-center gap-1.5 text-sm sm:text-base" title="Ajouter un disjoncteur">
                   <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
                   <span className="hidden sm:inline">Ajouter</span>
-                  <span className="sm:hidden">+</span>
                 </button>
               </div>
             </div>
@@ -3200,6 +3291,209 @@ export default function Switchboards() {
           </div>
         </div>
       )}
+
+      {/* Photo Gallery Modal */}
+      {showPhotoGallery && selectedBoard && (() => {
+        // Combine profile photo + gallery photos
+        const allPhotos = [
+          ...(selectedBoard.has_photo ? [{ id: 'profile', source: 'profile', description: 'Photo de profil' }] : []),
+          ...galleryPhotos
+        ];
+        const currentPhoto = allPhotos[selectedPhotoIndex];
+        const hasMultiplePhotos = allPhotos.length > 1;
+
+        const getCurrentPhotoUrl = () => {
+          if (!currentPhoto) return null;
+          if (currentPhoto.id === 'profile') {
+            return getBoardPhotoUrl(selectedBoard.id);
+          }
+          return api.switchboard.boardGalleryPhotoUrl(selectedBoard.id, currentPhoto.id);
+        };
+
+        const handleDeletePhoto = async () => {
+          if (!currentPhoto || currentPhoto.id === 'profile') return;
+          if (!confirm('Supprimer cette photo ?')) return;
+          try {
+            await api.switchboard.deleteBoardPhoto(selectedBoard.id, currentPhoto.id);
+            setGalleryPhotos(prev => prev.filter(p => p.id !== currentPhoto.id));
+            if (selectedPhotoIndex >= allPhotos.length - 1) {
+              setSelectedPhotoIndex(Math.max(0, selectedPhotoIndex - 1));
+            }
+            showToast('Photo supprimée', 'success');
+          } catch (err) {
+            showToast('Erreur lors de la suppression', 'error');
+          }
+        };
+
+        const handleAddPhoto = async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          try {
+            await api.switchboard.addBoardPhoto(selectedBoard.id, file, 'manual');
+            // Reload photos
+            const res = await api.switchboard.getBoardPhotos(selectedBoard.id);
+            setGalleryPhotos(res.photos || []);
+            showToast('Photo ajoutée', 'success');
+          } catch (err) {
+            showToast('Erreur lors de l\'ajout', 'error');
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col animate-fadeIn">
+            {/* Header */}
+            <div className="flex items-center justify-between p-3 sm:p-4 text-white border-b border-white/10">
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold truncate">{selectedBoard.code}</h3>
+                <p className="text-sm text-gray-400 truncate">{selectedBoard.name}</p>
+              </div>
+              <div className="flex items-center gap-1 sm:gap-2">
+                {/* Ajouter photo */}
+                <input ref={galleryPhotoRef} type="file" accept="image/*" onChange={handleAddPhoto} className="hidden" />
+                <button
+                  onClick={() => galleryPhotoRef.current?.click()}
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white flex items-center gap-2"
+                  title="Ajouter une photo"
+                >
+                  <Plus size={18} />
+                  <span className="hidden sm:inline">Ajouter</span>
+                </button>
+                {/* Supprimer photo (sauf profil) */}
+                {currentPhoto && currentPhoto.id !== 'profile' && (
+                  <button
+                    onClick={handleDeletePhoto}
+                    className="p-2 bg-red-500/20 hover:bg-red-500/40 rounded-lg text-red-400"
+                    title="Supprimer cette photo"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+                {/* Changer photo profil */}
+                {currentPhoto?.id === 'profile' && (
+                  <button
+                    onClick={() => boardPhotoRef.current?.click()}
+                    className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white flex items-center gap-2"
+                    title="Changer la photo de profil"
+                  >
+                    <Camera size={18} />
+                  </button>
+                )}
+                {/* Fermer */}
+                <button
+                  onClick={() => setShowPhotoGallery(false)}
+                  className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Photo principale avec navigation */}
+            <div className="flex-1 flex items-center justify-center p-4 relative overflow-hidden">
+              {loadingGallery ? (
+                <div className="text-gray-400 flex flex-col items-center">
+                  <RefreshCw size={32} className="animate-spin mb-2" />
+                  <span>Chargement...</span>
+                </div>
+              ) : allPhotos.length > 0 ? (
+                <>
+                  {/* Navigation gauche */}
+                  {hasMultiplePhotos && selectedPhotoIndex > 0 && (
+                    <button
+                      onClick={() => setSelectedPhotoIndex(i => i - 1)}
+                      className="absolute left-2 sm:left-4 p-2 sm:p-3 bg-black/50 hover:bg-black/70 rounded-full text-white z-10"
+                    >
+                      <ArrowLeft size={24} />
+                    </button>
+                  )}
+
+                  {/* Image */}
+                  <img
+                    src={getCurrentPhotoUrl()}
+                    alt={currentPhoto?.description || selectedBoard.name}
+                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+                  />
+
+                  {/* Navigation droite */}
+                  {hasMultiplePhotos && selectedPhotoIndex < allPhotos.length - 1 && (
+                    <button
+                      onClick={() => setSelectedPhotoIndex(i => i + 1)}
+                      className="absolute right-2 sm:right-4 p-2 sm:p-3 bg-black/50 hover:bg-black/70 rounded-full text-white z-10"
+                    >
+                      <ArrowRight size={24} />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="text-center text-gray-400">
+                  <ImagePlus size={64} className="mx-auto mb-4 opacity-50" />
+                  <p>Aucune photo</p>
+                  <button
+                    onClick={() => galleryPhotoRef.current?.click()}
+                    className="mt-4 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+                  >
+                    Ajouter une photo
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Miniatures + info */}
+            {allPhotos.length > 0 && (
+              <div className="border-t border-white/10 p-3">
+                {/* Info photo courante */}
+                <div className="text-center mb-3">
+                  <span className="text-white/70 text-sm">
+                    {currentPhoto?.id === 'profile' ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Camera size={14} /> Photo de profil
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <Sparkles size={14} /> {currentPhoto?.description || `Scan - ${new Date(currentPhoto?.created_at).toLocaleDateString('fr-FR')}`}
+                      </span>
+                    )}
+                    {hasMultiplePhotos && (
+                      <span className="ml-2 text-gray-500">({selectedPhotoIndex + 1}/{allPhotos.length})</span>
+                    )}
+                  </span>
+                </div>
+
+                {/* Miniatures */}
+                {hasMultiplePhotos && (
+                  <div className="flex justify-center gap-2 overflow-x-auto pb-2">
+                    {allPhotos.map((photo, index) => (
+                      <button
+                        key={photo.id}
+                        onClick={() => setSelectedPhotoIndex(index)}
+                        className={`flex-shrink-0 w-16 h-16 sm:w-20 sm:h-20 rounded-lg overflow-hidden border-2 transition-all ${
+                          index === selectedPhotoIndex
+                            ? 'border-blue-500 ring-2 ring-blue-500/50'
+                            : 'border-white/20 hover:border-white/50'
+                        }`}
+                      >
+                        <img
+                          src={photo.id === 'profile'
+                            ? getBoardPhotoUrl(selectedBoard.id)
+                            : api.switchboard.boardGalleryPhotoUrl(selectedBoard.id, photo.id)
+                          }
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                        {photo.id === 'profile' && (
+                          <div className="absolute inset-0 flex items-end justify-center">
+                            <span className="bg-black/70 text-white text-[10px] px-1 rounded">Profil</span>
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {showBoardForm && renderBoardForm()}
       {showDeviceForm && renderDeviceForm()}

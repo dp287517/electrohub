@@ -1987,6 +1987,34 @@ export const api = {
       );
     },
 
+    // ========================= GALERIE PHOTOS =========================
+
+    /** Liste des photos de la galerie */
+    getBoardPhotos: (id) =>
+      get(`/api/switchboard/boards/${encodeURIComponent(id)}/photos`),
+
+    /** URL d'une photo de la galerie */
+    boardGalleryPhotoUrl: (boardId, photoId) =>
+      `${API_BASE}/api/switchboard/boards/${encodeURIComponent(boardId)}/photos/${encodeURIComponent(photoId)}?site=${currentSite()}`,
+
+    /** Ajouter une photo à la galerie */
+    addBoardPhoto: (id, file, source = 'manual', description = '') => {
+      const { email } = getIdentity();
+      const fd = new FormData();
+      fd.append("photo", file);
+      fd.append("source", source);
+      if (description) fd.append("description", description);
+      if (email) fd.append("user_email", email);
+      return upload(
+        `/api/switchboard/boards/${encodeURIComponent(id)}/photos`,
+        fd
+      );
+    },
+
+    /** Supprimer une photo de la galerie */
+    deleteBoardPhoto: (boardId, photoId) =>
+      del(`/api/switchboard/boards/${encodeURIComponent(boardId)}/photos/${encodeURIComponent(photoId)}`),
+
     // ========================= PDF EXPORT (LISTING) =========================
 
     /** URL du PDF listing (téléchargement direct via lien <a>) */
