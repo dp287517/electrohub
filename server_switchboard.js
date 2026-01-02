@@ -596,6 +596,23 @@ async function ensureSchema() {
     );
 
     -- =======================================================
+    -- TABLE: Switchboard Photos Gallery
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS switchboard_photos (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+      photo BYTEA NOT NULL,
+      thumbnail BYTEA,
+      source TEXT DEFAULT 'manual',
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_switchboard_photos_board ON switchboard_photos(switchboard_id);
+    CREATE INDEX IF NOT EXISTS idx_switchboard_photos_site ON switchboard_photos(site);
+
+    -- =======================================================
     -- TABLE: Scanned Products Cache
     -- =======================================================
     CREATE TABLE IF NOT EXISTS scanned_products (
@@ -1434,35 +1451,37 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const limit = Math.min(parseInt(pageSize, 10) || 100, 500);
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
-    // REQUÊTE OPTIMISÉE: inclut device_count et complete_count directement
+    // REQUÊTE OPTIMISÉE: inclut device_count, complete_count et photos_count directement
     const sql = `
-      SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
-             modes, quality, diagram_data, created_at, 
-             (photo IS NOT NULL) as has_photo,
-             COALESCE(device_count, 0) as device_count,
-             COALESCE(complete_count, 0) as complete_count
-      FROM switchboards
-      WHERE ${where.join(' AND ')}
-      ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
+      SELECT s.id, s.site, s.name, s.code, s.building_code, s.floor, s.room, s.regime_neutral, s.is_principal,
+             s.modes, s.quality, s.diagram_data, s.created_at,
+             (s.photo IS NOT NULL) as has_photo,
+             COALESCE(s.device_count, 0) as device_count,
+             COALESCE(s.complete_count, 0) as complete_count,
+             COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = s.id), 0) as photos_count
+      FROM switchboards s
+      WHERE ${where.map(w => w.replace(/\b(id|site|name|code|building_code|floor|room)\b/g, 's.$1')).join(' AND ')}
+      ORDER BY ${sortSafe(sort).replace(/^(id|name|code|created_at)$/, 's.$1')} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
     `;
-    
+
     const { rows } = await query(sql, vals, { label: 'LIST_BOARDS', timeout: 8000 });
-    
+
     // Count total (rapide avec index)
     const countRes = await quickQuery(`SELECT COUNT(*)::int AS total FROM switchboards WHERE ${where.join(' AND ')}`, vals);
-    
+
     const data = rows.map(r => ({
       id: r.id,
       meta: { site: r.site, building_code: r.building_code, floor: r.floor, room: r.room },
-      name: r.name, 
-      code: r.code, 
+      name: r.name,
+      code: r.code,
       regime_neutral: r.regime_neutral,
       is_principal: r.is_principal,
       has_photo: r.has_photo,
+      photos_count: parseInt(r.photos_count, 10) || 0,
       diagram_data: r.diagram_data || {},
-      modes: r.modes || {}, 
-      quality: r.quality || {}, 
+      modes: r.modes || {},
+      quality: r.quality || {},
       created_at: r.created_at,
       // COUNTS INCLUS DIRECTEMENT - Plus besoin d'appel séparé!
       device_count: r.device_count,
@@ -1483,12 +1502,13 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site header' });
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
-    
+
     const r = await quickQuery(
-      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
+      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
               modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
               COALESCE(device_count, 0) as device_count,
-              COALESCE(complete_count, 0) as complete_count
+              COALESCE(complete_count, 0) as complete_count,
+              COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = switchboards.id), 0) as photos_count
        FROM switchboards WHERE id=$1 AND site=$2`, [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
@@ -1509,15 +1529,16 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     res.json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
-      name: sb.name, 
-      code: sb.code, 
+      name: sb.name,
+      code: sb.code,
       regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
       has_photo: sb.has_photo,
+      photos_count: parseInt(sb.photos_count, 10) || 0,
       diagram_data: sb.diagram_data || {},
       upstream_sources: upstream.rows,
-      modes: sb.modes || {}, 
-      quality: sb.quality || {}, 
+      modes: sb.modes || {},
+      quality: sb.quality || {},
       created_at: sb.created_at,
       device_count: sb.device_count,
       complete_count: sb.complete_count
@@ -1889,7 +1910,7 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
     const id = Number(req.params.id);
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
 
@@ -1903,6 +1924,119 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
   } catch (e) {
     console.error('[BOARD PHOTO GET]', e.message);
     res.status(500).json({ error: 'Get photo failed' });
+  }
+});
+
+// ============================================================
+// SWITCHBOARD PHOTOS GALLERY
+// ============================================================
+
+// GET /api/switchboard/boards/:id/photos - Liste des photos de la galerie
+app.get('/api/switchboard/boards/:id/photos', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
+
+    const { rows } = await quickQuery(`
+      SELECT id, source, description, created_at, created_by
+      FROM switchboard_photos
+      WHERE switchboard_id = $1 AND site = $2
+      ORDER BY created_at DESC
+    `, [id, site]);
+
+    res.json({ photos: rows });
+  } catch (e) {
+    console.error('[BOARD PHOTOS LIST]', e.message);
+    res.status(500).json({ error: 'Failed to get photos' });
+  }
+});
+
+// GET /api/switchboard/boards/:id/photos/:photoId - Récupérer une photo spécifique
+app.get('/api/switchboard/boards/:id/photos/:photoId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    const photoId = Number(req.params.photoId);
+    if (!id || isNaN(id) || !photoId || isNaN(photoId)) {
+      return res.status(400).json({ error: 'Invalid ID' });
+    }
+
+    const { rows } = await quickQuery(`
+      SELECT photo FROM switchboard_photos
+      WHERE id = $1 AND switchboard_id = $2 AND site = $3
+    `, [photoId, id, site]);
+
+    if (!rows.length || !rows[0].photo) {
+      return res.status(404).json({ error: 'Photo not found' });
+    }
+
+    res.set('Content-Type', 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(rows[0].photo);
+  } catch (e) {
+    console.error('[BOARD PHOTO GET]', e.message);
+    res.status(500).json({ error: 'Failed to get photo' });
+  }
+});
+
+// POST /api/switchboard/boards/:id/photos - Ajouter une photo à la galerie
+app.post('/api/switchboard/boards/:id/photos', upload.single('photo'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
+
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+
+    const user = await currentUser(req);
+    const source = req.body.source || 'manual';
+    const description = req.body.description || null;
+
+    const { rows } = await quickQuery(`
+      INSERT INTO switchboard_photos (site, switchboard_id, photo, source, description, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, source, description, created_at
+    `, [site, id, req.file.buffer, source, description, user?.email]);
+
+    res.json({ success: true, photo: rows[0] });
+  } catch (e) {
+    console.error('[BOARD PHOTO ADD]', e.message);
+    res.status(500).json({ error: 'Failed to add photo' });
+  }
+});
+
+// DELETE /api/switchboard/boards/:id/photos/:photoId - Supprimer une photo
+app.delete('/api/switchboard/boards/:id/photos/:photoId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    const photoId = Number(req.params.photoId);
+    if (!id || isNaN(id) || !photoId || isNaN(photoId)) {
+      return res.status(400).json({ error: 'Invalid ID' });
+    }
+
+    const { rowCount } = await quickQuery(`
+      DELETE FROM switchboard_photos
+      WHERE id = $1 AND switchboard_id = $2 AND site = $3
+    `, [photoId, id, site]);
+
+    if (rowCount === 0) {
+      return res.status(404).json({ error: 'Photo not found' });
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[BOARD PHOTO DELETE]', e.message);
+    res.status(500).json({ error: 'Failed to delete photo' });
   }
 });
 
@@ -4347,6 +4481,38 @@ Réponds en JSON: { "specs": [ { "reference": "...", "icu_ka": number, "curve_ty
     console.log(`[PANEL SCAN]    ├─ To update: ${willUpdateCount}`);
     console.log(`[PANEL SCAN]    └─ Already exist: ${existingDevices.length}`);
     console.log(`${'='.repeat(70)}\n`);
+
+    // Sauvegarder les photos du scan dans la galerie
+    try {
+      for (let i = 0; i < images.length; i++) {
+        const imageData = images[i];
+        // Convertir base64 en buffer si nécessaire
+        let photoBuffer;
+        if (typeof imageData === 'string') {
+          // C'est du base64
+          const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+          photoBuffer = Buffer.from(base64Data, 'base64');
+        } else if (Buffer.isBuffer(imageData)) {
+          photoBuffer = imageData;
+        } else {
+          continue; // Format non supporté
+        }
+
+        await quickQuery(`
+          INSERT INTO switchboard_photos (site, switchboard_id, photo, source, description, created_by)
+          VALUES ($1, $2, $3, 'panel_scan', $4, $5)
+        `, [
+          site,
+          switchboardId,
+          photoBuffer,
+          `Scan du ${new Date().toLocaleDateString('fr-FR')} - Photo ${i + 1}/${images.length}`,
+          userEmail
+        ]);
+      }
+      console.log(`[PANEL SCAN] 💾 ${images.length} photos sauvegardées dans la galerie`);
+    } catch (photoErr) {
+      console.warn('[PANEL SCAN] Failed to save photos to gallery:', photoErr.message);
+    }
 
     // Send push notification (only once)
     if (userEmail && !job.notified) {
