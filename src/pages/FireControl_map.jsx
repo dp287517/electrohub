@@ -36,10 +36,7 @@ import {
   AlertCircle,
   X,
   RefreshCw,
-  Trash2,
   ExternalLink,
-  Crosshair,
-  Target,
   ArrowLeft,
   Layers,
   Zap,
@@ -184,36 +181,6 @@ function ConfirmModal({ open, title = "Confirmation", message, confirmText = "Co
   );
 }
 
-/* ----------------------------- Context Menu ----------------------------- */
-function ContextMenu({ x, y, onDelete, onClose }) {
-  useEffect(() => {
-    const handleClick = () => onClose();
-    const handleScroll = () => onClose();
-    window.addEventListener("click", handleClick);
-    window.addEventListener("scroll", handleScroll, true);
-    return () => {
-      window.removeEventListener("click", handleClick);
-      window.removeEventListener("scroll", handleScroll, true);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed bg-white rounded-xl shadow-2xl border py-1 z-[6000] min-w-[160px] animate-slideUp"
-      style={{ left: x, top: y }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <button
-        className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-      >
-        <Trash2 size={16} />
-        Retirer du plan
-      </button>
-    </div>
-  );
-}
-
 /* ----------------------------- Source System Icon ----------------------------- */
 const SourceSystemIcon = ({ source }) => {
   switch (source) {
@@ -225,13 +192,23 @@ const SourceSystemIcon = ({ source }) => {
 };
 
 /* ----------------------------- Sidebar Card ----------------------------- */
-const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
+const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick }) => {
   const getSourceBadge = () => {
     switch (equipment.source_system) {
       case 'doors': return <Badge variant="purple">Porte</Badge>;
       case 'switchboard': return <Badge variant="info">Tableau</Badge>;
       case 'datahub': return <Badge variant="success">DataHub</Badge>;
       default: return <Badge variant="orange">Équipement</Badge>;
+    }
+  };
+
+  // Get the source system page for navigation
+  const getSourceLink = () => {
+    switch (equipment.source_system) {
+      case 'doors': return `/app/doors-map?door=${equipment.id}`;
+      case 'switchboard': return `/app/switchboard-map?switchboard=${equipment.id}`;
+      case 'datahub': return `/app/datahub-map?item=${equipment.id}`;
+      default: return null;
     }
   };
 
@@ -268,28 +245,19 @@ const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedEls
           {isPlacedHere ? (
             <span className="flex items-center gap-1 text-emerald-600 text-xs">
               <CheckCircle size={14} />
-              Placé
+              Localisé
             </span>
           ) : isPlacedSomewhere ? (
             <span className="flex items-center gap-1 text-orange-600 text-xs">
-              <CheckCircle size={14} />
-              Ailleurs
+              <MapPin size={14} />
+              Autre plan
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-amber-600 text-xs">
+            <span className="flex items-center gap-1 text-gray-400 text-xs">
               <AlertCircle size={14} />
-              Non placé
+              Non localisé
             </span>
           )}
-
-          <button
-            onClick={(e) => { e.stopPropagation(); onPlace(equipment); }}
-            className="px-2 py-1 bg-orange-500 text-white text-xs rounded-lg flex items-center gap-1 hover:bg-orange-600 transition-colors"
-            title={isPlacedSomewhere ? "Déplacer sur ce plan" : "Placer sur ce plan"}
-          >
-            <Target size={12} />
-            {isPlacedSomewhere ? "Déplacer" : "Placer"}
-          </button>
         </div>
       </div>
     </div>
@@ -297,8 +265,17 @@ const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedEls
 };
 
 /* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource }) => {
   if (!position) return null;
+
+  const getSourceLabel = () => {
+    switch (position.source_system || equipment?.source_system) {
+      case 'doors': return 'Voir la porte';
+      case 'switchboard': return 'Voir le tableau';
+      case 'datahub': return 'Voir dans DataHub';
+      default: return 'Voir l\'équipement';
+    }
+  };
 
   return (
     <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
@@ -310,7 +287,7 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
             </div>
             <div>
               <h3 className="font-bold">{position.equipment_code || equipment?.code || "Équipement"}</h3>
-              <p className="text-sm text-orange-100">{position.building || equipment?.building || "-"}</p>
+              <p className="text-sm text-orange-100">{position.source_system || equipment?.source_system || "-"}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
@@ -338,26 +315,20 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
           </div>
         )}
 
-        <div className="text-xs text-gray-400 flex items-center gap-2">
-          <MapPin size={12} />
-          Position: {((position.x ?? position.x_frac ?? 0) * 100).toFixed(1)}%, {((position.y ?? position.y_frac ?? 0) * 100).toFixed(1)}%
-        </div>
+        {(position.zone_id || equipment?.zone_id) && (
+          <div className="bg-orange-50 rounded-lg p-2 text-sm">
+            <span className="text-orange-600 text-xs block">Zone incendie</span>
+            <span className="font-semibold text-orange-900">{position.zone_id || equipment?.zone_id}</span>
+          </div>
+        )}
 
         <div className="flex gap-2 pt-2">
           <button
-            onClick={() => onNavigate(position.equipment_id || equipment?.id)}
+            onClick={() => onGoToSource(position.source_system || equipment?.source_system, position.equipment_id || equipment?.id)}
             className="flex-1 py-2.5 px-4 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-red-700 transition-all flex items-center justify-center gap-2"
           >
             <ExternalLink size={16} />
-            Voir les contrôles
-          </button>
-
-          <button
-            onClick={() => onDelete?.(position)}
-            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
-            title="Retirer du plan"
-          >
-            <Trash2 size={16} />
+            {getSourceLabel()}
           </button>
         </div>
       </div>
@@ -365,39 +336,14 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
   );
 };
 
-/* ----------------------------- Placement Mode Indicator ----------------------------- */
-const PlacementModeIndicator = ({ equipment, onCancel }) => (
-  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-30">
-    <div className="bg-orange-600 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 animate-slideUp">
-      <div className="p-2 bg-white/20 rounded-lg">
-        <Crosshair size={20} className="animate-pulse" />
-      </div>
-      <div>
-        <p className="font-semibold">Mode placement actif</p>
-        <p className="text-orange-200 text-sm">
-          Cliquez sur le plan pour placer <span className="font-semibold">{equipment.code || equipment.name || "Équipement"}</span>
-        </p>
-      </div>
-      <button onClick={onCancel} className="p-2 hover:bg-white/20 rounded-lg transition-colors ml-2">
-        <X size={18} />
-      </button>
-    </div>
-  </div>
-);
-
-/* ----------------------------- Leaflet Viewer ----------------------------- */
+/* ----------------------------- Leaflet Viewer (READ-ONLY) ----------------------------- */
 const EquipmentLeafletViewer = forwardRef(({
   fileUrl,
   pageIndex = 0,
   initialPoints = [],
   selectedId = null,
   onReady,
-  onMovePoint,
   onClickPoint,
-  onCreatePoint,
-  onContextMenu,
-  disabled = false,
-  placementActive = false,
 }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -410,7 +356,6 @@ const EquipmentLeafletViewer = forwardRef(({
 
   const pointsRef = useRef(initialPoints);
   const selectedIdRef = useRef(selectedId);
-  const placementActiveRef = useRef(placementActive);
   const aliveRef = useRef(true);
 
   const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
@@ -421,16 +366,10 @@ const EquipmentLeafletViewer = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
-  const longPressTimerRef = useRef(null);
-  const longPressTriggeredRef = useRef(false);
-  const onCreatePointRef = useRef(onCreatePoint);
-
   const ICON_PX = 22;
   const ICON_PX_SELECTED = 30;
   const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
 
-  useEffect(() => { placementActiveRef.current = placementActive; }, [placementActive]);
-  useEffect(() => { onCreatePointRef.current = onCreatePoint; }, [onCreatePoint]);
   useEffect(() => {
     selectedIdRef.current = selectedId;
     if (mapRef.current && imgSize.w > 0) {
@@ -487,10 +426,10 @@ const EquipmentLeafletViewer = forwardRef(({
       const isSelected = p.equipment_id === selectedIdRef.current;
       const icon = makeEquipmentIcon(isSelected, p.source_system);
 
+      // Read-only markers - no dragging
       const mk = L.marker(latlng, {
         icon,
-        draggable: !disabled && !placementActiveRef.current,
-        autoPan: true,
+        draggable: false,
         bubblingMouseEvents: false,
         keyboard: false,
         riseOnHover: true,
@@ -500,76 +439,27 @@ const EquipmentLeafletViewer = forwardRef(({
         id: p.id,
         equipment_id: p.equipment_id,
         equipment_code: p.equipment_code || p.code,
+        name: p.name,
         x_frac: p.x_frac ?? p.x,
         y_frac: p.y_frac ?? p.y,
-        x: p.x_frac ?? p.x,
-        y: p.y_frac ?? p.y,
         building: p.building,
         floor: p.floor,
         location: p.location,
         source_system: p.source_system,
+        zone_id: p.zone_id,
+        alarm_level: p.alarm_level,
       };
 
       mk.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
-        if (longPressTriggeredRef.current) {
-          longPressTriggeredRef.current = false;
-          return;
-        }
         setPicker(null);
         onClickPoint?.(mk.__meta);
       });
 
-      mk.on("dragend", () => {
-        if (!onMovePoint) return;
-        const ll = mk.getLatLng();
-        const xFrac = clamp(ll.lng / w, 0, 1);
-        const yFrac = clamp(ll.lat / h, 0, 1);
-        onMovePoint(mk.__meta.equipment_id, { x: Math.round(xFrac * 1e6) / 1e6, y: Math.round(yFrac * 1e6) / 1e6 });
-      });
-
-      mk.on("contextmenu", (e) => {
-        L.DomEvent.stopPropagation(e);
-        L.DomEvent.preventDefault(e);
-        const containerPoint = map.latLngToContainerPoint(e.latlng);
-        const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-        onContextMenu?.(mk.__meta, { x: rect.left + containerPoint.x, y: rect.top + containerPoint.y });
-      });
-
       mk.addTo(g);
       markersMapRef.current.set(p.equipment_id, mk);
-
-      // Long press for mobile
-      setTimeout(() => {
-        const el = mk.getElement();
-        if (!el) return;
-
-        const startLongPress = (clientX, clientY) => {
-          longPressTriggeredRef.current = false;
-          longPressTimerRef.current = setTimeout(() => {
-            longPressTriggeredRef.current = true;
-            onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
-          }, 600);
-        };
-
-        const cancelLongPress = () => {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-        };
-
-        el.addEventListener("touchstart", (e) => {
-          const touch = e.touches[0];
-          startLongPress(touch.clientX, touch.clientY);
-        }, { passive: true });
-
-        el.addEventListener("touchend", cancelLongPress, { passive: true });
-        el.addEventListener("touchcancel", cancelLongPress, { passive: true });
-        el.addEventListener("touchmove", cancelLongPress, { passive: true });
-      }, 50);
     });
-  }, [onClickPoint, onMovePoint, onContextMenu, disabled]);
+  }, [onClickPoint]);
 
   const highlightMarker = useCallback((equipmentId) => {
     let mk = markersMapRef.current.get(equipmentId);
@@ -694,15 +584,9 @@ const EquipmentLeafletViewer = forwardRef(({
 
         markersLayerRef.current = L.layerGroup().addTo(m);
 
+        // Read-only click handler - only for selecting equipment
         m.on("click", (e) => {
           if (!aliveRef.current) return;
-          if (placementActiveRef.current && onCreatePointRef.current) {
-            const ll = e.latlng;
-            const xFrac = clamp(ll.lng / canvas.width, 0, 1);
-            const yFrac = clamp(ll.lat / canvas.height, 0, 1);
-            onCreatePointRef.current(xFrac, yFrac);
-            return;
-          }
 
           const clicked = e.containerPoint;
           const near = [];
@@ -869,17 +753,10 @@ export default function FireControlMap() {
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
-  const [placementMode, setPlacementMode] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-
-  // Context menu
-  const [contextMenu, setContextMenu] = useState(null);
-
-  // Confirm modal
-  const [confirmState, setConfirmState] = useState({ open: false, position: null });
 
   const viewerRef = useRef(null);
 
@@ -962,8 +839,8 @@ export default function FireControlMap() {
   const loadEquipment = async () => {
     setLoadingEquipment(true);
     try {
-      // Get equipment from doors, switchboard, datahub with fire_interlock=true
-      const res = await api.fireControlMaps.crossSystemEquipment({ fire_interlock: true });
+      // Get ALL equipment with fire_interlock=true (for sidebar list)
+      const res = await api.fireControlMaps.crossSystemEquipment({});
       const list = res?.equipment || [];
       setEquipment(Array.isArray(list) ? list : []);
     } catch (err) {
@@ -973,30 +850,46 @@ export default function FireControlMap() {
     }
   };
 
+  // Load positioned equipment from source systems (doors, switchboard, datahub)
   const loadPositions = async (plan, pageIdx = 0) => {
     if (!plan) return [];
     try {
-      const res = await api.fireControlMaps.positions(plan.logical_name, pageIdx).catch(() => ({}));
-      const list = Array.isArray(res?.positions) ? res.positions : (Array.isArray(res?.items) ? res.items : []);
-      const mapped = list.map((item) => ({
-        id: item.id,
-        equipment_id: item.equipment_id || item.detector_id,
-        equipment_code: item.equipment_code || item.detector_code || item.code,
-        x_frac: Number(item.x_frac ?? item.x ?? 0),
-        y_frac: Number(item.y_frac ?? item.y ?? 0),
-        x: Number(item.x_frac ?? item.x ?? 0),
-        y: Number(item.y_frac ?? item.y ?? 0),
+      // Get equipment WITH positions on this specific plan from source systems
+      const res = await api.fireControlMaps.crossSystemEquipment({
+        plan_logical_name: plan.logical_name,
+        page_index: pageIdx,
+      });
+      const list = res?.equipment || [];
+
+      // Filter to only equipment that has a position on this plan
+      const positioned = list.filter(eq => eq.x_frac != null && eq.y_frac != null);
+
+      const mapped = positioned.map((item) => ({
+        id: item.position_id || item.id,
+        equipment_id: item.id,
+        equipment_code: item.code,
+        name: item.name,
+        x_frac: Number(item.x_frac ?? 0),
+        y_frac: Number(item.y_frac ?? 0),
+        x: Number(item.x_frac ?? 0),
+        y: Number(item.y_frac ?? 0),
         building: item.building || "",
         floor: item.floor || "",
         location: item.location || "",
         source_system: item.source_system || "",
+        zone_id: item.zone_id,
+        alarm_level: item.alarm_level,
       }));
 
       setInitialPoints(mapped);
 
-      // Update placed IDs
-      const ids = new Set(mapped.map(m => m.equipment_id).filter(Boolean));
-      setPlacedIds(ids);
+      // Update placed IDs (all equipment that has ANY position)
+      const allEquipRes = await api.fireControlMaps.crossSystemEquipment({});
+      const allEquip = allEquipRes?.equipment || [];
+      const idsWithPositions = new Set(
+        allEquip.filter(eq => eq.x_frac != null).map(eq => eq.id)
+      );
+      setPlacedIds(idsWithPositions);
 
       viewerRef.current?.drawMarkers(mapped);
       return mapped;
@@ -1007,39 +900,8 @@ export default function FireControlMap() {
     }
   };
 
-  const handleSetPosition = async (equip, xFrac, yFrac) => {
-    if (!stableSelectedPlan || !equip) return;
-    try {
-      await api.fireControlMaps.setPosition(equip.id, {
-        logical_name: stableSelectedPlan.logical_name,
-        plan_id: stableSelectedPlan.id || null,
-        page_index: pageIndex,
-        x_frac: xFrac,
-        y_frac: yFrac,
-        source_system: equip.source_system,
-      });
-      await loadPositions(stableSelectedPlan, pageIndex);
-      setPlacementMode(null);
-    } catch (err) {
-      console.error("Erreur placement équipement:", err);
-    }
-  };
-
-  const askDeletePosition = (position) => {
-    setContextMenu(null);
-    setConfirmState({ open: true, position });
-  };
-
-  const handleDeletePosition = async (position) => {
-    try {
-      await api.fireControlMaps.deletePosition(position.id);
-      await loadPositions(stableSelectedPlan, pageIndex);
-      setSelectedPosition(null);
-      setConfirmState({ open: false, position: null });
-    } catch (err) {
-      console.error("Erreur suppression position:", err);
-    }
-  };
+  // Positions are READ-ONLY - equipment is positioned in source systems (Doors, Switchboard, Datahub)
+  // No placement or deletion from this page
 
   // Filter equipment
   const filteredEquipment = useMemo(() => {
@@ -1217,7 +1079,6 @@ export default function FireControlMap() {
                         setSelectedPosition(null);
                       }
                     }}
-                    onPlace={(equip) => setPlacementMode(equip)}
                   />
                 ))
               )}
@@ -1263,58 +1124,37 @@ export default function FireControlMap() {
                 initialPoints={initialPoints}
                 selectedId={selectedEquipmentId}
                 onReady={() => setPdfReady(true)}
-                onMovePoint={async (equipmentId, xy) => {
-                  if (!stableSelectedPlan) return;
-                  const equip = equipment.find(e => e.id === equipmentId);
-                  await api.fireControlMaps.setPosition(equipmentId, {
-                    logical_name: stableSelectedPlan.logical_name,
-                    plan_id: stableSelectedPlan.id,
-                    page_index: pageIndex,
-                    x_frac: xy.x,
-                    y_frac: xy.y,
-                    source_system: equip?.source_system,
-                  });
-                  await loadPositions(stableSelectedPlan, pageIndex);
-                }}
                 onClickPoint={(meta) => {
                   const e = equipment.find(eq => eq.id === meta.equipment_id);
                   setSelectedPosition(meta);
                   setSelectedEquipment(e || null);
                 }}
-                onCreatePoint={(xFrac, yFrac) => {
-                  if (placementMode) {
-                    handleSetPosition(placementMode, xFrac, yFrac);
-                  }
-                }}
-                onContextMenu={(meta, pos) => setContextMenu({ position: meta, x: pos.x, y: pos.y })}
-                placementActive={!!placementMode}
               />
             </>
           )}
 
-          {/* Placement mode indicator */}
-          {placementMode && (
-            <PlacementModeIndicator equipment={placementMode} onCancel={() => setPlacementMode(null)} />
-          )}
-
           {/* Detail panel */}
-          {selectedPosition && !placementMode && (
+          {selectedPosition && (
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}
               onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); }}
-              onNavigate={(id) => navigate(`/app/fire-control?equipment=${id}`)}
-              onDelete={askDeletePosition}
-            />
-          )}
-
-          {/* Context menu */}
-          {contextMenu && (
-            <ContextMenu
-              x={contextMenu.x}
-              y={contextMenu.y}
-              onDelete={() => askDeletePosition(contextMenu.position)}
-              onClose={() => setContextMenu(null)}
+              onGoToSource={(sourceSystem, equipmentId) => {
+                // Navigate to the source system's map page
+                switch (sourceSystem) {
+                  case 'doors':
+                    navigate(`/app/doors-map?door=${equipmentId}`);
+                    break;
+                  case 'switchboard':
+                    navigate(`/app/switchboard-map?switchboard=${equipmentId}`);
+                    break;
+                  case 'datahub':
+                    navigate(`/app/datahub-map?item=${equipmentId}`);
+                    break;
+                  default:
+                    break;
+                }
+              }}
             />
           )}
         </div>
@@ -1395,7 +1235,6 @@ export default function FireControlMap() {
                       }
                       setShowSidebar(false);
                     }}
-                    onPlace={(equip) => { setPlacementMode(equip); setShowSidebar(false); }}
                   />
                 ))
               )}
@@ -1403,17 +1242,6 @@ export default function FireControlMap() {
           </div>
         </div>
       )}
-
-      {/* Confirm modal */}
-      <ConfirmModal
-        open={confirmState.open}
-        title="Retirer du plan"
-        message={`Voulez-vous retirer "${confirmState.position?.equipment_code || "cet équipement"}" du plan ?`}
-        confirmText="Retirer"
-        onConfirm={() => handleDeletePosition(confirmState.position)}
-        onCancel={() => setConfirmState({ open: false, position: null })}
-        danger
-      />
     </div>
   );
 }
