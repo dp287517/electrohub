@@ -2797,8 +2797,11 @@ export const api = {
 
   // ========== FIRE CONTROL MAPS (Leaflet visualization) ==========
   fireControlMaps: {
-    // List plans for map display
+    // List plans for map display (from fire control uploads)
     listPlans: () => get("/api/fire-control/maps/listPlans"),
+
+    // List shared plans from other systems (doors, etc.)
+    listSharedPlans: () => get("/api/fire-control/shared-plans"),
 
     // Get plan file URL for PDF display
     planFileUrl: (plan, { bust = false } = {}) => {
@@ -2806,6 +2809,10 @@ export const api = {
       const idParam = typeof key === 'string' && key.match(/^[0-9a-f-]{36}$/i) ? `id=${key}` : `logical_name=${encodeURIComponent(key)}`;
       return withBust(`${API_BASE}/api/fire-control/maps/planFile?${idParam}&site=${currentSite()}`, bust);
     },
+
+    // Get shared plan file URL (from doors system)
+    sharedPlanFileUrl: (logicalName, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/fire-control/shared-plans/${encodeURIComponent(logicalName)}/file?site=${currentSite()}`, bust),
 
     // Get positions for a plan (zones and equipment markers)
     positions: (planId, pageIndex = 0) => get("/api/fire-control/maps/positions", { plan_id: planId, page_index: pageIndex }),
@@ -2815,6 +2822,12 @@ export const api = {
 
     // Delete a position
     deletePosition: (positionId) => del(`/api/fire-control/maps/positions/${encodeURIComponent(positionId)}`),
+
+    // Get cross-system equipment (doors, switchboard with fire_interlock=true)
+    crossSystemEquipment: (params) => get("/api/fire-control/cross-system-equipment", params),
+
+    // Get equipment positions for a specific zone check (with check status)
+    zoneCheckEquipmentMap: (zoneCheckId) => get(`/api/fire-control/zone-checks/${encodeURIComponent(zoneCheckId)}/equipment-map`),
   },
 };
 

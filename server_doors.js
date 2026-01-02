@@ -172,6 +172,10 @@ async function ensureSchema() {
   `);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS photo_path TEXT;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS photo_file_id UUID;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS code TEXT;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_zone_id UUID;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_alarm_level INT DEFAULT 1;`);
 
   // Checks
   await pool.query(`

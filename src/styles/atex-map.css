@@ -2257,3 +2257,112 @@ input[readonly] {
   color: #374151;
 }
 
+/* ==========================================================================
+   🔥 FIRE CONTROL - Equipment Check Animations
+   ========================================================================== */
+
+/* Pending equipment - orange pulsing/blinking */
+@keyframes fire-control-pending {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 10px rgba(0,0,0,.25), 0 0 0 0 rgba(251, 146, 60, 0.7);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 6px 15px rgba(0,0,0,.3), 0 0 0 12px rgba(251, 146, 60, 0);
+    opacity: 0.7;
+  }
+}
+
+/* OK equipment - green pulse */
+@keyframes fire-control-ok {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 10px rgba(0,0,0,.25);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 6px 15px rgba(34, 197, 94, 0.4);
+  }
+}
+
+/* NOK equipment - red urgent pulse */
+@keyframes fire-control-nok {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 10px rgba(0,0,0,.25), 0 0 0 0 rgba(239, 68, 68, 0.8);
+  }
+  25% {
+    transform: scale(1.12);
+    box-shadow: 0 6px 15px rgba(0,0,0,.3), 0 0 0 8px rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    transform: scale(1);
+    box-shadow: 0 4px 10px rgba(0,0,0,.25), 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+  75% {
+    transform: scale(1.08);
+    box-shadow: 0 5px 12px rgba(0,0,0,.28), 0 0 0 6px rgba(239, 68, 68, 0.3);
+  }
+}
+
+/* Fire control marker classes - Desktop */
+@media (min-width: 769px) {
+  .fc-marker-pending > div,
+  .fc-marker-pending {
+    animation: fire-control-pending 1.2s ease-in-out infinite;
+  }
+
+  .fc-marker-ok > div,
+  .fc-marker-ok {
+    animation: fire-control-ok 2s ease-in-out infinite;
+  }
+
+  .fc-marker-nok > div,
+  .fc-marker-nok {
+    animation: fire-control-nok 0.8s ease-in-out infinite;
+  }
+}
+
+/* Mobile - lighter animations */
+@media (max-width: 768px) {
+  .fc-marker-pending,
+  .fc-marker-pending > div {
+    animation: blinkPulse 1.2s ease-in-out infinite !important;
+  }
+
+  .fc-marker-ok,
+  .fc-marker-ok > div,
+  .fc-marker-nok,
+  .fc-marker-nok > div {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+/* Fire control legend */
+.fc-legend-pending {
+  background: radial-gradient(circle at 30% 30%, #fb923c, #ea580c);
+}
+.fc-legend-ok {
+  background: radial-gradient(circle at 30% 30%, #4ade80, #22c55e);
+}
+.fc-legend-nok {
+  background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);
+}
+.fc-legend-na {
+  background: radial-gradient(circle at 30% 30%, #9ca3af, #6b7280);
+}
+
+/* Fire control marker base style */
+.fc-marker-inline {
+  background: transparent !important;
+  border: none !important;
+}
+
+.fc-marker-inline > div:hover {
+  transform: scale(1.2);
+  z-index: 1000;
+}
+
