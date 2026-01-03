@@ -1426,6 +1426,7 @@ app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
   try {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
     const { zones, equipment, zone_equipment_links } = req.body;
 
     await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`, [JSON.stringify(req.body), id]);
@@ -1469,9 +1470,9 @@ app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
     // Create zone-equipment links
     if (zone_equipment_links && Array.isArray(zone_equipment_links)) {
       for (const link of zone_equipment_links) {
-        // Get zone and equipment IDs by code
-        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.zone_code, tenant.companyId, tenant.siteId]);
-        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.equipment_code, tenant.companyId, tenant.siteId]);
+        // Get zone and equipment IDs by code (use tenant filter for proper NULL handling)
+        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND ${filter.where}`, [link.zone_code, ...filter.params]);
+        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND ${filter.where}`, [link.equipment_code, ...filter.params]);
 
         if (zoneRows.length && equipRows.length) {
           await pool.query(`
@@ -1534,6 +1535,8 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
     console.log(`[FireControl] Job ${jobId}: Already ${job.status}, skipping`);
     return;
   }
+
+  const filter = getTenantFilter(tenant);
 
   const saveProgress = async () => {
     try { await saveMatrixParseJob(job); } catch (e) { console.warn(`[FireControl] Save job error: ${e.message}`); }
@@ -1607,17 +1610,19 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       messages: [
         {
           role: "system",
-          content: `Extrais les données d'une matrice d'asservissement incendie. Retourne du JSON:
+          content: `Extrais les données d'une matrice d'asservissement incendie Siemens FC2060. Retourne du JSON:
 
-{"zones":[{"code":"Z001","name":"...","building":"","floor":"","detector_numbers":"20900-20905","detector_type":"smoke"}],
-"equipment":[{"code":"PCF001","name":"PCF B21.015","type":"pcf","building":"","floor":"","location":"","fdcio_module":"FDCIO222","fdcio_output":"1"}],
-"links":[]}
+{"zones":[{"code":"Z001","name":"Nom zone","detector_numbers":"20900-20905"}],
+"equipment":[{"code":"PCF001","name":"PCF B21.015","type":"pcf"}],
+"links":[{"zone_code":"Z001","equipment_code":"PCF001","alarm_level":1}]}
 
-ZONES: Lignes avec numéros de détecteurs (ex: "Sous-sol accès 0: 20900-20905")
-EQUIPMENT: PCF (porte coupe-feu), HVAC, Ventilation, Clapet, Ascenseur, Evacuation, Alarme, Flash
-Types: pcf,hvac,ventilation,clapet,ascenseur,monte_charge,alarme,sirene,flash,evacuation,autre
+ZONES: Colonnes avec numéros de détecteurs (ex: "20900-20905")
+EQUIPMENT: Lignes avec PCF, HVAC, Ventilation, Clapet, etc.
+LINKS: Les "I" ou "II" dans la matrice = liens zone/équipement. I=alarm_level 1, II=alarm_level 2.
 
-IMPORTANT: Extrais TOUTES les zones (lignes avec numéros détecteurs) et TOUS les équipements. Pas de liens pour l'instant.`
+Types équipement: pcf,hvac,ventilation,clapet,ascenseur,monte_charge,alarme,sirene,flash,evacuation,autre
+
+IMPORTANT: Extrais les zones, équipements ET les liens (I/II dans la matrice).`
         },
         {
           role: "user",
@@ -1678,8 +1683,8 @@ IMPORTANT: Extrais TOUTES les zones (lignes avec numéros détecteurs) et TOUS l
 
     for (const link of allLinks) {
       try {
-        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.zone_code, tenant.companyId, tenant.siteId]);
-        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND company_id = $2 AND site_id = $3`, [link.equipment_code, tenant.companyId, tenant.siteId]);
+        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND ${filter.where}`, [link.zone_code, ...filter.params]);
+        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND ${filter.where}`, [link.equipment_code, ...filter.params]);
         if (zoneRows.length && equipRows.length) {
           await pool.query(`INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
             [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action || 'activate', matrixId]);
