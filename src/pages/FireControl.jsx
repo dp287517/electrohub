@@ -636,6 +636,7 @@ export default function FireControl() {
               { id: "campaigns", label: "Campagnes", mobileLabel: "Camp.", icon: Calendar },
               { id: "documents", label: "Documents", mobileLabel: "Docs", icon: FileText },
               { id: "controls", label: "Contrôles", mobileLabel: "Ctrl", icon: ClipboardCheck },
+              { id: "equipment", label: "Équipements", mobileLabel: "Équip.", icon: Link2 },
               { id: "schedule", label: "Calendrier", mobileLabel: "Cal.", icon: CalendarDays },
             ].map((tab) => (
               <button
@@ -744,6 +745,18 @@ export default function FireControl() {
                   setShowZoneCheckModal(true);
                 }}
                 onRefresh={loadZoneChecks}
+              />
+            )}
+
+            {activeTab === "equipment" && (
+              <EquipmentMatchingTab
+                matrices={matrices}
+                zones={zones}
+                showToast={showToast}
+                onRefresh={() => {
+                  loadMatrices();
+                  loadZones();
+                }}
               />
             )}
 
@@ -2747,5 +2760,383 @@ function CheckStatusBadge({ status }) {
     <span className={`px-2 py-1 text-xs font-medium rounded-full ${cfg.class}`}>
       {cfg.label}
     </span>
+  );
+}
+
+// =============================================================================
+// EQUIPMENT MATCHING TAB
+// =============================================================================
+function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
+  const [selectedMatrix, setSelectedMatrix] = useState(null);
+  const [matrixEquipment, setMatrixEquipment] = useState([]);
+  const [matchResults, setMatchResults] = useState([]);
+  const [crossSystemEquipment, setCrossSystemEquipment] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [matchingInProgress, setMatchingInProgress] = useState(false);
+  const [filter, setFilter] = useState("all"); // all, matched, unmatched
+
+  // Load matrix equipment when matrix is selected
+  useEffect(() => {
+    if (selectedMatrix) {
+      loadMatrixEquipment(selectedMatrix);
+    }
+  }, [selectedMatrix]);
+
+  // Load cross-system equipment on mount
+  useEffect(() => {
+    loadCrossSystemEquipment();
+  }, []);
+
+  const loadMatrixEquipment = async (matrixId) => {
+    setLoading(true);
+    try {
+      const data = await api.fireControl.getMatrixEquipment(matrixId);
+      setMatrixEquipment(data.equipment || []);
+    } catch (err) {
+      showToast("Erreur chargement équipements: " + err.message, "error");
+    }
+    setLoading(false);
+  };
+
+  const loadCrossSystemEquipment = async () => {
+    try {
+      const data = await api.fireControl.crossSystemEquipment({});
+      setCrossSystemEquipment(data.equipment || []);
+    } catch (err) {
+      console.warn("Erreur chargement équipements cross-système:", err.message);
+    }
+  };
+
+  const handleAutoMatch = async () => {
+    if (!matrixEquipment.length) {
+      showToast("Aucun équipement à matcher", "error");
+      return;
+    }
+
+    setMatchingInProgress(true);
+    try {
+      const result = await api.fireControl.autoMatchEquipment(matrixEquipment);
+      setMatchResults(result.matches || []);
+      showToast(`${result.matches?.length || 0} équipements analysés`, "success");
+    } catch (err) {
+      showToast("Erreur matching: " + err.message, "error");
+    }
+    setMatchingInProgress(false);
+  };
+
+  const handleConfirmMatch = async (matrixEqCode, match) => {
+    try {
+      await api.fireControl.confirmEquipmentMatch({
+        source_system: match.source,
+        equipment_id: match.id,
+        fire_interlock_code: matrixEqCode,
+        zone_id: null,
+        alarm_level: 1
+      });
+      showToast(`${match.name} lié à ${matrixEqCode}`, "success");
+      loadCrossSystemEquipment();
+      // Update match results to show as confirmed
+      setMatchResults(prev => prev.map(r =>
+        r.matrix_equipment.code === matrixEqCode
+          ? { ...r, confirmed: true, confirmed_match: match }
+          : r
+      ));
+    } catch (err) {
+      showToast("Erreur: " + err.message, "error");
+    }
+  };
+
+  const filteredResults = useMemo(() => {
+    if (!matchResults.length) return [];
+    if (filter === "all") return matchResults;
+    if (filter === "matched") return matchResults.filter(r => r.best_match?.score >= 0.85 || r.confirmed);
+    if (filter === "unmatched") return matchResults.filter(r => !r.best_match || r.best_match.score < 0.5);
+    return matchResults;
+  }, [matchResults, filter]);
+
+  const stats = useMemo(() => {
+    if (!matchResults.length) return { total: 0, confident: 0, uncertain: 0, noMatch: 0 };
+    return {
+      total: matchResults.length,
+      confident: matchResults.filter(r => r.best_match?.score >= 0.85 || r.confirmed).length,
+      uncertain: matchResults.filter(r => r.best_match && r.best_match.score >= 0.5 && r.best_match.score < 0.85).length,
+      noMatch: matchResults.filter(r => !r.best_match || r.best_match.score < 0.5).length,
+    };
+  }, [matchResults]);
+
+  const sourceIcons = {
+    doors: "🚪",
+    switchboard: "⚡",
+    datahub: "📦",
+  };
+
+  const sourceLabels = {
+    doors: "Porte",
+    switchboard: "Tableau",
+    datahub: "Équipement",
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-white rounded-xl shadow-sm border p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <Link2 className="w-5 h-5 text-orange-500" />
+              Association des équipements
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Liez les équipements de la matrice aux équipements existants (Portes, Tableaux, Datahub)
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={selectedMatrix || ""}
+              onChange={(e) => setSelectedMatrix(e.target.value || null)}
+              className="px-3 py-2 border rounded-lg text-sm"
+            >
+              <option value="">Sélectionner une matrice...</option>
+              {matrices.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleAutoMatch}
+              disabled={!selectedMatrix || matchingInProgress || loading}
+              className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {matchingInProgress ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+              Auto-matcher
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      {matchResults.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl shadow-sm border p-4 text-center">
+            <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
+            <div className="text-sm text-gray-500">Total</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-4 text-center cursor-pointer hover:bg-green-50" onClick={() => setFilter("matched")}>
+            <div className="text-2xl font-bold text-green-600">{stats.confident}</div>
+            <div className="text-sm text-gray-500">Correspondances</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-4 text-center">
+            <div className="text-2xl font-bold text-yellow-600">{stats.uncertain}</div>
+            <div className="text-sm text-gray-500">Incertains</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-4 text-center cursor-pointer hover:bg-red-50" onClick={() => setFilter("unmatched")}>
+            <div className="text-2xl font-bold text-red-600">{stats.noMatch}</div>
+            <div className="text-sm text-gray-500">Sans correspondance</div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter tabs */}
+      {matchResults.length > 0 && (
+        <div className="flex gap-2">
+          {[
+            { id: "all", label: "Tous" },
+            { id: "matched", label: "Correspondances" },
+            { id: "unmatched", label: "Sans correspondance" },
+          ].map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+                filter === f.id
+                  ? "bg-orange-100 text-orange-700"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Results list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+        </div>
+      ) : matchResults.length > 0 ? (
+        <div className="space-y-3">
+          {filteredResults.map((result, idx) => (
+            <EquipmentMatchCard
+              key={idx}
+              result={result}
+              sourceIcons={sourceIcons}
+              sourceLabels={sourceLabels}
+              onConfirm={handleConfirmMatch}
+            />
+          ))}
+        </div>
+      ) : selectedMatrix && matrixEquipment.length > 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border p-8 text-center">
+          <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            {matrixEquipment.length} équipements trouvés
+          </h3>
+          <p className="text-gray-500 mb-4">
+            Cliquez sur "Auto-matcher" pour trouver les correspondances avec vos équipements existants
+          </p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm border p-8 text-center">
+          <Link2 className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            Sélectionnez une matrice
+          </h3>
+          <p className="text-gray-500">
+            Choisissez une matrice pour voir les équipements à associer
+          </p>
+        </div>
+      )}
+
+      {/* Cross-system equipment summary */}
+      {crossSystemEquipment.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border p-4">
+          <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-green-500" />
+            Équipements déjà liés ({crossSystemEquipment.length})
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {crossSystemEquipment.slice(0, 10).map((eq) => (
+              <span key={`${eq.source_system}-${eq.id}`} className="inline-flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-lg text-sm">
+                <span>{sourceIcons[eq.source_system]}</span>
+                {eq.name}
+              </span>
+            ))}
+            {crossSystemEquipment.length > 10 && (
+              <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-lg text-sm">
+                +{crossSystemEquipment.length - 10} autres
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Equipment match card component
+function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
+  const [expanded, setExpanded] = useState(false);
+  const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match } = result;
+
+  const getScoreColor = (score) => {
+    if (score >= 0.85) return "text-green-600 bg-green-100";
+    if (score >= 0.5) return "text-yellow-600 bg-yellow-100";
+    return "text-red-600 bg-red-100";
+  };
+
+  const getScoreLabel = (score) => {
+    if (score >= 0.85) return "Excellent";
+    if (score >= 0.7) return "Bon";
+    if (score >= 0.5) return "Possible";
+    return "Faible";
+  };
+
+  return (
+    <div className={`bg-white rounded-xl shadow-sm border p-4 ${confirmed ? 'border-green-300 bg-green-50/30' : ''}`}>
+      <div className="flex items-start justify-between gap-4">
+        {/* Matrix equipment info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm bg-gray-100 px-2 py-0.5 rounded">{matrix_equipment.code}</span>
+            <span className="font-medium text-gray-900 truncate">{matrix_equipment.name}</span>
+          </div>
+          <div className="text-sm text-gray-500 mt-1">
+            {matrix_equipment.type && <span className="capitalize">{matrix_equipment.type}</span>}
+            {matrix_equipment.building && <span> • {matrix_equipment.building}</span>}
+            {matrix_equipment.floor && <span> • {matrix_equipment.floor}</span>}
+          </div>
+        </div>
+
+        {/* Match status */}
+        <div className="flex items-center gap-2">
+          {confirmed ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg">
+              <CheckCircle2 className="w-4 h-4" />
+              <span className="text-sm font-medium">Lié à {confirmed_match?.name}</span>
+            </div>
+          ) : best_match ? (
+            <>
+              <span className={`px-2 py-1 rounded text-xs font-medium ${getScoreColor(best_match.score)}`}>
+                {Math.round(best_match.score * 100)}% - {getScoreLabel(best_match.score)}
+              </span>
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="p-1 hover:bg-gray-100 rounded"
+              >
+                {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              </button>
+            </>
+          ) : (
+            <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs">
+              Aucune correspondance
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Best match suggestion */}
+      {best_match && !confirmed && (
+        <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{sourceIcons[best_match.source]}</span>
+              <div>
+                <div className="font-medium text-gray-900">{best_match.name}</div>
+                <div className="text-sm text-gray-500">
+                  {sourceLabels[best_match.source]}
+                  {best_match.building && ` • ${best_match.building}`}
+                  {best_match.location && ` • ${best_match.location}`}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => onConfirm(matrix_equipment.code, best_match)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm"
+            >
+              <Check className="w-4 h-4" />
+              Confirmer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Alternatives */}
+      {expanded && alternatives && alternatives.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <div className="text-sm font-medium text-gray-700">Autres correspondances possibles:</div>
+          {alternatives.map((alt, idx) => (
+            <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2">
+                <span>{sourceIcons[alt.source]}</span>
+                <span className="text-sm text-gray-900">{alt.name}</span>
+                <span className={`px-1.5 py-0.5 rounded text-xs ${getScoreColor(alt.score)}`}>
+                  {Math.round(alt.score * 100)}%
+                </span>
+              </div>
+              <button
+                onClick={() => onConfirm(matrix_equipment.code, alt)}
+                className="text-xs text-orange-600 hover:text-orange-700 font-medium"
+              >
+                Sélectionner
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

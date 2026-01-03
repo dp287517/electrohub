@@ -176,6 +176,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_zone_id UUID;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_alarm_level INT DEFAULT 1;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_code TEXT;`);
 
   // Checks
   await pool.query(`
@@ -740,12 +741,12 @@ app.get("/api/doors/doors", async (req, res) => {
 
 app.post("/api/doors/doors", async (req, res) => {
   try {
-    const { name, building = "", floor = "", location = "" } = req.body || {};
+    const { name, building = "", floor = "", location = "", fire_interlock = false, fire_interlock_code = null } = req.body || {};
     if (!name) return res.status(400).json({ error: "name requis" });
 
     const { rows } = await pool.query(
-      `INSERT INTO fd_doors(name, building, floor, location) VALUES($1,$2,$3,$4) RETURNING *`,
-      [name, building, floor, location]
+      `INSERT INTO fd_doors(name, building, floor, location, fire_interlock, fire_interlock_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [name, building, floor, location, fire_interlock, fire_interlock_code]
     );
     const door = rows[0];
 
@@ -834,7 +835,7 @@ app.get("/api/doors/doors/:id", async (req, res) => {
 
 app.put("/api/doors/doors/:id", async (req, res) => {
   try {
-    const { name, building, floor, location } = req.body || {};
+    const { name, building, floor, location, fire_interlock, fire_interlock_code } = req.body || {};
     const fields = [];
     const values = [];
     let i = 1;
@@ -853,6 +854,14 @@ app.put("/api/doors/doors/:id", async (req, res) => {
     if (location !== undefined) {
       fields.push(`location=$${i++}`);
       values.push(location);
+    }
+    if (fire_interlock !== undefined) {
+      fields.push(`fire_interlock=$${i++}`);
+      values.push(fire_interlock);
+    }
+    if (fire_interlock_code !== undefined) {
+      fields.push(`fire_interlock_code=$${i++}`);
+      values.push(fire_interlock_code || null);
     }
     values.push(req.params.id);
     const result = await pool.query(

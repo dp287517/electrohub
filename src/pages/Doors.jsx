@@ -1001,7 +1001,7 @@ const DetailPanel = ({
 
 const EditForm = ({ door, onSave, onCancel, showToast }) => {
   const isNew = !door?.id;
-  const initialFormData = { name: '', building: '', floor: '', location: '', fire_interlock: false };
+  const initialFormData = { name: '', building: '', floor: '', location: '', fire_interlock: false, fire_interlock_code: '' };
 
   // Auto-save draft for new items only
   const {
@@ -1036,7 +1036,8 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
         building: door.building || '',
         floor: door.floor || '',
         location: door.location || '',
-        fire_interlock: door.fire_interlock || false
+        fire_interlock: door.fire_interlock || false,
+        fire_interlock_code: door.fire_interlock_code || ''
       });
     } else if (isNew && hasDraft) {
       // New door - restore from draft
@@ -1155,6 +1156,19 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
               <p className="text-sm text-gray-500">Cette porte apparaîtra dans le système d'asservissement incendie</p>
             </div>
           </label>
+          {form.fire_interlock && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Code matrice (optionnel)</label>
+              <input
+                type="text"
+                value={form.fire_interlock_code}
+                onChange={e => setForm(f => ({ ...f, fire_interlock_code: e.target.value }))}
+                placeholder="Ex: PCF-B21.015"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-orange-500 focus:border-orange-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">Code de l'équipement dans la matrice d'asservissement</p>
+            </div>
+          )}
         </div>
       </div>
 
