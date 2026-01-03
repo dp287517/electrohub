@@ -1548,7 +1548,8 @@ app.post("/api/fire-control/matrices/:id/parse", async (req, res) => {
 app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
   try {
     const { id } = req.params;
-    const tenant = extractTenantFromRequest(req);
+    let tenant = extractTenantFromRequest(req);
+    tenant = await enrichTenantWithSiteId(tenant, req, pool);
 
     // Get equipment associated with this matrix
     const { rows: equipment } = await pool.query(`
@@ -1885,7 +1886,8 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
     return;
   }
 
-  const filter = getTenantFilter(tenant);
+  // Use paramOffset: 1 because queries use $1 for code/other params
+  const filter = getTenantFilter(tenant, { paramOffset: 1 });
 
   const saveProgress = async () => {
     try { await saveMatrixParseJob(job); } catch (e) { console.warn(`[FireControl] Save job error: ${e.message}`); }
