@@ -2985,6 +2985,7 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
               sourceIcons={sourceIcons}
               sourceLabels={sourceLabels}
               onConfirm={handleConfirmMatch}
+              crossSystemEquipment={crossSystemEquipment}
             />
           ))}
         </div>
@@ -3037,8 +3038,10 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 }
 
 // Equipment match card component
-function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
+function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, crossSystemEquipment = [] }) {
   const [expanded, setExpanded] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match } = result;
 
   const getScoreColor = (score) => {
@@ -3053,6 +3056,19 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
     if (score >= 50) return "Possible";
     return "Faible";
   };
+
+  // Filter cross-system equipment based on search query
+  const filteredEquipment = useMemo(() => {
+    if (!searchQuery.trim()) return crossSystemEquipment.slice(0, 10);
+    const q = searchQuery.toLowerCase();
+    return crossSystemEquipment
+      .filter(eq =>
+        eq.code?.toLowerCase().includes(q) ||
+        eq.name?.toLowerCase().includes(q) ||
+        eq.building?.toLowerCase().includes(q)
+      )
+      .slice(0, 10);
+  }, [crossSystemEquipment, searchQuery]);
 
   return (
     <div className={`bg-white rounded-xl shadow-sm border p-4 ${confirmed ? 'border-green-300 bg-green-50/30' : ''}`}>
@@ -3090,12 +3106,72 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
               </button>
             </>
           ) : (
-            <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs">
-              Aucune correspondance
-            </span>
+            <button
+              onClick={() => setSearchMode(!searchMode)}
+              className="flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded text-xs transition-colors"
+            >
+              <Search className="w-3 h-3" />
+              {searchMode ? "Fermer" : "Rechercher"}
+            </button>
           )}
         </div>
       </div>
+
+      {/* Manual search panel */}
+      {searchMode && !best_match && !confirmed && (
+        <div className="mt-3 p-3 bg-orange-50 rounded-lg border border-orange-200">
+          <div className="flex items-center gap-2 mb-3">
+            <Search className="w-4 h-4 text-orange-600" />
+            <span className="text-sm font-medium text-orange-800">Rechercher un équipement</span>
+          </div>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Tapez pour rechercher (code, nom, bâtiment...)"
+            className="w-full px-3 py-2 border border-orange-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 mb-2"
+            autoFocus
+          />
+          {filteredEquipment.length > 0 ? (
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {filteredEquipment.map((eq, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between p-2 bg-white rounded-lg hover:bg-orange-100 cursor-pointer transition-colors"
+                  onClick={() => {
+                    onConfirm(matrix_equipment.code, {
+                      source_system: eq.source,
+                      candidate_id: eq.id,
+                      candidate_name: eq.name,
+                      candidate_code: eq.code,
+                    });
+                    setSearchMode(false);
+                    setSearchQuery("");
+                  }}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-lg flex-shrink-0">{sourceIcons[eq.source]}</span>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">{eq.code || eq.name}</div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {sourceLabels[eq.source]} {eq.building && `• ${eq.building}`}
+                      </div>
+                    </div>
+                  </div>
+                  <Check className="w-4 h-4 text-orange-600 flex-shrink-0" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500 text-center py-4">
+              {crossSystemEquipment.length === 0
+                ? "Aucun équipement disponible. Ajoutez d'abord des équipements dans Portes, Tableaux ou DataHub."
+                : "Aucun résultat trouvé"
+              }
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Best match suggestion */}
       {best_match && !confirmed && (
