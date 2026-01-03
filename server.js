@@ -3454,8 +3454,13 @@ function mkProxy(target, { withRestream = false, timeoutMs = 20000 } = {}) {
     // Re-stream du body si déjà parsé en amont (sécurité)
     // IMPORTANT: On doit toujours envoyer quelque chose si req.body existe,
     // même pour {} vide, sinon le backend attend des données qui n'arrivent jamais
+    // MAIS: Ne pas re-streamer les requêtes multipart/form-data (uploads de fichiers)
     onProxyReq: withRestream
       ? (proxyReq, req) => {
+          // Skip re-streaming for multipart/form-data (file uploads)
+          const contentType = req.headers["content-type"] || "";
+          if (contentType.includes("multipart/form-data")) return;
+
           if (!req.body) return;
           const bodyData = JSON.stringify(req.body);
           proxyReq.setHeader("Content-Type", "application/json");
