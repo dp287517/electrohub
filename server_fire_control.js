@@ -16,7 +16,7 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import PDFDocument from "pdfkit";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
-import { extractTenantFromRequest, getTenantFilter } from "./lib/tenant-filter.js";
+import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyMaintenanceCompleted, notifyStatusChanged, notifyNonConformity, notify } from "./lib/push-notify.js";
 import OpenAI from "openai";
 
@@ -2234,9 +2234,11 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
 
   try {
     const { id } = req.params;
-    const tenant = extractTenantFromRequest(req);
-    const userEmail = req.headers['x-user-email'] || 'unknown';
-    console.log(`[FireControl] AI parse - tenant extracted: ${Date.now() - startTime}ms`);
+    let tenant = extractTenantFromRequest(req);
+    // Enrich tenant with site_id/company_id from database if needed
+    tenant = await enrichTenantWithSiteId(tenant, req, pool);
+    const userEmail = req.headers['x-user-email'] || tenant.email || 'unknown';
+    console.log(`[FireControl] AI parse - tenant extracted: ${Date.now() - startTime}ms, companyId=${tenant.companyId}, siteId=${tenant.siteId}`);
 
     // Check if OpenAI is available
     if (!openai) {
