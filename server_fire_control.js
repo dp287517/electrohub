@@ -1054,23 +1054,67 @@ app.get("/api/fire-control/zone-checks/:id", async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: "Zone check not found" });
 
-    // Get equipment results for Alarm 1
+    // Get equipment results for Alarm 1 with source system positions
     const { rows: resultsAL1 } = await pool.query(`
-      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location, e.external_system, e.external_id
+      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location,
+             e.external_system, e.external_id, e.fdcio_module, e.fdcio_output
       FROM fc_equipment_results er
       JOIN fc_equipment e ON e.id = er.equipment_id
       WHERE er.zone_check_id = $1 AND er.alarm_level = 1
       ORDER BY e.equipment_type, e.name
     `, [id]);
 
-    // Get equipment results for Alarm 2
+    // Get equipment results for Alarm 2 with source system positions
     const { rows: resultsAL2 } = await pool.query(`
-      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location, e.external_system, e.external_id
+      SELECT er.*, e.code as equipment_code, e.name as equipment_name, e.equipment_type, e.location,
+             e.external_system, e.external_id, e.fdcio_module, e.fdcio_output
       FROM fc_equipment_results er
       JOIN fc_equipment e ON e.id = er.equipment_id
       WHERE er.zone_check_id = $1 AND er.alarm_level = 2
       ORDER BY e.equipment_type, e.name
     `, [id]);
+
+    // Enrich equipment results with positions from source systems
+    const enrichWithPositions = async (results) => {
+      for (const eq of results) {
+        if (eq.external_system && eq.external_id) {
+          try {
+            if (eq.external_system === 'doors') {
+              const { rows } = await pool.query(`
+                SELECT pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+                FROM fd_door_positions pos WHERE pos.door_id = $1 LIMIT 1
+              `, [eq.external_id]);
+              if (rows.length) {
+                eq.position = rows[0];
+              }
+            } else if (eq.external_system === 'switchboard') {
+              const { rows } = await pool.query(`
+                SELECT pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+                FROM switchboard_positions pos WHERE pos.switchboard_id = $1 LIMIT 1
+              `, [eq.external_id]);
+              if (rows.length) {
+                eq.position = rows[0];
+              }
+            } else if (eq.external_system === 'datahub') {
+              const { rows } = await pool.query(`
+                SELECT pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+                FROM dh_positions pos WHERE pos.item_id = $1 LIMIT 1
+              `, [eq.external_id]);
+              if (rows.length) {
+                eq.position = rows[0];
+              }
+            }
+          } catch (e) { /* ignore position fetch errors */ }
+        }
+      }
+      return results;
+    };
+
+    await Promise.all([
+      enrichWithPositions(resultsAL1),
+      enrichWithPositions(resultsAL2)
+    ]);
+
 
     // Get attached files
     const { rows: files } = await pool.query(`
@@ -2996,17 +3040,46 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
       return res.status(400).json({ error: "Unknown source_system" });
     }
 
-    // Also create/link in fc_equipment table
-    const { rows } = await pool.query(`
-      INSERT INTO fc_equipment (code, name, equipment_type, external_system, external_id)
-      SELECT $1, $1, $2, $3, $4
-      WHERE NOT EXISTS (
-        SELECT 1 FROM fc_equipment WHERE external_system = $3 AND external_id = $4
-      )
-      RETURNING *
-    `, [fire_interlock_code || equipment_id, source_system, source_system, equipment_id]);
+    // Update existing fc_equipment with external_system and external_id if code matches
+    // Or create a new one if it doesn't exist
+    let fcEquipment = null;
 
-    res.json({ success: true, updated, fc_equipment: rows[0] || null });
+    if (fire_interlock_code) {
+      // First try to update existing equipment by code
+      const { rows: updateRows } = await pool.query(`
+        UPDATE fc_equipment SET
+          external_system = $1,
+          external_id = $2,
+          updated_at = now()
+        WHERE code = $3 AND (external_system IS NULL OR external_system = $1)
+        RETURNING *
+      `, [source_system, equipment_id, fire_interlock_code]);
+
+      if (updateRows.length) {
+        fcEquipment = updateRows[0];
+      }
+    }
+
+    // If no existing equipment was updated, check if one exists by external_system/external_id
+    if (!fcEquipment) {
+      const { rows: existingRows } = await pool.query(`
+        SELECT * FROM fc_equipment WHERE external_system = $1 AND external_id = $2
+      `, [source_system, equipment_id]);
+
+      if (existingRows.length) {
+        fcEquipment = existingRows[0];
+      } else {
+        // Create new fc_equipment entry
+        const { rows: insertRows } = await pool.query(`
+          INSERT INTO fc_equipment (code, name, equipment_type, external_system, external_id)
+          VALUES ($1, $1, $2, $3, $4)
+          RETURNING *
+        `, [fire_interlock_code || equipment_id, source_system, source_system, equipment_id]);
+        fcEquipment = insertRows[0];
+      }
+    }
+
+    res.json({ success: true, updated, fc_equipment: fcEquipment });
   } catch (err) {
     console.error("[FireControl] Confirm match error:", err);
     res.status(500).json({ error: err.message });
