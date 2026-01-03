@@ -447,12 +447,12 @@ export default function FireControl() {
       for (const match of confident) {
         try {
           await api.fireControlMaps.confirmEquipmentMatch({
-            matrix_code: match.matrix_item.code,
-            matrix_name: match.matrix_item.name,
+            matrix_code: match.matrix_equipment.code,
+            matrix_name: match.matrix_equipment.name,
             source_system: match.best_match.source_system,
             source_id: match.best_match.id,
             zone_id: context.zone_id,
-            alarm_level: match.matrix_item.alarm_level || 1,
+            alarm_level: match.matrix_equipment.alarm_level || 1,
           });
           autoLinked++;
         } catch (e) {
@@ -483,16 +483,16 @@ export default function FireControl() {
   const handleConfirmEquipmentMatch = async (matchResult, selectedEquipment) => {
     try {
       await api.fireControlMaps.confirmEquipmentMatch({
-        matrix_code: matchResult.matrix_item.code,
-        matrix_name: matchResult.matrix_item.name,
+        matrix_code: matchResult.matrix_equipment.code,
+        matrix_name: matchResult.matrix_equipment.name,
         source_system: selectedEquipment.source_system,
         source_id: selectedEquipment.id,
         zone_id: matchingContext?.zone_id,
-        alarm_level: matchResult.matrix_item.alarm_level || 1,
+        alarm_level: matchResult.matrix_equipment.alarm_level || 1,
       });
 
       // Remove from uncertain list
-      setUncertainMatches(prev => prev.filter(m => m.matrix_item.code !== matchResult.matrix_item.code));
+      setUncertainMatches(prev => prev.filter(m => m.matrix_equipment.code !== matchResult.matrix_equipment.code));
       showToast("Équipement lié avec succès");
 
       // Close modal if no more uncertain matches
@@ -507,7 +507,7 @@ export default function FireControl() {
   };
 
   const handleSkipEquipmentMatch = (matchResult) => {
-    setUncertainMatches(prev => prev.filter(m => m.matrix_item.code !== matchResult.matrix_item.code));
+    setUncertainMatches(prev => prev.filter(m => m.matrix_equipment.code !== matchResult.matrix_equipment.code));
 
     if (uncertainMatches.length <= 1) {
       setShowEquipmentMatchingModal(false);
@@ -2536,14 +2536,14 @@ function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, 
               </h4>
               <div className="bg-white rounded-lg p-3 border border-yellow-200">
                 <p className="text-sm font-medium text-gray-900">
-                  Code matrice: <span className="font-bold text-orange-600">{currentMatch.matrix_item?.code}</span>
+                  Code matrice: <span className="font-bold text-orange-600">{currentMatch.matrix_equipment?.code}</span>
                 </p>
                 <p className="text-sm text-gray-600">
-                  Nom: {currentMatch.matrix_item?.name || "-"}
+                  Nom: {currentMatch.matrix_equipment?.name || "-"}
                 </p>
-                {currentMatch.matrix_item?.building && (
+                {currentMatch.matrix_equipment?.building && (
                   <p className="text-sm text-gray-600">
-                    Bâtiment: {currentMatch.matrix_item.building}
+                    Bâtiment: {currentMatch.matrix_equipment.building}
                   </p>
                 )}
               </div>
