@@ -1578,6 +1578,8 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       throw new Error("Le PDF ne contient pas de texte extractible (image scannée?)");
     }
 
+    console.log(`[FireControl] Job ${jobId}: Extracted ${fullText.length} chars, first 500: ${fullText.substring(0, 500).replace(/\n/g, ' ')}`);
+
     job.progress = 40;
     job.message = 'Analyse IA en cours...';
     await saveProgress();
@@ -1618,6 +1620,8 @@ Si rien trouvé: {"zones": [], "equipment": [], "links": []}`
     await saveProgress();
 
     const content = aiResponse.choices[0]?.message?.content || "";
+    console.log(`[FireControl] Job ${jobId}: OpenAI response (${content.length} chars): ${content.substring(0, 500)}`);
+
     let jsonStr = content;
     const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) jsonStr = jsonMatch[1].trim();
