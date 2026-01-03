@@ -330,22 +330,12 @@ export default function FireControl() {
           const zones = job.result?.zones_created || 0;
           const equip = job.result?.equipment_created || 0;
           showToast(
-            `✅ Analyse terminée: ${zones} zones, ${equip} équipements extraits`,
+            `✅ Analyse terminée: ${zones} zones, ${equip} équipements extraits. Allez dans l'onglet Équipements pour le matching.`,
             "success"
           );
           loadMatrices();
           loadZones();
           loadDashboard();
-
-          // Trigger auto-matching if equipment found
-          if (job.result?.equipment_created > 0) {
-            const response = await api.fireControl.getMatrixEquipment(matrixId);
-            const matrixEquipment = response?.equipment || [];
-            if (matrixEquipment.length > 0) {
-              showToast("Lancement de la correspondance automatique...");
-              await handleAutoMatchEquipment(matrixEquipment, { matrix_id: matrixId });
-            }
-          }
           return; // Stop polling
         }
 
@@ -447,12 +437,11 @@ export default function FireControl() {
       for (const match of confident) {
         try {
           await api.fireControlMaps.confirmEquipmentMatch({
-            matrix_code: match.matrix_equipment.code,
-            matrix_name: match.matrix_equipment.name,
             source_system: match.best_match.source_system,
-            source_id: match.best_match.id,
+            equipment_id: match.best_match.id,
             zone_id: context.zone_id,
             alarm_level: match.matrix_equipment.alarm_level || 1,
+            fire_interlock_code: match.matrix_equipment.code,
           });
           autoLinked++;
         } catch (e) {
@@ -483,12 +472,11 @@ export default function FireControl() {
   const handleConfirmEquipmentMatch = async (matchResult, selectedEquipment) => {
     try {
       await api.fireControlMaps.confirmEquipmentMatch({
-        matrix_code: matchResult.matrix_equipment.code,
-        matrix_name: matchResult.matrix_equipment.name,
         source_system: selectedEquipment.source_system,
-        source_id: selectedEquipment.id,
+        equipment_id: selectedEquipment.id,
         zone_id: matchingContext?.zone_id,
         alarm_level: matchResult.matrix_equipment.alarm_level || 1,
+        fire_interlock_code: matchResult.matrix_equipment.code,
       });
 
       // Remove from uncertain list
@@ -634,10 +622,10 @@ export default function FireControl() {
           <div className="flex gap-1 mt-3 sm:mt-4 overflow-x-auto pb-1 -mx-3 px-3 sm:mx-0 sm:px-0 scrollbar-hide">
             {[
               { id: "dashboard", label: "Dashboard", mobileLabel: "Accueil", icon: BarChart3 },
-              { id: "campaigns", label: "Campagnes", mobileLabel: "Camp.", icon: Calendar },
-              { id: "documents", label: "Documents", mobileLabel: "Docs", icon: FileText },
-              { id: "controls", label: "Contrôles", mobileLabel: "Ctrl", icon: ClipboardCheck },
-              { id: "equipment", label: "Équipements", mobileLabel: "Équip.", icon: Link2 },
+              { id: "documents", label: "1. Documents", mobileLabel: "Docs", icon: FileText },
+              { id: "equipment", label: "2. Équipements", mobileLabel: "Équip.", icon: Link2 },
+              { id: "campaigns", label: "3. Campagnes", mobileLabel: "Camp.", icon: Calendar },
+              { id: "controls", label: "4. Contrôles", mobileLabel: "Ctrl", icon: ClipboardCheck },
               { id: "schedule", label: "Calendrier", mobileLabel: "Cal.", icon: CalendarDays },
             ].map((tab) => (
               <button
@@ -2821,7 +2809,7 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 
   const loadCrossSystemEquipment = async () => {
     try {
-      const data = await api.fireControl.crossSystemEquipment({});
+      const data = await api.fireControlMaps.crossSystemEquipment({});
       setCrossSystemEquipment(data.equipment || []);
     } catch (err) {
       console.warn("Erreur chargement équipements cross-système:", err.message);
@@ -2836,7 +2824,7 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 
     setMatchingInProgress(true);
     try {
-      const result = await api.fireControl.autoMatchEquipment(matrixEquipment);
+      const result = await api.fireControlMaps.autoMatchEquipment(matrixEquipment);
       setMatchResults(result.matches || []);
       showToast(`${result.matches?.length || 0} équipements analysés`, "success");
     } catch (err) {
@@ -2847,8 +2835,8 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 
   const handleConfirmMatch = async (matrixEqCode, match) => {
     try {
-      await api.fireControl.confirmEquipmentMatch({
-        source_system: match.source,
+      await api.fireControlMaps.confirmEquipmentMatch({
+        source_system: match.source_system || match.source,
         equipment_id: match.id,
         fire_interlock_code: matrixEqCode,
         zone_id: null,
