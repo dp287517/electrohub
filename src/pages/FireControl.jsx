@@ -807,6 +807,10 @@ export default function FireControl() {
             setShowZoneCheckModal(false);
             setSelectedZoneCheck(null);
           }}
+          onViewMap={(zoneCheckId) => {
+            setShowZoneCheckModal(false);
+            navigate(`/app/fire-control/map?zone_check=${zoneCheckId}`);
+          }}
         />
       )}
 
@@ -2045,7 +2049,7 @@ function UploadPlanModal({ buildings, onUpload, onClose }) {
 }
 
 // Zone Check Modal (for recording test results with equipment checklist)
-function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onClose }) {
+function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onClose, onViewMap }) {
   const [form, setForm] = useState({
     alarm1_triggered: zoneCheck.alarm1_triggered,
     alarm2_triggered: zoneCheck.alarm2_triggered,
@@ -2239,7 +2243,13 @@ function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onC
                       </p>
                       {item.external_system && (
                         <p className="text-xs text-blue-500 mt-0.5">
-                          Lié: {item.external_system} #{item.external_id}
+                          Lié: {item.external_system === 'doors' ? '🚪 Porte' : item.external_system === 'switchboard' ? '⚡ Tableau' : '📦 Équipement'}
+                        </p>
+                      )}
+                      {item.position && (
+                        <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
+                          <MapPin className="w-3 h-3" />
+                          Position sur plan disponible
                         </p>
                       )}
                     </div>
@@ -2285,6 +2295,16 @@ function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onC
           >
             Fermer
           </button>
+          {onViewMap && (equipmentAL1.some(e => e.position) || equipmentAL2.some(e => e.position)) && (
+            <button
+              type="button"
+              onClick={() => onViewMap(zoneCheck.id)}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 sm:py-2 text-blue-600 border border-blue-300 rounded-lg hover:bg-blue-50 text-sm"
+            >
+              <MapPin className="w-4 h-4" />
+              <span className="hidden sm:inline">Voir sur plan</span>
+            </button>
+          )}
           <button
             type="submit"
             disabled={saving}
