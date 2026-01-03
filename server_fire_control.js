@@ -1555,8 +1555,8 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
     job.message = 'Extraction du texte...';
     await saveProgress();
 
-    // Extract text
-    const pdfDoc = await pdfjsLib.getDocument({ data: pdfBuffer }).promise;
+    // Extract text (pdfjs-dist requires Uint8Array, not Buffer)
+    const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
     const numPages = pdfDoc.numPages;
     console.log(`[FireControl] Job ${jobId}: PDF has ${numPages} pages`);
 
