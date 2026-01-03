@@ -434,7 +434,8 @@ export default function FireControl() {
   // Handler for auto-matching equipment from matrix
   const handleAutoMatchEquipment = async (matrixEquipment, context = {}) => {
     try {
-      const results = await api.fireControlMaps.autoMatchEquipment(matrixEquipment);
+      const response = await api.fireControlMaps.autoMatchEquipment(matrixEquipment);
+      const results = response.matches || [];
 
       // Separate confident matches (auto-link) from uncertain matches (need confirmation)
       const confident = results.filter(r => r.status === "confident" && r.best_match);
