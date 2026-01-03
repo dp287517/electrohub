@@ -1570,6 +1570,167 @@ app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
   }
 });
 
+// Helper: Generate unique equipment code from name/location
+function generateEquipmentCode(equipment, index) {
+  const name = (equipment.name || '').toUpperCase();
+  const location = (equipment.location || equipment.fdcio_module || '');
+
+  // Try to extract existing code patterns
+  const patterns = [
+    /\b(PCF[- ]?[A-Z0-9.]+)/i,           // PCF B21.015
+    /\b([A-Z]{2,4}[-\s]?[\d.-]+[-\s]?[A-Z]*)/i, // HVAC 20-2-02-TC
+    /\bInterlock\s+(i\d+)/i,              // Interlock i22
+    /\b(B\d+\.\d+)/i,                     // B21.015
+  ];
+
+  for (const pattern of patterns) {
+    const match = name.match(pattern) || location.match(pattern);
+    if (match) {
+      return match[1].replace(/\s+/g, '-').toUpperCase();
+    }
+  }
+
+  // Fallback: generate from type + index
+  const type = (equipment.type || 'EQ').substring(0, 3).toUpperCase();
+  return `${type}-${String(index + 1).padStart(3, '0')}`;
+}
+
+// Helper: Parse zone from text (e.g. "Sous-sol accès 0: 20900-20905,20908-20912")
+function parseZonesFromText(text) {
+  const zones = [];
+  // Pattern: "Location accès N: detector_numbers" or "Location accès N fx-plafond: detector_numbers"
+  const zonePattern = /([^:\n]+?accès\s*\d+[^:]*?):\s*([\d\-,]+)/gi;
+  let match;
+  let index = 0;
+
+  while ((match = zonePattern.exec(text)) !== null) {
+    const name = match[1].trim();
+    const detectors = match[2].trim();
+
+    // Extract access number for code
+    const accessMatch = name.match(/accès\s*(\d+)/i);
+    const accessNum = accessMatch ? accessMatch[1] : String(index + 1);
+
+    // Determine building/floor from name
+    let building = '';
+    let floor = '';
+    const nameLower = name.toLowerCase();
+    if (nameLower.includes('sous-sol') || nameLower.includes('s-sol')) floor = 'Sous-sol';
+    else if (nameLower.includes('rez')) floor = 'Rez';
+    else if (nameLower.includes('1er') || nameLower.includes('1 er')) floor = '1er';
+    else if (nameLower.includes('2ème') || nameLower.includes('2 ème')) floor = '2ème';
+    else if (nameLower.includes('toiture')) floor = 'Toiture';
+
+    const bldgMatch = name.match(/b[âa]t\.?\s*(\d+)/i);
+    if (bldgMatch) building = `B${bldgMatch[1]}`;
+
+    zones.push({
+      code: `Z${accessNum.padStart(3, '0')}`,
+      name: name,
+      detector_numbers: detectors,
+      building,
+      floor,
+      detector_type: nameLower.includes('fx-plafond') ? 'fx-plafond' : 'smoke'
+    });
+    index++;
+  }
+
+  return zones;
+}
+
+// Helper: Parse equipment from text
+function parseEquipmentFromText(text) {
+  const equipment = [];
+  const seen = new Set();
+
+  // Pattern for FDCIO equipment lines
+  // Format: "FDCIO222, Location    output#    Equipment Name"
+  const fdcioPattern = /FDCIO(\d+),?\s*([^0-9\n]+?)\s+(\d+)\s+([^\n]+)/gi;
+  let match;
+
+  while ((match = fdcioPattern.exec(text)) !== null) {
+    const fdcioModule = `FDCIO${match[1]}`;
+    const location = match[2].trim();
+    const output = match[3];
+    const name = match[4].trim();
+
+    // Determine equipment type from name
+    let type = 'autre';
+    const nameLower = name.toLowerCase();
+    if (nameLower.includes('pcf') || nameLower.includes('p.c.f')) type = 'pcf';
+    else if (nameLower.includes('hvac') || nameLower.includes('climatisation')) type = 'hvac';
+    else if (nameLower.includes('ventil')) type = 'ventilation';
+    else if (nameLower.includes('clapet')) type = 'clapet';
+    else if (nameLower.includes('ascenseur')) type = 'ascenseur';
+    else if (nameLower.includes('monte') && nameLower.includes('charge')) type = 'monte_charge';
+    else if (nameLower.includes('alarme')) type = 'alarme';
+    else if (nameLower.includes('sirene') || nameLower.includes('sirène')) type = 'sirene';
+    else if (nameLower.includes('flash')) type = 'flash';
+    else if (nameLower.includes('evacuation') || nameLower.includes('évacuation')) type = 'evacuation';
+    else if (nameLower.includes('interlock') || nameLower.includes('porte')) type = 'interlock';
+    else if (nameLower.includes('roll') && nameLower.includes('up')) type = 'roll_up';
+    else if (nameLower.includes('flux') || nameLower.includes('lami')) type = 'flux_laminaire';
+
+    // Extract building from location or name
+    let building = '';
+    const bldgMatch = (location + name).match(/b[âa]t\.?\s*(\d+)|B(\d+)\./i);
+    if (bldgMatch) building = `B${bldgMatch[1] || bldgMatch[2]}`;
+
+    const eq = {
+      name,
+      type,
+      location,
+      fdcio_module: fdcioModule,
+      fdcio_output: output,
+      building
+    };
+
+    // Generate unique code
+    eq.code = generateEquipmentCode(eq, equipment.length);
+
+    // Avoid duplicates
+    const key = `${eq.fdcio_module}-${eq.fdcio_output}-${eq.name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      equipment.push(eq);
+    }
+  }
+
+  // Also catch equipment without FDCIO (FCnet, Evacuation commands, etc.)
+  const otherPatterns = [
+    /Alarme\s+(I+),\s*([^\n(]+)/gi,           // Alarme I/II, Bâtiment X
+    /Commande\s+[EÉ]vacuation\s+([^\n(]+)/gi, // Commande Evacuation bâtiment X
+    /Feu\s+flash\s+([^\n(]+)/gi,              // Feu flash côté X
+  ];
+
+  for (const pattern of otherPatterns) {
+    let m;
+    while ((m = pattern.exec(text)) !== null) {
+      const name = m[0].trim();
+      const key = name.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        let type = 'autre';
+        if (name.toLowerCase().includes('alarme')) type = 'alarme';
+        else if (name.toLowerCase().includes('evacuation') || name.toLowerCase().includes('évacuation')) type = 'evacuation';
+        else if (name.toLowerCase().includes('flash')) type = 'flash';
+
+        equipment.push({
+          code: generateEquipmentCode({ name, type }, equipment.length),
+          name,
+          type,
+          location: '',
+          fdcio_module: '',
+          fdcio_output: '',
+          building: ''
+        });
+      }
+    }
+  }
+
+  return equipment;
+}
+
 // Background worker for matrix parsing
 async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
   const job = matrixParseJobs.get(jobId);
@@ -1613,26 +1774,31 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       throw new Error("No PDF content available");
     }
 
-    job.progress = 15;
+    job.progress = 10;
     job.message = 'Extraction du texte...';
     await saveProgress();
 
-    // Extract text (pdfjs-dist requires Uint8Array, not Buffer)
+    // Extract text from ALL pages (pdfjs-dist requires Uint8Array, not Buffer)
     const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
     const numPages = pdfDoc.numPages;
     console.log(`[FireControl] Job ${jobId}: PDF has ${numPages} pages`);
 
+    // Store text per page for better processing
+    const pageTexts = [];
     let fullText = "";
+
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
       try {
         const page = await pdfDoc.getPage(pageNum);
         const textContent = await page.getTextContent();
         const pageText = textContent.items.map(item => item.str).join(" ");
+        pageTexts.push({ pageNum, text: pageText });
         fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
       } catch (e) {
         console.warn(`[FireControl] Job ${jobId}: Page ${pageNum} error: ${e.message}`);
+        pageTexts.push({ pageNum, text: "" });
       }
-      job.progress = 15 + Math.round((pageNum / numPages) * 20);
+      job.progress = 10 + Math.round((pageNum / numPages) * 15);
       await saveProgress();
     }
 
@@ -1640,61 +1806,155 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       throw new Error("Le PDF ne contient pas de texte extractible (image scannée?)");
     }
 
-    console.log(`[FireControl] Job ${jobId}: Extracted ${fullText.length} chars, first 500: ${fullText.substring(0, 500).replace(/\n/g, ' ')}`);
+    console.log(`[FireControl] Job ${jobId}: Extracted ${fullText.length} chars from ${numPages} pages`);
 
-    job.progress = 40;
-    job.message = 'Analyse IA en cours...';
+    job.progress = 30;
+    job.message = 'Extraction des zones et équipements...';
     await saveProgress();
 
-    console.log(`[FireControl] Job ${jobId}: Calling OpenAI...`);
+    // === NEW: Hybrid approach - local parsing + AI for verification ===
+    // Step 1: Extract zones and equipment locally using regex patterns
+    const localZones = parseZonesFromText(fullText);
+    const localEquipment = parseEquipmentFromText(fullText);
 
-    // Call OpenAI - simplified prompt to maximize response tokens
-    const aiResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `Extrais les données d'une matrice d'asservissement incendie Siemens FC2060. Retourne du JSON:
+    console.log(`[FireControl] Job ${jobId}: Local parsing found ${localZones.length} zones, ${localEquipment.length} equipment`);
 
-{"zones":[{"code":"Z001","name":"Nom zone","detector_numbers":"20900-20905"}],
-"equipment":[{"code":"PCF001","name":"PCF B21.015","type":"pcf"}],
-"links":[{"zone_code":"Z001","equipment_code":"PCF001","alarm_level":1}]}
+    job.progress = 45;
+    job.message = 'Analyse IA pour enrichissement...';
+    await saveProgress();
 
-ZONES: Colonnes avec numéros de détecteurs (ex: "20900-20905")
-EQUIPMENT: Lignes avec PCF, HVAC, Ventilation, Clapet, etc.
-LINKS: Les "I" ou "II" dans la matrice = liens zone/équipement. I=alarm_level 1, II=alarm_level 2.
+    // Step 2: Use AI to enhance/verify data if OpenAI is available
+    let allZones = localZones;
+    let allEquipment = localEquipment;
+    let allLinks = [];
 
-Types équipement: pcf,hvac,ventilation,clapet,ascenseur,monte_charge,alarme,sirene,flash,evacuation,autre
+    if (openai && fullText.length > 100) {
+      try {
+        // Process PDF in chunks if needed (for very long PDFs)
+        const chunkSize = 28000; // Slightly under 30K to leave room for prompt
+        const textChunks = [];
 
-IMPORTANT: Extrais les zones, équipements ET les liens (I/II dans la matrice).`
-        },
-        {
-          role: "user",
-          content: fullText.substring(0, 25000)
+        for (let i = 0; i < fullText.length; i += chunkSize) {
+          textChunks.push(fullText.substring(i, Math.min(i + chunkSize, fullText.length)));
         }
-      ],
-      max_tokens: 16384,
-      temperature: 0.1
-    });
+
+        console.log(`[FireControl] Job ${jobId}: Processing ${textChunks.length} chunk(s) with AI`);
+
+        // Process each chunk and merge results
+        const aiZones = [];
+        const aiEquipment = [];
+        const aiLinks = [];
+
+        for (let chunkIdx = 0; chunkIdx < textChunks.length; chunkIdx++) {
+          const chunk = textChunks[chunkIdx];
+          job.progress = 45 + Math.round((chunkIdx / textChunks.length) * 20);
+          job.message = `Analyse IA ${chunkIdx + 1}/${textChunks.length}...`;
+          await saveProgress();
+
+          const aiResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content: `Tu es un expert en systèmes de sécurité incendie Siemens FC2060.
+Extrais les données d'une matrice d'asservissement incendie. Retourne UNIQUEMENT du JSON valide:
+
+{
+  "zones": [
+    {"code": "Z001", "name": "Sous-sol accès 0", "detector_numbers": "20900-20905,20908-20912", "building": "B20", "floor": "Sous-sol"}
+  ],
+  "equipment": [
+    {"code": "HVAC-20-2-02", "name": "HVAC tabl. 20-2-02-TC", "type": "hvac", "fdcio_module": "FDCIO222", "fdcio_output": "1", "location": "Local ventilation toiture", "building": "B20"}
+  ],
+  "links": [
+    {"zone_code": "Z001", "equipment_code": "HVAC-20-2-02", "alarm_level": 1}
+  ]
+}
+
+ZONES: Lignes avec "accès N:" suivi de numéros de détecteurs (ex: "20900-20905")
+ÉQUIPEMENTS: Lignes avec FDCIO + numéro de sortie + nom (PCF, HVAC, Ventil, Clapet, etc.)
+LIENS: Quand une zone active un équipement (colonnes "l" dans la matrice)
+
+CODES ÉQUIPEMENT: Utilise le nom technique (ex: "PCF-B21.015", "HVAC-20-2-02-TC", "INTERLOCK-I22")
+
+Types valides: pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, sirene, flash, evacuation, interlock, roll_up, flux_laminaire, autre
+
+IMPORTANT:
+- Extrais TOUS les équipements de chaque ligne FDCIO
+- Génère des codes uniques basés sur le nom technique
+- alarm_level: 1 pour Alarme I, 2 pour Alarme II`
+              },
+              {
+                role: "user",
+                content: `Extrait les zones, équipements et liens de cette partie de la matrice (partie ${chunkIdx + 1}/${textChunks.length}):\n\n${chunk}`
+              }
+            ],
+            max_tokens: 16384,
+            temperature: 0.1
+          });
+
+          const content = aiResponse.choices[0]?.message?.content || "";
+          console.log(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} response length: ${content.length}`);
+
+          try {
+            let jsonStr = content;
+            const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+            if (jsonMatch) jsonStr = jsonMatch[1].trim();
+
+            // Try to fix common JSON issues
+            jsonStr = jsonStr.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.zones) aiZones.push(...parsed.zones);
+            if (parsed.equipment) aiEquipment.push(...parsed.equipment);
+            if (parsed.links) aiLinks.push(...parsed.links);
+          } catch (parseErr) {
+            console.warn(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} parse error: ${parseErr.message}`);
+          }
+        }
+
+        // Merge AI results with local parsing (prefer AI if available, dedupe)
+        if (aiZones.length > 0 || aiEquipment.length > 0) {
+          // Deduplicate zones by code
+          const zoneMap = new Map();
+          for (const z of localZones) zoneMap.set(z.code, z);
+          for (const z of aiZones) {
+            if (!zoneMap.has(z.code) || (z.name && z.detector_numbers)) {
+              zoneMap.set(z.code, z);
+            }
+          }
+          allZones = Array.from(zoneMap.values());
+
+          // Deduplicate equipment by code or fdcio+output
+          const eqMap = new Map();
+          for (const e of localEquipment) {
+            const key = e.code || `${e.fdcio_module}-${e.fdcio_output}`;
+            eqMap.set(key, e);
+          }
+          for (const e of aiEquipment) {
+            const key = e.code || `${e.fdcio_module}-${e.fdcio_output}`;
+            if (!eqMap.has(key) || (e.name && e.type !== 'autre')) {
+              eqMap.set(key, e);
+            }
+          }
+          allEquipment = Array.from(eqMap.values());
+
+          allLinks = aiLinks;
+        }
+
+        console.log(`[FireControl] Job ${jobId}: After AI merge: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
+
+      } catch (aiErr) {
+        console.warn(`[FireControl] Job ${jobId}: AI enrichment failed, using local parsing: ${aiErr.message}`);
+        // Fall back to local parsing results
+      }
+    }
 
     job.progress = 70;
     job.message = 'Traitement des résultats...';
     await saveProgress();
 
-    const content = aiResponse.choices[0]?.message?.content || "";
-    const finishReason = aiResponse.choices[0]?.finish_reason || "unknown";
-    console.log(`[FireControl] Job ${jobId}: OpenAI response (${content.length} chars, finish: ${finishReason}): ${content.substring(0, 500)}`);
-
-    let jsonStr = content;
-    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) jsonStr = jsonMatch[1].trim();
-
-    const parsed = JSON.parse(jsonStr);
-    const allZones = parsed.zones || [];
-    const allEquipment = parsed.equipment || [];
-    const allLinks = parsed.links || [];
-
-    console.log(`[FireControl] Job ${jobId}: Found ${allZones.length} zones, ${allEquipment.length} equipment`);
+    console.log(`[FireControl] Job ${jobId}: Final count - ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
 
     job.progress = 80;
     job.message = 'Enregistrement en base...';
@@ -1708,19 +1968,35 @@ IMPORTANT: Extrais les zones, équipements ET les liens (I/II dans la matrice).`
         await pool.query(`
           INSERT INTO fc_zones (code, name, description, building, floor, detector_numbers, detector_type, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          ON CONFLICT (code, company_id, site_id) DO UPDATE SET name = EXCLUDED.name, matrix_id = EXCLUDED.matrix_id, updated_at = now()
-        `, [z.code, z.name, z.description || '', z.building, z.floor, z.detector_numbers, z.detector_type || 'smoke', matrixId, tenant.companyId, tenant.siteId]);
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), fc_zones.name),
+            detector_numbers = COALESCE(NULLIF(EXCLUDED.detector_numbers, ''), fc_zones.detector_numbers),
+            building = COALESCE(NULLIF(EXCLUDED.building, ''), fc_zones.building),
+            floor = COALESCE(NULLIF(EXCLUDED.floor, ''), fc_zones.floor),
+            matrix_id = EXCLUDED.matrix_id,
+            updated_at = now()
+        `, [z.code, z.name, z.description || '', z.building || '', z.floor || '', z.detector_numbers || '', z.detector_type || 'smoke', matrixId, tenant.companyId, tenant.siteId]);
         zonesCreated++;
       } catch (e) { console.warn(`[FireControl] Zone error: ${e.message}`); }
     }
 
     for (const e of allEquipment) {
       try {
+        // Ensure we have a valid code
+        const code = e.code || generateEquipmentCode(e, equipmentCreated);
         await pool.query(`
           INSERT INTO fc_equipment (code, name, equipment_type, building, floor, location, fdcio_module, fdcio_output, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          ON CONFLICT (code, company_id, site_id) DO UPDATE SET name = EXCLUDED.name, matrix_id = EXCLUDED.matrix_id, updated_at = now()
-        `, [e.code, e.name, e.type || 'autre', e.building, e.floor, e.location, e.fdcio_module, e.fdcio_output, matrixId, tenant.companyId, tenant.siteId]);
+          ON CONFLICT (code, company_id, site_id) DO UPDATE SET
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), fc_equipment.name),
+            equipment_type = CASE WHEN EXCLUDED.equipment_type != 'autre' THEN EXCLUDED.equipment_type ELSE fc_equipment.equipment_type END,
+            building = COALESCE(NULLIF(EXCLUDED.building, ''), fc_equipment.building),
+            location = COALESCE(NULLIF(EXCLUDED.location, ''), fc_equipment.location),
+            fdcio_module = COALESCE(NULLIF(EXCLUDED.fdcio_module, ''), fc_equipment.fdcio_module),
+            fdcio_output = COALESCE(NULLIF(EXCLUDED.fdcio_output, ''), fc_equipment.fdcio_output),
+            matrix_id = EXCLUDED.matrix_id,
+            updated_at = now()
+        `, [code, e.name || '', e.type || 'autre', e.building || '', e.floor || '', e.location || '', e.fdcio_module || '', e.fdcio_output || '', matrixId, tenant.companyId, tenant.siteId]);
         equipmentCreated++;
       } catch (err) { console.warn(`[FireControl] Equipment error: ${err.message}`); }
     }
@@ -1739,7 +2015,13 @@ IMPORTANT: Extrais les zones, équipements ET les liens (I/II dans la matrice).`
 
     // Store parsed data
     await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`,
-      [JSON.stringify({ zones: allZones, equipment: allEquipment, links: allLinks, parsed_at: new Date().toISOString() }), matrixId]);
+      [JSON.stringify({
+        zones: allZones,
+        equipment: allEquipment,
+        links: allLinks,
+        parsed_at: new Date().toISOString(),
+        stats: { pages: numPages, total_chars: fullText.length }
+      }), matrixId]);
 
     job.status = 'completed';
     job.progress = 100;
@@ -1755,7 +2037,7 @@ IMPORTANT: Extrais les zones, équipements ET les liens (I/II dans la matrice).`
       await notify({
         tag: `matrix-parse-${jobId}`,
         title: '✅ Analyse matrice terminée',
-        body: `${equipmentCreated} équipements extraits de "${matrix.name}"`,
+        body: `${zonesCreated} zones, ${equipmentCreated} équipements extraits de "${matrix.name}"`,
         data: { type: 'matrix_parse_complete', job_id: jobId, matrix_id: matrixId },
         userEmail: userEmail
       });
@@ -2874,6 +3156,133 @@ function stringSimilarity(s1, s2) {
   return 1 - (matrix[len1][len2] / maxLen);
 }
 
+// Extract key identifiers from equipment name/code for matching
+function extractEquipmentIdentifiers(text) {
+  if (!text) return { patterns: [], building: null, room: null };
+
+  const upper = text.toUpperCase();
+  const patterns = [];
+
+  // Extract building reference (B20, B21, Bâtiment 20, etc.)
+  const buildingMatch = upper.match(/B[ÂAÂA]?T?\.?\s*(\d+)|B(\d+)\./i);
+  const building = buildingMatch ? `B${buildingMatch[1] || buildingMatch[2]}` : null;
+
+  // Extract room/location codes (B21.015, 21.915, etc.)
+  const roomMatches = upper.match(/\b(\d{2})[.-](\d{3})\b/g) || [];
+  for (const rm of roomMatches) {
+    patterns.push(rm.replace(/[.-]/g, '.'));
+  }
+
+  // Extract PCF codes
+  const pcfMatch = upper.match(/PCF[- ]?([A-Z]?\d+[.\-]?\d*)/i);
+  if (pcfMatch) patterns.push(`PCF-${pcfMatch[1].replace(/[.\-\s]/g, '')}`);
+
+  // Extract interlock codes (i22, I17, etc.)
+  const interlockMatch = upper.match(/(?:INTERLOCK\s*)?I(\d+)/i);
+  if (interlockMatch) patterns.push(`I${interlockMatch[1]}`);
+
+  // Extract HVAC/TC codes (20-2-02-TC, 21-1-09-TC)
+  const hvacMatches = upper.match(/(\d+[.-]\d+[.-]\d+[.-]?(?:TC|TS|SA)?)/gi) || [];
+  for (const hv of hvacMatches) {
+    patterns.push(hv.replace(/[.-]/g, '-'));
+  }
+
+  // Extract "Gr." group references
+  const grMatch = upper.match(/GR\.?\s*(\d+)/i);
+  if (grMatch) patterns.push(`GR${grMatch[1]}`);
+
+  return { patterns, building, room: roomMatches[0] || null };
+}
+
+// Enhanced matching using extracted identifiers
+function calculateEnhancedMatchScore(matrixEq, candidate) {
+  let score = 0;
+  let bonuses = [];
+
+  // Extract identifiers
+  const matrixIds = extractEquipmentIdentifiers((matrixEq.code || '') + ' ' + (matrixEq.name || '') + ' ' + (matrixEq.location || ''));
+  const candIds = extractEquipmentIdentifiers((candidate.code || '') + ' ' + (candidate.name || '') + ' ' + (candidate.location || ''));
+
+  // Direct pattern matches (high confidence)
+  for (const mp of matrixIds.patterns) {
+    for (const cp of candIds.patterns) {
+      if (mp === cp) {
+        score += 0.35;
+        bonuses.push(`pattern:${mp}`);
+      } else if (mp.includes(cp) || cp.includes(mp)) {
+        score += 0.2;
+        bonuses.push(`partial:${mp}~${cp}`);
+      }
+    }
+  }
+
+  // Building match
+  if (matrixIds.building && candIds.building && matrixIds.building === candIds.building) {
+    score += 0.15;
+    bonuses.push(`building:${matrixIds.building}`);
+  }
+
+  // Name similarity (lower weight, more prone to false positives)
+  const nameScore = stringSimilarity(matrixEq.name, candidate.name) * 0.2;
+  score += nameScore;
+
+  // Code similarity
+  const codeScore = stringSimilarity(matrixEq.code, candidate.code) * 0.25;
+  score += codeScore;
+
+  // Location/room match bonus
+  if (matrixEq.location && candidate.location) {
+    const locScore = stringSimilarity(matrixEq.location, candidate.location) * 0.1;
+    score += locScore;
+  }
+
+  // Floor match bonus
+  if (matrixEq.floor && candidate.floor) {
+    const floorLower = (matrixEq.floor || '').toLowerCase();
+    const candFloorLower = (candidate.floor || '').toLowerCase();
+    if (floorLower === candFloorLower) {
+      score += 0.05;
+      bonuses.push('floor');
+    } else if (
+      (floorLower.includes('sous') && candFloorLower.includes('sous')) ||
+      (floorLower.includes('rez') && candFloorLower.includes('rez')) ||
+      (floorLower.includes('1er') && candFloorLower.includes('1')) ||
+      (floorLower.includes('toiture') && candFloorLower.includes('toit'))
+    ) {
+      score += 0.03;
+    }
+  }
+
+  // Equipment type similarity
+  const typeMatches = {
+    pcf: ['pcf', 'porte', 'door', 'coupe-feu'],
+    hvac: ['hvac', 'ventil', 'clim', 'air'],
+    interlock: ['interlock', 'verrouill', 'sas'],
+    ventilation: ['ventil', 'hvac', 'air', 'extract'],
+    ascenseur: ['ascenseur', 'elevator', 'lift'],
+    monte_charge: ['monte', 'charge', 'freight'],
+  };
+
+  const matrixType = (matrixEq.type || '').toLowerCase();
+  const candType = (candidate.eq_type || '').toLowerCase();
+  const candName = (candidate.name || '').toLowerCase();
+
+  for (const [type, keywords] of Object.entries(typeMatches)) {
+    if (matrixType === type || matrixType.includes(type)) {
+      for (const kw of keywords) {
+        if (candType.includes(kw) || candName.includes(kw)) {
+          score += 0.08;
+          bonuses.push(`type:${type}`);
+          break;
+        }
+      }
+      break;
+    }
+  }
+
+  return { score: Math.min(score, 1.0), bonuses };
+}
+
 // Auto-match matrix equipment to existing equipment
 app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
   try {
@@ -2921,25 +3330,17 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
     } catch (e) {}
 
     const results = [];
-    const CONFIDENT_THRESHOLD = 0.85;
-    const UNCERTAIN_THRESHOLD = 0.5;
+    const CONFIDENT_THRESHOLD = 0.75; // Lowered to allow pattern-based matches
+    const UNCERTAIN_THRESHOLD = 0.35; // Lowered to catch more potential matches
 
     for (const matrixEq of matrix_equipment) {
       const matches = [];
 
       for (const candidate of allCandidates) {
-        // Calculate match scores
-        const codeScore = stringSimilarity(matrixEq.code, candidate.code) * 0.4;
-        const nameScore = stringSimilarity(matrixEq.name, candidate.name) * 0.3;
-        const buildingScore = (matrixEq.building && candidate.building &&
-          matrixEq.building.toLowerCase() === candidate.building.toLowerCase()) ? 0.15 : 0;
-        const floorScore = (matrixEq.floor && candidate.floor &&
-          matrixEq.floor.toLowerCase() === candidate.floor.toLowerCase()) ? 0.1 : 0;
-        const locationScore = stringSimilarity(matrixEq.location, candidate.location) * 0.05;
+        // Use enhanced matching with pattern extraction
+        const { score: enhancedScore, bonuses } = calculateEnhancedMatchScore(matrixEq, candidate);
 
-        const totalScore = codeScore + nameScore + buildingScore + floorScore + locationScore;
-
-        if (totalScore >= UNCERTAIN_THRESHOLD) {
+        if (enhancedScore >= UNCERTAIN_THRESHOLD) {
           matches.push({
             candidate_id: candidate.id,
             candidate_code: candidate.code,
@@ -2951,7 +3352,8 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
             equipment_type: candidate.eq_type,
             already_linked: candidate.fire_interlock || false,
             linked_zone_id: candidate.fire_interlock_zone_id,
-            score: Math.round(totalScore * 100),
+            score: Math.round(enhancedScore * 100),
+            match_reasons: bonuses, // Include why this matched
           });
         }
       }
@@ -2961,7 +3363,7 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
 
       const topMatch = matches[0];
       const isConfident = topMatch && topMatch.score >= CONFIDENT_THRESHOLD * 100;
-      const hasMultipleGoodMatches = matches.filter(m => m.score >= UNCERTAIN_THRESHOLD * 100).length > 1;
+      const hasMultipleGoodMatches = matches.filter(m => m.score >= 60).length > 1; // Multiple matches above 60%
 
       results.push({
         matrix_code: matrixEq.code,
