@@ -325,6 +325,19 @@ async function ensureSchema() {
     );
   `);
 
+  // Migration: Add missing columns to fc_check_files (for tables created before these columns were added)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'fc_check_files' AND column_name = 'zone_check_id') THEN
+        ALTER TABLE fc_check_files ADD COLUMN zone_check_id UUID REFERENCES fc_zone_checks(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'fc_check_files' AND column_name = 'equipment_result_id') THEN
+        ALTER TABLE fc_check_files ADD COLUMN equipment_result_id UUID REFERENCES fc_equipment_results(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
+
   // 10. Positions des zones/équipements sur les plans
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fc_map_positions (
