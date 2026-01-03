@@ -3535,6 +3535,15 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
       const hasMultipleGoodMatches = matches.filter(m => m.score >= 60).length > 1; // Multiple matches above 60%
 
       results.push({
+        // Nested object for frontend compatibility
+        matrix_equipment: {
+          code: matrixEq.code,
+          name: matrixEq.name,
+          type: matrixEq.type,
+          building: matrixEq.building,
+          floor: matrixEq.floor,
+        },
+        // Keep flat fields for backward compatibility
         matrix_code: matrixEq.code,
         matrix_name: matrixEq.name,
         matrix_type: matrixEq.type,
