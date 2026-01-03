@@ -1363,7 +1363,9 @@ app.post("/api/fire-control/zone-checks/:id/files", uploadFile.single("file"), a
 
 app.post("/api/fire-control/matrices/upload", uploadMatrix.single("file"), async (req, res) => {
   try {
-    const tenant = extractTenantFromRequest(req);
+    let tenant = extractTenantFromRequest(req);
+    tenant = await enrichTenantWithSiteId(tenant, req, pool);
+    console.log(`[FireControl] Matrix upload - tenant: companyId=${tenant.companyId}, siteId=${tenant.siteId}`);
     const { campaign_id, matrix_name, version } = req.body;
 
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
