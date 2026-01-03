@@ -1081,12 +1081,13 @@ app.post("/api/fire-control/campaigns/:id/generate-checks", async (req, res) => 
   try {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
     const { building } = req.body;
     const { email } = getIdentityFromReq(req);
 
-    // Get all zones
-    let sql = `SELECT id FROM fc_zones WHERE company_id = $1 AND site_id = $2`;
-    const params = [tenant.companyId, tenant.siteId];
+    // Get all zones using proper tenant filter
+    let sql = `SELECT id FROM fc_zones WHERE ${filter.where}`;
+    const params = [...filter.params];
 
     if (building) {
       params.push(building);
@@ -1094,6 +1095,7 @@ app.post("/api/fire-control/campaigns/:id/generate-checks", async (req, res) => 
     }
 
     const { rows: zones } = await pool.query(sql, params);
+    console.log(`[FireControl] generate-checks: found ${zones.length} zones for campaign ${id}`);
 
     let created = 0;
     for (const zone of zones) {
