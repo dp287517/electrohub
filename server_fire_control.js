@@ -1592,26 +1592,38 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       messages: [
         {
           role: "system",
-          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte extrait d'un PDF et extrais TOUTES les zones de détection et équipements.
+          content: `Tu es un expert en matrices d'asservissement incendie Siemens FC2060. Analyse le texte extrait d'un PDF.
 
-IMPORTANT: Le format varie selon les matrices. Cherche:
-- Zones de détection: identifiées par des numéros de détecteurs (ex: "20900-20905"), des étages, des accès, des locaux
-- Équipements: portes coupe-feu, VMC, désenfumage, clapets, volets, exutoires, sirènes, etc.
-- Relations zone→équipement dans les tableaux ou colonnes
+FORMAT TYPIQUE DES MATRICES:
+1. ZONES (en haut/gauche): Lignes comme "Sous-sol accès 0: 20900-20905,20908-20912" où les numéros sont les détecteurs
+2. ÉQUIPEMENTS (à droite): Lignes avec "FDCIO222" suivi d'un emplacement, puis une commande (PCF, HVAC, Ventilation, etc.)
+3. LIENS: Les caractères "l" ou points dans la matrice indiquent qu'une zone déclenche un équipement
+4. NIVEAUX D'ALARME: Colonnes 11/21/31 = Alarme I (locale), 12/22/32 = Alarme II (générale)
 
-Génère des codes uniques si non présents (ex: "ZONE-001", "PCF-001").
+ÉQUIPEMENTS À IDENTIFIER:
+- PCF = Porte Coupe-Feu (ex: "PCF B21.015 JURA", "PCF Bât. 20")
+- HVAC = Ventilation/Climatisation (ex: "HVAC tabl. 20-2-02-TC")
+- Ventilation (ex: "Ventilation B21 (21-1-10-TS)")
+- Clapet C.F = Clapet Coupe-Feu
+- Ascenseur, Monte-charge
+- Feu flash, Sirène, Alarme
+- Commande Evacuation
+
+IMPORTANT: Dans le texte, cherche les patterns:
+- "FDCIO222, [emplacement]" + numéro de sortie → c'est le module de commande
+- Lignes "Commande" ou "Action" → nom de l'équipement commandé
 
 Retourne UNIQUEMENT du JSON valide:
 {
-  "zones": [{"code": "ZONE-001", "name": "Sous-sol accès 0", "building": "", "floor": "Sous-sol", "detector_numbers": "20900-20905,20908-20912", "detector_type": "smoke"}],
-  "equipment": [{"code": "PCF-001", "name": "Porte coupe-feu escalier", "type": "pcf", "building": "", "floor": "RDC", "location": "", "fdcio_module": "", "fdcio_output": ""}],
+  "zones": [{"code": "ZONE-001", "name": "Sous-sol accès 0", "building": "20", "floor": "Sous-sol", "detector_numbers": "20900-20905,20908-20912", "detector_type": "smoke"}],
+  "equipment": [{"code": "PCF-001", "name": "PCF B21.015 JURA", "type": "pcf", "building": "21", "floor": "", "location": "B21.015", "fdcio_module": "FDCIO222", "fdcio_output": "1"}],
   "links": [{"zone_code": "ZONE-001", "equipment_code": "PCF-001", "alarm_level": 1, "action": "fermeture"}]
 }
 
-Types d'équipements: pcf, vmc, extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
-Niveaux alarme: 1 (pré-alarme/détection), 2 (alarme générale)
+Types: pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, sirene, flash, evacuation, coupure_elec, autre
+Niveaux: 1 = Alarme I (détection locale), 2 = Alarme II (générale)
 
-EXTRAIS LE MAXIMUM de données même si le format est inhabituel. Ne retourne PAS de tableaux vides s'il y a des données dans le texte.`
+EXTRAIS TOUS les équipements listés dans "Commande" même sans lien visible. Génère des codes uniques (ZONE-001, PCF-001, HVAC-001, etc.)`
         },
         {
           role: "user",
