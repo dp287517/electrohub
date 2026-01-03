@@ -310,7 +310,7 @@ export default function FireControl() {
     try {
       await api.fireControl.deleteMatrix(matrix.id);
       showToast("Matrice supprimée");
-      refreshData();
+      loadMatrices();
     } catch (err) {
       console.error("Delete matrix error:", err);
       showToast(err.message || "Erreur lors de la suppression", "error");
