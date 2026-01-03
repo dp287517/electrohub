@@ -1570,23 +1570,49 @@ app.get("/api/fire-control/matrices/:id/equipment", async (req, res) => {
   }
 });
 
-// Helper: Generate unique equipment code from name/location
+// ============================================================================
+// MATRIX PARSING - Siemens FC2060 Fire Control Matrix
+// ============================================================================
+// Structure of the matrix:
+// - ZONES (columns at top): Detection lines with detector numbers
+//   - Format: "Location accès N: detector_numbers"
+//   - With "DM" = Manual trigger (déclencheur manuel)
+//   - Without "DM" = Smoke detector (détecteur de fumée)
+// - EQUIPMENT (rows): In the "Action" column (NOT "Type, emplacement de montage")
+//   - Names like: "PCF B21.015", "HVAC tabl. 20-2-02-TC", "Coupure tableau Becomix"
+// - LINKS: Black dots (■/l) in the matrix = zone triggers equipment
+// ============================================================================
+
+// Helper: Generate unique equipment code from action name
 function generateEquipmentCode(equipment, index) {
   const name = (equipment.name || '').toUpperCase();
-  const location = (equipment.location || equipment.fdcio_module || '');
 
-  // Try to extract existing code patterns
+  // Try to extract existing code patterns from the action name
   const patterns = [
-    /\b(PCF[- ]?[A-Z0-9.]+)/i,           // PCF B21.015
-    /\b([A-Z]{2,4}[-\s]?[\d.-]+[-\s]?[A-Z]*)/i, // HVAC 20-2-02-TC
-    /\bInterlock\s+(i\d+)/i,              // Interlock i22
-    /\b(B\d+\.\d+)/i,                     // B21.015
+    /\b(PCF[- ]?B?\d+[.\d]*[- ]?[A-Z]*)/i,      // PCF B21.015, PCF Bât. 20
+    /\b(HVAC[- ]?(?:tabl\.?)?[- ]?\d+[.\-\d]+[- ]?[A-Z]*)/i, // HVAC tabl. 20-2-02-TC
+    /\b(Interlock[- ]?i\d+)/i,                   // Interlock i22
+    /\b(Porte[- ]?(?:Interlock)?[- ]?i\d+)/i,   // Porte Interlock i21
+    /\b(Rideau[- ]?coupe[- ]?feu[- ]?CW\d+)/i,  // Rideau coupe feu CW1
+    /\b(Porte[- ]?coupe[- ]?feu[- ]?B\d+[.\d]+)/i, // Porte coupe feu B24.006
+    /\b(Clapet[- ]?C\.?F\.?)/i,                  // Clapet C.F
+    /\b(Feu[- ]?flash[- ]?\w+)/i,               // Feu flash Prangins
+    /\b(Alarme[- ]?I+)/i,                        // Alarme I, Alarme II
+    /\b(Monte[- ]?charge)/i,                     // Monte charge
+    /\b(Ascenseur)/i,                            // Ascenseur
+    /\b(Ventil[.\w]*[- ]?\d*[.\-\d]*)/i,        // Ventilation, Ventil. vest.
+    /\b(Climatisation[- ]?\w*)/i,                // Climatisation
+    /\b(Coupure[- ]?\w+)/i,                      // Coupure tableau
+    /\b(Flux[- ]?lami[.\w]*)/i,                  // Flux laminaire
+    /\b(Roll[- ]?up)/i,                          // Roll up
+    /\b(Cde[- ]?[eé]vacuation)/i,               // Cde évacuation
+    /\b(Commande[- ]?[EÉ]vacuation)/i,          // Commande Evacuation
   ];
 
   for (const pattern of patterns) {
-    const match = name.match(pattern) || location.match(pattern);
+    const match = name.match(pattern);
     if (match) {
-      return match[1].replace(/\s+/g, '-').toUpperCase();
+      return match[1].replace(/\s+/g, '-').replace(/[.]+/g, '.').toUpperCase();
     }
   }
 
@@ -1595,140 +1621,256 @@ function generateEquipmentCode(equipment, index) {
   return `${type}-${String(index + 1).padStart(3, '0')}`;
 }
 
-// Helper: Parse zone from text (e.g. "Sous-sol accès 0: 20900-20905,20908-20912")
+// Helper: Determine equipment type from action name
+function determineEquipmentType(actionName) {
+  const name = (actionName || '').toLowerCase();
+
+  if (name.includes('pcf') || name.includes('p.c.f') || name.includes('porte coupe feu')) return 'pcf';
+  if (name.includes('hvac') || name.includes('climatisation')) return 'hvac';
+  if (name.includes('ventil')) return 'ventilation';
+  if (name.includes('clapet')) return 'clapet';
+  if (name.includes('ascenseur')) return 'ascenseur';
+  if (name.includes('monte') && name.includes('charge')) return 'monte_charge';
+  if (name.includes('alarme')) return 'alarme';
+  if (name.includes('sirene') || name.includes('sirène')) return 'sirene';
+  if (name.includes('flash') || name.includes('feu flash')) return 'flash';
+  if (name.includes('evacuation') || name.includes('évacuation')) return 'evacuation';
+  if (name.includes('interlock') || name.includes('porte interlock')) return 'interlock';
+  if (name.includes('roll') && name.includes('up')) return 'roll_up';
+  if (name.includes('rideau')) return 'rideau_cf';
+  if (name.includes('flux') || name.includes('lami')) return 'flux_laminaire';
+  if (name.includes('coupure')) return 'coupure';
+  if (name.includes('contrôle') && name.includes('accès')) return 'controle_acces';
+
+  return 'autre';
+}
+
+// Helper: Extract building from name
+function extractBuilding(text) {
+  const match = (text || '').match(/b[âa]t\.?\s*(\d+)|B(\d+)\.|bâtiment\s*(\d+)/i);
+  if (match) return `B${match[1] || match[2] || match[3]}`;
+  return '';
+}
+
+// Helper: Parse zones from matrix text
+// Zones are the detection lines at the top of the matrix
 function parseZonesFromText(text) {
   const zones = [];
-  // Pattern: "Location accès N: detector_numbers" or "Location accès N fx-plafond: detector_numbers"
-  const zonePattern = /([^:\n]+?accès\s*\d+[^:]*?):\s*([\d\-,]+)/gi;
-  let match;
-  let index = 0;
+  const seen = new Set();
 
-  while ((match = zonePattern.exec(text)) !== null) {
-    const name = match[1].trim();
-    const detectors = match[2].trim();
+  // Pattern for zones: "Location accès N: detector_numbers" or similar
+  // Also match: "Rez de chaussée: 24001-24017", "1er étage: 22100-22108"
+  const zonePatterns = [
+    /([^:\n]{3,50}?(?:accès|acces)\s*\d+[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /([^:\n]{3,30}?(?:étage|etage)[^:]{0,20}?):\s*([\d\-,]+)/gi,
+    /(Rez[- ]?de[- ]?chauss[ée]e[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(Sous-sol[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(Toiture[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(Attique[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(Escalier[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(S-sol[^:]{0,30}?):\s*([\d\-,]+)/gi,
+    /(\d+(?:er|ème|e)\s*(?:étage)?[^:]{0,30}?):\s*([\d\-,]+)/gi,
+  ];
 
-    // Extract access number for code
-    const accessMatch = name.match(/accès\s*(\d+)/i);
-    const accessNum = accessMatch ? accessMatch[1] : String(index + 1);
+  for (const pattern of zonePatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const name = match[1].trim();
+      const detectors = match[2].trim();
 
-    // Determine building/floor from name
-    let building = '';
-    let floor = '';
-    const nameLower = name.toLowerCase();
-    if (nameLower.includes('sous-sol') || nameLower.includes('s-sol')) floor = 'Sous-sol';
-    else if (nameLower.includes('rez')) floor = 'Rez';
-    else if (nameLower.includes('1er') || nameLower.includes('1 er')) floor = '1er';
-    else if (nameLower.includes('2ème') || nameLower.includes('2 ème')) floor = '2ème';
-    else if (nameLower.includes('toiture')) floor = 'Toiture';
+      // Skip if already seen (dedup)
+      const key = `${name.toLowerCase()}:${detectors}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-    const bldgMatch = name.match(/b[âa]t\.?\s*(\d+)/i);
-    if (bldgMatch) building = `B${bldgMatch[1]}`;
+      // Skip evacuation lines (not real zones)
+      if (name.toLowerCase().includes('evacuation')) continue;
 
-    zones.push({
-      code: `Z${accessNum.padStart(3, '0')}`,
-      name: name,
-      detector_numbers: detectors,
-      building,
-      floor,
-      detector_type: nameLower.includes('fx-plafond') ? 'fx-plafond' : 'smoke'
-    });
-    index++;
+      // Determine if this is a manual trigger (DM) or smoke detector
+      const isDM = /,?\s*DM\s*$/i.test(name) || name.includes('DM:');
+      const isFxPlafond = name.toLowerCase().includes('fx-plafond') || name.toLowerCase().includes('faux plafond');
+
+      // Extract access number for code
+      const accessMatch = name.match(/acc[eè]s\s*(\d+)/i);
+      const accessNum = accessMatch ? accessMatch[1].padStart(2, '0') : '';
+
+      // Determine building/floor from name
+      const nameLower = name.toLowerCase();
+      let floor = '';
+      if (nameLower.includes('sous-sol') || nameLower.includes('s-sol')) floor = 'Sous-sol';
+      else if (nameLower.includes('rez')) floor = 'Rez';
+      else if (nameLower.includes('1er') || nameLower.includes('1 er')) floor = '1er étage';
+      else if (nameLower.includes('2') && nameLower.includes('me')) floor = '2ème étage';
+      else if (nameLower.includes('toiture') || nameLower.includes('attique')) floor = 'Toiture';
+      else if (nameLower.includes('mezzanine')) floor = 'Mezzanine';
+
+      const building = extractBuilding(name);
+
+      // Generate zone code
+      let code;
+      if (accessNum) {
+        code = `Z${accessNum}${isDM ? '-DM' : ''}${isFxPlafond ? '-FX' : ''}`;
+      } else {
+        code = `Z${String(zones.length + 1).padStart(3, '0')}${isDM ? '-DM' : ''}`;
+      }
+
+      zones.push({
+        code,
+        name: name.replace(/,?\s*DM\s*$/i, '').trim(), // Clean up name
+        detector_numbers: detectors,
+        building,
+        floor,
+        detector_type: isDM ? 'manual' : (isFxPlafond ? 'fx-plafond' : 'smoke'),
+        is_manual_trigger: isDM,
+      });
+    }
   }
 
   return zones;
 }
 
-// Helper: Parse equipment from text
+// Helper: Parse equipment from the "Action" column of the matrix
+// These are the commands/equipment that get activated when a zone triggers
 function parseEquipmentFromText(text) {
   const equipment = [];
   const seen = new Set();
 
-  // Pattern for FDCIO equipment lines
-  // Format: "FDCIO222, Location    output#    Equipment Name"
-  const fdcioPattern = /FDCIO(\d+),?\s*([^0-9\n]+?)\s+(\d+)\s+([^\n]+)/gi;
-  let match;
+  // Equipment patterns - these are the ACTION names (what gets activated)
+  // NOT the FDCIO module locations
+  const equipmentPatterns = [
+    // PCF - Portes Coupe Feu
+    /\b(PCF\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s+\d|\s+\()/gim,
+    /\b(P\.C\.F\.?\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s+\d|\s+\()/gim,
+    /\b(Porte\s+coupe\s+feu\s+B\d+[.\d]+[.\d]*)/gi,
 
-  while ((match = fdcioPattern.exec(text)) !== null) {
-    const fdcioModule = `FDCIO${match[1]}`;
-    const location = match[2].trim();
-    const output = match[3];
-    const name = match[4].trim();
+    // HVAC / Ventilation / Climatisation
+    /\b(HVAC\s+(?:tabl\.?\s*)?[\d.\-]+[A-Z\-]*)/gi,
+    /\b(Ventil[.\w]*\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s*\()/gim,
+    /\b(Climatisation\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s*\()/gim,
+    /\b(Air\s+neuf\s+[A-Za-z0-9.\-\s]+)/gi,
 
-    // Determine equipment type from name
-    let type = 'autre';
-    const nameLower = name.toLowerCase();
-    if (nameLower.includes('pcf') || nameLower.includes('p.c.f')) type = 'pcf';
-    else if (nameLower.includes('hvac') || nameLower.includes('climatisation')) type = 'hvac';
-    else if (nameLower.includes('ventil')) type = 'ventilation';
-    else if (nameLower.includes('clapet')) type = 'clapet';
-    else if (nameLower.includes('ascenseur')) type = 'ascenseur';
-    else if (nameLower.includes('monte') && nameLower.includes('charge')) type = 'monte_charge';
-    else if (nameLower.includes('alarme')) type = 'alarme';
-    else if (nameLower.includes('sirene') || nameLower.includes('sirène')) type = 'sirene';
-    else if (nameLower.includes('flash')) type = 'flash';
-    else if (nameLower.includes('evacuation') || nameLower.includes('évacuation')) type = 'evacuation';
-    else if (nameLower.includes('interlock') || nameLower.includes('porte')) type = 'interlock';
-    else if (nameLower.includes('roll') && nameLower.includes('up')) type = 'roll_up';
-    else if (nameLower.includes('flux') || nameLower.includes('lami')) type = 'flux_laminaire';
+    // Interlock / Portes
+    /\b(Interlock\s+i\d+\s*[A-Za-z0-9.\-\s]*)/gi,
+    /\b(Porte\s+Interlock\s+i\d+\s*[A-Za-z0-9.\-]*)/gi,
+    /\b(Porte\s+coulissante\s+B\d+[.\d]+)/gi,
 
-    // Extract building from location or name
-    let building = '';
-    const bldgMatch = (location + name).match(/b[âa]t\.?\s*(\d+)|B(\d+)\./i);
-    if (bldgMatch) building = `B${bldgMatch[1] || bldgMatch[2]}`;
+    // Rideau coupe feu / Roll up
+    /\b(Rideau\s+coupe\s+feu\s+CW\d+\s*[A-Za-z0-9.\-]*)/gi,
+    /\b(Roll\s+up\s+B\d+[.\s\d\/]+)/gi,
 
-    const eq = {
-      name,
-      type,
-      location,
-      fdcio_module: fdcioModule,
-      fdcio_output: output,
-      building
-    };
+    // Ascenseur / Monte-charge
+    /\b(Ascenseur\s+[A-Za-z0-9\s]+)/gi,
+    /\b(Monte[\s-]?charge\s*[A-Za-z0-9.\s]*)/gi,
 
-    // Generate unique code
-    eq.code = generateEquipmentCode(eq, equipment.length);
+    // Alarmes
+    /\b(Alarme\s+I+,?\s*[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
 
-    // Avoid duplicates
-    const key = `${eq.fdcio_module}-${eq.fdcio_output}-${eq.name}`;
-    if (!seen.has(key)) {
+    // Evacuation
+    /\b(Cde\s+[eé]vacuation\s+[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
+    /\b(Commande\s+[EÉ]vacuation\s+[A-Za-z0-9\s]+)/gi,
+    /\b(Arrêt\s+[eé]vacuation\s+[A-Za-z0-9\s]+)/gi,
+
+    // Feu flash / Signalisation
+    /\b(Feu\s+flash\s+[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
+
+    // Coupure / Autres
+    /\b(Coupure\s+tableau\s+[A-Za-z0-9\s]+)/gi,
+    /\b(Clapet\s+C\.?F\.?\s*[A-Za-z0-9\s]*)/gi,
+    /\b(Flux\s+lami[.\w]*\s*[A-Za-z0-9.\-\s]*)/gi,
+
+    // Contrôle d'accès
+    /\b(Contrôle\s+d'accès\s+[A-Za-z0-9.\s]+)/gi,
+    /\b(Cellule\s+compensatrice\s+\d+)/gi,
+
+    // Sas
+    /\b(Sas\s+[A-Za-z0-9\s]+)/gi,
+  ];
+
+  for (const pattern of equipmentPatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      let name = match[1].trim();
+
+      // Clean up the name
+      name = name.replace(/\s+/g, ' ').trim();
+      name = name.replace(/\s*\(Nr\.\d+\)\s*$/, ''); // Remove (Nr.01) suffixes
+      name = name.replace(/\s*\(\d+\)\s*$/, ''); // Remove (1) suffixes
+
+      // Skip if too short or already seen
+      if (name.length < 5) continue;
+      const key = name.toLowerCase().replace(/\s+/g, '');
+      if (seen.has(key)) continue;
       seen.add(key);
+
+      // Skip FDCIO lines (these are locations, not equipment names)
+      if (name.includes('FDCIO') || name.includes('DC1154')) continue;
+
+      // Skip reserve entries
+      if (name.toLowerCase().includes('reserve') || name.toLowerCase().includes('réserve')) continue;
+
+      const type = determineEquipmentType(name);
+      const building = extractBuilding(name);
+
+      const eq = {
+        name,
+        type,
+        building,
+        floor: '',
+        location: '', // We don't use FDCIO location anymore
+      };
+
+      eq.code = generateEquipmentCode(eq, equipment.length);
       equipment.push(eq);
     }
   }
 
-  // Also catch equipment without FDCIO (FCnet, Evacuation commands, etc.)
-  const otherPatterns = [
-    /Alarme\s+(I+),\s*([^\n(]+)/gi,           // Alarme I/II, Bâtiment X
-    /Commande\s+[EÉ]vacuation\s+([^\n(]+)/gi, // Commande Evacuation bâtiment X
-    /Feu\s+flash\s+([^\n(]+)/gi,              // Feu flash côté X
-  ];
+  return equipment;
+}
 
-  for (const pattern of otherPatterns) {
-    let m;
-    while ((m = pattern.exec(text)) !== null) {
-      const name = m[0].trim();
-      const key = name.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        let type = 'autre';
-        if (name.toLowerCase().includes('alarme')) type = 'alarme';
-        else if (name.toLowerCase().includes('evacuation') || name.toLowerCase().includes('évacuation')) type = 'evacuation';
-        else if (name.toLowerCase().includes('flash')) type = 'flash';
+// Helper: Determine alarm level from context in the matrix line
+// In the matrix, "Alarme locale (Alarme I)" = level 1, "Alarme globale (Alarme II)" = level 2
+function determineAlarmLevel(lineText) {
+  // Default to level 1 (Alarme I / locale)
+  // The matrix has columns for Alarme I and Alarme II
+  // When there's a "l" in the Alarme II column, it's level 2
 
-        equipment.push({
-          code: generateEquipmentCode({ name, type }, equipment.length),
-          name,
-          type,
-          location: '',
-          fdcio_module: '',
-          fdcio_output: '',
-          building: ''
-        });
-      }
+  // Check if this line has indicators for alarm level
+  const lowerText = lineText.toLowerCase();
+
+  // If the line explicitly mentions Alarme II or global
+  if (lowerText.includes('alarme ii') || lowerText.includes('alarme globale') ||
+      lowerText.includes('(nr.02)') || lowerText.includes('niveau 2')) {
+    return 2;
+  }
+
+  // Check for "l l" pattern which often indicates both alarm levels
+  // Or check position indicators
+
+  // Default to level 1
+  return 1;
+}
+
+// Helper: Parse links between zones and equipment from the matrix
+// The "l" characters in the matrix indicate which zones trigger which equipment
+function parseLinksFromAI(aiLinks, zones, equipment) {
+  const links = [];
+  const zoneMap = new Map(zones.map(z => [z.code.toLowerCase(), z]));
+  const equipMap = new Map(equipment.map(e => [e.code.toLowerCase(), e]));
+
+  for (const link of aiLinks) {
+    const zoneCode = (link.zone_code || '').toLowerCase();
+    const equipCode = (link.equipment_code || '').toLowerCase();
+
+    if (zoneMap.has(zoneCode) && equipMap.has(equipCode)) {
+      links.push({
+        zone_code: zoneMap.get(zoneCode).code,
+        equipment_code: equipMap.get(equipCode).code,
+        alarm_level: link.alarm_level || 1,
+      });
     }
   }
 
-  return equipment;
+  return links;
 }
 
 // Background worker for matrix parsing
@@ -1861,28 +2003,49 @@ Extrais les données d'une matrice d'asservissement incendie. Retourne UNIQUEMEN
 
 {
   "zones": [
-    {"code": "Z001", "name": "Sous-sol accès 0", "detector_numbers": "20900-20905,20908-20912", "building": "B20", "floor": "Sous-sol"}
+    {"code": "Z00", "name": "Sous-sol accès 0", "detector_numbers": "20900-20905,20908-20912", "building": "", "floor": "Sous-sol", "is_manual_trigger": false}
   ],
   "equipment": [
-    {"code": "HVAC-20-2-02", "name": "HVAC tabl. 20-2-02-TC", "type": "hvac", "fdcio_module": "FDCIO222", "fdcio_output": "1", "location": "Local ventilation toiture", "building": "B20"}
+    {"code": "HVAC-20-2-02-TC", "name": "HVAC tabl. 20-2-02-TC", "type": "hvac", "building": "B20"}
   ],
   "links": [
-    {"zone_code": "Z001", "equipment_code": "HVAC-20-2-02", "alarm_level": 1}
+    {"zone_code": "Z00", "equipment_code": "HVAC-20-2-02-TC", "alarm_level": 1}
   ]
 }
 
-ZONES: Lignes avec "accès N:" suivi de numéros de détecteurs (ex: "20900-20905")
-ÉQUIPEMENTS: Lignes avec FDCIO + numéro de sortie + nom (PCF, HVAC, Ventil, Clapet, etc.)
-LIENS: Quand une zone active un équipement (colonnes "l" dans la matrice)
+=== STRUCTURE DE LA MATRICE ===
 
-CODES ÉQUIPEMENT: Utilise le nom technique (ex: "PCF-B21.015", "HVAC-20-2-02-TC", "INTERLOCK-I22")
+ZONES (EN HAUT, colonnes verticales):
+- Format: "Location accès N: numéros_détecteurs"
+- Exemples: "Sous-sol accès 0: 20900-20905", "1er étage accès 52: 20471-20492"
+- Avec "DM" = Déclencheur Manuel (is_manual_trigger: true)
+- Sans "DM" = Détecteur de fumée (is_manual_trigger: false)
+- Code zone = Z + numéro accès (ex: accès 0 -> Z00, accès 52 -> Z52)
 
-Types valides: pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, sirene, flash, evacuation, interlock, roll_up, flux_laminaire, autre
+ÉQUIPEMENTS (colonne "Action" à droite - PAS la colonne "Type, emplacement de montage"):
+- Ce sont les COMMANDES/ACTIONS, pas les modules FDCIO!
+- Exemples: "PCF B21.015 JURA", "HVAC tabl. 20-2-02-TC", "Coupure tableau Becomix"
+- IGNORE la colonne "FDCIO222, Local électrique..." (c'est juste l'emplacement)
+
+NIVEAUX D'ALARME (colonnes "Évènement"):
+- "Alarme locale (Alarme I)" = alarm_level: 1
+- "Alarme globale (Alarme II)" = alarm_level: 2
+- Les "l" dans ces colonnes indiquent quel niveau déclenche l'équipement
+
+LIENS:
+- Les points noirs "l" dans la matrice = lien zone→équipement
+- Quand une zone a un "l" sur une ligne équipement = cette zone déclenche cet équipement
+
+=== TYPES ÉQUIPEMENT ===
+pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, flash, evacuation, interlock, roll_up, rideau_cf, coupure, controle_acces, autre
+
+=== CODES ÉQUIPEMENT ===
+Extrais le code technique du nom: "PCF-B21.015", "HVAC-20-2-02-TC", "INTERLOCK-I22", "PORTE-INTERLOCK-I21"
 
 IMPORTANT:
-- Extrais TOUS les équipements de chaque ligne FDCIO
-- Génère des codes uniques basés sur le nom technique
-- alarm_level: 1 pour Alarme I, 2 pour Alarme II`
+- Extrais les équipements de la colonne "Action" (Commande), PAS de "Type, emplacement"
+- Distingue les zones DM (déclencheur manuel) des détecteurs de fumée
+- alarm_level = 1 pour Alarme I (locale), 2 pour Alarme II (globale)`
               },
               {
                 role: "user",
