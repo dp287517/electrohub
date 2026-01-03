@@ -1592,19 +1592,26 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       messages: [
         {
           role: "system",
-          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte et extrais les données.
+          content: `Tu es un expert en matrices d'asservissement incendie. Analyse le texte extrait d'un PDF et extrais TOUTES les zones de détection et équipements.
+
+IMPORTANT: Le format varie selon les matrices. Cherche:
+- Zones de détection: identifiées par des numéros de détecteurs (ex: "20900-20905"), des étages, des accès, des locaux
+- Équipements: portes coupe-feu, VMC, désenfumage, clapets, volets, exutoires, sirènes, etc.
+- Relations zone→équipement dans les tableaux ou colonnes
+
+Génère des codes uniques si non présents (ex: "ZONE-001", "PCF-001").
 
 Retourne UNIQUEMENT du JSON valide:
 {
-  "zones": [{"code": "ZD-01", "name": "Zone 01", "building": "A", "floor": "RDC", "detector_numbers": "1-10", "detector_type": "smoke"}],
-  "equipment": [{"code": "PCF-01", "name": "Porte coupe-feu 01", "type": "pcf", "building": "A", "floor": "RDC", "location": "Couloir", "fdcio_module": "M1", "fdcio_output": "S1"}],
-  "links": [{"zone_code": "ZD-01", "equipment_code": "PCF-01", "alarm_level": 1, "action": "fermeture"}]
+  "zones": [{"code": "ZONE-001", "name": "Sous-sol accès 0", "building": "", "floor": "Sous-sol", "detector_numbers": "20900-20905,20908-20912", "detector_type": "smoke"}],
+  "equipment": [{"code": "PCF-001", "name": "Porte coupe-feu escalier", "type": "pcf", "building": "", "floor": "RDC", "location": "", "fdcio_module": "", "fdcio_output": ""}],
+  "links": [{"zone_code": "ZONE-001", "equipment_code": "PCF-001", "alarm_level": 1, "action": "fermeture"}]
 }
 
-Types: pcf, vmc, extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
-Niveaux alarme: 1 (pré-alarme), 2 (alarme générale)
+Types d'équipements: pcf, vmc, extincteur, desenfumage, alarme, coupure_elec, clapet, volet, exutoire, sirene, flash, autre
+Niveaux alarme: 1 (pré-alarme/détection), 2 (alarme générale)
 
-Si rien trouvé: {"zones": [], "equipment": [], "links": []}`
+EXTRAIS LE MAXIMUM de données même si le format est inhabituel. Ne retourne PAS de tableaux vides s'il y a des données dans le texte.`
         },
         {
           role: "user",
