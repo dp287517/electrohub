@@ -1378,11 +1378,12 @@ app.delete("/api/fire-control/matrices/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant);
 
-    // Check if matrix exists
+    // Check if matrix exists (using same tenant filter as listing)
     const { rows } = await pool.query(
-      `SELECT id, name, file_path FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
-      [id, tenant.companyId, tenant.siteId]
+      `SELECT id, name, file_path FROM fc_matrices WHERE id = $1 AND ${filter.where}`,
+      [id, ...filter.params]
     );
 
     if (!rows.length) {
@@ -1732,11 +1733,12 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
     }
     console.log(`[FireControl] AI parse - OpenAI check passed: ${Date.now() - startTime}ms`);
 
-    // Check if matrix exists
+    // Check if matrix exists (using same tenant filter as listing)
+    const filter = getTenantFilter(tenant);
     console.log(`[FireControl] AI parse - checking matrix exists...`);
     const { rows } = await pool.query(
-      `SELECT id, name FROM fc_matrices WHERE id = $1 AND company_id = $2 AND site_id = $3`,
-      [id, tenant.companyId, tenant.siteId]
+      `SELECT id, name FROM fc_matrices WHERE id = $1 AND ${filter.where}`,
+      [id, ...filter.params]
     );
     console.log(`[FireControl] AI parse - matrix query done: ${Date.now() - startTime}ms, found: ${rows.length}`);
 
