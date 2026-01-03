@@ -1586,48 +1586,27 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
 
     console.log(`[FireControl] Job ${jobId}: Calling OpenAI...`);
 
-    // Call OpenAI
+    // Call OpenAI - simplified prompt to maximize response tokens
     const aiResponse = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         {
           role: "system",
-          content: `Tu es un expert en matrices d'asservissement incendie Siemens FC2060. Analyse le texte extrait d'un PDF.
+          content: `Extrais les données d'une matrice d'asservissement incendie. Retourne du JSON:
 
-FORMAT TYPIQUE DES MATRICES:
-1. ZONES (en haut/gauche): Lignes comme "Sous-sol accès 0: 20900-20905,20908-20912" où les numéros sont les détecteurs
-2. ÉQUIPEMENTS (à droite): Lignes avec "FDCIO222" suivi d'un emplacement, puis une commande (PCF, HVAC, Ventilation, etc.)
-3. LIENS: Les caractères "l" ou points dans la matrice indiquent qu'une zone déclenche un équipement
-4. NIVEAUX D'ALARME: Colonnes 11/21/31 = Alarme I (locale), 12/22/32 = Alarme II (générale)
+{"zones":[{"code":"Z001","name":"...","building":"","floor":"","detector_numbers":"20900-20905","detector_type":"smoke"}],
+"equipment":[{"code":"PCF001","name":"PCF B21.015","type":"pcf","building":"","floor":"","location":"","fdcio_module":"FDCIO222","fdcio_output":"1"}],
+"links":[]}
 
-ÉQUIPEMENTS À IDENTIFIER:
-- PCF = Porte Coupe-Feu (ex: "PCF B21.015 JURA", "PCF Bât. 20")
-- HVAC = Ventilation/Climatisation (ex: "HVAC tabl. 20-2-02-TC")
-- Ventilation (ex: "Ventilation B21 (21-1-10-TS)")
-- Clapet C.F = Clapet Coupe-Feu
-- Ascenseur, Monte-charge
-- Feu flash, Sirène, Alarme
-- Commande Evacuation
+ZONES: Lignes avec numéros de détecteurs (ex: "Sous-sol accès 0: 20900-20905")
+EQUIPMENT: PCF (porte coupe-feu), HVAC, Ventilation, Clapet, Ascenseur, Evacuation, Alarme, Flash
+Types: pcf,hvac,ventilation,clapet,ascenseur,monte_charge,alarme,sirene,flash,evacuation,autre
 
-IMPORTANT: Dans le texte, cherche les patterns:
-- "FDCIO222, [emplacement]" + numéro de sortie → c'est le module de commande
-- Lignes "Commande" ou "Action" → nom de l'équipement commandé
-
-Retourne UNIQUEMENT du JSON valide:
-{
-  "zones": [{"code": "ZONE-001", "name": "Sous-sol accès 0", "building": "20", "floor": "Sous-sol", "detector_numbers": "20900-20905,20908-20912", "detector_type": "smoke"}],
-  "equipment": [{"code": "PCF-001", "name": "PCF B21.015 JURA", "type": "pcf", "building": "21", "floor": "", "location": "B21.015", "fdcio_module": "FDCIO222", "fdcio_output": "1"}],
-  "links": [{"zone_code": "ZONE-001", "equipment_code": "PCF-001", "alarm_level": 1, "action": "fermeture"}]
-}
-
-Types: pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, sirene, flash, evacuation, coupure_elec, autre
-Niveaux: 1 = Alarme I (détection locale), 2 = Alarme II (générale)
-
-EXTRAIS TOUS les équipements listés dans "Commande" même sans lien visible. Génère des codes uniques (ZONE-001, PCF-001, HVAC-001, etc.)`
+IMPORTANT: Extrais TOUTES les zones (lignes avec numéros détecteurs) et TOUS les équipements. Pas de liens pour l'instant.`
         },
         {
           role: "user",
-          content: `Matrice "${matrix.name}":\n\n${fullText.substring(0, 30000)}`
+          content: fullText.substring(0, 25000)
         }
       ],
       max_tokens: 16384,
@@ -1639,7 +1618,8 @@ EXTRAIS TOUS les équipements listés dans "Commande" même sans lien visible. G
     await saveProgress();
 
     const content = aiResponse.choices[0]?.message?.content || "";
-    console.log(`[FireControl] Job ${jobId}: OpenAI response (${content.length} chars): ${content.substring(0, 500)}`);
+    const finishReason = aiResponse.choices[0]?.finish_reason || "unknown";
+    console.log(`[FireControl] Job ${jobId}: OpenAI response (${content.length} chars, finish: ${finishReason}): ${content.substring(0, 500)}`);
 
     let jsonStr = content;
     const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
