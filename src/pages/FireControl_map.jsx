@@ -1089,13 +1089,10 @@ export default function FireControlMap() {
               </div>
               <div className="flex gap-1">
                 <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
+                  Tous ({stats.total})
                 </Btn>
                 <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
+                  Sur ce plan ({stats.placed})
                 </Btn>
               </div>
             </div>
@@ -1245,13 +1242,10 @@ export default function FireControlMap() {
               </div>
               <div className="flex gap-1">
                 <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
+                  Tous ({stats.total})
                 </Btn>
                 <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
+                  Sur ce plan ({stats.placed})
                 </Btn>
               </div>
             </div>
