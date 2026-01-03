@@ -2545,7 +2545,7 @@ function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, 
             <div className="flex items-center gap-2 mb-3">
               <ThumbsUp className="w-5 h-5 text-green-600" />
               <h4 className="font-semibold text-green-800">
-                Meilleure correspondance ({Math.round(currentMatch.best_match.score * 100)}% de confiance)
+                Meilleure correspondance ({currentMatch.best_match.score}% de confiance)
               </h4>
             </div>
 
@@ -2622,7 +2622,7 @@ function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, 
                           {getSourceSystemLabel(alt.source_system)}
                         </span>
                         <span className="text-xs text-gray-400">
-                          {Math.round(alt.score * 100)}%
+                          {alt.score}%
                         </span>
                       </div>
                       <p className="text-sm font-medium truncate">{alt.code || alt.name}</p>
@@ -2836,13 +2836,13 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
   const handleConfirmMatch = async (matrixEqCode, match) => {
     try {
       await api.fireControlMaps.confirmEquipmentMatch({
-        source_system: match.source_system || match.source,
-        equipment_id: match.id,
+        source_system: match.source_system,
+        equipment_id: match.candidate_id || match.id,
         fire_interlock_code: matrixEqCode,
         zone_id: null,
         alarm_level: 1
       });
-      showToast(`${match.name} lié à ${matrixEqCode}`, "success");
+      showToast(`${match.candidate_name || match.name} lié à ${matrixEqCode}`, "success");
       loadCrossSystemEquipment();
       // Update match results to show as confirmed
       setMatchResults(prev => prev.map(r =>
@@ -2858,8 +2858,8 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
   const filteredResults = useMemo(() => {
     if (!matchResults.length) return [];
     if (filter === "all") return matchResults;
-    if (filter === "matched") return matchResults.filter(r => r.best_match?.score >= 0.85 || r.confirmed);
-    if (filter === "unmatched") return matchResults.filter(r => !r.best_match || r.best_match.score < 0.5);
+    if (filter === "matched") return matchResults.filter(r => r.best_match?.score >= 85 || r.confirmed);
+    if (filter === "unmatched") return matchResults.filter(r => !r.best_match || r.best_match.score < 50);
     return matchResults;
   }, [matchResults, filter]);
 
@@ -2867,9 +2867,9 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
     if (!matchResults.length) return { total: 0, confident: 0, uncertain: 0, noMatch: 0 };
     return {
       total: matchResults.length,
-      confident: matchResults.filter(r => r.best_match?.score >= 0.85 || r.confirmed).length,
-      uncertain: matchResults.filter(r => r.best_match && r.best_match.score >= 0.5 && r.best_match.score < 0.85).length,
-      noMatch: matchResults.filter(r => !r.best_match || r.best_match.score < 0.5).length,
+      confident: matchResults.filter(r => r.best_match?.score >= 85 || r.confirmed).length,
+      uncertain: matchResults.filter(r => r.best_match && r.best_match.score >= 50 && r.best_match.score < 85).length,
+      noMatch: matchResults.filter(r => !r.best_match || r.best_match.score < 50).length,
     };
   }, [matchResults]);
 
@@ -3042,15 +3042,15 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
   const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match } = result;
 
   const getScoreColor = (score) => {
-    if (score >= 0.85) return "text-green-600 bg-green-100";
-    if (score >= 0.5) return "text-yellow-600 bg-yellow-100";
+    if (score >= 85) return "text-green-600 bg-green-100";
+    if (score >= 50) return "text-yellow-600 bg-yellow-100";
     return "text-red-600 bg-red-100";
   };
 
   const getScoreLabel = (score) => {
-    if (score >= 0.85) return "Excellent";
-    if (score >= 0.7) return "Bon";
-    if (score >= 0.5) return "Possible";
+    if (score >= 85) return "Excellent";
+    if (score >= 70) return "Bon";
+    if (score >= 50) return "Possible";
     return "Faible";
   };
 
@@ -3080,7 +3080,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
           ) : best_match ? (
             <>
               <span className={`px-2 py-1 rounded text-xs font-medium ${getScoreColor(best_match.score)}`}>
-                {Math.round(best_match.score * 100)}% - {getScoreLabel(best_match.score)}
+                {best_match.score}% - {getScoreLabel(best_match.score)}
               </span>
               <button
                 onClick={() => setExpanded(!expanded)}
@@ -3102,14 +3102,26 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
         <div className="mt-3 p-3 bg-gray-50 rounded-lg">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="text-lg">{sourceIcons[best_match.source]}</span>
+              <span className="text-lg">{sourceIcons[best_match.source_system]}</span>
               <div>
-                <div className="font-medium text-gray-900">{best_match.name}</div>
-                <div className="text-sm text-gray-500">
-                  {sourceLabels[best_match.source]}
-                  {best_match.building && ` • ${best_match.building}`}
-                  {best_match.location && ` • ${best_match.location}`}
+                <div className="font-medium text-gray-900">
+                  {best_match.candidate_code || best_match.candidate_name || best_match.name}
                 </div>
+                <div className="text-sm text-gray-500">
+                  {sourceLabels[best_match.source_system]}
+                  {best_match.candidate_building && ` • ${best_match.candidate_building}`}
+                  {best_match.candidate_location && ` • ${best_match.candidate_location}`}
+                </div>
+                {/* Match reasons */}
+                {best_match.match_reasons && best_match.match_reasons.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {best_match.match_reasons.map((reason, i) => (
+                      <span key={i} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                        {reason}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -3129,16 +3141,32 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm }) {
           <div className="text-sm font-medium text-gray-700">Autres correspondances possibles:</div>
           {alternatives.map((alt, idx) => (
             <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-2">
-                <span>{sourceIcons[alt.source]}</span>
-                <span className="text-sm text-gray-900">{alt.name}</span>
-                <span className={`px-1.5 py-0.5 rounded text-xs ${getScoreColor(alt.score)}`}>
-                  {Math.round(alt.score * 100)}%
-                </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span>{sourceIcons[alt.source_system]}</span>
+                  <span className="text-sm text-gray-900 truncate">
+                    {alt.candidate_code || alt.candidate_name}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    ({sourceLabels[alt.source_system]})
+                  </span>
+                  <span className={`px-1.5 py-0.5 rounded text-xs ${getScoreColor(alt.score)}`}>
+                    {alt.score}%
+                  </span>
+                </div>
+                {alt.match_reasons && alt.match_reasons.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1 ml-6">
+                    {alt.match_reasons.slice(0, 3).map((reason, i) => (
+                      <span key={i} className="px-1 py-0.5 bg-gray-200 text-gray-600 text-xs rounded">
+                        {reason}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => onConfirm(matrix_equipment.code, alt)}
-                className="text-xs text-orange-600 hover:text-orange-700 font-medium"
+                className="text-xs text-orange-600 hover:text-orange-700 font-medium ml-2"
               >
                 Sélectionner
               </button>
