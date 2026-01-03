@@ -2248,7 +2248,7 @@ app.post("/api/fire-control/matrices/:id/ai-parse", async (req, res) => {
     console.log(`[FireControl] AI parse - OpenAI check passed: ${Date.now() - startTime}ms`);
 
     // Check if matrix exists (using same tenant filter as listing)
-    const filter = getTenantFilter(tenant);
+    const filter = getTenantFilter(tenant, { paramOffset: 1 }); // offset because $1 is used for matrix id
     console.log(`[FireControl] AI parse - checking matrix exists...`);
     const { rows } = await pool.query(
       `SELECT id, name FROM fc_matrices WHERE id = $1 AND ${filter.where}`,
