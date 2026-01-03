@@ -327,11 +327,15 @@ export default function FireControl() {
         const job = await api.fireControl.getMatrixParseJob(jobId);
 
         if (job.status === 'completed') {
+          const zones = job.result?.zones_created || 0;
+          const equip = job.result?.equipment_created || 0;
           showToast(
-            `✅ Analyse terminée: ${job.result?.equipment_created || 0} équipements extraits`,
+            `✅ Analyse terminée: ${zones} zones, ${equip} équipements extraits`,
             "success"
           );
           loadMatrices();
+          loadZones();
+          loadDashboard();
 
           // Trigger auto-matching if equipment found
           if (job.result?.equipment_created > 0) {
