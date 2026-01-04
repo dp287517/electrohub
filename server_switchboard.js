@@ -6081,7 +6081,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         // Build breaker description: name + amps + position_number at the end
         const breakerName = d.name || d.reference || d.manufacturer || 'Depart';
         const breakerAmps = d.in_amps ? `${d.in_amps}A` : '';
-        const breakerCode = d.position_number || '';
+        const breakerCode = d.position_number ? `groupe ${d.position_number}` : '';
         const breakerDesc = [breakerName, breakerAmps, breakerCode].filter(Boolean).join(' ');
         return `${d.source_board_code} via ${breakerDesc}`;
       }).join(', ');
