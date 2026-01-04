@@ -6,7 +6,7 @@ import {
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles,
   Calendar, X, MapPin, Briefcase, Shield, Globe, Crown, Battery, Database,
   Play, Clock, CheckCircle, ChevronDown, Building2, Layers, Activity,
-  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star, Bell
+  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star, Bell, ShieldAlert
 } from 'lucide-react';
 import {
   AreaChart, Area, PieChart as RechartsPie, Pie, Cell,
@@ -24,48 +24,13 @@ import NotificationCenter from '../components/NotificationCenter';
 // Chart colors
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-// Custom ATEX Triangle Icon (panneau de danger EX)
-const AtexTriangleIcon = ({ size = 24, className = "" }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 32 32"
-    xmlns="http://www.w3.org/2000/svg"
-    className={className}
-  >
-    {/* Triangle jaune */}
-    <polygon
-      points="16,3 30,28 2,28"
-      fill="#fbbf24"
-    />
-    {/* Bordure noire intérieure */}
-    <polygon
-      points="16,7 26,25 6,25"
-      fill="none"
-      stroke="#1a1a1a"
-      strokeWidth="2"
-      strokeLinejoin="round"
-    />
-    {/* Texte EX */}
-    <text
-      x="16"
-      y="22"
-      textAnchor="middle"
-      fontFamily="Arial, sans-serif"
-      fontSize="9"
-      fontWeight="bold"
-      fill="#1a1a1a"
-    >EX</text>
-  </svg>
-);
-
 // Icon mapping
 const iconMap = {
   '⚡': Zap, '♻️': Recycle, '🧩': Puzzle, '📈': TrendingUp, '⚠️': AlertTriangle,
-  '🔄': RefreshCw, '💳': CreditCard, '⚙️': Cog, '🧯': Flame,
+  '🔄': RefreshCw, '💳': CreditCard, '⚙️': Cog, '🧯': Flame, '🔥': Flame,
   '🛠️': Wrench, '🤝': Users, '💬': MessageCircle, '🚪': DoorOpen, '📊': BarChart3,
   '📋': ClipboardCheck, '🔋': Battery, '🗄️': Database, '🔌': Zap,
-  '🔺': AtexTriangleIcon, // Triangle ATEX
+  '🔺': ShieldAlert, // ATEX zones
 };
 
 // All apps with full names
