@@ -1091,22 +1091,22 @@ function ElectroLiveFeed() {
       {expanded && (
         <div className="px-4 pb-4 space-y-4">
           {/* Stats row */}
-          <div className="grid grid-cols-4 gap-2">
-            <div className="bg-white/10 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-white">{stats.done_count}</div>
-              <div className="text-xs text-indigo-200">Contrôlés</div>
+          <div className="grid grid-cols-4 gap-1 sm:gap-2">
+            <div className="bg-white/10 rounded-lg p-2 sm:p-3 text-center">
+              <div className="text-lg sm:text-2xl font-bold text-white">{stats.done_count}</div>
+              <div className="text-[10px] sm:text-xs text-indigo-200">Contrôlés</div>
             </div>
-            <div className="bg-white/10 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-green-400">{stats.ok_count}</div>
-              <div className="text-xs text-indigo-200">OK</div>
+            <div className="bg-white/10 rounded-lg p-2 sm:p-3 text-center">
+              <div className="text-lg sm:text-2xl font-bold text-green-400">{stats.ok_count}</div>
+              <div className="text-[10px] sm:text-xs text-indigo-200">OK</div>
             </div>
-            <div className="bg-white/10 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-red-400">{stats.nok_count}</div>
-              <div className="text-xs text-indigo-200">NOK</div>
+            <div className="bg-white/10 rounded-lg p-2 sm:p-3 text-center">
+              <div className="text-lg sm:text-2xl font-bold text-red-400">{stats.nok_count}</div>
+              <div className="text-[10px] sm:text-xs text-indigo-200">NOK</div>
             </div>
-            <div className="bg-white/10 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-yellow-400">{stats.pending_count}</div>
-              <div className="text-xs text-indigo-200">Restants</div>
+            <div className="bg-white/10 rounded-lg p-2 sm:p-3 text-center">
+              <div className="text-lg sm:text-2xl font-bold text-yellow-400">{stats.pending_count}</div>
+              <div className="text-[10px] sm:text-xs text-indigo-200">Restants</div>
             </div>
           </div>
 
