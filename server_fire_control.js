@@ -2778,7 +2778,7 @@ app.get("/api/fire-control/live-activity", async (req, res) => {
 
     const photosQuery = await pool.query(`
       SELECT
-        cf.id, cf.filename, cf.original_name, cf.uploaded_at, cf.uploaded_by_name,
+        cf.id, cf.filename, cf.uploaded_at, cf.uploaded_by_name,
         z.code as zone_code, z.name as zone_name
       FROM fc_check_files cf
       JOIN fc_zone_checks zc ON zc.id = cf.zone_check_id
