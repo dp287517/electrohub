@@ -1746,11 +1746,10 @@ function parseEquipmentFromText(text) {
     /\b(P\.C\.F\.?\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s+\d|\s+\()/gim,
     /\b(Porte\s+coupe\s+feu\s+B\d+[.\d]+[.\d]*)/gi,
 
-    // HVAC / Ventilation / Climatisation
+    // HVAC / Ventilation / Climatisation - include accented chars
     /\b(HVAC\s+(?:tabl\.?\s*)?[\d.\-]+[A-Z\-]*)/gi,
-    /\b(Ventil[.\w]*\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s*\()/gim,
-    /\b(Climatisation\s+[A-Za-z0-9.\-\s]+?)(?:\s*$|\s*\()/gim,
-    /\b(Air\s+neuf\s+[A-Za-z0-9.\-\s]+)/gi,
+    /\b(Climatisation\s+[\wÀ-ÿ.\-\s]+?)(?:\s*$|\s*\()/gim,
+    /\b(Air\s+neuf\s+[\wÀ-ÿ.\-\s]+)/gi,
 
     // Interlock / Portes
     /\b(Interlock\s+i\d+\s*[A-Za-z0-9.\-\s]*)/gi,
@@ -1761,32 +1760,36 @@ function parseEquipmentFromText(text) {
     /\b(Rideau\s+coupe\s+feu\s+CW\d+\s*[A-Za-z0-9.\-]*)/gi,
     /\b(Roll\s+up\s+B\d+[.\s\d\/]+)/gi,
 
-    // Ascenseur / Monte-charge
-    /\b(Ascenseur\s+[A-Za-z0-9\s]+)/gi,
-    /\b(Monte[\s-]?charge\s*[A-Za-z0-9.\s]*)/gi,
+    // Ascenseur / Monte-charge - include accented chars for "bâtiment"
+    /\b(Ascenseur\s+[\wÀ-ÿ\s\d]+)/gi,
+    /\b(Monte[\s-]?charge\s*[\wÀ-ÿ\s\d.]*)/gi,
 
     // Alarmes
-    /\b(Alarme\s+I+,?\s*[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
+    /\b(Alarme\s+I+,?\s*[\wÀ-ÿ\s]+?)(?:\s*\(|\s*$)/gim,
 
-    // Evacuation
-    /\b(Cde\s+[eé]vacuation\s+[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
-    /\b(Commande\s+[EÉ]vacuation\s+[A-Za-z0-9\s]+)/gi,
-    /\b(Arrêt\s+[eé]vacuation\s+[A-Za-z0-9\s]+)/gi,
+    // Evacuation - include accented chars for "bâtiment", "évacuation"
+    /\b(Cde\s+[eé]vacuation\s+[\wÀ-ÿ\s\d]+?)(?:\s*\(|\s*$)/gim,
+    /\b(Commande\s+[EÉeé]vacuation\s+[\wÀ-ÿ\s\d]+)/gi,
+    /\b(Arr[êe]t\s+[eé]vacuation\s+[\wÀ-ÿ\s\d]+)/gi,
 
     // Feu flash / Signalisation
-    /\b(Feu\s+flash\s+[A-Za-z0-9\s]+?)(?:\s*\(|\s*$)/gim,
+    /\b(Feu\s+flash\s+[\wÀ-ÿ\s]+?)(?:\s*\(|\s*$)/gim,
 
     // Coupure / Autres
-    /\b(Coupure\s+tableau\s+[A-Za-z0-9\s]+)/gi,
-    /\b(Clapet\s+C\.?F\.?\s*[A-Za-z0-9\s]*)/gi,
-    /\b(Flux\s+lami[.\w]*\s*[A-Za-z0-9.\-\s]*)/gi,
+    /\b(Coupure\s+tableau\s+[\wÀ-ÿ\s\d]+)/gi,
+    /\b(Clapet\s+C\.?F\.?\s*[\wÀ-ÿ\s]*)/gi,
+    /\b(Flux\s+lami[.\w]*\s*[\wÀ-ÿ.\-\s]*)/gi,
 
     // Contrôle d'accès
-    /\b(Contrôle\s+d'accès\s+[A-Za-z0-9.\s]+)/gi,
+    /\b(Contr[oô]le\s+d['']acc[eè]s\s+[\wÀ-ÿ.\s\d]+)/gi,
     /\b(Cellule\s+compensatrice\s+\d+)/gi,
 
     // Sas
-    /\b(Sas\s+[A-Za-z0-9\s]+)/gi,
+    /\b(Sas\s+[\wÀ-ÿ\s\d]+)/gi,
+
+    // Ventilation - more complete capture
+    /\b(Ventil[.\w]*\s+[\wÀ-ÿ.\-\s\d]+?)(?:\s*\(|\s*$)/gim,
+    /\b(Ventilation\s+[\wÀ-ÿ.\-\s\d]+?)(?:\s*\(|\s*$)/gim,
   ];
 
   for (const pattern of equipmentPatterns) {
