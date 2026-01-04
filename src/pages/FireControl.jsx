@@ -3058,6 +3058,7 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
               sourceLabels={sourceLabels}
               onConfirm={handleConfirmMatch}
               crossSystemEquipment={crossSystemEquipment}
+              allZones={zones}
             />
           ))}
         </div>
@@ -3110,11 +3111,65 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 }
 
 // Equipment match card component
-function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, crossSystemEquipment = [] }) {
+function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, crossSystemEquipment = [], allZones = [] }) {
   const [expanded, setExpanded] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showZoneSelector, setShowZoneSelector] = useState(false);
+  const [selectedZones, setSelectedZones] = useState([]); // [{zone_id, alarm_level}]
+  const [pendingMatch, setPendingMatch] = useState(null); // Store match while selecting zones
+  const [zoneSearchQuery, setZoneSearchQuery] = useState("");
   const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match, existing_zone_links } = result;
+
+  // Filter zones based on search
+  const filteredZones = useMemo(() => {
+    if (!allZones.length) return [];
+    const q = zoneSearchQuery.toLowerCase();
+    return allZones.filter(z =>
+      !q || z.code?.toLowerCase().includes(q) || z.name?.toLowerCase().includes(q)
+    );
+  }, [allZones, zoneSearchQuery]);
+
+  // Toggle zone selection
+  const toggleZone = (zoneId, alarmLevel) => {
+    setSelectedZones(prev => {
+      const existingIdx = prev.findIndex(s => s.zone_id === zoneId && s.alarm_level === alarmLevel);
+      if (existingIdx >= 0) {
+        return prev.filter((_, i) => i !== existingIdx);
+      }
+      // Remove other alarm levels for this zone and add new
+      return [...prev.filter(s => s.zone_id !== zoneId), { zone_id: zoneId, alarm_level: alarmLevel }];
+    });
+  };
+
+  // Handle initiating match with zone selection
+  const handleInitiateMatch = (match) => {
+    // If we have zones to select from, show the zone selector
+    if (allZones.length > 0) {
+      setPendingMatch(match);
+      setShowZoneSelector(true);
+    } else {
+      // No zones, just confirm directly
+      onConfirm(matrix_equipment.code, match, []);
+    }
+  };
+
+  // Handle final confirmation with selected zones
+  const handleFinalConfirm = () => {
+    if (pendingMatch) {
+      onConfirm(matrix_equipment.code, pendingMatch, selectedZones);
+      setShowZoneSelector(false);
+      setPendingMatch(null);
+      setSelectedZones([]);
+    }
+  };
+
+  // Cancel zone selection
+  const handleCancelZoneSelection = () => {
+    setShowZoneSelector(false);
+    setPendingMatch(null);
+    setSelectedZones([]);
+  };
 
   const getScoreColor = (score) => {
     if (score >= 85) return "text-green-600 bg-green-100";
@@ -3233,12 +3288,12 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
                   key={idx}
                   className="flex items-center justify-between p-2 bg-white rounded-lg hover:bg-orange-100 cursor-pointer transition-colors"
                   onClick={() => {
-                    onConfirm(matrix_equipment.code, {
+                    handleInitiateMatch({
                       source_system: eq.source,
                       candidate_id: eq.id,
                       candidate_name: eq.name,
                       candidate_code: eq.code,
-                    }, existing_zone_links || []);
+                    });
                     setSearchMode(false);
                     setSearchQuery("");
                   }}
@@ -3295,7 +3350,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
               </div>
             </div>
             <button
-              onClick={() => onConfirm(matrix_equipment.code, best_match, existing_zone_links || [])}
+              onClick={() => handleInitiateMatch(best_match)}
               className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm"
             >
               <Check className="w-4 h-4" />
@@ -3335,13 +3390,133 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
                 )}
               </div>
               <button
-                onClick={() => onConfirm(matrix_equipment.code, alt, existing_zone_links || [])}
+                onClick={() => handleInitiateMatch(alt)}
                 className="text-xs text-orange-600 hover:text-orange-700 font-medium ml-2"
               >
                 Sélectionner
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Zone selector modal/panel */}
+      {showZoneSelector && pendingMatch && (
+        <div className="mt-4 p-4 bg-blue-50 rounded-lg border-2 border-blue-300">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-blue-600" />
+              <span className="font-medium text-blue-800">
+                Sélectionner les zones pour "{pendingMatch.candidate_name || pendingMatch.name}"
+              </span>
+            </div>
+            <button
+              onClick={handleCancelZoneSelection}
+              className="p-1 hover:bg-blue-100 rounded"
+            >
+              <X className="w-5 h-5 text-blue-600" />
+            </button>
+          </div>
+
+          <div className="text-sm text-blue-700 mb-3">
+            Cochez les zones dans lesquelles cet équipement doit être contrôlé et choisissez le niveau d'alarme (AL1 = locale, AL2 = générale)
+          </div>
+
+          {/* Zone search */}
+          <input
+            type="text"
+            value={zoneSearchQuery}
+            onChange={(e) => setZoneSearchQuery(e.target.value)}
+            placeholder="Rechercher une zone..."
+            className="w-full px-3 py-2 border border-blue-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+
+          {/* Zones grid */}
+          <div className="max-h-64 overflow-y-auto space-y-2 mb-4">
+            {filteredZones.length > 0 ? (
+              filteredZones.map((zone) => {
+                const selectedZone = selectedZones.find(s => s.zone_id === zone.id);
+                return (
+                  <div
+                    key={zone.id}
+                    className={`p-2 rounded-lg border ${selectedZone ? 'bg-blue-100 border-blue-400' : 'bg-white border-gray-200'}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm bg-gray-100 px-1.5 py-0.5 rounded">{zone.code}</span>
+                        <span className="text-sm text-gray-700 truncate">{zone.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleZone(zone.id, 1)}
+                          className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                            selectedZone?.alarm_level === 1
+                              ? 'bg-orange-500 text-white'
+                              : 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                          }`}
+                        >
+                          AL1
+                        </button>
+                        <button
+                          onClick={() => toggleZone(zone.id, 2)}
+                          className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                            selectedZone?.alarm_level === 2
+                              ? 'bg-red-500 text-white'
+                              : 'bg-red-100 text-red-700 hover:bg-red-200'
+                          }`}
+                        >
+                          AL2
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center text-gray-500 py-4">
+                {allZones.length === 0 ? "Aucune zone disponible. Importez d'abord une matrice." : "Aucune zone trouvée."}
+              </div>
+            )}
+          </div>
+
+          {/* Selected zones summary */}
+          {selectedZones.length > 0 && (
+            <div className="mb-4 p-2 bg-white rounded-lg border border-blue-200">
+              <div className="text-xs font-medium text-gray-600 mb-1">Zones sélectionnées ({selectedZones.length}):</div>
+              <div className="flex flex-wrap gap-1">
+                {selectedZones.map((sel) => {
+                  const zone = allZones.find(z => z.id === sel.zone_id);
+                  return (
+                    <span
+                      key={`${sel.zone_id}-${sel.alarm_level}`}
+                      className={`px-1.5 py-0.5 text-xs rounded ${
+                        sel.alarm_level === 1 ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      {zone?.code || 'Zone'} (AL{sel.alarm_level})
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={handleCancelZoneSelection}
+              className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+            >
+              Annuler
+            </button>
+            <button
+              onClick={handleFinalConfirm}
+              className="flex items-center gap-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+            >
+              <Check className="w-4 h-4" />
+              Confirmer avec {selectedZones.length} zone{selectedZones.length !== 1 ? 's' : ''}
+            </button>
+          </div>
         </div>
       )}
     </div>
