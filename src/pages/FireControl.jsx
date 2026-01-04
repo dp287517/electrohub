@@ -442,6 +442,7 @@ export default function FireControl() {
             zone_id: context.zone_id,
             alarm_level: match.matrix_equipment.alarm_level || 1,
             fire_interlock_code: match.matrix_equipment.code,
+            zone_links: match.existing_zone_links || [],
           });
           autoLinked++;
         } catch (e) {
@@ -3118,7 +3119,7 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
         equipment_id: match.candidate_id || match.id,
         fire_interlock_code: matrixEqCode,
         zone_id: null,
-        alarm_level: 1,
+        alarm_level: zoneLinks?.[0]?.alarm_level || 1,
         zone_links: zoneLinks
       });
 
