@@ -3080,7 +3080,9 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 
   const loadCrossSystemEquipment = async () => {
     try {
-      const data = await api.fireControlMaps.crossSystemEquipment({});
+      // Use include_all=true to get ALL equipment (not just those already linked to fire control)
+      // This allows searching and linking equipment that hasn't been linked yet
+      const data = await api.fireControlMaps.crossSystemEquipment({ include_all: true });
       setCrossSystemEquipment(data.equipment || []);
     } catch (err) {
       console.warn("Erreur chargement équipements cross-système:", err.message);
