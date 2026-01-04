@@ -5958,6 +5958,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
 
     const upstreamRes = await quickQuery(
       `SELECT d.id, d.name, d.reference, d.manufacturer, d.in_amps, d.icu_ka,
+              d.position_number,
               sb.name as source_board_name, sb.code as source_board_code
        FROM devices d
        JOIN switchboards sb ON d.switchboard_id = sb.id
@@ -6077,11 +6078,11 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════
     if (upstreamDevices.length > 0) {
       const upText = upstreamDevices.map(d => {
-        // Build breaker description: position + name + amps
-        const position = d.position_number ? `[${d.position_number}]` : '';
+        // Build breaker description: name + amps + position_number at the end
         const breakerName = d.name || d.reference || d.manufacturer || 'Depart';
         const breakerAmps = d.in_amps ? `${d.in_amps}A` : '';
-        const breakerDesc = [position, breakerName, breakerAmps].filter(Boolean).join(' ');
+        const breakerCode = d.position_number || '';
+        const breakerDesc = [breakerName, breakerAmps, breakerCode].filter(Boolean).join(' ');
         return `${d.source_board_code} via ${breakerDesc}`;
       }).join(', ');
       drawRoundedRect(40, currentY, 515, 20, 5, colors.warningBg, colors.warning);
