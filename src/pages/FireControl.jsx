@@ -2835,14 +2835,22 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
 
   const handleConfirmMatch = async (matrixEqCode, match) => {
     try {
-      await api.fireControlMaps.confirmEquipmentMatch({
+      const result = await api.fireControlMaps.confirmEquipmentMatch({
         source_system: match.source_system,
         equipment_id: match.candidate_id || match.id,
         fire_interlock_code: matrixEqCode,
         zone_id: null,
         alarm_level: 1
       });
-      showToast(`${match.candidate_name || match.name} lié à ${matrixEqCode}`, "success");
+
+      // Check if equipment has a position (will appear on plans)
+      const sourceLabels = { doors: "Porte", switchboard: "Tableau", datahub: "Équipement" };
+      const sourceLabel = sourceLabels[match.source_system] || "Équipement";
+      showToast(
+        `✅ ${sourceLabel} "${match.candidate_name || match.name}" lié à ${matrixEqCode}. Visible sur les Plans.`,
+        "success"
+      );
+
       loadCrossSystemEquipment();
       // Update match results to show as confirmed
       setMatchResults(prev => prev.map(r =>
