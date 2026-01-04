@@ -2024,6 +2024,9 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
           job.message = `Analyse IA ${chunkIdx + 1}/${textChunks.length}...`;
           await saveProgress();
 
+          console.log(`[FireControl] Job ${jobId}: Sending chunk ${chunkIdx + 1} to AI (${chunk.length} chars)`);
+          console.log(`[FireControl] Job ${jobId}: Chunk preview: ${chunk.substring(0, 500).replace(/\n/g, ' ')}...`);
+
           const aiResponse = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
@@ -2116,9 +2119,27 @@ IMPORTANT - GÉNÉRAL:
             const parsed = JSON.parse(jsonStr);
             if (parsed.zones) aiZones.push(...parsed.zones);
             if (parsed.equipment) aiEquipment.push(...parsed.equipment);
-            if (parsed.links) aiLinks.push(...parsed.links);
+            if (parsed.links) {
+              aiLinks.push(...parsed.links);
+              // DETAILED LOGGING: Log alarm levels from AI response
+              const al1Links = parsed.links.filter(l => l.alarm_level === 1);
+              const al2Links = parsed.links.filter(l => l.alarm_level === 2);
+              const noLevelLinks = parsed.links.filter(l => !l.alarm_level);
+              console.log(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} LINKS ANALYSIS:`);
+              console.log(`  - Total links: ${parsed.links.length}`);
+              console.log(`  - AL1 (alarm_level=1): ${al1Links.length}`);
+              console.log(`  - AL2 (alarm_level=2): ${al2Links.length}`);
+              console.log(`  - No alarm_level: ${noLevelLinks.length}`);
+              if (al2Links.length > 0) {
+                console.log(`  - First 5 AL2 links: ${JSON.stringify(al2Links.slice(0, 5))}`);
+              }
+              if (noLevelLinks.length > 0) {
+                console.log(`  - First 5 links without alarm_level: ${JSON.stringify(noLevelLinks.slice(0, 5))}`);
+              }
+            }
           } catch (parseErr) {
             console.warn(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} parse error: ${parseErr.message}`);
+            console.warn(`[FireControl] Job ${jobId}: Raw AI response (first 2000 chars): ${content.substring(0, 2000)}`);
           }
         }
 
@@ -2232,7 +2253,20 @@ IMPORTANT - GÉNÉRAL:
       } catch (err) { console.warn(`[FireControl] Equipment error: ${err.message}`); }
     }
 
-    console.log(`[FireControl] Job ${jobId}: Zone map size: ${zoneCodeToId.size}, Equipment map size: ${equipCodeToId.size}, Links to process: ${allLinks.length}`);
+    // DETAILED LOGGING: Analyze all links before processing
+    const totalAL1 = allLinks.filter(l => l.alarm_level === 1).length;
+    const totalAL2 = allLinks.filter(l => l.alarm_level === 2).length;
+    const totalNoLevel = allLinks.filter(l => !l.alarm_level).length;
+    console.log(`[FireControl] Job ${jobId}: FINAL LINK SUMMARY BEFORE DB INSERT:`);
+    console.log(`  - Zone map size: ${zoneCodeToId.size}`);
+    console.log(`  - Equipment map size: ${equipCodeToId.size}`);
+    console.log(`  - Total links to process: ${allLinks.length}`);
+    console.log(`  - Links with alarm_level=1: ${totalAL1}`);
+    console.log(`  - Links with alarm_level=2: ${totalAL2}`);
+    console.log(`  - Links WITHOUT alarm_level (will default to 1): ${totalNoLevel}`);
+
+    // Track what actually gets inserted
+    let al1Created = 0, al2Created = 0;
 
     for (const link of allLinks) {
       try {
@@ -2260,15 +2294,25 @@ IMPORTANT - GÉNÉRAL:
           if (equipRows.length) equipId = equipRows[0].id;
         }
 
+        const effectiveAlarmLevel = link.alarm_level || 1;
         if (zoneId && equipId) {
           await pool.query(`INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-            [zoneId, equipId, link.alarm_level || 1, link.action || 'activate', matrixId]);
+            [zoneId, equipId, effectiveAlarmLevel, link.action || 'activate', matrixId]);
           linksCreated++;
+          if (effectiveAlarmLevel === 1) al1Created++;
+          else if (effectiveAlarmLevel === 2) al2Created++;
         } else {
-          console.log(`[FireControl] Job ${jobId}: Link skipped - zone=${link.zone_code} (${zoneId ? 'found' : 'NOT FOUND'}), equip=${link.equipment_code} (${equipId ? 'found' : 'NOT FOUND'})`);
+          console.log(`[FireControl] Job ${jobId}: Link skipped - zone=${link.zone_code} (${zoneId ? 'found' : 'NOT FOUND'}), equip=${link.equipment_code} (${equipId ? 'found' : 'NOT FOUND'}), alarm_level=${link.alarm_level}`);
         }
       } catch (err) { console.warn(`[FireControl] Link error: ${err.message}`); }
     }
+
+    // FINAL SUMMARY LOG
+    console.log(`[FireControl] Job ${jobId}: ========== LINK CREATION COMPLETE ==========`);
+    console.log(`[FireControl] Job ${jobId}: Total links created: ${linksCreated}`);
+    console.log(`[FireControl] Job ${jobId}: AL1 links created: ${al1Created}`);
+    console.log(`[FireControl] Job ${jobId}: AL2 links created: ${al2Created}`);
+    console.log(`[FireControl] Job ${jobId}: =============================================`);
 
     // Store parsed data
     await pool.query(`UPDATE fc_matrices SET parsed_data = $1 WHERE id = $2`,
@@ -2277,17 +2321,17 @@ IMPORTANT - GÉNÉRAL:
         equipment: allEquipment,
         links: allLinks,
         parsed_at: new Date().toISOString(),
-        stats: { pages: numPages, total_chars: fullText.length }
+        stats: { pages: numPages, total_chars: fullText.length, al1_links: al1Created, al2_links: al2Created }
       }), matrixId]);
 
     job.status = 'completed';
     job.progress = 100;
     job.message = 'Analyse terminée';
     job.completed_at = Date.now();
-    job.result = { zones_created: zonesCreated, equipment_created: equipmentCreated, links_created: linksCreated };
+    job.result = { zones_created: zonesCreated, equipment_created: equipmentCreated, links_created: linksCreated, al1_links: al1Created, al2_links: al2Created };
     await saveProgress();
 
-    console.log(`[FireControl] Job ${jobId}: Completed - ${zonesCreated} zones, ${equipmentCreated} equipment, ${linksCreated} links`);
+    console.log(`[FireControl] Job ${jobId}: Completed - ${zonesCreated} zones, ${equipmentCreated} equipment, ${linksCreated} links (AL1: ${al1Created}, AL2: ${al2Created})`);
 
     // Send push notification
     try {
