@@ -2162,6 +2162,13 @@ RÈGLE CRITIQUE: Si tu vois un équipement associé à une zone SANS indication 
 Colonne "Action" (Commande): PCF, HVAC, Ventilation, Coupure, etc.
 Types: pcf, hvac, ventilation, clapet, ascenseur, alarme, evacuation, interlock, coupure, autre
 
+⚠️ ATTENTION - NE PAS EXTRAIRE CES PATTERNS ⚠️
+IGNORER COMPLÈTEMENT les identifiants de modules matériels:
+- FDCIO### (ex: FDCIO222-20, FDCIO224-03) = modules I/O, PAS des équipements
+- DC1154, DC1193 = cartes de contrôle, PAS des équipements
+- Tout code qui commence par "FDCIO" ou "DC11" doit être IGNORÉ
+Ces codes apparaissent dans la colonne "Emplacement" mais ne sont PAS des équipements à extraire.
+
 === LIENS - EXTRACTION EXHAUSTIVE ===
 1. Pour CHAQUE équipement listé
 2. Pour CHAQUE zone où il est marqué
@@ -2219,12 +2226,29 @@ ${chunk}`
               console.log(`[FireControl] Job ${jobId}: AI returned NO ZONES`);
             }
 
-            // Log AI equipment
+            // Log AI equipment and filter out FDCIO/DC11 patterns
             if (parsed.equipment && parsed.equipment.length > 0) {
-              console.log(`[FireControl] Job ${jobId}: AI EQUIPMENT (${parsed.equipment.length}, showing first 30):`);
+              console.log(`[FireControl] Job ${jobId}: AI EQUIPMENT RAW (${parsed.equipment.length}, showing first 30):`);
               parsed.equipment.slice(0, 30).forEach((e, i) => console.log(`  ${i + 1}. Code="${e.code}" Type="${e.type}" Name="${e.name?.substring(0, 40) || ''}"`));
               if (parsed.equipment.length > 30) console.log(`  ... and ${parsed.equipment.length - 30} more equipment`);
-              aiEquipment.push(...parsed.equipment);
+
+              // Filter out FDCIO and DC11 patterns (hardware modules, not actual equipment)
+              const fdcioPattern = /^(FDCIO|DC11)/i;
+              const filteredEquipment = parsed.equipment.filter(e => {
+                const code = e.code || '';
+                if (fdcioPattern.test(code)) {
+                  console.log(`  ⚠️ FILTERED OUT hardware module: "${code}"`);
+                  return false;
+                }
+                return true;
+              });
+
+              const removedCount = parsed.equipment.length - filteredEquipment.length;
+              if (removedCount > 0) {
+                console.log(`[FireControl] Job ${jobId}: FILTERED ${removedCount} hardware modules (FDCIO/DC11), kept ${filteredEquipment.length} real equipment`);
+              }
+
+              aiEquipment.push(...filteredEquipment);
             } else {
               console.log(`[FireControl] Job ${jobId}: AI returned NO EQUIPMENT`);
             }

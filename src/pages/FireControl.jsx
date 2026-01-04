@@ -3354,10 +3354,20 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
   const [searchMode, setSearchMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showZoneSelector, setShowZoneSelector] = useState(false);
-  const [selectedZones, setSelectedZones] = useState([]); // [{zone_id, alarm_level}]
   const [pendingMatch, setPendingMatch] = useState(null); // Store match while selecting zones
   const [zoneSearchQuery, setZoneSearchQuery] = useState("");
   const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match, existing_zone_links } = result;
+
+  // Pre-populate selectedZones with existing_zone_links from matrix parsing
+  const [selectedZones, setSelectedZones] = useState(() => {
+    if (existing_zone_links && existing_zone_links.length > 0) {
+      return existing_zone_links.map(link => ({
+        zone_id: link.zone_id,
+        alarm_level: link.alarm_level || 1
+      }));
+    }
+    return [];
+  });
 
   // Filter zones based on search
   const filteredZones = useMemo(() => {
@@ -3382,7 +3392,18 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
 
   // Handle initiating match with zone selection
   const handleInitiateMatch = (match) => {
-    // If we have zones to select from, show the zone selector
+    // If we have existing_zone_links from matrix parsing, use them directly without manual selection
+    if (existing_zone_links && existing_zone_links.length > 0) {
+      const zonesToUse = existing_zone_links.map(link => ({
+        zone_id: link.zone_id,
+        alarm_level: link.alarm_level || 1
+      }));
+      console.log('[EquipmentMatchCard] Using existing_zone_links directly:', zonesToUse);
+      onConfirm(matrix_equipment.code, match, zonesToUse);
+      return;
+    }
+
+    // If we have zones to select from but no pre-existing links, show the zone selector
     if (allZones.length > 0) {
       setPendingMatch(match);
       setShowZoneSelector(true);
