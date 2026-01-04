@@ -4099,7 +4099,7 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
             await pool.query(`
               INSERT INTO fc_equipment_results (zone_check_id, equipment_id, alarm_level)
               VALUES ($1, $2, $3)
-              ON CONFLICT (zone_check_id, equipment_id) DO NOTHING
+              ON CONFLICT (zone_check_id, equipment_id, alarm_level) DO NOTHING
             `, [check.id, fcEquipment.id, link.alarm_level]);
             resultsCreated++;
           }
