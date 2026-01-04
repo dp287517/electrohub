@@ -1010,7 +1010,12 @@ app.get("/api/fire-control/zone-checks", async (req, res) => {
         (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.alarm_level = 1) as equipment_count_al1,
         (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.alarm_level = 2) as equipment_count_al2,
         (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'ok') as ok_count,
-        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'nok') as nok_count
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'nok') as nok_count,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND er.result = 'na') as na_count,
+        (SELECT COUNT(*) FROM fc_equipment_results er WHERE er.zone_check_id = zc.id AND (er.result IS NULL OR er.result = 'pending')) as pending_count,
+        (SELECT COUNT(*) FROM fc_equipment_results er
+          JOIN fc_equipment e ON e.id = er.equipment_id
+          WHERE er.zone_check_id = zc.id AND e.external_system IS NOT NULL) as equipment_with_position_count
       FROM fc_zone_checks zc
       JOIN fc_zones z ON z.id = zc.zone_id
       WHERE ${filter.where.replace(/company_id/g, 'zc.company_id').replace(/site_id/g, 'zc.site_id')}
@@ -3562,6 +3567,35 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
       allCandidates.push(...items);
     } catch (e) {}
 
+    // Pre-fetch fc_equipment and their zone links for faster lookup
+    const fcEquipmentMap = new Map();
+    try {
+      const { rows: fcEquipment } = await pool.query(`
+        SELECT e.id, e.code, e.name,
+          COALESCE(
+            (SELECT json_agg(json_build_object(
+              'zone_id', ze.zone_id,
+              'alarm_level', ze.alarm_level,
+              'zone_code', z.code,
+              'zone_name', z.name
+            ))
+            FROM fc_zone_equipment ze
+            JOIN fc_zones z ON z.id = ze.zone_id
+            WHERE ze.equipment_id = e.id), '[]'
+          ) as zone_links
+        FROM fc_equipment e
+      `);
+
+      for (const eq of fcEquipment) {
+        // Store by normalized code for easier matching
+        const normalizedCode = (eq.code || '').replace(/[\s\-]+/g, '').toUpperCase();
+        fcEquipmentMap.set(normalizedCode, eq);
+        fcEquipmentMap.set(eq.code, eq);
+      }
+    } catch (e) {
+      console.warn("[FireControl] Failed to pre-fetch fc_equipment:", e.message);
+    }
+
     const results = [];
     const CONFIDENT_THRESHOLD = 0.75; // Lowered to allow pattern-based matches
     const UNCERTAIN_THRESHOLD = 0.35; // Lowered to catch more potential matches
@@ -3598,6 +3632,11 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
       const isConfident = topMatch && topMatch.score >= CONFIDENT_THRESHOLD * 100;
       const hasMultipleGoodMatches = matches.filter(m => m.score >= 60).length > 1; // Multiple matches above 60%
 
+      // Find existing fc_equipment and its zone links for this matrix equipment
+      const normalizedMatrixCode = (matrixEq.code || '').replace(/[\s\-]+/g, '').toUpperCase();
+      const fcEq = fcEquipmentMap.get(normalizedMatrixCode) || fcEquipmentMap.get(matrixEq.code);
+      const existingZoneLinks = fcEq?.zone_links || [];
+
       results.push({
         // Nested object for frontend compatibility
         matrix_equipment: {
@@ -3620,6 +3659,9 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
         needs_confirmation: !isConfident || hasMultipleGoodMatches,
         question: !isConfident && matches.length > 0 ?
           `L'équipement "${matrixEq.code}" de la matrice correspond-il à "${topMatch?.candidate_code}" (${topMatch?.source_system}) ?` : null,
+        // NEW: Include existing zone links from fc_equipment for transfer during confirmation
+        fc_equipment_id: fcEq?.id || null,
+        existing_zone_links: existingZoneLinks,
       });
     }
 
@@ -3726,14 +3768,17 @@ app.get("/api/fire-control-maps/equipment-controls/:sourceSystem/:equipmentId", 
 });
 
 // Confirm equipment match and link to fire control
+// Enhanced version: now accepts zone_links array to create fc_zone_equipment entries
 app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
   try {
-    const { source_system, equipment_id, zone_id, alarm_level = 1, fire_interlock_code } = req.body;
+    const { source_system, equipment_id, zone_id, alarm_level = 1, fire_interlock_code, zone_links } = req.body;
+    // zone_links is an optional array of { zone_id, alarm_level } objects
 
     if (!source_system || !equipment_id) {
       return res.status(400).json({ error: "source_system and equipment_id required" });
     }
 
+    const tenant = extractTenantFromRequest(req);
     let updated = false;
 
     if (source_system === 'doors') {
@@ -3777,18 +3822,28 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
     let fcEquipment = null;
 
     if (fire_interlock_code) {
-      // First try to update existing equipment by code
-      const { rows: updateRows } = await pool.query(`
-        UPDATE fc_equipment SET
-          external_system = $1,
-          external_id = $2,
-          updated_at = now()
-        WHERE code = $3 AND (external_system IS NULL OR external_system = $1)
-        RETURNING *
-      `, [source_system, equipment_id, fire_interlock_code]);
+      // First try to update existing equipment by code (try multiple variations)
+      const codeVariations = [
+        fire_interlock_code,
+        fire_interlock_code.replace(/[\s\-]+/g, '').toUpperCase(),
+        fire_interlock_code.replace(/[\s]+/g, '-'),
+      ];
 
-      if (updateRows.length) {
-        fcEquipment = updateRows[0];
+      for (const codeVar of codeVariations) {
+        const { rows: updateRows } = await pool.query(`
+          UPDATE fc_equipment SET
+            external_system = $1,
+            external_id = $2,
+            updated_at = now()
+          WHERE UPPER(REPLACE(code, '-', '')) = UPPER(REPLACE($3, '-', ''))
+            AND (external_system IS NULL OR external_system = $1)
+          RETURNING *
+        `, [source_system, equipment_id, codeVar]);
+
+        if (updateRows.length) {
+          fcEquipment = updateRows[0];
+          break;
+        }
       }
     }
 
@@ -3803,17 +3858,115 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
       } else {
         // Create new fc_equipment entry
         const { rows: insertRows } = await pool.query(`
-          INSERT INTO fc_equipment (code, name, equipment_type, external_system, external_id)
-          VALUES ($1, $1, $2, $3, $4)
+          INSERT INTO fc_equipment (code, name, equipment_type, external_system, external_id, company_id, site_id)
+          VALUES ($1, $1, $2, $3, $4, $5, $6)
           RETURNING *
-        `, [fire_interlock_code || equipment_id, source_system, source_system, equipment_id]);
+        `, [fire_interlock_code || equipment_id, source_system, source_system, equipment_id, tenant.companyId, tenant.siteId]);
         fcEquipment = insertRows[0];
       }
     }
 
-    res.json({ success: true, updated, fc_equipment: fcEquipment });
+    // If zone_links were provided, create/update fc_zone_equipment entries
+    let linksCreated = 0;
+    if (fcEquipment && Array.isArray(zone_links) && zone_links.length > 0) {
+      for (const link of zone_links) {
+        if (link.zone_id && link.alarm_level) {
+          try {
+            await pool.query(`
+              INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type)
+              VALUES ($1, $2, $3, 'activate')
+              ON CONFLICT (zone_id, equipment_id, alarm_level) DO NOTHING
+            `, [link.zone_id, fcEquipment.id, link.alarm_level]);
+            linksCreated++;
+          } catch (linkErr) {
+            console.warn(`[FireControl] Zone link error: ${linkErr.message}`);
+          }
+        }
+      }
+    }
+
+    // Also create zone link if single zone_id was provided
+    if (fcEquipment && zone_id) {
+      try {
+        await pool.query(`
+          INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type)
+          VALUES ($1, $2, $3, 'activate')
+          ON CONFLICT (zone_id, equipment_id, alarm_level) DO NOTHING
+        `, [zone_id, fcEquipment.id, alarm_level]);
+        linksCreated++;
+      } catch (linkErr) {
+        console.warn(`[FireControl] Zone link error: ${linkErr.message}`);
+      }
+    }
+
+    res.json({ success: true, updated, fc_equipment: fcEquipment, links_created: linksCreated });
   } catch (err) {
     console.error("[FireControl] Confirm match error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk link equipment to multiple zones with alarm levels
+app.post("/api/fire-control/equipment/:equipmentId/link-zones", async (req, res) => {
+  try {
+    const { equipmentId } = req.params;
+    const { zone_links } = req.body;
+    // zone_links: array of { zone_id, alarm_level }
+
+    if (!Array.isArray(zone_links) || zone_links.length === 0) {
+      return res.status(400).json({ error: "zone_links array required" });
+    }
+
+    // Verify equipment exists
+    const { rows: eqRows } = await pool.query(`SELECT id FROM fc_equipment WHERE id = $1`, [equipmentId]);
+    if (!eqRows.length) {
+      return res.status(404).json({ error: "Equipment not found" });
+    }
+
+    let created = 0;
+    let updated = 0;
+
+    for (const link of zone_links) {
+      if (!link.zone_id || !link.alarm_level) continue;
+
+      const { rows: existing } = await pool.query(`
+        SELECT id FROM fc_zone_equipment WHERE zone_id = $1 AND equipment_id = $2 AND alarm_level = $3
+      `, [link.zone_id, equipmentId, link.alarm_level]);
+
+      if (existing.length) {
+        updated++;
+      } else {
+        await pool.query(`
+          INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type)
+          VALUES ($1, $2, $3, 'activate')
+        `, [link.zone_id, equipmentId, link.alarm_level]);
+        created++;
+      }
+    }
+
+    res.json({ success: true, created, updated, total: zone_links.length });
+  } catch (err) {
+    console.error("[FireControl] Link zones error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get zones linked to an equipment
+app.get("/api/fire-control/equipment/:equipmentId/zones", async (req, res) => {
+  try {
+    const { equipmentId } = req.params;
+
+    const { rows } = await pool.query(`
+      SELECT ze.*, z.code as zone_code, z.name as zone_name, z.building, z.floor
+      FROM fc_zone_equipment ze
+      JOIN fc_zones z ON z.id = ze.zone_id
+      WHERE ze.equipment_id = $1
+      ORDER BY z.code, ze.alarm_level
+    `, [equipmentId]);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("[FireControl] Get equipment zones error:", err);
     res.status(500).json({ error: err.message });
   }
 });
