@@ -2706,6 +2706,164 @@ app.put("/api/fire-control/schedule/:id", async (req, res) => {
 });
 
 // ------------------------------
+// ROUTES: Real-time Activity Feed (Electro Dashboard)
+// ------------------------------
+
+app.get("/api/fire-control/live-activity", async (req, res) => {
+  try {
+    const tenant = extractTenantFromRequest(req);
+    const filter = getTenantFilter(tenant, { paramOffset: 0 });
+    const { campaign_id, limit = 20 } = req.query;
+
+    // Get active campaign stats
+    let campaignFilter = '';
+    const params = [...filter.params];
+    if (campaign_id) {
+      params.push(campaign_id);
+      campaignFilter = ` AND c.id = $${params.length}`;
+    }
+
+    // Get overall stats for active campaigns
+    const statsQuery = await pool.query(`
+      SELECT
+        COUNT(DISTINCT zc.id) as total_zones,
+        COUNT(DISTINCT CASE WHEN zc.status = 'completed' THEN zc.id END) as completed_zones,
+        COUNT(DISTINCT CASE WHEN zc.status = 'in_progress' THEN zc.id END) as in_progress_zones,
+        COUNT(er.id) as total_equipment,
+        COUNT(CASE WHEN er.result = 'ok' THEN 1 END) as ok_count,
+        COUNT(CASE WHEN er.result = 'nok' THEN 1 END) as nok_count,
+        COUNT(CASE WHEN er.result IS NULL OR er.result = 'pending' THEN 1 END) as pending_count
+      FROM fc_zone_checks zc
+      JOIN fc_campaigns c ON c.id = zc.campaign_id
+      LEFT JOIN fc_equipment_results er ON er.zone_check_id = zc.id
+      WHERE c.status IN ('active', 'in_progress', 'planned') ${campaignFilter}
+    `, params);
+
+    const stats = statsQuery.rows[0] || {};
+
+    // Get recent activity (last N equipment checks with results)
+    const recentParams = [...filter.params];
+    let recentCampaignFilter = '';
+    if (campaign_id) {
+      recentParams.push(campaign_id);
+      recentCampaignFilter = ` AND c.id = $${recentParams.length}`;
+    }
+    recentParams.push(parseInt(limit) || 20);
+
+    const recentQuery = await pool.query(`
+      SELECT
+        er.id, er.result, er.updated_at, er.result_notes,
+        e.code as equipment_code, e.name as equipment_name, e.equipment_type,
+        z.code as zone_code, z.name as zone_name, z.building,
+        zc.checked_by_name, zc.checked_by_email
+      FROM fc_equipment_results er
+      JOIN fc_equipment e ON e.id = er.equipment_id
+      JOIN fc_zone_checks zc ON zc.id = er.zone_check_id
+      JOIN fc_zones z ON z.id = zc.zone_id
+      JOIN fc_campaigns c ON c.id = zc.campaign_id
+      WHERE er.result IS NOT NULL AND er.result != 'pending'
+        AND c.status IN ('active', 'in_progress', 'planned') ${recentCampaignFilter}
+      ORDER BY er.updated_at DESC
+      LIMIT $${recentParams.length}
+    `, recentParams);
+
+    // Get recent photos
+    const photoParams = [...filter.params];
+    let photoCampaignFilter = '';
+    if (campaign_id) {
+      photoParams.push(campaign_id);
+      photoCampaignFilter = ` AND c.id = $${photoParams.length}`;
+    }
+    photoParams.push(10);
+
+    const photosQuery = await pool.query(`
+      SELECT
+        cf.id, cf.filename, cf.original_name, cf.uploaded_at, cf.uploaded_by_name,
+        z.code as zone_code, z.name as zone_name
+      FROM fc_check_files cf
+      JOIN fc_zone_checks zc ON zc.id = cf.zone_check_id
+      JOIN fc_zones z ON z.id = zc.zone_id
+      JOIN fc_campaigns c ON c.id = zc.campaign_id
+      WHERE c.status IN ('active', 'in_progress', 'planned') ${photoCampaignFilter}
+      ORDER BY cf.uploaded_at DESC
+      LIMIT $${photoParams.length}
+    `, photoParams);
+
+    // Get technicians currently working (in_progress checks)
+    const techParams = [...filter.params];
+    let techCampaignFilter = '';
+    if (campaign_id) {
+      techParams.push(campaign_id);
+      techCampaignFilter = ` AND c.id = $${techParams.length}`;
+    }
+
+    const techQuery = await pool.query(`
+      SELECT DISTINCT ON (zc.checked_by_email)
+        zc.checked_by_email, zc.checked_by_name,
+        z.code as zone_code, z.name as zone_name,
+        zc.updated_at as last_activity
+      FROM fc_zone_checks zc
+      JOIN fc_zones z ON z.id = zc.zone_id
+      JOIN fc_campaigns c ON c.id = zc.campaign_id
+      WHERE zc.status = 'in_progress'
+        AND zc.checked_by_email IS NOT NULL
+        AND c.status IN ('active', 'in_progress', 'planned') ${techCampaignFilter}
+      ORDER BY zc.checked_by_email, zc.updated_at DESC
+    `, techParams);
+
+    // Calculate message based on progress
+    const pending = parseInt(stats.pending_count || 0);
+    const total = parseInt(stats.total_equipment || 0);
+    const done = total - pending;
+    let message = '';
+    let messageType = 'info';
+
+    if (total === 0) {
+      message = 'Aucun équipement à contrôler pour le moment';
+      messageType = 'info';
+    } else if (pending === 0) {
+      message = '🎉 Tous les équipements ont été contrôlés !';
+      messageType = 'success';
+    } else if (pending === 1) {
+      message = 'Plus qu\'1 équipement à vérifier !';
+      messageType = 'warning';
+    } else if (pending <= 5) {
+      message = `Encore ${pending} équipements à vérifier, presque fini !`;
+      messageType = 'warning';
+    } else {
+      message = `${done}/${total} équipements contrôlés, ${pending} restants`;
+      messageType = 'info';
+    }
+
+    res.json({
+      stats: {
+        total_zones: parseInt(stats.total_zones || 0),
+        completed_zones: parseInt(stats.completed_zones || 0),
+        in_progress_zones: parseInt(stats.in_progress_zones || 0),
+        total_equipment: total,
+        ok_count: parseInt(stats.ok_count || 0),
+        nok_count: parseInt(stats.nok_count || 0),
+        pending_count: pending,
+        done_count: done,
+        progress_percent: total > 0 ? Math.round((done / total) * 100) : 0,
+      },
+      message,
+      message_type: messageType,
+      recent_activity: recentQuery.rows,
+      recent_photos: photosQuery.rows.map(p => ({
+        ...p,
+        url: `/api/fire-control/check-files/${p.id}/download`
+      })),
+      active_technicians: techQuery.rows,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("[FireControl] GET live-activity error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ------------------------------
 // ROUTES: Reports
 // ------------------------------
 
