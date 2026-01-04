@@ -2838,6 +2838,10 @@ export const api = {
 
     // Confirm equipment match and link to fire control system
     confirmEquipmentMatch: (payload) => post("/api/fire-control/confirm-equipment-match", payload),
+
+    // Get controls (zone checks) for a specific equipment
+    getEquipmentControls: (sourceSystem, equipmentId) =>
+      get(`/api/fire-control-maps/equipment-controls/${encodeURIComponent(sourceSystem)}/${encodeURIComponent(equipmentId)}`),
   },
 };
 

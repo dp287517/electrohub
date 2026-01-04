@@ -2039,9 +2039,15 @@ NIVEAUX D'ALARME (colonnes "Évènement"):
 - "Alarme globale (Alarme II)" = alarm_level: 2
 - Les "l" dans ces colonnes indiquent quel niveau déclenche l'équipement
 
-LIENS:
-- Les points noirs "l" dans la matrice = lien zone→équipement
-- Quand une zone a un "l" sur une ligne équipement = cette zone déclenche cet équipement
+LIENS (TRÈS IMPORTANT - EXTRAIS TOUS LES LIENS!):
+- La matrice est un tableau où les ZONES sont en colonnes et les ÉQUIPEMENTS en lignes
+- Les points noirs "●", "l", "■", "X" dans les cellules = liens zone→équipement
+- Pour CHAQUE équipement, regarde CHAQUE colonne de zone
+- Si une cellule est marquée (non vide) sous une zone pour un équipement = créer un lien
+- Créer un lien POUR CHAQUE intersection marquée dans la matrice
+- Un équipement peut être lié à PLUSIEURS zones (souvent 5-20 zones par équipement)
+- Les liens sous "Alarme I" = alarm_level: 1
+- Les liens sous "Alarme II" = alarm_level: 2
 
 === TYPES ÉQUIPEMENT ===
 pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, flash, evacuation, interlock, roll_up, rideau_cf, coupure, controle_acces, autre
@@ -2049,7 +2055,14 @@ pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, flash, evacuati
 === CODES ÉQUIPEMENT ===
 Extrais le code technique du nom: "PCF-B21.015", "HVAC-20-2-02-TC", "INTERLOCK-I22", "PORTE-INTERLOCK-I21"
 
-IMPORTANT:
+IMPORTANT - LIENS:
+- Il y a généralement BEAUCOUP de liens dans une matrice (centaines voire milliers)
+- Pour chaque ligne équipement, regarde TOUTES les colonnes zones pour trouver les marqueurs
+- Créer un objet link pour CHAQUE intersection marquée, même si cela fait beaucoup de liens
+- NE PAS résumer ou regrouper les liens - liste chaque lien individuellement
+- Utilise EXACTEMENT les mêmes codes zone_code et equipment_code que tu as définis plus haut
+
+IMPORTANT - GÉNÉRAL:
 - Extrais les équipements de la colonne "Action" (Commande), PAS de "Type, emplacement"
 - Distingue les zones DM (déclencheur manuel) des détecteurs de fumée
 - alarm_level = 1 pour Alarme I (locale), 2 pour Alarme II (globale)`
@@ -2133,9 +2146,13 @@ IMPORTANT:
     // Save to database
     let zonesCreated = 0, equipmentCreated = 0, linksCreated = 0;
 
+    // Track code -> ID mappings for link creation
+    const zoneCodeToId = new Map();
+    const equipCodeToId = new Map();
+
     for (const z of allZones) {
       try {
-        await pool.query(`
+        const result = await pool.query(`
           INSERT INTO fc_zones (code, name, description, building, floor, detector_numbers, detector_type, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           ON CONFLICT (code, company_id, site_id) DO UPDATE SET
@@ -2145,7 +2162,14 @@ IMPORTANT:
             floor = COALESCE(NULLIF(EXCLUDED.floor, ''), fc_zones.floor),
             matrix_id = EXCLUDED.matrix_id,
             updated_at = now()
+          RETURNING id
         `, [z.code, z.name, z.description || '', z.building || '', z.floor || '', z.detector_numbers || '', z.detector_type || 'smoke', matrixId, tenant.companyId, tenant.siteId]);
+        if (result.rows.length) {
+          zoneCodeToId.set(z.code, result.rows[0].id);
+          // Also map normalized versions (Z00 -> Z0, Z01 -> Z1, etc.)
+          const normalized = z.code.replace(/^Z0+(\d)$/, 'Z$1');
+          zoneCodeToId.set(normalized, result.rows[0].id);
+        }
         zonesCreated++;
       } catch (e) { console.warn(`[FireControl] Zone error: ${e.message}`); }
     }
@@ -2154,7 +2178,7 @@ IMPORTANT:
       try {
         // Ensure we have a valid code
         const code = e.code || generateEquipmentCode(e, equipmentCreated);
-        await pool.query(`
+        const result = await pool.query(`
           INSERT INTO fc_equipment (code, name, equipment_type, building, floor, location, fdcio_module, fdcio_output, matrix_id, company_id, site_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           ON CONFLICT (code, company_id, site_id) DO UPDATE SET
@@ -2166,19 +2190,56 @@ IMPORTANT:
             fdcio_output = COALESCE(NULLIF(EXCLUDED.fdcio_output, ''), fc_equipment.fdcio_output),
             matrix_id = EXCLUDED.matrix_id,
             updated_at = now()
+          RETURNING id
         `, [code, e.name || '', e.type || 'autre', e.building || '', e.floor || '', e.location || '', e.fdcio_module || '', e.fdcio_output || '', matrixId, tenant.companyId, tenant.siteId]);
+        if (result.rows.length) {
+          equipCodeToId.set(code, result.rows[0].id);
+          // Also map original AI code if different
+          if (e.code && e.code !== code) {
+            equipCodeToId.set(e.code, result.rows[0].id);
+          }
+          // Map normalized version (remove spaces/dashes)
+          const normalized = code.replace(/[\s\-]+/g, '').toUpperCase();
+          equipCodeToId.set(normalized, result.rows[0].id);
+        }
         equipmentCreated++;
       } catch (err) { console.warn(`[FireControl] Equipment error: ${err.message}`); }
     }
 
+    console.log(`[FireControl] Job ${jobId}: Zone map size: ${zoneCodeToId.size}, Equipment map size: ${equipCodeToId.size}, Links to process: ${allLinks.length}`);
+
     for (const link of allLinks) {
       try {
-        const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND ${filter.where}`, [link.zone_code, ...filter.params]);
-        const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND ${filter.where}`, [link.equipment_code, ...filter.params]);
-        if (zoneRows.length && equipRows.length) {
+        // Try direct lookup from maps first
+        let zoneId = zoneCodeToId.get(link.zone_code);
+        let equipId = equipCodeToId.get(link.equipment_code);
+
+        // Try normalized versions if direct lookup failed
+        if (!zoneId) {
+          const normalizedZone = link.zone_code.replace(/^Z0+(\d)$/, 'Z$1');
+          zoneId = zoneCodeToId.get(normalizedZone);
+        }
+        if (!equipId) {
+          const normalizedEquip = (link.equipment_code || '').replace(/[\s\-]+/g, '').toUpperCase();
+          equipId = equipCodeToId.get(normalizedEquip);
+        }
+
+        // Fallback to database lookup if maps don't have it
+        if (!zoneId) {
+          const { rows: zoneRows } = await pool.query(`SELECT id FROM fc_zones WHERE code = $1 AND ${filter.where}`, [link.zone_code, ...filter.params]);
+          if (zoneRows.length) zoneId = zoneRows[0].id;
+        }
+        if (!equipId) {
+          const { rows: equipRows } = await pool.query(`SELECT id FROM fc_equipment WHERE code = $1 AND ${filter.where}`, [link.equipment_code, ...filter.params]);
+          if (equipRows.length) equipId = equipRows[0].id;
+        }
+
+        if (zoneId && equipId) {
           await pool.query(`INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-            [zoneRows[0].id, equipRows[0].id, link.alarm_level || 1, link.action || 'activate', matrixId]);
+            [zoneId, equipId, link.alarm_level || 1, link.action || 'activate', matrixId]);
           linksCreated++;
+        } else {
+          console.log(`[FireControl] Job ${jobId}: Link skipped - zone=${link.zone_code} (${zoneId ? 'found' : 'NOT FOUND'}), equip=${link.equipment_code} (${equipId ? 'found' : 'NOT FOUND'})`);
         }
       } catch (err) { console.warn(`[FireControl] Link error: ${err.message}`); }
     }
@@ -3572,6 +3633,94 @@ app.post("/api/fire-control/auto-match-equipment", async (req, res) => {
     res.json({ matches: results, stats });
   } catch (err) {
     console.error("[FireControl] Auto-match error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get controls (zone checks) for a specific external equipment
+app.get("/api/fire-control-maps/equipment-controls/:sourceSystem/:equipmentId", async (req, res) => {
+  try {
+    const { sourceSystem, equipmentId } = req.params;
+
+    // Find the fc_equipment that matches this external equipment
+    let fcEquipment = null;
+    const equipQuery = await pool.query(`
+      SELECT id, code, name, external_system, external_id
+      FROM fc_equipment
+      WHERE external_system = $1 AND external_id = $2
+    `, [sourceSystem, equipmentId]);
+
+    if (equipQuery.rows.length > 0) {
+      fcEquipment = equipQuery.rows[0];
+    }
+
+    // Get active/pending zone checks where this equipment is involved
+    const controlsQuery = await pool.query(`
+      SELECT
+        zc.id as zone_check_id,
+        zc.zone_id,
+        z.code as zone_code,
+        z.name as zone_name,
+        c.id as campaign_id,
+        c.name as campaign_name,
+        c.status as campaign_status,
+        er.id as result_id,
+        er.alarm_level,
+        er.result,
+        er.checked_at,
+        er.checked_by,
+        er.notes as result_notes
+      FROM fc_equipment_results er
+      JOIN fc_zone_checks zc ON zc.id = er.zone_check_id
+      JOIN fc_zones z ON z.id = zc.zone_id
+      LEFT JOIN fc_campaigns c ON c.id = zc.campaign_id
+      WHERE er.equipment_id = $1
+        AND (c.status IS NULL OR c.status IN ('active', 'planning'))
+      ORDER BY
+        CASE WHEN er.result IS NULL THEN 0 ELSE 1 END,
+        c.name, z.code, er.alarm_level
+    `, [fcEquipment?.id || '00000000-0000-0000-0000-000000000000']);
+
+    // Group by zone check
+    const controls = [];
+    for (const row of controlsQuery.rows) {
+      controls.push({
+        zone_check_id: row.zone_check_id,
+        zone_code: row.zone_code,
+        zone_name: row.zone_name,
+        campaign_id: row.campaign_id,
+        campaign_name: row.campaign_name,
+        campaign_status: row.campaign_status,
+        alarm_level: row.alarm_level,
+        result: row.result,
+        checked_at: row.checked_at,
+        checked_by: row.checked_by,
+        is_pending: !row.result,
+      });
+    }
+
+    // Also get linked zones (fc_zone_equipment) for this equipment even if no active campaign
+    let linkedZones = [];
+    if (fcEquipment?.id) {
+      const zonesQuery = await pool.query(`
+        SELECT z.id, z.code, z.name, ze.alarm_level, ze.action_type
+        FROM fc_zone_equipment ze
+        JOIN fc_zones z ON z.id = ze.zone_id
+        WHERE ze.equipment_id = $1
+        ORDER BY z.code, ze.alarm_level
+      `, [fcEquipment.id]);
+      linkedZones = zonesQuery.rows;
+    }
+
+    res.json({
+      equipment: fcEquipment,
+      controls,
+      linked_zones: linkedZones,
+      pending_count: controls.filter(c => c.is_pending).length,
+      completed_count: controls.filter(c => !c.is_pending).length,
+    });
+  } catch (err) {
+    console.error("[FireControl] Get equipment controls error:", err);
     res.status(500).json({ error: err.message });
   }
 });
