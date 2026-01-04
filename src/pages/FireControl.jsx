@@ -995,6 +995,184 @@ function DashboardTab({ dashboard, campaigns, onSelectCampaign }) {
           )}
         </div>
       </div>
+
+      {/* Electro Live Feed */}
+      <ElectroLiveFeed />
+    </div>
+  );
+}
+
+// =============================================================================
+// ELECTRO LIVE FEED - Real-time control monitoring
+// =============================================================================
+function ElectroLiveFeed() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(true);
+
+  // Auto-refresh every 10 seconds
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const result = await api.fireControl.liveActivity({});
+      setData(result);
+    } catch (err) {
+      console.error("Erreur chargement activité:", err);
+    }
+    setLoading(false);
+  };
+
+  if (loading && !data) {
+    return (
+      <div className="bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 rounded-xl shadow-lg p-6 text-white">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white/10 animate-pulse" />
+          <span className="animate-pulse">Chargement d'Electro...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const { stats, message, message_type, recent_activity, recent_photos, active_technicians } = data;
+
+  return (
+    <div className="bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 rounded-xl shadow-lg overflow-hidden">
+      {/* Header */}
+      <div
+        className="p-4 flex items-center justify-between cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-yellow-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold flex items-center gap-2">
+              Electro
+              <span className="text-xs bg-green-500 px-2 py-0.5 rounded-full animate-pulse">LIVE</span>
+            </h3>
+            <p className="text-indigo-200 text-sm">{message}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          {/* Progress circle */}
+          <div className="relative w-14 h-14 hidden sm:block">
+            <svg className="w-14 h-14 transform -rotate-90" viewBox="0 0 36 36">
+              <path
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                fill="none"
+                stroke="rgba(255,255,255,0.2)"
+                strokeWidth="3"
+              />
+              <path
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                fill="none"
+                stroke={stats.nok_count > 0 ? "#ef4444" : "#22c55e"}
+                strokeWidth="3"
+                strokeDasharray={`${stats.progress_percent}, 100`}
+              />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-white font-bold text-sm">{stats.progress_percent}%</span>
+            </div>
+          </div>
+          <ChevronDown className={`w-5 h-5 text-white/60 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </div>
+      </div>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="px-4 pb-4 space-y-4">
+          {/* Stats row */}
+          <div className="grid grid-cols-4 gap-2">
+            <div className="bg-white/10 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-white">{stats.done_count}</div>
+              <div className="text-xs text-indigo-200">Contrôlés</div>
+            </div>
+            <div className="bg-white/10 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-green-400">{stats.ok_count}</div>
+              <div className="text-xs text-indigo-200">OK</div>
+            </div>
+            <div className="bg-white/10 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-red-400">{stats.nok_count}</div>
+              <div className="text-xs text-indigo-200">NOK</div>
+            </div>
+            <div className="bg-white/10 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-yellow-400">{stats.pending_count}</div>
+              <div className="text-xs text-indigo-200">Restants</div>
+            </div>
+          </div>
+
+          {/* Active technicians */}
+          {active_technicians && active_technicians.length > 0 && (
+            <div className="bg-white/5 rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-indigo-200 text-xs font-medium">Techniciens actifs</span>
+                <span className="bg-green-500/30 text-green-300 text-xs px-1.5 py-0.5 rounded">
+                  {active_technicians.length}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {active_technicians.map((tech, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-white/10 rounded-full px-3 py-1">
+                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                    <span className="text-white text-sm">{tech.checked_by_name || tech.checked_by_email?.split('@')[0]}</span>
+                    <span className="text-indigo-300 text-xs">{tech.zone_code}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recent activity feed */}
+          {recent_activity && recent_activity.length > 0 && (
+            <div className="bg-white/5 rounded-lg p-3">
+              <div className="text-indigo-200 text-xs font-medium mb-2">Derniers contrôles</div>
+              <div className="space-y-2 max-h-32 overflow-y-auto">
+                {recent_activity.slice(0, 5).map((item, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2">
+                      {item.result === 'ok' && <CheckCircle2 className="w-4 h-4 text-green-400" />}
+                      {item.result === 'nok' && <XCircle className="w-4 h-4 text-red-400" />}
+                      {item.result === 'na' && <span className="w-4 h-4 text-gray-400 text-xs">N/A</span>}
+                      <span className="text-white truncate max-w-[150px]">{item.equipment_name || item.equipment_code}</span>
+                    </div>
+                    <span className="text-indigo-300 text-xs">{dayjs(item.updated_at).fromNow()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recent photos */}
+          {recent_photos && recent_photos.length > 0 && (
+            <div className="bg-white/5 rounded-lg p-3">
+              <div className="text-indigo-200 text-xs font-medium mb-2">Photos récentes</div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {recent_photos.map((photo, i) => (
+                  <div key={i} className="flex-shrink-0 relative group">
+                    <img
+                      src={photo.url}
+                      alt={photo.original_name}
+                      className="w-16 h-16 object-cover rounded-lg border-2 border-white/20"
+                    />
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 rounded-lg flex items-center justify-center transition-opacity">
+                      <span className="text-white text-xs text-center px-1">{photo.zone_code}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

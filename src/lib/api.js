@@ -2701,6 +2701,7 @@ export const api = {
   fireControl: {
     // Dashboard
     dashboard: (params) => get("/api/fire-control/dashboard", params),
+    liveActivity: (params) => get("/api/fire-control/live-activity", params),
     health: () => get("/api/fire-control/health"),
 
     // ========================= CAMPAIGNS =========================
