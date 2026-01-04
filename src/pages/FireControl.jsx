@@ -2829,6 +2829,8 @@ function CheckStatusBadge({ status }) {
 // =============================================================================
 // EQUIPMENT MATCHING TAB
 // =============================================================================
+const MATCH_STORAGE_KEY = 'fc_equipment_match_session';
+
 function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
   const [selectedMatrix, setSelectedMatrix] = useState(null);
   const [matrixEquipment, setMatrixEquipment] = useState([]);
@@ -2837,6 +2839,49 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
   const [loading, setLoading] = useState(false);
   const [matchingInProgress, setMatchingInProgress] = useState(false);
   const [filter, setFilter] = useState("all"); // all, matched, unmatched
+  const [sessionRestored, setSessionRestored] = useState(false);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(MATCH_STORAGE_KEY);
+      if (saved) {
+        const session = JSON.parse(saved);
+        if (session.matchResults?.length > 0) {
+          setSelectedMatrix(session.selectedMatrix || null);
+          setMatchResults(session.matchResults);
+          setFilter(session.filter || "all");
+          setSessionRestored(true);
+          showToast(`Session restaurée: ${session.matchResults.length} équipements`, "success");
+        }
+      }
+    } catch (err) {
+      console.warn("Erreur restauration session:", err);
+    }
+  }, []);
+
+  // Save session to localStorage when matchResults change
+  useEffect(() => {
+    if (matchResults.length > 0) {
+      try {
+        localStorage.setItem(MATCH_STORAGE_KEY, JSON.stringify({
+          selectedMatrix,
+          matchResults,
+          filter,
+          savedAt: new Date().toISOString()
+        }));
+      } catch (err) {
+        console.warn("Erreur sauvegarde session:", err);
+      }
+    }
+  }, [matchResults, selectedMatrix, filter]);
+
+  // Clear session helper
+  const clearSession = () => {
+    localStorage.removeItem(MATCH_STORAGE_KEY);
+    setMatchResults([]);
+    setSessionRestored(false);
+  };
 
   // Load matrix equipment when matrix is selected
   useEffect(() => {
@@ -2936,12 +2981,13 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
   }, [matchResults, filter]);
 
   const stats = useMemo(() => {
-    if (!matchResults.length) return { total: 0, confident: 0, uncertain: 0, noMatch: 0 };
+    if (!matchResults.length) return { total: 0, confident: 0, uncertain: 0, noMatch: 0, confirmed: 0 };
     return {
       total: matchResults.length,
       confident: matchResults.filter(r => r.best_match?.score >= 85 || r.confirmed).length,
-      uncertain: matchResults.filter(r => r.best_match && r.best_match.score >= 50 && r.best_match.score < 85).length,
+      uncertain: matchResults.filter(r => r.best_match && r.best_match.score >= 50 && r.best_match.score < 85 && !r.confirmed).length,
       noMatch: matchResults.filter(r => !r.best_match || r.best_match.score < 50).length,
+      confirmed: matchResults.filter(r => r.confirmed).length,
     };
   }, [matchResults]);
 
@@ -2997,6 +3043,24 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
           </div>
         </div>
       </div>
+
+      {/* Session restored indicator */}
+      {sessionRestored && matchResults.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-blue-700">
+            <RefreshCw className="w-4 h-4" />
+            <span className="text-sm font-medium">
+              Session précédente restaurée ({stats.confirmed || 0}/{stats.total} confirmés)
+            </span>
+          </div>
+          <button
+            onClick={clearSession}
+            className="text-sm text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            Effacer et recommencer
+          </button>
+        </div>
+      )}
 
       {/* Stats */}
       {matchResults.length > 0 && (
