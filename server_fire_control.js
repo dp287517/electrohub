@@ -2111,68 +2111,84 @@ Extrais les données d'une matrice d'asservissement incendie. Retourne UNIQUEMEN
 
 {
   "zones": [
-    {"code": "Z00", "name": "Sous-sol accès 0", "detector_numbers": "20900-20905,20908-20912", "building": "", "floor": "Sous-sol", "is_manual_trigger": false}
+    {"code": "Z00", "name": "Sous-sol accès 0", "detector_numbers": "20900-20905", "building": "", "floor": "Sous-sol", "is_manual_trigger": false}
   ],
   "equipment": [
     {"code": "HVAC-20-2-02-TC", "name": "HVAC tabl. 20-2-02-TC", "type": "hvac", "building": "B20"}
   ],
   "links": [
-    {"zone_code": "Z00", "equipment_code": "HVAC-20-2-02-TC", "alarm_level": 1}
+    {"zone_code": "Z00", "equipment_code": "HVAC-20-2-02-TC", "alarm_level": 1},
+    {"zone_code": "Z00", "equipment_code": "HVAC-20-2-02-TC", "alarm_level": 2}
   ]
 }
 
-=== STRUCTURE DE LA MATRICE ===
+=== STRUCTURE MATRICE SIEMENS FC2060 - TRÈS IMPORTANT ===
 
-ZONES (EN HAUT, colonnes verticales):
+Cette matrice a une structure SPÉCIALE avec DEUX niveaux d'alarme par zone:
+- "Alarme I" ou "Alarme locale" = alarm_level: 1
+- "Alarme II" ou "Alarme globale" = alarm_level: 2
+
+Dans le texte extrait, tu verras des patterns comme:
+"Alarme I, Bâtiment 20 (Nr.01)"  "Alarme II, Bâtiment 20 (Nr.01)"
+ou
+"Alarme locale (Alarme I)"  "Alarme globale (Alarme II)"
+
+Pour CHAQUE zone, il y a DEUX colonnes côte à côte dans la matrice:
+- Une colonne pour Alarme I (locale)
+- Une colonne pour Alarme II (générale)
+
+Les équipements peuvent être marqués dans:
+- Seulement la colonne Alarme I → créer UN lien avec alarm_level: 1
+- Seulement la colonne Alarme II → créer UN lien avec alarm_level: 2
+- LES DEUX colonnes → créer DEUX liens séparés (un avec 1, un avec 2)
+
+=== COMMENT DÉTECTER LES LIENS AL1 vs AL2 ===
+
+Dans le texte brut, cherche ces indices:
+1. Les headers "Alarme I" et "Alarme II" sont listés pour chaque bâtiment/zone
+2. Les marques "l", "●", "■", "X" dans le texte indiquent des liens
+3. Les nombres "1" ou "2" près des marques peuvent indiquer le niveau d'alarme
+4. Les équipements mentionnant "Alarme I" ou "locale" → AL1
+5. Les équipements mentionnant "Alarme II" ou "générale/globale" → AL2
+
+RÈGLE CRITIQUE: Si tu vois un équipement associé à une zone SANS indication claire du niveau d'alarme, crée DEUX liens (AL1 et AL2) car dans la plupart des cas les équipements répondent aux deux niveaux.
+
+=== ZONES ===
 - Format: "Location accès N: numéros_détecteurs"
-- Exemples: "Sous-sol accès 0: 20900-20905", "1er étage accès 52: 20471-20492"
-- Avec "DM" = Déclencheur Manuel (is_manual_trigger: true)
-- Sans "DM" = Détecteur de fumée (is_manual_trigger: false)
 - Code zone = Z + numéro accès (ex: accès 0 -> Z00, accès 52 -> Z52)
+- Avec "DM" = Déclencheur Manuel (is_manual_trigger: true)
 
-ÉQUIPEMENTS (colonne "Action" à droite - PAS la colonne "Type, emplacement de montage"):
-- Ce sont les COMMANDES/ACTIONS, pas les modules FDCIO!
-- Exemples: "PCF B21.015 JURA", "HVAC tabl. 20-2-02-TC", "Coupure tableau Becomix"
-- IGNORE la colonne "FDCIO222, Local électrique..." (c'est juste l'emplacement)
+=== ÉQUIPEMENTS ===
+Colonne "Action" (Commande): PCF, HVAC, Ventilation, Coupure, etc.
+Types: pcf, hvac, ventilation, clapet, ascenseur, alarme, evacuation, interlock, coupure, autre
 
-NIVEAUX D'ALARME (colonnes "Évènement" - TRÈS IMPORTANT):
-- La matrice a DEUX colonnes séparées par zone: "Alarme I" (locale) et "Alarme II" (générale)
-- Chaque équipement peut être marqué dans L'UNE, L'AUTRE ou LES DEUX colonnes
-- Si marqué dans "Alarme I" = créer lien avec alarm_level: 1
-- Si marqué dans "Alarme II" = créer lien avec alarm_level: 2
-- Si marqué dans LES DEUX = créer DEUX liens séparés (un avec alarm_level: 1, un avec alarm_level: 2)
+=== LIENS - EXTRACTION EXHAUSTIVE ===
+1. Pour CHAQUE équipement listé
+2. Pour CHAQUE zone où il est marqué
+3. Crée UN lien pour Alarme I (alarm_level: 1) SI marqué dans cette colonne
+4. Crée UN lien pour Alarme II (alarm_level: 2) SI marqué dans cette colonne
+5. Si pas d'indication claire → crée LES DEUX liens
 
-LIENS (TRÈS IMPORTANT - EXTRAIS TOUS LES LIENS AVEC BONS NIVEAUX!):
-- La matrice est un tableau où les ZONES sont en colonnes et les ÉQUIPEMENTS en lignes
-- Les points noirs "●", "l", "■", "X" dans les cellules = liens zone→équipement
-- Pour CHAQUE équipement, regarde CHAQUE colonne de zone ET CHAQUE niveau d'alarme
-- CRÉER DES LIENS SÉPARÉS pour chaque niveau d'alarme (AL1 et AL2 sont des liens distincts!)
-- Exemple: Si équipement E1 est marqué sous zone Z1 dans AL1 ET dans AL2:
-  → Créer: {"zone_code": "Z1", "equipment_code": "E1", "alarm_level": 1}
-  → Créer: {"zone_code": "Z1", "equipment_code": "E1", "alarm_level": 2}
-- Un équipement peut avoir des centaines de liens (beaucoup de zones × 2 niveaux d'alarme)
+EXEMPLE CONCRET:
+Si tu vois "PCF B21.015 JURA" avec des marques sous les zones Z00, Z01, Z02:
+- Et les headers montrent "Alarme I" et "Alarme II" pour chaque zone
+- Alors crée 6 liens: Z00-AL1, Z00-AL2, Z01-AL1, Z01-AL2, Z02-AL1, Z02-AL2
 
-=== TYPES ÉQUIPEMENT ===
-pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, flash, evacuation, interlock, roll_up, rideau_cf, coupure, controle_acces, autre
-
-=== CODES ÉQUIPEMENT ===
-Extrais le code technique du nom: "PCF-B21.015", "HVAC-20-2-02-TC", "INTERLOCK-I22", "PORTE-INTERLOCK-I21"
-
-IMPORTANT - LIENS:
-- Il y a généralement BEAUCOUP de liens dans une matrice (centaines voire milliers)
-- Pour chaque ligne équipement, regarde TOUTES les colonnes zones pour trouver les marqueurs
-- Créer un objet link pour CHAQUE intersection marquée, même si cela fait beaucoup de liens
-- NE PAS résumer ou regrouper les liens - liste chaque lien individuellement
-- Utilise EXACTEMENT les mêmes codes zone_code et equipment_code que tu as définis plus haut
-
-IMPORTANT - GÉNÉRAL:
-- Extrais les équipements de la colonne "Action" (Commande), PAS de "Type, emplacement"
-- Distingue les zones DM (déclencheur manuel) des détecteurs de fumée
-- alarm_level = 1 pour Alarme I (locale), 2 pour Alarme II (globale)`
+JE VEUX BEAUCOUP DE LIENS! Une matrice typique a des centaines de liens.
+Chaque équipement × chaque zone × chaque niveau d'alarme = 1 lien.`
               },
               {
                 role: "user",
-                content: `Extrait les zones, équipements et liens de cette partie de la matrice (partie ${chunkIdx + 1}/${textChunks.length}):\n\n${chunk}`
+                content: `Extrait les zones, équipements et liens de cette partie de la matrice Siemens FC2060.
+
+RAPPEL CRITIQUE:
+- Chaque zone a DEUX colonnes d'alarme (I et II)
+- Crée des liens séparés pour alarm_level=1 ET alarm_level=2
+- Si un équipement est lié à une zone, il est probablement lié aux DEUX niveaux d'alarme
+
+Voici le texte de la matrice (partie ${chunkIdx + 1}/${textChunks.length}):
+
+${chunk}`
               }
             ],
             max_tokens: 16384,
