@@ -2752,7 +2752,7 @@ app.get("/api/fire-control/live-activity", async (req, res) => {
 
     const recentQuery = await pool.query(`
       SELECT
-        er.id, er.result, er.updated_at, er.result_notes,
+        er.id, er.result, COALESCE(er.checked_at, er.created_at) as updated_at, er.notes as result_notes,
         e.code as equipment_code, e.name as equipment_name, e.equipment_type,
         z.code as zone_code, z.name as zone_name, z.building,
         zc.checked_by_name, zc.checked_by_email
@@ -2763,7 +2763,7 @@ app.get("/api/fire-control/live-activity", async (req, res) => {
       JOIN fc_campaigns c ON c.id = zc.campaign_id
       WHERE er.result IS NOT NULL AND er.result != 'pending'
         AND c.status IN ('active', 'in_progress', 'planned') ${recentCampaignFilter}
-      ORDER BY er.updated_at DESC
+      ORDER BY COALESCE(er.checked_at, er.created_at) DESC
       LIMIT $${recentParams.length}
     `, recentParams);
 
