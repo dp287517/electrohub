@@ -2058,20 +2058,22 @@ ZONES (EN HAUT, colonnes verticales):
 - Exemples: "PCF B21.015 JURA", "HVAC tabl. 20-2-02-TC", "Coupure tableau Becomix"
 - IGNORE la colonne "FDCIO222, Local électrique..." (c'est juste l'emplacement)
 
-NIVEAUX D'ALARME (colonnes "Évènement"):
-- "Alarme locale (Alarme I)" = alarm_level: 1
-- "Alarme globale (Alarme II)" = alarm_level: 2
-- Les "l" dans ces colonnes indiquent quel niveau déclenche l'équipement
+NIVEAUX D'ALARME (colonnes "Évènement" - TRÈS IMPORTANT):
+- La matrice a DEUX colonnes séparées par zone: "Alarme I" (locale) et "Alarme II" (générale)
+- Chaque équipement peut être marqué dans L'UNE, L'AUTRE ou LES DEUX colonnes
+- Si marqué dans "Alarme I" = créer lien avec alarm_level: 1
+- Si marqué dans "Alarme II" = créer lien avec alarm_level: 2
+- Si marqué dans LES DEUX = créer DEUX liens séparés (un avec alarm_level: 1, un avec alarm_level: 2)
 
-LIENS (TRÈS IMPORTANT - EXTRAIS TOUS LES LIENS!):
+LIENS (TRÈS IMPORTANT - EXTRAIS TOUS LES LIENS AVEC BONS NIVEAUX!):
 - La matrice est un tableau où les ZONES sont en colonnes et les ÉQUIPEMENTS en lignes
 - Les points noirs "●", "l", "■", "X" dans les cellules = liens zone→équipement
-- Pour CHAQUE équipement, regarde CHAQUE colonne de zone
-- Si une cellule est marquée (non vide) sous une zone pour un équipement = créer un lien
-- Créer un lien POUR CHAQUE intersection marquée dans la matrice
-- Un équipement peut être lié à PLUSIEURS zones (souvent 5-20 zones par équipement)
-- Les liens sous "Alarme I" = alarm_level: 1
-- Les liens sous "Alarme II" = alarm_level: 2
+- Pour CHAQUE équipement, regarde CHAQUE colonne de zone ET CHAQUE niveau d'alarme
+- CRÉER DES LIENS SÉPARÉS pour chaque niveau d'alarme (AL1 et AL2 sont des liens distincts!)
+- Exemple: Si équipement E1 est marqué sous zone Z1 dans AL1 ET dans AL2:
+  → Créer: {"zone_code": "Z1", "equipment_code": "E1", "alarm_level": 1}
+  → Créer: {"zone_code": "Z1", "equipment_code": "E1", "alarm_level": 2}
+- Un équipement peut avoir des centaines de liens (beaucoup de zones × 2 niveaux d'alarme)
 
 === TYPES ÉQUIPEMENT ===
 pcf, hvac, ventilation, clapet, ascenseur, monte_charge, alarme, flash, evacuation, interlock, roll_up, rideau_cf, coupure, controle_acces, autre
@@ -3253,19 +3255,20 @@ app.get("/api/fire-control/alerts", async (req, res) => {
 // Get all fire-interlock linked equipment from external systems with positions
 app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
   try {
-    const { plan_logical_name, page_index = 0, zone_check_id } = req.query;
+    const { plan_logical_name, page_index = 0, zone_check_id, include_all } = req.query;
+    const includeAllEquipment = include_all === 'true';
     const allEquipment = [];
 
-    // 1. Fetch doors with fire_interlock=true
+    // 1. Fetch doors (with fire_interlock filter unless include_all=true)
     const doorsQuery = await pool.query(`
       SELECT
         d.id, d.code, d.name, d.building, d.floor, d.location,
-        d.fire_interlock_zone_id, d.fire_interlock_alarm_level,
+        d.fire_interlock, d.fire_interlock_zone_id, d.fire_interlock_alarm_level,
         'doors' as source_system, 'pcf' as equipment_type,
         pos.id as position_id, pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
       FROM fd_doors d
       LEFT JOIN fd_door_positions pos ON pos.door_id = d.id
-      WHERE d.fire_interlock = true
+      WHERE ${includeAllEquipment ? 'TRUE' : 'd.fire_interlock = true'}
         ${plan_logical_name ? `AND pos.plan_logical_name = $1` : ''}
         ${plan_logical_name ? `AND pos.page_index = $2` : ''}
     `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
@@ -3282,6 +3285,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
         source_system: door.source_system,
         zone_id: door.fire_interlock_zone_id,
         alarm_level: door.fire_interlock_alarm_level || 1,
+        already_linked: door.fire_interlock || false,
         position_id: door.position_id,
         plan_logical_name: door.plan_logical_name,
         page_index: door.page_index,
@@ -3291,17 +3295,17 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
       });
     }
 
-    // 2. Fetch switchboards with fire_interlock=true
+    // 2. Fetch switchboards (with fire_interlock filter unless include_all=true)
     try {
       const switchQuery = await pool.query(`
         SELECT
           s.id, s.code, s.name, s.building_code as building, s.floor, s.room as location,
-          s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
+          s.designation, s.fire_interlock, s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
           'switchboard' as source_system, 'interlock' as equipment_type,
           pos.id as position_id, pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
         FROM switchboards s
         LEFT JOIN switchboard_positions pos ON pos.switchboard_id = s.id
-        WHERE s.fire_interlock = true
+        WHERE ${includeAllEquipment ? 'TRUE' : 's.fire_interlock = true'}
           ${plan_logical_name ? `AND pos.logical_name = $1 AND pos.page_index = $2` : ''}
       `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
 
@@ -3310,6 +3314,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           id: sw.id,
           code: sw.fire_interlock_code || sw.code || sw.name,
           name: sw.name,
+          designation: sw.designation,
           building: sw.building,
           floor: sw.floor,
           location: sw.location,
@@ -3317,6 +3322,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           source_system: sw.source_system,
           zone_id: sw.fire_interlock_zone_id,
           alarm_level: sw.fire_interlock_alarm_level || 1,
+          already_linked: sw.fire_interlock || false,
           position_id: sw.position_id,
           plan_logical_name: sw.plan_logical_name,
           page_index: sw.page_index,
@@ -3327,19 +3333,19 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
       }
     } catch (e) { console.warn("[FireControl] Switchboard query failed:", e.message); }
 
-    // 3. Fetch datahub items with fire_interlock=true
+    // 3. Fetch datahub items (with fire_interlock filter unless include_all=true)
     try {
       const datahubQuery = await pool.query(`
         SELECT
           i.id, i.code, i.name, i.building, i.floor, i.location,
-          i.fire_interlock_zone_id, i.fire_interlock_alarm_level, i.fire_interlock_code,
+          i.fire_interlock, i.fire_interlock_zone_id, i.fire_interlock_alarm_level, i.fire_interlock_code,
           c.name as category_name, c.color as category_color, c.icon as category_icon,
           'datahub' as source_system,
           pos.id as position_id, pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
         FROM dh_items i
         LEFT JOIN dh_categories c ON c.id = i.category_id
         LEFT JOIN dh_positions pos ON pos.item_id = i.id
-        WHERE i.fire_interlock = true
+        WHERE ${includeAllEquipment ? 'TRUE' : 'i.fire_interlock = true'}
           ${plan_logical_name ? `AND pos.logical_name = $1 AND pos.page_index = $2` : ''}
       `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
 
@@ -3357,6 +3363,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           source_system: dh.source_system,
           zone_id: dh.fire_interlock_zone_id,
           alarm_level: dh.fire_interlock_alarm_level || 1,
+          already_linked: dh.fire_interlock || false,
           position_id: dh.position_id,
           plan_logical_name: dh.plan_logical_name,
           page_index: dh.page_index,
