@@ -1653,18 +1653,36 @@ function determineEquipmentType(actionName) {
   return 'autre';
 }
 
-// Helper: Extract building from name
-function extractBuilding(text) {
-  const match = (text || '').match(/b[âa]t\.?\s*(\d+)|B(\d+)\.|bâtiment\s*(\d+)/i);
+/// Helper: Extract building from name or text
+function extractBuilding(text, fallbackText = '') {
+  if (!text && !fallbackText) return '';
+
+  // Try primary text first
+  const textToCheck = text || '';
+  let match = textToCheck.match(/b[âa]t\.?\s*(\d+)|B(\d+)\.|bâtiment\s*(\d+)/i);
   if (match) return `B${match[1] || match[2] || match[3]}`;
+
+  // Try pattern like "20.9.09" which suggests building 20
+  match = textToCheck.match(/(\d{2})[\.\-]?\d[\.\-]?\d{2}/);
+  if (match) return `B${match[1]}`;
+
+  // Try fallback text
+  if (fallbackText) {
+    match = fallbackText.match(/b[âa]t\.?\s*(\d+)|B(\d+)\.|bâtiment\s*(\d+)/i);
+    if (match) return `B${match[1] || match[2] || match[3]}`;
+  }
+
   return '';
 }
 
 // Helper: Parse zones from matrix text
 // Zones are the detection lines at the top of the matrix
-function parseZonesFromText(text) {
+function parseZonesFromText(text, matrixName = '') {
   const zones = [];
   const seen = new Set();
+
+  // Extract default building from matrix name or first occurrence in text
+  let defaultBuilding = extractBuilding(matrixName, text);
 
   // Pattern for zones: "Location accès N: detector_numbers" or similar
   // Also match: "Rez de chaussée: 24001-24017", "1er étage: 22100-22108"
@@ -1712,7 +1730,8 @@ function parseZonesFromText(text) {
       else if (nameLower.includes('toiture') || nameLower.includes('attique')) floor = 'Toiture';
       else if (nameLower.includes('mezzanine')) floor = 'Mezzanine';
 
-      const building = extractBuilding(name);
+      // Try to extract building from zone name, fallback to default
+      const building = extractBuilding(name) || defaultBuilding;
 
       // Generate zone code
       let code;
@@ -1968,7 +1987,7 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
 
     // === NEW: Hybrid approach - local parsing + AI for verification ===
     // Step 1: Extract zones and equipment locally using regex patterns
-    const localZones = parseZonesFromText(fullText);
+    const localZones = parseZonesFromText(fullText, matrix.name);
     const localEquipment = parseEquipmentFromText(fullText);
 
     console.log(`[FireControl] Job ${jobId}: Local parsing found ${localZones.length} zones, ${localEquipment.length} equipment`);
@@ -3868,6 +3887,9 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
 
     // If zone_links were provided, create/update fc_zone_equipment entries
     let linksCreated = 0;
+    let resultsCreated = 0;
+    const allZoneLinks = [];
+
     if (fcEquipment && Array.isArray(zone_links) && zone_links.length > 0) {
       for (const link of zone_links) {
         if (link.zone_id && link.alarm_level) {
@@ -3878,6 +3900,7 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
               ON CONFLICT (zone_id, equipment_id, alarm_level) DO NOTHING
             `, [link.zone_id, fcEquipment.id, link.alarm_level]);
             linksCreated++;
+            allZoneLinks.push({ zone_id: link.zone_id, alarm_level: link.alarm_level });
           } catch (linkErr) {
             console.warn(`[FireControl] Zone link error: ${linkErr.message}`);
           }
@@ -3894,12 +3917,45 @@ app.post("/api/fire-control/confirm-equipment-match", async (req, res) => {
           ON CONFLICT (zone_id, equipment_id, alarm_level) DO NOTHING
         `, [zone_id, fcEquipment.id, alarm_level]);
         linksCreated++;
+        allZoneLinks.push({ zone_id, alarm_level });
       } catch (linkErr) {
         console.warn(`[FireControl] Zone link error: ${linkErr.message}`);
       }
     }
 
-    res.json({ success: true, updated, fc_equipment: fcEquipment, links_created: linksCreated });
+    // IMPORTANT: Create fc_equipment_results for any active zone checks that exist for these zones
+    // This ensures that equipment linked AFTER zone checks are generated will still appear
+    if (fcEquipment && allZoneLinks.length > 0) {
+      for (const link of allZoneLinks) {
+        try {
+          // Find active zone checks for this zone (not completed)
+          const { rows: activeChecks } = await pool.query(`
+            SELECT zc.id FROM fc_zone_checks zc
+            JOIN fc_campaigns c ON c.id = zc.campaign_id
+            WHERE zc.zone_id = $1
+              AND zc.status != 'completed'
+              AND c.status IN ('active', 'planned')
+          `, [link.zone_id]);
+
+          for (const check of activeChecks) {
+            await pool.query(`
+              INSERT INTO fc_equipment_results (zone_check_id, equipment_id, alarm_level)
+              VALUES ($1, $2, $3)
+              ON CONFLICT (zone_check_id, equipment_id) DO NOTHING
+            `, [check.id, fcEquipment.id, link.alarm_level]);
+            resultsCreated++;
+          }
+        } catch (resultErr) {
+          console.warn(`[FireControl] Equipment result creation error: ${resultErr.message}`);
+        }
+      }
+
+      if (resultsCreated > 0) {
+        console.log(`[FireControl] Created ${resultsCreated} equipment results for active zone checks`);
+      }
+    }
+
+    res.json({ success: true, updated, fc_equipment: fcEquipment, links_created: linksCreated, results_created: resultsCreated });
   } catch (err) {
     console.error("[FireControl] Confirm match error:", err);
     res.status(500).json({ error: err.message });

@@ -1019,8 +1019,12 @@ export default function FireControlMap() {
 
   // Zone Check mode (when accessed from a zone check)
   const zoneCheckId = searchParams.get("zone_check");
+  const highlightEquipmentId = searchParams.get("highlight");
+  const urlPlan = searchParams.get("plan");
+  const urlPage = searchParams.get("page");
   const [zoneCheck, setZoneCheck] = useState(null);
   const [zoneCheckEquipment, setZoneCheckEquipment] = useState([]);
+  const [hasNavigatedToEquipment, setHasNavigatedToEquipment] = useState(false);
 
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
@@ -1078,21 +1082,34 @@ export default function FireControlMap() {
     }
   };
 
-  // Restore plan from localStorage
+  // Restore plan from URL params or localStorage
   useEffect(() => {
     if (plans.length > 0 && !selectedPlan) {
-      const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
-      const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
-
       let planToSelect = null;
       let pageIdx = 0;
 
-      if (savedPlanKey) {
-        planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+      // Priority 1: URL parameters (from direct navigation)
+      if (urlPlan) {
+        planToSelect = plans.find(p => p.logical_name === urlPlan);
+        if (planToSelect && urlPage) {
+          pageIdx = Number(urlPage) || 0;
+        }
       }
-      if (planToSelect && savedPageIndex) {
-        pageIdx = Number(savedPageIndex) || 0;
+
+      // Priority 2: localStorage (last visited)
+      if (!planToSelect) {
+        const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
+        const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
+
+        if (savedPlanKey) {
+          planToSelect = plans.find(p => p.logical_name === savedPlanKey);
+        }
+        if (planToSelect && savedPageIndex) {
+          pageIdx = Number(savedPageIndex) || 0;
+        }
       }
+
+      // Priority 3: First plan
       if (!planToSelect) {
         planToSelect = plans[0];
       }
@@ -1104,7 +1121,29 @@ export default function FireControlMap() {
         loadPositions(planToSelect, pageIdx);
       }
     }
-  }, [plans]);
+  }, [plans, urlPlan, urlPage]);
+
+  // Highlight equipment from URL after positions are loaded
+  useEffect(() => {
+    if (highlightEquipmentId && pdfReady && initialPoints.length > 0 && !hasNavigatedToEquipment) {
+      // Give time for markers to be rendered
+      const timer = setTimeout(() => {
+        viewerRef.current?.highlightMarker(highlightEquipmentId);
+        setHasNavigatedToEquipment(true);
+        // Also select the equipment in the sidebar
+        // The highlight ID is the external_id (source system ID), match by that
+        const equip = zoneCheckEquipment.find(e =>
+          String(e.external_id) === String(highlightEquipmentId) ||
+          String(e.id) === String(highlightEquipmentId) ||
+          String(e.equipment_id) === String(highlightEquipmentId)
+        );
+        if (equip) {
+          setSelectedEquipment(equip);
+        }
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightEquipmentId, pdfReady, initialPoints, hasNavigatedToEquipment, zoneCheckEquipment]);
 
   useEffect(() => {
     if (selectedPlan?.logical_name) {

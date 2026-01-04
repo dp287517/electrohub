@@ -1173,15 +1173,7 @@ function DocumentsTab({ matrices, plans, onUploadMatrix, onRefresh, onLinkEquipm
                       )}
                     </button>
                   )}
-                  {onLinkEquipment && (
-                    <button
-                      onClick={() => onLinkEquipment(matrix)}
-                      className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded flex-shrink-0"
-                      title="Lier les équipements"
-                    >
-                      <Link2 className="w-4 h-4 sm:w-5 sm:h-5" />
-                    </button>
-                  )}
+                  {/* Button removed - linking now done in Matching tab */}
                   <a
                     href={api.fireControl.matrixFileUrl(matrix.id)}
                     target="_blank"
@@ -2281,9 +2273,10 @@ function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onC
                           onClick={(e) => {
                             e.stopPropagation();
                             // Navigate to the equipment position on the plan
+                            // Use external_id (source system ID) for marker lookup since markers are stored by source ID
                             const params = new URLSearchParams({
                               zone_check: zoneCheck.id,
-                              highlight: item.id,
+                              highlight: item.external_id,
                               plan: item.position.plan_logical_name,
                               page: item.position.page_index?.toString() || '0'
                             });
@@ -3248,17 +3241,35 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
     return "Faible";
   };
 
+  // Normalize string for search (remove separators, lowercase)
+  const normalizeForSearch = (str) => {
+    if (!str) return '';
+    return str.toLowerCase().replace(/[\s\-\._]+/g, '');
+  };
+
   // Filter cross-system equipment based on search query
   const filteredEquipment = useMemo(() => {
     if (!searchQuery.trim()) return crossSystemEquipment.slice(0, 10);
     const q = searchQuery.toLowerCase();
+    const qNorm = normalizeForSearch(searchQuery);
+
     return crossSystemEquipment
-      .filter(eq =>
-        eq.code?.toLowerCase().includes(q) ||
-        eq.name?.toLowerCase().includes(q) ||
-        eq.building?.toLowerCase().includes(q)
-      )
-      .slice(0, 10);
+      .filter(eq => {
+        // Standard search
+        if (eq.code?.toLowerCase().includes(q) ||
+            eq.name?.toLowerCase().includes(q) ||
+            eq.building?.toLowerCase().includes(q) ||
+            eq.designation?.toLowerCase().includes(q) ||
+            eq.location?.toLowerCase().includes(q)) {
+          return true;
+        }
+        // Normalized search (ignores separators like . - _ spaces)
+        const codeNorm = normalizeForSearch(eq.code);
+        const nameNorm = normalizeForSearch(eq.name);
+        const designationNorm = normalizeForSearch(eq.designation);
+        return codeNorm.includes(qNorm) || nameNorm.includes(qNorm) || designationNorm.includes(qNorm);
+      })
+      .slice(0, 20); // Show more results
   }, [crossSystemEquipment, searchQuery]);
 
   return (
