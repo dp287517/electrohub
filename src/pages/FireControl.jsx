@@ -469,19 +469,29 @@ export default function FireControl() {
     }
   };
 
-  const handleConfirmEquipmentMatch = async (matchResult, selectedEquipment) => {
+  const handleConfirmEquipmentMatch = async (matchResult, selectedEquipment, existingZoneLinks = []) => {
     try {
-      await api.fireControlMaps.confirmEquipmentMatch({
+      // Convert existing_zone_links to the format expected by the backend
+      const zoneLinks = Array.isArray(existingZoneLinks)
+        ? existingZoneLinks.map(link => ({
+            zone_id: link.zone_id,
+            alarm_level: link.alarm_level
+          }))
+        : [];
+
+      const result = await api.fireControlMaps.confirmEquipmentMatch({
         source_system: selectedEquipment.source_system,
         equipment_id: selectedEquipment.id,
         zone_id: matchingContext?.zone_id,
         alarm_level: matchResult.matrix_equipment.alarm_level || 1,
         fire_interlock_code: matchResult.matrix_equipment.code,
+        zone_links: zoneLinks,
       });
 
       // Remove from uncertain list
       setUncertainMatches(prev => prev.filter(m => m.matrix_equipment.code !== matchResult.matrix_equipment.code));
-      showToast("Équipement lié avec succès");
+      const linksMsg = result.links_created > 0 ? ` + ${result.links_created} zone(s) liée(s)` : "";
+      showToast(`Équipement lié avec succès${linksMsg}`);
 
       // Close modal if no more uncertain matches
       if (uncertainMatches.length <= 1) {
@@ -1362,6 +1372,28 @@ function ControlsTab({
                 <p className="text-xs text-gray-500 mb-3">
                   {check.building} {check.floor && `- ${check.floor}`} {check.access_point && `- ${check.access_point}`}
                 </p>
+                {/* Progress bar */}
+                {(() => {
+                  const total = (check.equipment_count_al1 || 0) + (check.equipment_count_al2 || 0);
+                  const done = (check.ok_count || 0) + (check.nok_count || 0) + (check.na_count || 0);
+                  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+                  return total > 0 ? (
+                    <div className="mb-2">
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
+                        <span>{done}/{total} équipements</span>
+                        <span>{progress}%</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all ${
+                            check.nok_count > 0 ? 'bg-red-500' : 'bg-green-500'
+                          }`}
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
                 <div className="flex items-center justify-between">
                   <div className="flex gap-4 text-xs">
                     <div className="flex items-center gap-1.5">
@@ -1379,15 +1411,23 @@ function ControlsTab({
                       <span className="text-gray-400">({check.equipment_count_al2 || 0})</span>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectZoneCheck(check);
-                    }}
-                    className="p-2 text-orange-600 bg-orange-50 rounded-lg"
-                  >
-                    <Play className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {check.equipment_with_position_count > 0 && (
+                      <span className="text-[10px] text-green-600 flex items-center gap-0.5">
+                        <MapPin className="w-3 h-3" />
+                        {check.equipment_with_position_count}
+                      </span>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectZoneCheck(check);
+                      }}
+                      className="p-2 text-orange-600 bg-orange-50 rounded-lg"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -2236,10 +2276,24 @@ function ZoneCheckModal({ zoneCheck, equipmentTypes, onUpdateResult, onSave, onC
                         </p>
                       )}
                       {item.position && (
-                        <p className="text-xs text-green-600 mt-0.5 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Navigate to the equipment position on the plan
+                            const params = new URLSearchParams({
+                              zone_check: zoneCheck.id,
+                              highlight: item.id,
+                              plan: item.position.plan_logical_name,
+                              page: item.position.page_index?.toString() || '0'
+                            });
+                            window.open(`/app/fire-control/map?${params.toString()}`, '_blank');
+                          }}
+                          className="mt-1 text-xs text-green-600 hover:text-green-800 flex items-center gap-1 hover:bg-green-50 px-1.5 py-0.5 rounded"
+                        >
                           <MapPin className="w-3 h-3" />
-                          Position sur plan disponible
-                        </p>
+                          Voir sur plan →
+                        </button>
                       )}
                     </div>
                     <div className="flex items-center gap-2 ml-2">
@@ -2446,7 +2500,7 @@ function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, 
     if (!currentMatch.best_match) return;
     setProcessing(true);
     try {
-      await onConfirm(currentMatch, currentMatch.best_match);
+      await onConfirm(currentMatch, currentMatch.best_match, currentMatch.existing_zone_links || []);
       if (currentIndex < uncertainMatches.length - 1) {
         setCurrentIndex(prev => prev + 1);
         setShowAlternatives(false);
@@ -2459,7 +2513,7 @@ function EquipmentMatchingModal({ uncertainMatches, context, onConfirm, onSkip, 
   const handleSelectAlternative = async (equipment) => {
     setProcessing(true);
     try {
-      await onConfirm(currentMatch, equipment);
+      await onConfirm(currentMatch, equipment, currentMatch.existing_zone_links || []);
       setShowAlternatives(false);
       if (currentIndex < uncertainMatches.length - 1) {
         setCurrentIndex(prev => prev + 1);
@@ -2833,21 +2887,31 @@ function EquipmentMatchingTab({ matrices, zones, showToast, onRefresh }) {
     setMatchingInProgress(false);
   };
 
-  const handleConfirmMatch = async (matrixEqCode, match) => {
+  const handleConfirmMatch = async (matrixEqCode, match, existingZoneLinks = []) => {
     try {
+      // Convert existing_zone_links to the format expected by the backend
+      const zoneLinks = Array.isArray(existingZoneLinks)
+        ? existingZoneLinks.map(link => ({
+            zone_id: link.zone_id,
+            alarm_level: link.alarm_level
+          }))
+        : [];
+
       const result = await api.fireControlMaps.confirmEquipmentMatch({
         source_system: match.source_system,
         equipment_id: match.candidate_id || match.id,
         fire_interlock_code: matrixEqCode,
         zone_id: null,
-        alarm_level: 1
+        alarm_level: 1,
+        zone_links: zoneLinks
       });
 
       // Check if equipment has a position (will appear on plans)
       const sourceLabels = { doors: "Porte", switchboard: "Tableau", datahub: "Équipement" };
       const sourceLabel = sourceLabels[match.source_system] || "Équipement";
+      const linksMsg = result.links_created > 0 ? ` + ${result.links_created} zone(s) liée(s)` : "";
       showToast(
-        `✅ ${sourceLabel} "${match.candidate_name || match.name}" lié à ${matrixEqCode}. Visible sur les Plans.`,
+        `✅ ${sourceLabel} "${match.candidate_name || match.name}" lié à ${matrixEqCode}${linksMsg}. Visible sur les Plans.`,
         "success"
       );
 
@@ -3050,7 +3114,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
   const [expanded, setExpanded] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match } = result;
+  const { matrix_equipment, best_match, alternatives, confirmed, confirmed_match, existing_zone_links } = result;
 
   const getScoreColor = (score) => {
     if (score >= 85) return "text-green-600 bg-green-100";
@@ -3092,6 +3156,28 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
             {matrix_equipment.building && <span> • {matrix_equipment.building}</span>}
             {matrix_equipment.floor && <span> • {matrix_equipment.floor}</span>}
           </div>
+          {/* Show linked zones from matrix parsing */}
+          {existing_zone_links && existing_zone_links.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {existing_zone_links.slice(0, 6).map((link, i) => (
+                <span
+                  key={i}
+                  className={`px-1.5 py-0.5 text-xs rounded ${
+                    link.alarm_level === 1
+                      ? 'bg-orange-100 text-orange-700'
+                      : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  {link.zone_code || `Zone`} (AL{link.alarm_level})
+                </span>
+              ))}
+              {existing_zone_links.length > 6 && (
+                <span className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+                  +{existing_zone_links.length - 6} autres
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Match status */}
@@ -3152,7 +3238,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
                       candidate_id: eq.id,
                       candidate_name: eq.name,
                       candidate_code: eq.code,
-                    });
+                    }, existing_zone_links || []);
                     setSearchMode(false);
                     setSearchQuery("");
                   }}
@@ -3209,7 +3295,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
               </div>
             </div>
             <button
-              onClick={() => onConfirm(matrix_equipment.code, best_match)}
+              onClick={() => onConfirm(matrix_equipment.code, best_match, existing_zone_links || [])}
               className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm"
             >
               <Check className="w-4 h-4" />
@@ -3249,7 +3335,7 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
                 )}
               </div>
               <button
-                onClick={() => onConfirm(matrix_equipment.code, alt)}
+                onClick={() => onConfirm(matrix_equipment.code, alt, existing_zone_links || [])}
                 className="text-xs text-orange-600 hover:text-orange-700 font-medium ml-2"
               >
                 Sélectionner

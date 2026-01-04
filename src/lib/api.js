@@ -2837,11 +2837,20 @@ export const api = {
     autoMatchEquipment: (matrixEquipment) => post("/api/fire-control/auto-match-equipment", { matrix_equipment: matrixEquipment }),
 
     // Confirm equipment match and link to fire control system
+    // payload: { source_system, equipment_id, fire_interlock_code, zone_id?, alarm_level?, zone_links?: [{zone_id, alarm_level}] }
     confirmEquipmentMatch: (payload) => post("/api/fire-control/confirm-equipment-match", payload),
 
     // Get controls (zone checks) for a specific equipment
     getEquipmentControls: (sourceSystem, equipmentId) =>
       get(`/api/fire-control-maps/equipment-controls/${encodeURIComponent(sourceSystem)}/${encodeURIComponent(equipmentId)}`),
+
+    // Bulk link equipment to zones with alarm levels
+    linkEquipmentToZones: (equipmentId, zoneLinks) =>
+      post(`/api/fire-control/equipment/${encodeURIComponent(equipmentId)}/link-zones`, { zone_links: zoneLinks }),
+
+    // Get zones linked to an equipment
+    getEquipmentZones: (equipmentId) =>
+      get(`/api/fire-control/equipment/${encodeURIComponent(equipmentId)}/zones`),
   },
 };
 
