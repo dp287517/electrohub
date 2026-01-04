@@ -3259,6 +3259,8 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
     const includeAllEquipment = include_all === 'true';
     const allEquipment = [];
 
+    console.log(`[FireControl] cross-system-equipment called with include_all=${include_all}, includeAllEquipment=${includeAllEquipment}`);
+
     // 1. Fetch doors (with fire_interlock filter unless include_all=true)
     const doorsQuery = await pool.query(`
       SELECT
@@ -3272,6 +3274,8 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
         ${plan_logical_name ? `AND pos.plan_logical_name = $1` : ''}
         ${plan_logical_name ? `AND pos.page_index = $2` : ''}
     `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
+
+    console.log(`[FireControl] Found ${doorsQuery.rows.length} doors`);
 
     for (const door of doorsQuery.rows) {
       allEquipment.push({
@@ -3300,7 +3304,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
       const switchQuery = await pool.query(`
         SELECT
           s.id, s.code, s.name, s.building_code as building, s.floor, s.room as location,
-          s.designation, s.fire_interlock, s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
+          s.fire_interlock, s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
           'switchboard' as source_system, 'interlock' as equipment_type,
           pos.id as position_id, pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
         FROM switchboards s
@@ -3309,12 +3313,13 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           ${plan_logical_name ? `AND pos.logical_name = $1 AND pos.page_index = $2` : ''}
       `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
 
+      console.log(`[FireControl] Found ${switchQuery.rows.length} switchboards`);
+
       for (const sw of switchQuery.rows) {
         allEquipment.push({
           id: sw.id,
           code: sw.fire_interlock_code || sw.code || sw.name,
           name: sw.name,
-          designation: sw.designation,
           building: sw.building,
           floor: sw.floor,
           location: sw.location,
@@ -3331,7 +3336,7 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           check_status: null,
         });
       }
-    } catch (e) { console.warn("[FireControl] Switchboard query failed:", e.message); }
+    } catch (e) { console.error("[FireControl] Switchboard query failed:", e.message); }
 
     // 3. Fetch datahub items (with fire_interlock filter unless include_all=true)
     try {

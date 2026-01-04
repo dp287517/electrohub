@@ -3440,15 +3440,14 @@ function EquipmentMatchCard({ result, sourceIcons, sourceLabels, onConfirm, cros
         if (eq.code?.toLowerCase().includes(q) ||
             eq.name?.toLowerCase().includes(q) ||
             eq.building?.toLowerCase().includes(q) ||
-            eq.designation?.toLowerCase().includes(q) ||
             eq.location?.toLowerCase().includes(q)) {
           return true;
         }
         // Normalized search (ignores separators like . - _ spaces)
         const codeNorm = normalizeForSearch(eq.code);
         const nameNorm = normalizeForSearch(eq.name);
-        const designationNorm = normalizeForSearch(eq.designation);
-        return codeNorm.includes(qNorm) || nameNorm.includes(qNorm) || designationNorm.includes(qNorm);
+        const locationNorm = normalizeForSearch(eq.location);
+        return codeNorm.includes(qNorm) || nameNorm.includes(qNorm) || locationNorm.includes(qNorm);
       })
       .slice(0, 20); // Show more results
   }, [crossSystemEquipment, searchQuery]);
