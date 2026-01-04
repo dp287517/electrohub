@@ -1089,7 +1089,7 @@ app.get("/api/fire-control/zone-checks/:id", async (req, res) => {
               }
             } else if (eq.external_system === 'switchboard') {
               const { rows } = await pool.query(`
-                SELECT pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+                SELECT pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
                 FROM switchboard_positions pos WHERE pos.switchboard_id = $1 LIMIT 1
               `, [eq.external_id]);
               if (rows.length) {
@@ -3055,11 +3055,11 @@ app.get("/api/fire-control/cross-system-equipment", async (req, res) => {
           s.id, s.code, s.name, s.building_code as building, s.floor, s.room as location,
           s.fire_interlock_zone_id, s.fire_interlock_alarm_level, s.fire_interlock_code,
           'switchboard' as source_system, 'interlock' as equipment_type,
-          pos.id as position_id, pos.plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
+          pos.id as position_id, pos.logical_name as plan_logical_name, pos.page_index, pos.x_frac, pos.y_frac
         FROM switchboards s
         LEFT JOIN switchboard_positions pos ON pos.switchboard_id = s.id
         WHERE s.fire_interlock = true
-          ${plan_logical_name ? `AND pos.plan_logical_name = $1 AND pos.page_index = $2` : ''}
+          ${plan_logical_name ? `AND pos.logical_name = $1 AND pos.page_index = $2` : ''}
       `, plan_logical_name ? [plan_logical_name, Number(page_index)] : []);
 
       for (const sw of switchQuery.rows) {
