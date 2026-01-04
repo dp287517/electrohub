@@ -1964,12 +1964,71 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       try {
         const page = await pdfDoc.getPage(pageNum);
         const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(" ");
-        pageTexts.push({ pageNum, text: pageText });
+
+        // DETAILED LOGGING: Extract text items with positions
+        const textItems = textContent.items.map(item => ({
+          str: item.str,
+          x: Math.round(item.transform[4]),
+          y: Math.round(item.transform[5]),
+          width: Math.round(item.width || 0)
+        }));
+
+        const pageText = textItems.map(item => item.str).join(" ");
+        pageTexts.push({ pageNum, text: pageText, items: textItems });
         fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
+
+        // DETAILED LOGGING: Analyze page structure
+        console.log(`[FireControl] Job ${jobId}: ========== PAGE ${pageNum} ANALYSIS ==========`);
+        console.log(`[FireControl] Job ${jobId}: Page ${pageNum} has ${textItems.length} text items`);
+
+        // Find zone headers (typically at top of page, look for Z00, Z01, etc.)
+        const zoneItems = textItems.filter(item => /Z\d{1,2}|Zone\s*\d/i.test(item.str));
+        if (zoneItems.length > 0) {
+          console.log(`[FireControl] Job ${jobId}: ZONES DETECTED ON PAGE ${pageNum}:`);
+          zoneItems.forEach(z => console.log(`  - "${z.str}" at position X=${z.x}, Y=${z.y}`));
+        }
+
+        // Find alarm level headers (AL1, AL2, Alarme I, Alarme II)
+        const alarmHeaders = textItems.filter(item => /AL\s*[12]|Alarme\s*[I1]|Alarme\s*II|Alarme\s*2|locale|g[ée]n[ée]rale/i.test(item.str));
+        if (alarmHeaders.length > 0) {
+          console.log(`[FireControl] Job ${jobId}: ALARM LEVEL HEADERS ON PAGE ${pageNum}:`);
+          alarmHeaders.forEach(a => console.log(`  - "${a.str}" at position X=${a.x}, Y=${a.y}`));
+        }
+
+        // Find equipment codes (patterns like 20-9-09, HVAC, etc.)
+        const equipItems = textItems.filter(item => /\d{2}[\.\-]\d[\.\-]\d{2}|HVAC|VMC|CTA|PCF|DAS/i.test(item.str));
+        if (equipItems.length > 0) {
+          console.log(`[FireControl] Job ${jobId}: EQUIPMENT CODES ON PAGE ${pageNum} (first 20):`);
+          equipItems.slice(0, 20).forEach(e => console.log(`  - "${e.str}" at position X=${e.x}, Y=${e.y}`));
+          if (equipItems.length > 20) console.log(`  ... and ${equipItems.length - 20} more equipment items`);
+        }
+
+        // Find marks/dots (●, ■, l, X, x, •) that indicate links
+        const markItems = textItems.filter(item => /^[●■lXx•✓✗○◯\u2022\u25CF\u25A0]+$/.test(item.str.trim()));
+        if (markItems.length > 0) {
+          console.log(`[FireControl] Job ${jobId}: MARKS/DOTS (links) ON PAGE ${pageNum}:`);
+          console.log(`  - Total marks found: ${markItems.length}`);
+          // Group marks by Y position (same row)
+          const marksByRow = {};
+          markItems.forEach(m => {
+            const rowY = Math.round(m.y / 10) * 10; // Group by ~10 units
+            if (!marksByRow[rowY]) marksByRow[rowY] = [];
+            marksByRow[rowY].push(m);
+          });
+          console.log(`  - Marks grouped by ${Object.keys(marksByRow).length} rows`);
+          Object.entries(marksByRow).slice(0, 10).forEach(([y, marks]) => {
+            console.log(`    Row Y~${y}: ${marks.length} marks at X positions: ${marks.map(m => m.x).join(', ')}`);
+          });
+        }
+
+        // Log raw text sample
+        console.log(`[FireControl] Job ${jobId}: PAGE ${pageNum} RAW TEXT (first 1000 chars):`);
+        console.log(pageText.substring(0, 1000));
+        console.log(`[FireControl] Job ${jobId}: ========== END PAGE ${pageNum} ==========`);
+
       } catch (e) {
         console.warn(`[FireControl] Job ${jobId}: Page ${pageNum} error: ${e.message}`);
-        pageTexts.push({ pageNum, text: "" });
+        pageTexts.push({ pageNum, text: "", items: [] });
       }
       job.progress = 10 + Math.round((pageNum / numPages) * 15);
       await saveProgress();
@@ -1979,7 +2038,7 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
       throw new Error("Le PDF ne contient pas de texte extractible (image scannée?)");
     }
 
-    console.log(`[FireControl] Job ${jobId}: Extracted ${fullText.length} chars from ${numPages} pages`);
+    console.log(`[FireControl] Job ${jobId}: Total extracted ${fullText.length} chars from ${numPages} pages`);
 
     job.progress = 30;
     job.message = 'Extraction des zones et équipements...';
@@ -1990,7 +2049,22 @@ async function processMatrixParse(jobId, matrixId, tenant, userEmail) {
     const localZones = parseZonesFromText(fullText, matrix.name);
     const localEquipment = parseEquipmentFromText(fullText);
 
-    console.log(`[FireControl] Job ${jobId}: Local parsing found ${localZones.length} zones, ${localEquipment.length} equipment`);
+    console.log(`[FireControl] Job ${jobId}: ========== LOCAL PARSING RESULTS ==========`);
+    console.log(`[FireControl] Job ${jobId}: Found ${localZones.length} zones, ${localEquipment.length} equipment`);
+
+    // Log all zones found
+    if (localZones.length > 0) {
+      console.log(`[FireControl] Job ${jobId}: LOCAL ZONES:`);
+      localZones.forEach((z, i) => console.log(`  ${i + 1}. Code="${z.code}" Name="${z.name}" Building="${z.building || ''}" Floor="${z.floor || ''}"`));
+    }
+
+    // Log equipment found (first 30)
+    if (localEquipment.length > 0) {
+      console.log(`[FireControl] Job ${jobId}: LOCAL EQUIPMENT (first 30):`);
+      localEquipment.slice(0, 30).forEach((e, i) => console.log(`  ${i + 1}. Code="${e.code}" Type="${e.type}" Name="${e.name?.substring(0, 50) || ''}"`));
+      if (localEquipment.length > 30) console.log(`  ... and ${localEquipment.length - 30} more`);
+    }
+    console.log(`[FireControl] Job ${jobId}: ========== END LOCAL PARSING ==========`);
 
     job.progress = 45;
     job.message = 'Analyse IA pour enrichissement...';
@@ -2117,29 +2191,94 @@ IMPORTANT - GÉNÉRAL:
             jsonStr = jsonStr.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
 
             const parsed = JSON.parse(jsonStr);
-            if (parsed.zones) aiZones.push(...parsed.zones);
-            if (parsed.equipment) aiEquipment.push(...parsed.equipment);
-            if (parsed.links) {
+
+            console.log(`[FireControl] Job ${jobId}: ========== AI CHUNK ${chunkIdx + 1} PARSED RESULTS ==========`);
+
+            // Log AI zones
+            if (parsed.zones && parsed.zones.length > 0) {
+              console.log(`[FireControl] Job ${jobId}: AI ZONES (${parsed.zones.length}):`);
+              parsed.zones.forEach((z, i) => console.log(`  ${i + 1}. Code="${z.code}" Name="${z.name}" DetectorNums="${z.detector_numbers || ''}" IsManual=${z.is_manual_trigger || false}`));
+              aiZones.push(...parsed.zones);
+            } else {
+              console.log(`[FireControl] Job ${jobId}: AI returned NO ZONES`);
+            }
+
+            // Log AI equipment
+            if (parsed.equipment && parsed.equipment.length > 0) {
+              console.log(`[FireControl] Job ${jobId}: AI EQUIPMENT (${parsed.equipment.length}, showing first 30):`);
+              parsed.equipment.slice(0, 30).forEach((e, i) => console.log(`  ${i + 1}. Code="${e.code}" Type="${e.type}" Name="${e.name?.substring(0, 40) || ''}"`));
+              if (parsed.equipment.length > 30) console.log(`  ... and ${parsed.equipment.length - 30} more equipment`);
+              aiEquipment.push(...parsed.equipment);
+            } else {
+              console.log(`[FireControl] Job ${jobId}: AI returned NO EQUIPMENT`);
+            }
+
+            // Log AI links with detailed alarm level analysis
+            if (parsed.links && parsed.links.length > 0) {
               aiLinks.push(...parsed.links);
-              // DETAILED LOGGING: Log alarm levels from AI response
+
+              // Analyze alarm levels
               const al1Links = parsed.links.filter(l => l.alarm_level === 1);
               const al2Links = parsed.links.filter(l => l.alarm_level === 2);
-              const noLevelLinks = parsed.links.filter(l => !l.alarm_level);
-              console.log(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} LINKS ANALYSIS:`);
-              console.log(`  - Total links: ${parsed.links.length}`);
-              console.log(`  - AL1 (alarm_level=1): ${al1Links.length}`);
-              console.log(`  - AL2 (alarm_level=2): ${al2Links.length}`);
-              console.log(`  - No alarm_level: ${noLevelLinks.length}`);
+              const noLevelLinks = parsed.links.filter(l => l.alarm_level === undefined || l.alarm_level === null);
+              const otherLevelLinks = parsed.links.filter(l => l.alarm_level !== undefined && l.alarm_level !== null && l.alarm_level !== 1 && l.alarm_level !== 2);
+
+              console.log(`[FireControl] Job ${jobId}: AI LINKS ANALYSIS (${parsed.links.length} total):`);
+              console.log(`  - alarm_level=1 (AL1/Locale): ${al1Links.length} links`);
+              console.log(`  - alarm_level=2 (AL2/Générale): ${al2Links.length} links`);
+              console.log(`  - alarm_level=undefined/null: ${noLevelLinks.length} links`);
+              console.log(`  - alarm_level=other value: ${otherLevelLinks.length} links`);
+
+              // Log first 20 AL1 links
+              if (al1Links.length > 0) {
+                console.log(`[FireControl] Job ${jobId}: FIRST 20 AL1 LINKS:`);
+                al1Links.slice(0, 20).forEach((l, i) => console.log(`    ${i + 1}. Zone="${l.zone_code}" → Equip="${l.equipment_code}" AL=${l.alarm_level}`));
+              }
+
+              // Log ALL AL2 links (since there seem to be few/none)
               if (al2Links.length > 0) {
-                console.log(`  - First 5 AL2 links: ${JSON.stringify(al2Links.slice(0, 5))}`);
+                console.log(`[FireControl] Job ${jobId}: ALL AL2 LINKS (${al2Links.length}):`);
+                al2Links.forEach((l, i) => console.log(`    ${i + 1}. Zone="${l.zone_code}" → Equip="${l.equipment_code}" AL=${l.alarm_level}`));
+              } else {
+                console.log(`[FireControl] Job ${jobId}: ⚠️ NO AL2 LINKS FOUND IN AI RESPONSE!`);
               }
+
+              // Log links without alarm_level
               if (noLevelLinks.length > 0) {
-                console.log(`  - First 5 links without alarm_level: ${JSON.stringify(noLevelLinks.slice(0, 5))}`);
+                console.log(`[FireControl] Job ${jobId}: FIRST 10 LINKS WITHOUT alarm_level:`);
+                noLevelLinks.slice(0, 10).forEach((l, i) => console.log(`    ${i + 1}. Zone="${l.zone_code}" → Equip="${l.equipment_code}" AL=${l.alarm_level} (raw: ${JSON.stringify(l)})`));
               }
+
+              // Log other level links
+              if (otherLevelLinks.length > 0) {
+                console.log(`[FireControl] Job ${jobId}: LINKS WITH OTHER alarm_level VALUES:`);
+                otherLevelLinks.slice(0, 10).forEach((l, i) => console.log(`    ${i + 1}. Zone="${l.zone_code}" → Equip="${l.equipment_code}" AL=${l.alarm_level} (type: ${typeof l.alarm_level})`));
+              }
+
+              // Group links by zone to show structure
+              const linksByZone = {};
+              parsed.links.forEach(l => {
+                if (!linksByZone[l.zone_code]) linksByZone[l.zone_code] = { al1: 0, al2: 0, none: 0 };
+                if (l.alarm_level === 1) linksByZone[l.zone_code].al1++;
+                else if (l.alarm_level === 2) linksByZone[l.zone_code].al2++;
+                else linksByZone[l.zone_code].none++;
+              });
+
+              console.log(`[FireControl] Job ${jobId}: LINKS BY ZONE:`);
+              Object.entries(linksByZone).forEach(([zone, counts]) => {
+                console.log(`  ${zone}: AL1=${counts.al1}, AL2=${counts.al2}, NoLevel=${counts.none}`);
+              });
+
+            } else {
+              console.log(`[FireControl] Job ${jobId}: AI returned NO LINKS`);
             }
+
+            console.log(`[FireControl] Job ${jobId}: ========== END AI CHUNK ${chunkIdx + 1} ==========`);
+
           } catch (parseErr) {
             console.warn(`[FireControl] Job ${jobId}: AI chunk ${chunkIdx + 1} parse error: ${parseErr.message}`);
-            console.warn(`[FireControl] Job ${jobId}: Raw AI response (first 2000 chars): ${content.substring(0, 2000)}`);
+            console.warn(`[FireControl] Job ${jobId}: Raw AI response (first 3000 chars):`);
+            console.warn(content.substring(0, 3000));
           }
         }
 
@@ -2172,10 +2311,30 @@ IMPORTANT - GÉNÉRAL:
           allLinks = aiLinks;
         }
 
+        // DETAILED MERGE SUMMARY
+        console.log(`[FireControl] Job ${jobId}: ========== MERGE SUMMARY ==========`);
         console.log(`[FireControl] Job ${jobId}: After AI merge: ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
+
+        // Final alarm level analysis
+        const finalAL1 = allLinks.filter(l => l.alarm_level === 1).length;
+        const finalAL2 = allLinks.filter(l => l.alarm_level === 2).length;
+        const finalNoLevel = allLinks.filter(l => !l.alarm_level).length;
+        console.log(`[FireControl] Job ${jobId}: MERGED LINKS BY ALARM LEVEL:`);
+        console.log(`  - AL1: ${finalAL1}`);
+        console.log(`  - AL2: ${finalAL2}`);
+        console.log(`  - No level: ${finalNoLevel}`);
+
+        // Check if we have string vs number alarm_level
+        const stringLevels = allLinks.filter(l => typeof l.alarm_level === 'string');
+        if (stringLevels.length > 0) {
+          console.log(`[FireControl] Job ${jobId}: ⚠️ WARNING: ${stringLevels.length} links have STRING alarm_level (should be number)!`);
+          console.log(`  Examples: ${JSON.stringify(stringLevels.slice(0, 5))}`);
+        }
+        console.log(`[FireControl] Job ${jobId}: ========== END MERGE ==========`);
 
       } catch (aiErr) {
         console.warn(`[FireControl] Job ${jobId}: AI enrichment failed, using local parsing: ${aiErr.message}`);
+        console.warn(`[FireControl] Job ${jobId}: AI error stack: ${aiErr.stack}`);
         // Fall back to local parsing results
       }
     }
@@ -2184,7 +2343,16 @@ IMPORTANT - GÉNÉRAL:
     job.message = 'Traitement des résultats...';
     await saveProgress();
 
-    console.log(`[FireControl] Job ${jobId}: Final count - ${allZones.length} zones, ${allEquipment.length} equipment, ${allLinks.length} links`);
+    console.log(`[FireControl] Job ${jobId}: ========== FINAL DATA BEFORE DB ==========`);
+    console.log(`[FireControl] Job ${jobId}: Zones: ${allZones.length}`);
+    console.log(`[FireControl] Job ${jobId}: Equipment: ${allEquipment.length}`);
+    console.log(`[FireControl] Job ${jobId}: Links: ${allLinks.length}`);
+
+    // One more check on alarm levels
+    const dbAL1 = allLinks.filter(l => l.alarm_level === 1 || l.alarm_level === '1').length;
+    const dbAL2 = allLinks.filter(l => l.alarm_level === 2 || l.alarm_level === '2').length;
+    console.log(`[FireControl] Job ${jobId}: Links to insert - AL1: ${dbAL1}, AL2: ${dbAL2}, Other/None: ${allLinks.length - dbAL1 - dbAL2}`);
+    console.log(`[FireControl] Job ${jobId}: ========================================`);
 
     job.progress = 80;
     job.message = 'Enregistrement en base...';
@@ -2257,18 +2425,35 @@ IMPORTANT - GÉNÉRAL:
     const totalAL1 = allLinks.filter(l => l.alarm_level === 1).length;
     const totalAL2 = allLinks.filter(l => l.alarm_level === 2).length;
     const totalNoLevel = allLinks.filter(l => !l.alarm_level).length;
-    console.log(`[FireControl] Job ${jobId}: FINAL LINK SUMMARY BEFORE DB INSERT:`);
-    console.log(`  - Zone map size: ${zoneCodeToId.size}`);
-    console.log(`  - Equipment map size: ${equipCodeToId.size}`);
-    console.log(`  - Total links to process: ${allLinks.length}`);
-    console.log(`  - Links with alarm_level=1: ${totalAL1}`);
-    console.log(`  - Links with alarm_level=2: ${totalAL2}`);
-    console.log(`  - Links WITHOUT alarm_level (will default to 1): ${totalNoLevel}`);
+    console.log(`[FireControl] Job ${jobId}: ========== LINK INSERTION START ==========`);
+    console.log(`[FireControl] Job ${jobId}: Zone map size: ${zoneCodeToId.size}`);
+    console.log(`[FireControl] Job ${jobId}: Equipment map size: ${equipCodeToId.size}`);
+    console.log(`[FireControl] Job ${jobId}: Total links to process: ${allLinks.length}`);
+    console.log(`[FireControl] Job ${jobId}: Links with alarm_level=1: ${totalAL1}`);
+    console.log(`[FireControl] Job ${jobId}: Links with alarm_level=2: ${totalAL2}`);
+    console.log(`[FireControl] Job ${jobId}: Links WITHOUT alarm_level (will default to 1): ${totalNoLevel}`);
+
+    // Log zone map contents
+    console.log(`[FireControl] Job ${jobId}: ZONE MAP CONTENTS:`);
+    Array.from(zoneCodeToId.entries()).forEach(([code, id]) => console.log(`  ${code} → ${id}`));
+
+    // Log equipment map contents (first 20)
+    console.log(`[FireControl] Job ${jobId}: EQUIPMENT MAP (first 20):`);
+    Array.from(equipCodeToId.entries()).slice(0, 20).forEach(([code, id]) => console.log(`  ${code} → ${id}`));
 
     // Track what actually gets inserted
     let al1Created = 0, al2Created = 0;
+    let al1Skipped = 0, al2Skipped = 0;
+    let linkIndex = 0;
+
+    // Log first 50 links being processed for debugging
+    console.log(`[FireControl] Job ${jobId}: FIRST 50 LINKS TO PROCESS:`);
+    allLinks.slice(0, 50).forEach((l, i) => {
+      console.log(`  ${i + 1}. Zone="${l.zone_code}" Equip="${l.equipment_code}" AL=${l.alarm_level} (type: ${typeof l.alarm_level})`);
+    });
 
     for (const link of allLinks) {
+      linkIndex++;
       try {
         // Try direct lookup from maps first
         let zoneId = zoneCodeToId.get(link.zone_code);
@@ -2294,18 +2479,44 @@ IMPORTANT - GÉNÉRAL:
           if (equipRows.length) equipId = equipRows[0].id;
         }
 
-        const effectiveAlarmLevel = link.alarm_level || 1;
+        // Convert alarm_level to number (in case AI returned string)
+        let effectiveAlarmLevel = link.alarm_level;
+        if (typeof effectiveAlarmLevel === 'string') {
+          effectiveAlarmLevel = parseInt(effectiveAlarmLevel, 10);
+        }
+        if (!effectiveAlarmLevel || isNaN(effectiveAlarmLevel)) {
+          effectiveAlarmLevel = 1;
+        }
+
         if (zoneId && equipId) {
           await pool.query(`INSERT INTO fc_zone_equipment (zone_id, equipment_id, alarm_level, action_type, matrix_id) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
             [zoneId, equipId, effectiveAlarmLevel, link.action || 'activate', matrixId]);
           linksCreated++;
           if (effectiveAlarmLevel === 1) al1Created++;
-          else if (effectiveAlarmLevel === 2) al2Created++;
+          else if (effectiveAlarmLevel === 2) {
+            al2Created++;
+            // Log every AL2 link creation
+            console.log(`[FireControl] Job ${jobId}: ✓ AL2 LINK CREATED #${al2Created}: Zone=${link.zone_code} → Equip=${link.equipment_code}`);
+          }
         } else {
-          console.log(`[FireControl] Job ${jobId}: Link skipped - zone=${link.zone_code} (${zoneId ? 'found' : 'NOT FOUND'}), equip=${link.equipment_code} (${equipId ? 'found' : 'NOT FOUND'}), alarm_level=${link.alarm_level}`);
+          if (link.alarm_level === 2) {
+            al2Skipped++;
+            console.log(`[FireControl] Job ${jobId}: ✗ AL2 LINK SKIPPED #${al2Skipped}: Zone=${link.zone_code} (${zoneId ? 'found' : 'NOT FOUND'}), Equip=${link.equipment_code} (${equipId ? 'found' : 'NOT FOUND'})`);
+          } else {
+            al1Skipped++;
+          }
+          // Log every 10th skipped link or all AL2 skipped links
+          if (al1Skipped <= 10 || linkIndex <= 20) {
+            console.log(`[FireControl] Job ${jobId}: Link #${linkIndex} skipped - zone=${link.zone_code} (${zoneId ? 'found' : 'NOT'}), equip=${link.equipment_code} (${equipId ? 'found' : 'NOT'}), AL=${link.alarm_level}`);
+          }
         }
-      } catch (err) { console.warn(`[FireControl] Link error: ${err.message}`); }
+      } catch (err) {
+        console.warn(`[FireControl] Job ${jobId}: Link #${linkIndex} error: ${err.message}`);
+        console.warn(`  Link data: ${JSON.stringify(link)}`);
+      }
     }
+
+    console.log(`[FireControl] Job ${jobId}: Links skipped: AL1=${al1Skipped}, AL2=${al2Skipped}`);
 
     // FINAL SUMMARY LOG
     console.log(`[FireControl] Job ${jobId}: ========== LINK CREATION COMPLETE ==========`);
