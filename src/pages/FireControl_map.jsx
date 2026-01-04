@@ -264,8 +264,200 @@ const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedEls
   );
 };
 
+/* ----------------------------- Zone Check Sidebar ----------------------------- */
+const ZoneCheckSidebar = ({ zoneCheck, zoneCheckEquipment, plans, selectedEquipmentId, onSelectEquipment, onNavigateToPlan }) => {
+  const [expandedLevel, setExpandedLevel] = useState(1);
+
+  // Group equipment by alarm level
+  const al1Equipment = zoneCheckEquipment.filter(e => e.alarm_level === 1);
+  const al2Equipment = zoneCheckEquipment.filter(e => e.alarm_level === 2);
+
+  // Calculate stats
+  const getPendingCount = (items) => items.filter(e => !e.result).length;
+  const getOkCount = (items) => items.filter(e => e.result === 'ok').length;
+  const getNokCount = (items) => items.filter(e => e.result === 'nok').length;
+
+  const EquipmentRow = ({ eq, alarmLevel }) => {
+    const isPending = !eq.result;
+    const isOk = eq.result === 'ok';
+    const isNok = eq.result === 'nok';
+    const hasPosition = !!eq.position;
+
+    return (
+      <div
+        className={`p-2 rounded-lg border transition-all cursor-pointer
+          ${selectedEquipmentId === eq.equipment_id ? 'bg-orange-100 border-orange-300' : 'bg-white border-gray-200 hover:border-gray-300'}
+          ${!hasPosition ? 'opacity-60' : ''}`}
+        onClick={() => {
+          if (hasPosition) {
+            const planLogicalName = eq.position?.plan_logical_name;
+            const pageIndex = eq.position?.page_index || 0;
+            onNavigateToPlan?.(planLogicalName, pageIndex, eq.equipment_id);
+          }
+          onSelectEquipment?.(eq);
+        }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <SourceSystemIcon source={eq.external_system || eq.source_system} />
+              <span className="font-medium text-sm text-gray-900 truncate">
+                {eq.equipment_code || eq.code || `Équipement`}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 truncate mt-0.5">
+              {eq.equipment_name || eq.name || eq.location || '-'}
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {!hasPosition && (
+              <span className="text-xs text-gray-400">Non positionné</span>
+            )}
+            {isPending && (
+              <span className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
+                <AlertCircle size={14} />
+              </span>
+            )}
+            {isOk && (
+              <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                <CheckCircle size={14} />
+              </span>
+            )}
+            {isNok && (
+              <span className="w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center">
+                <X size={14} />
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Zone Check Header */}
+      <div className="p-3 bg-gradient-to-r from-orange-500 to-red-600 text-white">
+        <div className="flex items-center gap-2">
+          <Flame size={20} />
+          <div>
+            <h3 className="font-bold">Contrôle Zone {zoneCheck?.zone_code}</h3>
+            <p className="text-sm text-orange-100">{zoneCheck?.zone_name}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Progress Summary */}
+      <div className="p-3 border-b bg-gray-50">
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <div className="bg-amber-50 rounded-lg p-2">
+            <div className="text-amber-700 font-bold text-lg">
+              {getPendingCount(zoneCheckEquipment)}
+            </div>
+            <div className="text-amber-600">En attente</div>
+          </div>
+          <div className="bg-emerald-50 rounded-lg p-2">
+            <div className="text-emerald-700 font-bold text-lg">
+              {getOkCount(zoneCheckEquipment)}
+            </div>
+            <div className="text-emerald-600">OK</div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-2">
+            <div className="text-red-700 font-bold text-lg">
+              {getNokCount(zoneCheckEquipment)}
+            </div>
+            <div className="text-red-600">NOK</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Equipment List by Alarm Level */}
+      <div className="flex-1 overflow-y-auto">
+        {/* AL1 Section */}
+        <div className="border-b">
+          <button
+            className="w-full p-3 flex items-center justify-between bg-blue-50 hover:bg-blue-100 transition-colors"
+            onClick={() => setExpandedLevel(expandedLevel === 1 ? 0 : 1)}
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold text-sm">
+                1
+              </span>
+              <span className="font-medium text-blue-900">Alarme Locale (AL1)</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-amber-600">{getPendingCount(al1Equipment)} en attente</span>
+              <ChevronRight size={16} className={`text-blue-500 transition-transform ${expandedLevel === 1 ? 'rotate-90' : ''}`} />
+            </div>
+          </button>
+          {expandedLevel === 1 && (
+            <div className="p-2 space-y-2">
+              {al1Equipment.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">Aucun équipement AL1</p>
+              ) : (
+                al1Equipment.map((eq, idx) => (
+                  <EquipmentRow key={eq.equipment_id || idx} eq={eq} alarmLevel={1} />
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* AL2 Section */}
+        <div className="border-b">
+          <button
+            className="w-full p-3 flex items-center justify-between bg-purple-50 hover:bg-purple-100 transition-colors"
+            onClick={() => setExpandedLevel(expandedLevel === 2 ? 0 : 2)}
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center font-bold text-sm">
+                2
+              </span>
+              <span className="font-medium text-purple-900">Alarme Générale (AL2)</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-amber-600">{getPendingCount(al2Equipment)} en attente</span>
+              <ChevronRight size={16} className={`text-purple-500 transition-transform ${expandedLevel === 2 ? 'rotate-90' : ''}`} />
+            </div>
+          </button>
+          {expandedLevel === 2 && (
+            <div className="p-2 space-y-2">
+              {al2Equipment.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">Aucun équipement AL2</p>
+              ) : (
+                al2Equipment.map((eq, idx) => (
+                  <EquipmentRow key={eq.equipment_id || idx} eq={eq} alarmLevel={2} />
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource }) => {
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource, onGoToControl }) => {
+  const [controlsData, setControlsData] = useState(null);
+  const [loadingControls, setLoadingControls] = useState(false);
+
+  // Fetch controls for this equipment
+  useEffect(() => {
+    if (!position && !equipment) return;
+
+    const sourceSystem = position?.source_system || equipment?.source_system;
+    const equipmentId = position?.equipment_id || equipment?.id;
+
+    if (!sourceSystem || !equipmentId) return;
+
+    setLoadingControls(true);
+    api.fireControlMaps.getEquipmentControls(sourceSystem, equipmentId)
+      .then(data => setControlsData(data))
+      .catch(err => console.warn("Failed to load controls:", err))
+      .finally(() => setLoadingControls(false));
+  }, [position, equipment]);
+
   if (!position) return null;
 
   const getSourceLabel = () => {
@@ -277,9 +469,13 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource })
     }
   };
 
+  const pendingControls = controlsData?.controls?.filter(c => c.is_pending) || [];
+  const completedControls = controlsData?.controls?.filter(c => !c.is_pending) || [];
+  const linkedZones = controlsData?.linked_zones || [];
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
-      <div className="bg-gradient-to-r from-orange-500 to-red-600 p-4 text-white">
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+      <div className="bg-gradient-to-r from-orange-500 to-red-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-white/20 rounded-lg">
@@ -296,7 +492,7 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource })
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
             <span className="text-gray-500 text-xs block">Bâtiment</span>
@@ -315,10 +511,82 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onGoToSource })
           </div>
         )}
 
-        {(position.zone_id || equipment?.zone_id) && (
-          <div className="bg-orange-50 rounded-lg p-2 text-sm">
-            <span className="text-orange-600 text-xs block">Zone incendie</span>
-            <span className="font-semibold text-orange-900">{position.zone_id || equipment?.zone_id}</span>
+        {/* Linked zones */}
+        {linkedZones.length > 0 && (
+          <div className="bg-orange-50 rounded-lg p-3">
+            <div className="text-orange-600 text-xs font-medium mb-2">Zones liées ({linkedZones.length})</div>
+            <div className="flex flex-wrap gap-1">
+              {linkedZones.map((z, idx) => (
+                <span key={idx} className="px-2 py-0.5 bg-orange-100 text-orange-800 rounded text-xs">
+                  {z.code} (AL{z.alarm_level})
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Loading controls */}
+        {loadingControls && (
+          <div className="flex items-center justify-center py-4">
+            <RefreshCw size={16} className="animate-spin text-orange-500 mr-2" />
+            <span className="text-sm text-gray-500">Chargement des contrôles...</span>
+          </div>
+        )}
+
+        {/* Pending controls */}
+        {pendingControls.length > 0 && (
+          <div className="bg-amber-50 rounded-lg p-3">
+            <div className="text-amber-700 text-xs font-medium mb-2 flex items-center gap-1">
+              <AlertCircle size={14} />
+              Contrôles en attente ({pendingControls.length})
+            </div>
+            <div className="space-y-2">
+              {pendingControls.slice(0, 5).map((c, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between bg-white rounded-lg p-2 border border-amber-200 cursor-pointer hover:bg-amber-100 transition-colors"
+                  onClick={() => onGoToControl?.(c.zone_check_id, c.campaign_id)}
+                >
+                  <div>
+                    <div className="font-medium text-sm text-gray-900">{c.zone_code}</div>
+                    <div className="text-xs text-gray-500">{c.campaign_name || "Contrôle individuel"}</div>
+                  </div>
+                  <Badge variant="warning">AL{c.alarm_level}</Badge>
+                </div>
+              ))}
+              {pendingControls.length > 5 && (
+                <div className="text-xs text-amber-600 text-center">
+                  +{pendingControls.length - 5} autres contrôles
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Completed controls */}
+        {completedControls.length > 0 && (
+          <div className="bg-emerald-50 rounded-lg p-3">
+            <div className="text-emerald-700 text-xs font-medium mb-2 flex items-center gap-1">
+              <CheckCircle size={14} />
+              Contrôles terminés ({completedControls.length})
+            </div>
+            <div className="space-y-1">
+              {completedControls.slice(0, 3).map((c, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">{c.zone_code} - AL{c.alarm_level}</span>
+                  <Badge variant={c.result === 'ok' ? 'success' : 'danger'}>
+                    {c.result === 'ok' ? 'OK' : 'NOK'}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* No controls message */}
+        {!loadingControls && controlsData && pendingControls.length === 0 && completedControls.length === 0 && linkedZones.length === 0 && (
+          <div className="text-center text-gray-500 text-sm py-4">
+            Aucun contrôle actif pour cet équipement
           </div>
         )}
 
@@ -1074,64 +1342,108 @@ export default function FireControlMap() {
 
       {/* Content */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar */}
+        {/* Sidebar - Zone Check Mode or Normal Mode */}
         {showSidebar && !isMobile && (
           <div className="w-80 bg-white border-r shadow-sm flex flex-col z-10">
-            <div className="p-3 border-b space-y-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <Input
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="Rechercher..."
-                  className="pl-9"
-                />
-              </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous ({stats.total})
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Sur ce plan ({stats.placed})
-                </Btn>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingEquipment ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+            {zoneCheck ? (
+              /* Zone Check Navigation Mode */
+              <ZoneCheckSidebar
+                zoneCheck={zoneCheck}
+                zoneCheckEquipment={zoneCheckEquipment}
+                plans={plans}
+                selectedEquipmentId={selectedEquipmentId}
+                onSelectEquipment={(eq) => {
+                  setSelectedEquipment(eq);
+                  if (eq.position) {
+                    setSelectedPosition({
+                      equipment_id: eq.equipment_id,
+                      equipment_code: eq.equipment_code || eq.code,
+                      source_system: eq.external_system || eq.source_system,
+                      building: eq.building,
+                      floor: eq.floor,
+                      location: eq.location,
+                      x_frac: eq.position.x_frac,
+                      y_frac: eq.position.y_frac,
+                    });
+                  } else {
+                    setSelectedPosition(null);
+                  }
+                }}
+                onNavigateToPlan={async (planLogicalName, pageIdx, equipmentId) => {
+                  // Navigate to the correct plan and page
+                  const plan = plans.find(p => p.logical_name === planLogicalName);
+                  if (plan) {
+                    setSelectedPlan(plan);
+                    setPageIndex(pageIdx);
+                    setPdfReady(false);
+                    await loadPositions(plan, pageIdx);
+                    // Highlight the equipment marker after positions load
+                    setTimeout(() => {
+                      viewerRef.current?.highlightMarker(equipmentId);
+                    }, 500);
+                  }
+                }}
+              />
+            ) : (
+              /* Normal Equipment List Mode */
+              <>
+                <div className="p-3 border-b space-y-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                    <Input
+                      value={searchQuery}
+                      onChange={setSearchQuery}
+                      placeholder="Rechercher..."
+                      className="pl-9"
+                    />
+                  </div>
+                  <div className="flex gap-1">
+                    <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                      Tous ({stats.total})
+                    </Btn>
+                    <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                      Sur ce plan ({stats.placed})
+                    </Btn>
+                  </div>
                 </div>
-              ) : filteredEquipment.length === 0 ? (
-                <EmptyState
-                  icon={Flame}
-                  title="Aucun équipement"
-                  description="Liez des équipements au contrôle incendie depuis les pages Portes, Tableaux ou DataHub"
-                />
-              ) : (
-                filteredEquipment.map(e => (
-                  <EquipmentCard
-                    key={e.id}
-                    equipment={e}
-                    isPlacedHere={isPlacedHere(e.id)}
-                    isPlacedSomewhere={placedIds.has(e.id)}
-                    isPlacedElsewhere={placedIds.has(e.id) && !isPlacedHere(e.id)}
-                    isSelected={selectedEquipmentId === e.id}
-                    onClick={() => {
-                      const pos = initialPoints.find(p => p.equipment_id === e.id);
-                      if (pos) {
-                        setSelectedPosition(pos);
-                        setSelectedEquipment(e);
-                        viewerRef.current?.highlightMarker(e.id);
-                      } else {
-                        setSelectedEquipment(e);
-                        setSelectedPosition(null);
-                      }
-                    }}
-                  />
-                ))
-              )}
-            </div>
+
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                  {loadingEquipment ? (
+                    <div className="flex items-center justify-center py-8">
+                      <RefreshCw size={24} className="animate-spin text-gray-400" />
+                    </div>
+                  ) : filteredEquipment.length === 0 ? (
+                    <EmptyState
+                      icon={Flame}
+                      title="Aucun équipement"
+                      description="Liez des équipements au contrôle incendie depuis les pages Portes, Tableaux ou DataHub"
+                    />
+                  ) : (
+                    filteredEquipment.map(e => (
+                      <EquipmentCard
+                        key={e.id}
+                        equipment={e}
+                        isPlacedHere={isPlacedHere(e.id)}
+                        isPlacedSomewhere={placedIds.has(e.id)}
+                        isPlacedElsewhere={placedIds.has(e.id) && !isPlacedHere(e.id)}
+                        isSelected={selectedEquipmentId === e.id}
+                        onClick={() => {
+                          const pos = initialPoints.find(p => p.equipment_id === e.id);
+                          if (pos) {
+                            setSelectedPosition(pos);
+                            setSelectedEquipment(e);
+                            viewerRef.current?.highlightMarker(e.id);
+                          } else {
+                            setSelectedEquipment(e);
+                            setSelectedPosition(null);
+                          }
+                        }}
+                      />
+                    ))
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1202,6 +1514,14 @@ export default function FireControlMap() {
                     break;
                   default:
                     break;
+                }
+              }}
+              onGoToControl={(zoneCheckId, campaignId) => {
+                // Navigate to fire control with zone check selected
+                if (campaignId) {
+                  navigate(`/app/fire-control?tab=controls&campaign=${campaignId}&check=${zoneCheckId}`);
+                } else {
+                  navigate(`/app/fire-control?tab=controls&check=${zoneCheckId}`);
                 }
               }}
             />
