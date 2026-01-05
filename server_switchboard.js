@@ -7362,6 +7362,141 @@ app.get('/api/switchboard/controls/ddr-devices', async (req, res) => {
   }
 });
 
+// Get device controls for a specific switchboard (to display on Switchboards page)
+app.get('/api/switchboard/controls/device-controls-by-board/:boardId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { boardId } = req.params;
+
+    // Get all device control schedules for devices in this switchboard
+    const { rows } = await quickQuery(`
+      SELECT
+        cs.id as schedule_id,
+        cs.device_id,
+        cs.next_due_date,
+        cs.status,
+        ct.id as template_id,
+        ct.name as template_name,
+        ct.frequency_months,
+        ct.element_filter
+      FROM control_schedules cs
+      INNER JOIN control_templates ct ON cs.template_id = ct.id
+      INNER JOIN devices d ON cs.device_id = d.id
+      WHERE cs.site = $1 AND d.switchboard_id = $2 AND cs.device_id IS NOT NULL
+      ORDER BY cs.next_due_date
+    `, [site, boardId]);
+
+    // Group by device_id and calculate status
+    const now = new Date();
+    const controlsByDevice = {};
+
+    rows.forEach(r => {
+      if (!controlsByDevice[r.device_id]) {
+        controlsByDevice[r.device_id] = {
+          controls: [],
+          status: 'ok',
+          next_due: null,
+          overdue_count: 0,
+          pending_count: 0
+        };
+      }
+
+      const isOverdue = r.next_due_date && new Date(r.next_due_date) < now;
+      const control = {
+        schedule_id: r.schedule_id,
+        template_id: r.template_id,
+        template_name: r.template_name,
+        frequency_months: r.frequency_months,
+        element_filter: r.element_filter,
+        next_due_date: r.next_due_date,
+        is_overdue: isOverdue
+      };
+
+      controlsByDevice[r.device_id].controls.push(control);
+
+      if (isOverdue) {
+        controlsByDevice[r.device_id].overdue_count++;
+        controlsByDevice[r.device_id].status = 'overdue';
+      } else if (r.next_due_date) {
+        controlsByDevice[r.device_id].pending_count++;
+        if (controlsByDevice[r.device_id].status !== 'overdue') {
+          controlsByDevice[r.device_id].status = 'pending';
+        }
+      }
+
+      // Track earliest due date
+      if (r.next_due_date) {
+        if (!controlsByDevice[r.device_id].next_due ||
+            new Date(r.next_due_date) < new Date(controlsByDevice[r.device_id].next_due)) {
+          controlsByDevice[r.device_id].next_due = r.next_due_date;
+        }
+      }
+    });
+
+    res.json({ controls: controlsByDevice });
+  } catch (e) {
+    console.error('[CONTROLS] Device controls by board error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get existing control dates by frequency for a switchboard (for date alignment)
+app.get('/api/switchboard/controls/existing-dates/:boardId', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { boardId } = req.params;
+
+    // Get distinct frequencies and their next_due_dates for this switchboard's devices
+    const { rows } = await quickQuery(`
+      SELECT DISTINCT
+        ct.frequency_months,
+        cs.next_due_date
+      FROM control_schedules cs
+      INNER JOIN control_templates ct ON cs.template_id = ct.id
+      INNER JOIN devices d ON cs.device_id = d.id
+      WHERE cs.site = $1 AND d.switchboard_id = $2 AND cs.device_id IS NOT NULL
+      ORDER BY ct.frequency_months, cs.next_due_date
+    `, [site, boardId]);
+
+    // Group by frequency, keeping the most common date per frequency
+    const datesByFrequency = {};
+    rows.forEach(r => {
+      const freq = r.frequency_months;
+      if (!datesByFrequency[freq]) {
+        datesByFrequency[freq] = {};
+      }
+      const dateStr = r.next_due_date ? r.next_due_date.toISOString().split('T')[0] : null;
+      if (dateStr) {
+        datesByFrequency[freq][dateStr] = (datesByFrequency[freq][dateStr] || 0) + 1;
+      }
+    });
+
+    // Get the most common date for each frequency
+    const result = {};
+    Object.keys(datesByFrequency).forEach(freq => {
+      const dates = datesByFrequency[freq];
+      let maxCount = 0;
+      let mostCommonDate = null;
+      Object.keys(dates).forEach(date => {
+        if (dates[date] > maxCount) {
+          maxCount = dates[date];
+          mostCommonDate = date;
+        }
+      });
+      result[freq] = mostCommonDate;
+    });
+
+    res.json({ dates_by_frequency: result });
+  } catch (e) {
+    console.error('[CONTROLS] Existing dates error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get control status for a specific switchboard/device
 app.get('/api/switchboard/controls/status', async (req, res) => {
   try {

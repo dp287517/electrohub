@@ -1104,6 +1104,9 @@ export default function Switchboards() {
   const [upcomingControls, setUpcomingControls] = useState([]); // Controls in next 30 days
   const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
 
+  // Device-level control status (for displaying on each device card)
+  const [deviceControls, setDeviceControls] = useState({}); // { deviceId: { controls: [], status, next_due } }
+
   // AI Chat state
   const [showAIChat, setShowAIChat] = useState(false);
 
@@ -1259,6 +1262,12 @@ export default function Switchboards() {
   useEffect(() => {
     if (selectedBoard) {
       loadDevices(selectedBoard.id);
+      // Also load device-level controls for this board
+      api.switchboardControls.getDeviceControlsByBoard(selectedBoard.id)
+        .then(res => {
+          setDeviceControls(res.controls || {});
+        })
+        .catch(e => console.warn('Failed to load device controls:', e));
     }
   }, [selectedBoard?.id]);
 
@@ -2026,6 +2035,18 @@ export default function Switchboards() {
                       <AlertCircle size={12} />Incomplet
                     </span>
                   )}
+                  {/* Device control status badge */}
+                  {deviceControls[device.id] && (
+                    deviceControls[device.id].status === 'overdue' ? (
+                      <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full flex items-center gap-1" title={`Contrôle en retard: ${deviceControls[device.id].controls.map(c => c.template_name).join(', ')}`}>
+                        <AlertTriangle size={12} />Contrôle
+                      </span>
+                    ) : deviceControls[device.id].status === 'pending' ? (
+                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full flex items-center gap-1" title={`Prochain contrôle: ${new Date(deviceControls[device.id].next_due).toLocaleDateString('fr-FR')}`}>
+                        <Calendar size={12} />Contrôle
+                      </span>
+                    ) : null
+                  )}
                 </div>
                 <h4 className="font-semibold text-gray-900 mt-1 line-clamp-2">
                   {device.name || device.reference || 'Sans nom'}
@@ -2070,6 +2091,26 @@ export default function Switchboards() {
               <div className="mt-1 text-xs text-purple-600 flex items-center gap-1">
                 <ShieldCheck size={12} />
                 {device.differential_sensitivity_ma}mA {device.differential_type && `(Type ${device.differential_type})`}
+              </div>
+            )}
+
+            {/* Device control details */}
+            {deviceControls[device.id] && deviceControls[device.id].controls.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-gray-100">
+                <div className="text-xs text-gray-500 mb-1">Contrôles planifiés:</div>
+                <div className="space-y-1">
+                  {deviceControls[device.id].controls.slice(0, 2).map((ctrl, idx) => (
+                    <div key={idx} className={`text-xs flex items-center justify-between rounded px-2 py-1 ${ctrl.is_overdue ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
+                      <span className="truncate flex-1">{ctrl.template_name}</span>
+                      <span className="ml-2 flex-shrink-0">
+                        {ctrl.next_due_date ? new Date(ctrl.next_due_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : '-'}
+                      </span>
+                    </div>
+                  ))}
+                  {deviceControls[device.id].controls.length > 2 && (
+                    <div className="text-xs text-gray-400 text-center">+{deviceControls[device.id].controls.length - 2} autre(s)</div>
+                  )}
+                </div>
               </div>
             )}
           </div>

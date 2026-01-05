@@ -1840,6 +1840,10 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
   const [ddrDevicesBySwitchboard, setDdrDevicesBySwitchboard] = useState({}); // { switchboardId: [ddr_devices] }
   const [loadingDDRData, setLoadingDDRData] = useState(false);
 
+  // Date alignment states (for aligning controls with same frequency)
+  const [existingDatesByFrequency, setExistingDatesByFrequency] = useState({}); // { frequency_months: date }
+  const [suggestedDate, setSuggestedDate] = useState(null);
+
   // Get selected template's element_filter
   const selectedTemplate = (templates || []).find(t => t.id === Number(templateId));
   const elementFilter = selectedTemplate?.element_filter || null;
@@ -1958,6 +1962,34 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
       }
     }
   }, [targetType, isDDRControl, selectedSwitchboardsForDevices]);
+
+  // Load existing dates by frequency for date alignment
+  useEffect(() => {
+    if (targetType === 'device' && selectedSwitchboardsForDevices.size > 0) {
+      // Load existing dates for the first selected switchboard
+      const firstBoardId = Array.from(selectedSwitchboardsForDevices)[0];
+      if (firstBoardId && firstBoardId !== 'undefined') {
+        api.switchboardControls.getExistingDatesByBoard(firstBoardId)
+          .then(res => {
+            setExistingDatesByFrequency(res.dates_by_frequency || {});
+          })
+          .catch(e => console.warn('Load existing dates error:', e));
+      }
+    }
+  }, [targetType, selectedSwitchboardsForDevices]);
+
+  // Update suggested date when template or existing dates change
+  useEffect(() => {
+    if (selectedTemplate && existingDatesByFrequency) {
+      const freq = selectedTemplate.frequency_months;
+      const existingDate = existingDatesByFrequency[freq];
+      if (existingDate && existingDate !== suggestedDate) {
+        setSuggestedDate(existingDate);
+        // Auto-apply the suggested date
+        setNextDueDate(existingDate);
+      }
+    }
+  }, [templateId, existingDatesByFrequency, selectedTemplate]);
 
   // Filter templates: for datahub categories, look for templates with target_type matching the category
   const filteredTemplates = (templates || []).filter((t) => {
@@ -2514,9 +2546,20 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
                   <input
                     type="date"
                     value={nextDueDate}
-                    onChange={(e) => setNextDueDate(e.target.value)}
+                    onChange={(e) => {
+                      setNextDueDate(e.target.value);
+                      setSuggestedDate(null); // Clear suggestion when user manually changes
+                    }}
                     className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
                   />
+                  {suggestedDate && nextDueDate === suggestedDate && selectedTemplate && (
+                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-xs text-green-700 flex items-center gap-1">
+                        <span>✓</span>
+                        <strong>Alignement automatique :</strong> Cette date correspond à un contrôle {selectedTemplate.frequency_months === 12 ? 'annuel' : selectedTemplate.frequency_months === 6 ? 'semestriel' : selectedTemplate.frequency_months === 3 ? 'trimestriel' : selectedTemplate.frequency_months === 1 ? 'mensuel' : `tous les ${selectedTemplate.frequency_months} mois`} existant sur ce tableau
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
