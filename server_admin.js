@@ -2464,17 +2464,17 @@ const VALID_AGENT_TYPES = ['main', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex',
 
 // Agent display names
 const AGENT_NAMES = {
-  main: 'Electro (Principal)',
+  main: 'Electro (Assistant Principal)',
   vsd: 'Shakira (Variateurs)',
-  meca: 'Méca (Équipements Mécaniques)',
-  glo: 'GLO (Éclairage de Sécurité)',
-  hv: 'HV (Haute Tension)',
-  mobile: 'Mobile (Équipements Mobiles)',
-  atex: 'ATEX (Zones Explosives)',
-  switchboard: 'Switch (Tableaux Électriques)',
-  doors: 'Doors (Portes)',
-  datahub: 'Data (Datahub)',
-  firecontrol: 'Fire (Contrôle Incendie)'
+  meca: 'Titan (Équipements Mécaniques)',
+  glo: 'Lumina (Éclairage de Sécurité)',
+  hv: 'Voltaire (Haute Tension)',
+  mobile: 'Nomad (Équipements Mobiles)',
+  atex: 'Phoenix (Zones ATEX)',
+  switchboard: 'Matrix (Tableaux Électriques)',
+  doors: 'Portal (Portes)',
+  datahub: 'Nexus (Datahub)',
+  firecontrol: 'Blaze (Sécurité Incendie)'
 };
 
 // GET /api/admin/settings/ai-agents/list - Get all agent types and their video status
