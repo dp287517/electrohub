@@ -884,15 +884,38 @@ const DetailPanel = ({
   onDeleteDevice,
   onLoadDevices,
   controlStatuses,
-  navigate
+  navigate,
+  onPhotoUpdated
 }) => {
   const [showTechnical, setShowTechnical] = useState(false);
   const [showDevices, setShowDevices] = useState(true);
   const [showAIChat, setShowAIChat] = useState(false);
+  const [photoVersion, setPhotoVersion] = useState(Date.now());
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
 
   // Get control status for this equipment
   const controlStatus = controlStatuses?.[equipment?.id];
   const hasOverdueControl = controlStatus?.status === 'overdue';
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !equipment?.id) return;
+
+    setIsUploadingPhoto(true);
+    try {
+      await api.hv.uploadEquipmentPhoto(equipment.id, file);
+      setPhotoVersion(Date.now());
+      onPhotoUpdated?.({ ...equipment, has_photo: true });
+      showToast?.('Photo uploadée !', 'success');
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      showToast?.('Erreur lors de l\'upload', 'error');
+    } finally {
+      setIsUploadingPhoto(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     if (equipment?.id && (!devices || devices.length === 0)) {
@@ -942,20 +965,33 @@ const DetailPanel = ({
         </div>
 
         <div className="flex items-start gap-4">
-          <div className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center overflow-hidden ${equipment.is_principal ? 'bg-gradient-to-br from-amber-200 to-orange-300 text-amber-800' : 'bg-white/20'}`}>
+          {/* Photo cliquable - similaire à Switchboards */}
+          <div
+            onClick={() => photoInputRef.current?.click()}
+            className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer relative group ${equipment.is_principal ? 'bg-gradient-to-br from-amber-200 to-orange-300 text-amber-800' : 'bg-white/20'}`}
+          >
+            <input ref={photoInputRef} type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
             {equipment.has_photo ? (
               <img
-                src={api.hv.equipmentPhotoUrl(equipment.id, { bust: true })}
+                src={`${api.hv.equipmentPhotoUrl(equipment.id, { bust: false })}&v=${photoVersion}`}
                 alt=""
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   e.target.style.display = 'none';
-                  e.target.nextSibling.style.display = 'flex';
                 }}
               />
-            ) : null}
-            <div className={`w-full h-full flex items-center justify-center ${equipment.has_photo ? 'hidden' : ''}`}>
-              <Zap size={28} />
+            ) : (
+              <div className="flex flex-col items-center justify-center text-white/70">
+                <ImagePlus size={28} />
+              </div>
+            )}
+            {/* Overlay au survol */}
+            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              {isUploadingPhoto ? (
+                <RefreshCw size={24} className="text-white animate-spin" />
+              ) : (
+                <Camera size={24} className="text-white" />
+              )}
             </div>
           </div>
           <div className="flex-1 min-w-0">
@@ -1764,6 +1800,10 @@ export default function HighVoltage() {
                 onLoadDevices={loadDevices}
                 controlStatuses={controlStatuses}
                 navigate={navigate}
+                onPhotoUpdated={(updated) => {
+                  setSelectedEquipment(updated);
+                  setEquipments(prev => prev.map(eq => eq.id === updated.id ? { ...eq, has_photo: updated.has_photo } : eq));
+                }}
               />
             )
           ) : (
