@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
+import MiniElectro from '../components/MiniElectro';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
@@ -3040,6 +3041,30 @@ export default function Switchboards() {
                   </div>
                 </div>
               </div>
+            </AnimatedCard>
+
+            {/* Mini Electro - Assistant IA avec dépannage */}
+            <AnimatedCard delay={40}>
+              <MiniElectro
+                equipment={{
+                  id: selectedBoard.id,
+                  name: selectedBoard.name,
+                  code: selectedBoard.code,
+                  building_code: selectedBoard.building_code,
+                  floor: selectedBoard.floor,
+                  zone: selectedBoard.zone,
+                  room: selectedBoard.room
+                }}
+                equipmentType="switchboard"
+                onAction={(action, params) => {
+                  if (action === 'scheduleControl') {
+                    navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`);
+                  } else if (action === 'troubleshootingCreated') {
+                    setToast({ message: 'Dépannage enregistré avec succès', type: 'success' });
+                  }
+                }}
+                className="mb-4"
+              />
             </AnimatedCard>
 
             {/* Control Status Section - Enhanced to show ALL controls (board + devices) */}
