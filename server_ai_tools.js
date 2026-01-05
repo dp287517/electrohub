@@ -399,7 +399,9 @@ UTILISE CETTE FONCTION pour obtenir:
   },
 
   // -------------------------------------------------------------------------
-  // CONTRÔLES
+  // CONTRÔLES (centralisés dans Switchboard Controls)
+  // IMPORTANT: Tous les contrôles sont gérés depuis "Switchboard Controls"
+  // Tous les agents (mobile, vsd, meca, etc.) peuvent consulter ces données
   // -------------------------------------------------------------------------
   {
     type: "function",
@@ -407,10 +409,17 @@ UTILISE CETTE FONCTION pour obtenir:
       name: "get_controls",
       description: `Récupère les contrôles planifiés, en retard ou à venir.
 
+⚠️ IMPORTANT: Tous les contrôles sont centralisés dans "Switchboard Controls".
+Même si tu es un agent spécialisé (mobile, vsd, meca...), tu peux et dois utiliser cette fonction
+pour répondre aux questions sur l'état des contrôles, les retards, les plannings.
+
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "contrôles en retard", "équipements à contrôler"
 - "planning des contrôles", "contrôles de la semaine"
 - "qu'est-ce que je dois faire aujourd'hui"
+- "quel est l'état de cet équipement" (pour les contrôles)
+- "y a-t-il des contrôles en retard ?"
+- "prochain contrôle prévu", "échéances"
 - Toute question sur les contrôles ou la planification`,
       parameters: {
         type: "object",
@@ -423,11 +432,15 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
           equipment_type: {
             type: "string",
             enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "all"],
-            description: "Type d'équipement à filtrer"
+            description: "Type d'équipement contexte (pour info, tous les contrôles viennent de Switchboard Controls)"
           },
           building: {
             type: "string",
-            description: "Code du bâtiment pour filtrer"
+            description: "Code du bâtiment pour filtrer (très utile pour contextualiser)"
+          },
+          equipment_id: {
+            type: "string",
+            description: "ID spécifique d'un switchboard pour filtrer ses contrôles"
           },
           limit: {
             type: "number",
@@ -1328,10 +1341,12 @@ function createToolHandlers(pool, site) {
     },
 
     // -----------------------------------------------------------------------
-    // CONTRÔLES
+    // CONTRÔLES (Tous les contrôles sont gérés via Switchboard Controls)
+    // NOTE: Tous les agents doivent pouvoir voir les contrôles planifiés
+    // même s'ils sont sur un équipement non-switchboard (mobile, vsd, etc.)
     // -----------------------------------------------------------------------
     get_controls: async (params) => {
-      const { filter = 'overdue', equipment_type = 'all', building, limit = 20 } = params;
+      const { filter = 'overdue', equipment_type = 'all', building, equipment_id, limit = 20 } = params;
 
       const now = new Date();
       const today = now.toISOString().split('T')[0];
@@ -1384,9 +1399,17 @@ function createToolHandlers(pool, site) {
       const queryParams = [site];
       let paramIndex = 2;
 
+      // Filtrer par bâtiment si spécifié
       if (building) {
         query += ` AND UPPER(s.building_code) = $${paramIndex}`;
         queryParams.push(building.toUpperCase());
+        paramIndex++;
+      }
+
+      // Si un equipment_id spécifique est demandé (pour switchboard)
+      if (equipment_id && equipment_type === 'switchboard') {
+        query += ` AND s.id = $${paramIndex}`;
+        queryParams.push(equipment_id);
         paramIndex++;
       }
 
@@ -1397,12 +1420,22 @@ function createToolHandlers(pool, site) {
 
         // Calculer des stats
         const overdueCount = result.rows.filter(r => r.days_overdue > 0).length;
+        const upcomingCount = result.rows.filter(r => r.days_overdue === 0).length;
+
+        // Message adapté selon le contexte
+        let contextNote = '';
+        if (equipment_type && equipment_type !== 'switchboard' && equipment_type !== 'all') {
+          contextNote = `\n\n📋 **Note**: Tous les contrôles sont gérés depuis "Switchboard Controls". ` +
+            `Voici les contrôles planifiés${building ? ` pour le bâtiment ${building}` : ''}.`;
+        }
 
         return {
           success: true,
           filter,
           count: result.rows.length,
           overdue_count: overdueCount,
+          upcoming_count: upcomingCount,
+          building_filter: building || 'all',
           controls: result.rows.map(c => ({
             control_id: c.control_id,
             next_control_date: c.next_control_date,
@@ -1417,8 +1450,8 @@ function createToolHandlers(pool, site) {
             days_overdue: c.days_overdue
           })),
           summary: result.rows.length === 0
-            ? `Aucun contrôle ${filter === 'overdue' ? 'en retard' : 'prévu'}.`
-            : `${result.rows.length} contrôle(s) ${filter === 'overdue' ? 'en retard' : 'prévu(s)'}.`
+            ? `Aucun contrôle ${filter === 'overdue' ? 'en retard' : 'prévu'}${building ? ` pour le bâtiment ${building}` : ''}.`
+            : `${result.rows.length} contrôle(s) ${filter === 'overdue' ? 'en retard' : 'prévu(s)'}${overdueCount > 0 ? ` (${overdueCount} en retard)` : ''}.${contextNote}`
         };
       } catch (error) {
         console.error('[TOOL] get_controls error:', error.message);
@@ -1816,11 +1849,20 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "procédure pour...", "comment faire...", "mode opératoire" | search_procedures |
 | "ouvre/montre la procédure", "affiche la procédure" | open_procedure_modal |
 | "équipements du bâtiment", "trouve le tableau", "où est..." | search_equipment |
-| "contrôles en retard", "planning contrôles", "prochains contrôles" | get_controls |
+| "contrôles en retard", "planning contrôles", "prochains contrôles", "état équipement" | get_controls |
 | "NC ouvertes", "non-conformités", "anomalies" | get_non_conformities |
 | "montre sur la carte", "localise", "plan" | show_map |
 | "statistiques", "vue d'ensemble", "résumé", "combien de..." | get_statistics |
 | "documentation", "fiche technique", "datasheet", "manuel" | search_documentation |
+
+## ⚠️ ACCÈS AUX CONTRÔLES POUR TOUS LES AGENTS
+**IMPORTANT**: Tous les contrôles sont centralisés dans "Switchboard Controls".
+Même si tu es un agent spécialisé (Shakira pour VSD, Baptiste pour mobile, etc.),
+tu peux et DOIS utiliser la fonction get_controls pour répondre aux questions sur:
+- L'état des contrôles (en retard, à venir)
+- Les échéances de contrôle
+- Le planning de maintenance
+Utilise le paramètre "building" pour filtrer par bâtiment si l'utilisateur est sur un équipement spécifique.
 
 ## SYNONYMES IMPORTANTS
 - Panne = dépannage = incident = défaillance = breakdown = dysfonctionnement
