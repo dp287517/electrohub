@@ -1521,7 +1521,8 @@ export default function Doors() {
   // Load placements by iterating through all plans and their positions
   const loadPlacements = useCallback(async () => {
     try {
-      const plansRes = await api.doorsMaps.listPlans();
+      // Use VSD plans since doors now uses the shared VSD plan system
+      const plansRes = await api.vsdMaps.listPlans();
       const plans = plansRes?.plans || plansRes?.items || [];
       const placed = new Set();
 
