@@ -110,6 +110,12 @@ export default function MiniElectro({
     }
   };
 
+  // Détecter si l'utilisateur veut créer un dépannage
+  const wantsTroubleshooting = (message) => {
+    const keywords = ['faire un dépannage', 'créer un dépannage', 'nouveau dépannage', 'signaler un problème', 'déclarer une panne', 'signaler une panne', 'créer une intervention'];
+    return keywords.some(k => message.toLowerCase().includes(k));
+  };
+
   // Chat avec l'IA
   const sendChatMessage = async (e) => {
     e?.preventDefault();
@@ -121,6 +127,21 @@ export default function MiniElectro({
 
     // Ajouter le message utilisateur à l'historique
     setChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
+
+    // Si l'utilisateur veut créer un dépannage, on ouvre directement le modal
+    if (wantsTroubleshooting(userMessage)) {
+      setChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: `Je t'ouvre le formulaire de dépannage pour ${equipment.name || equipment.equipment_name || 'cet équipement'} 🔧`,
+        actions: [
+          { label: '📝 Ouvrir le formulaire', action: 'openTroubleshooting' }
+        ]
+      }]);
+      setIsSending(false);
+      // Ouvrir automatiquement le modal après un court délai
+      setTimeout(() => setShowTroubleshooting(true), 500);
+      return;
+    }
 
     try {
       const response = await post('/api/ai-assistant/chat', {
@@ -167,7 +188,9 @@ export default function MiniElectro({
 
   // Gérer les actions suggérées
   const handleChatAction = (action) => {
-    if (action.prompt) {
+    if (action.action === 'openTroubleshooting') {
+      setShowTroubleshooting(true);
+    } else if (action.prompt) {
       setChatMessage(action.prompt);
       // Envoyer automatiquement
       setTimeout(() => {
@@ -272,6 +295,12 @@ export default function MiniElectro({
                     <p className="text-xs text-gray-400 mt-1">Pose-moi une question sur cet équipement</p>
                     <div className="flex flex-wrap gap-2 justify-center mt-4">
                       <button
+                        onClick={() => setShowTroubleshooting(true)}
+                        className="px-3 py-1.5 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full text-xs font-medium hover:from-orange-600 hover:to-red-600 transition-colors shadow-sm"
+                      >
+                        🔧 Nouveau dépannage
+                      </button>
+                      <button
                         onClick={() => {
                           setChatMessage('Quel est l\'état de cet équipement ?');
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
@@ -287,16 +316,7 @@ export default function MiniElectro({
                         }}
                         className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full text-xs font-medium transition-colors"
                       >
-                        🔧 Dépannages
-                      </button>
-                      <button
-                        onClick={() => {
-                          setChatMessage('Quels sont les problèmes fréquents ?');
-                          setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
-                        }}
-                        className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-full text-xs font-medium transition-colors"
-                      >
-                        ⚠️ Problèmes
+                        📋 Historique
                       </button>
                       <button
                         onClick={() => {
