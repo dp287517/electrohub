@@ -37,7 +37,7 @@ import RealtimeAssistant from './RealtimeAssistant';
 import SignatureManager from './SignatureManager';
 
 // Step Component
-function StepCard({ step, procedureId, isEditing, onUpdate, onDelete }) {
+function StepCard({ step, procedureId, isEditing, onUpdate, onDelete, onImageClick }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(step);
@@ -78,8 +78,8 @@ function StepCard({ step, procedureId, isEditing, onUpdate, onDelete }) {
         <div className="w-8 h-8 bg-violet-100 text-violet-700 rounded-full flex items-center justify-center font-semibold">
           {step.step_number}
         </div>
-        <div className="flex-1">
-          <h4 className="font-medium text-gray-900">{step.title}</h4>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium text-gray-900 break-words">{step.title}</h4>
           {step.duration_minutes && (
             <span className="text-sm text-gray-500 flex items-center gap-1">
               <Clock className="w-3 h-3" />
@@ -163,7 +163,14 @@ function StepCard({ step, procedureId, isEditing, onUpdate, onDelete }) {
                   <img
                     src={getStepPhotoUrl(step.id)}
                     alt={`Étape ${step.step_number}`}
-                    className="max-h-48 rounded-lg border"
+                    className="max-h-48 rounded-lg border cursor-pointer hover:opacity-90 hover:shadow-lg transition-all"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onImageClick) {
+                        onImageClick(getStepPhotoUrl(step.id), `Étape ${step.step_number}: ${step.title}`);
+                      }
+                    }}
+                    title="Cliquez pour agrandir"
                   />
                 </div>
               )}
@@ -252,6 +259,34 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [showPhotoAssignment, setShowPhotoAssignment] = useState(false);
   const [pendingPhotos, setPendingPhotos] = useState([]);
   const [uploadingStepId, setUploadingStepId] = useState(null);
+
+  // Lightbox state for image enlargement
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [lightboxTitle, setLightboxTitle] = useState('');
+
+  const openLightbox = (src, title) => {
+    setLightboxSrc(src);
+    setLightboxTitle(title);
+    setLightboxOpen(true);
+  };
+
+  const closeLightbox = () => {
+    setLightboxOpen(false);
+    setLightboxSrc(null);
+    setLightboxTitle('');
+  };
+
+  // Handle keyboard escape to close lightbox
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && lightboxOpen) {
+        closeLightbox();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxOpen]);
 
   // Capture context for photo recapture
   const { startCapture, isCapturing, captures, captureCount, consumeCaptures } = useProcedureCapture();
@@ -981,6 +1016,7 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
                 isEditing={isEditing}
                 onUpdate={loadProcedure}
                 onDelete={handleDeleteStep}
+                onImageClick={openLightbox}
               />
             ))}
           </div>
@@ -1205,6 +1241,44 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
               >
                 Terminer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox pour agrandir les photos des étapes */}
+      {lightboxOpen && lightboxSrc && (
+        <div
+          className="fixed inset-0 z-[10001] bg-black/90 flex items-center justify-center p-4"
+          onClick={closeLightbox}
+        >
+          <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
+            {/* Bouton fermer */}
+            <button
+              onClick={closeLightbox}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 transition-colors text-lg font-medium flex items-center gap-2"
+            >
+              <span>Fermer</span>
+              <X className="w-6 h-6" />
+            </button>
+
+            {/* Titre */}
+            {lightboxTitle && (
+              <div className="absolute -top-12 left-0 text-white text-lg font-medium truncate max-w-[70%]">
+                {lightboxTitle}
+              </div>
+            )}
+
+            {/* Image */}
+            <img
+              src={lightboxSrc}
+              alt={lightboxTitle || "Photo agrandie"}
+              className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+
+            {/* Instructions */}
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 text-gray-400 text-sm">
+              Cliquez en dehors de l'image ou appuyez sur Échap pour fermer
             </div>
           </div>
         </div>
