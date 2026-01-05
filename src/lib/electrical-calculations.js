@@ -168,8 +168,11 @@ const ELECTRODE_COEFFICIENTS = {
   HOA:  { k1: -0.01619, k2: 0.903, k3: -0.065, k4: 0, k5: 0.00167, k6: 0.903, k7: -0.035, k8: 0, k9: 0, k10: 0 },
 };
 
+// PPE minimum requis - Bonne pratique de sécurité (toujours Cat. 1 minimum pour travaux sous tension)
+const MIN_PPE_CATEGORY = 1;
+
 const PPE_CATEGORIES = [
-  { level: 0, max: 1.2, name: 'Aucun PPE requis', color: 'green' },
+  { level: 0, max: 1.2, name: 'PPE Cat. 1 (énergie faible)', color: 'blue' }, // Anciennement "Aucun PPE requis" - remplacé par Cat. 1 minimum
   { level: 1, max: 4, name: 'PPE Cat. 1', color: 'blue' },
   { level: 2, max: 8, name: 'PPE Cat. 2', color: 'yellow' },
   { level: 3, max: 25, name: 'PPE Cat. 3', color: 'orange' },
@@ -218,17 +221,24 @@ export function calculateArcFlash(params) {
   // Arc flash boundary (where E = 1.2 cal/cm²)
   const AFB = D * Math.pow(E / 1.2, 0.5);
 
-  // PPE category
+  // PPE category (avec minimum requis pour sécurité)
   const E_cal = E / 4.184; // Convert J/cm² to cal/cm²
-  const ppe = PPE_CATEGORIES.find(p => E_cal <= p.max) || PPE_CATEGORIES[5];
+  const ppe_calculated = PPE_CATEGORIES.find(p => E_cal <= p.max) || PPE_CATEGORIES[5];
+
+  // Appliquer le PPE minimum (Cat. 1 pour tout travail sous tension)
+  const ppe_level = Math.max(ppe_calculated.level, MIN_PPE_CATEGORY);
+  const ppe = PPE_CATEGORIES.find(p => p.level === ppe_level) || ppe_calculated;
 
   return {
     incident_energy_cal: Number(E_cal.toFixed(2)),
     incident_energy_j: Number(E.toFixed(2)),
     arc_current_ka: Number(Iarc.toFixed(2)),
     arc_flash_boundary_mm: Number(AFB.toFixed(0)),
-    ppe_category: ppe.level,
-    ppe_name: ppe.name,
+    ppe_category: ppe_level,
+    ppe_category_calculated: ppe_calculated.level, // Valeur calculée avant application du minimum
+    ppe_name: ppe_level === MIN_PPE_CATEGORY && ppe_calculated.level < MIN_PPE_CATEGORY
+      ? 'PPE Cat. 1 (énergie faible)'
+      : ppe.name,
     ppe_color: ppe.color,
     working_distance_mm,
     arc_duration_ms: arc_duration_s * 1000,

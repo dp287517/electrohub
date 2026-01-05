@@ -616,6 +616,9 @@ function applyMitigations(t, settings = {}) {
   return t;
 }
 
+// PPE minimum requis - Bonne pratique de sécurité (toujours Cat. 1 minimum pour travaux sous tension)
+const MIN_PPE_CATEGORY = 1;
+
 function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure, gap) {
   const V = n(point.voltage_v, 400) / 1000;                 // kV
   const Ibf = Math.max(n(faultKa, 0), 0.001);               // kA (éviter log10(0))
@@ -635,20 +638,25 @@ function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure,
   // Incident energy E (simplifié + normalisation distance)
   const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
   let E = Math.pow(10, lgE) * 4.184 * Math.pow(610 / Dmm, 2); // cal/cm²
-  E = Math.min(Math.max(E, 0.1), 200); // borne haute par précaution d’affichage
+  E = Math.min(Math.max(E, 0.1), 200); // borne haute par précaution d'affichage
 
-  // PPE category (seuils usuels)
-  let ppe = 0;
-  if (E > 40) ppe = 4;
-  else if (E > 25) ppe = 3;
-  else if (E > 8)  ppe = 2;
-  else if (E > 1.2) ppe = 1;
+  // PPE category (seuils IEEE 1584 / NFPA 70E)
+  // IMPORTANT: PPE minimum = 1 pour tout travail sur installation électrique sous tension
+  // Même si E < 1.2 cal/cm², le risque de flash/projection existe toujours
+  let ppe_calculated = 0;
+  if (E > 40) ppe_calculated = 4;
+  else if (E > 25) ppe_calculated = 3;
+  else if (E > 8)  ppe_calculated = 2;
+  else if (E > 1.2) ppe_calculated = 1;
+
+  // Appliquer le minimum PPE pour la sécurité
+  const ppe = Math.max(ppe_calculated, MIN_PPE_CATEGORY);
 
   const riskZones = E > 1.2 ? [{ min: 1.2, max: E }] : [];
 
-  console.log(`[ARC CALC] E=${E.toFixed(2)} cal/cm², PPE=${ppe} (V=${V}kV, Ibf=${Ibf}kA, t=${t}s, D=${Dmm}mm, G=${G}", k1=${k1})`);
+  console.log(`[ARC CALC] E=${E.toFixed(2)} cal/cm², PPE=${ppe} (calc=${ppe_calculated}, min=${MIN_PPE_CATEGORY}) (V=${V}kV, Ibf=${Ibf}kA, t=${t}s, D=${Dmm}mm, G=${G}", k1=${k1})`);
 
-  return { incident_energy: Math.round(E * 100) / 100, ppe_category: ppe, riskZones };
+  return { incident_energy: Math.round(E * 100) / 100, ppe_category: ppe, ppe_calculated, riskZones };
 }
 
 function getRemediations(point, E, ppe) {
