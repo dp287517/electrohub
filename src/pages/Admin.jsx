@@ -1743,6 +1743,46 @@ function SettingsTab() {
   const [agentsList, setAgentsList] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [uploadingAgentVideo, setUploadingAgentVideo] = useState(null); // 'agentType-idle' | 'agentType-speaking' | null
+  const [agentNames, setAgentNames] = useState({});
+  const [editingAgentName, setEditingAgentName] = useState(null); // agentType being edited
+  const [tempAgentName, setTempAgentName] = useState('');
+
+  // Fetch agent custom names
+  const fetchAgentNames = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-agents/names`, getAuthOptions());
+      const data = await res.json();
+      if (data.names) {
+        setAgentNames(data.names);
+      }
+    } catch (err) {
+      console.error('Error fetching agent names:', err);
+    }
+  }, []);
+
+  // Update agent name
+  const handleUpdateAgentName = async (agentType, newName) => {
+    try {
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/settings/ai-agents/${agentType}/name`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name: newName })
+      });
+
+      if (!res.ok) throw new Error('Failed to update name');
+
+      setAgentNames(prev => ({ ...prev, [agentType]: newName }));
+      setEditingAgentName(null);
+    } catch (err) {
+      console.error('Error updating agent name:', err);
+      alert('Erreur: ' + err.message);
+    }
+  };
 
   // Fetch AI agents list with video status
   const fetchAgentsList = useCallback(async () => {
@@ -1850,8 +1890,8 @@ function SettingsTab() {
   }, []);
 
   useEffect(() => {
-    Promise.all([fetchAiIconInfo(), fetchAiVideoInfo(), fetchAgentsList()]).finally(() => setLoading(false));
-  }, [fetchAiIconInfo, fetchAiVideoInfo, fetchAgentsList]);
+    Promise.all([fetchAiIconInfo(), fetchAiVideoInfo(), fetchAgentsList(), fetchAgentNames()]).finally(() => setLoading(false));
+  }, [fetchAiIconInfo, fetchAiVideoInfo, fetchAgentsList, fetchAgentNames]);
 
   // Handle file selection
   const handleFileSelect = async (e) => {
@@ -2372,15 +2412,16 @@ function SettingsTab() {
                             )}
                           </div>
                           <div className="text-left">
-                            <p className="font-medium text-gray-900">{agent.name}</p>
+                            <p className="font-medium text-gray-900">
+                              {agentNames[agent.type] || agent.name?.split(' (')[0] || agent.type}
+                            </p>
                             <div className="flex items-center gap-2 text-xs">
-                              {hasVideos ? (
+                              <span className="text-gray-500">{agent.type}</span>
+                              {hasVideos && (
                                 <span className="text-green-600 flex items-center gap-1">
                                   <Check size={12} />
                                   {agent.hasIdleVideo && agent.hasSpeakingVideo ? '2 vidéos' : '1 vidéo'}
                                 </span>
-                              ) : (
-                                <span className="text-gray-400">Pas de vidéo</span>
                               )}
                             </div>
                           </div>
@@ -2394,6 +2435,52 @@ function SettingsTab() {
                       {/* Expanded content */}
                       {isExpanded && (
                         <div className="p-4 border-t border-gray-100 space-y-4">
+                          {/* Agent name editor */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-500">Nom:</span>
+                            {editingAgentName === agent.type ? (
+                              <div className="flex items-center gap-2 flex-1">
+                                <input
+                                  type="text"
+                                  value={tempAgentName}
+                                  onChange={(e) => setTempAgentName(e.target.value)}
+                                  className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+                                  placeholder="Nom de l'agent"
+                                  autoFocus
+                                  maxLength={50}
+                                />
+                                <button
+                                  onClick={() => handleUpdateAgentName(agent.type, tempAgentName)}
+                                  className="p-1 text-green-600 hover:bg-green-50 rounded"
+                                >
+                                  <Check size={16} />
+                                </button>
+                                <button
+                                  onClick={() => setEditingAgentName(null)}
+                                  className="p-1 text-gray-400 hover:bg-gray-100 rounded"
+                                >
+                                  <X size={16} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2 flex-1">
+                                <span className="text-sm font-medium text-gray-900">
+                                  {agentNames[agent.type] || agent.name?.split(' (')[0]}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTempAgentName(agentNames[agent.type] || agent.name?.split(' (')[0] || '');
+                                    setEditingAgentName(agent.type);
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
                           <div className="grid grid-cols-2 gap-3">
                             {/* Idle video */}
                             <div className="space-y-2">

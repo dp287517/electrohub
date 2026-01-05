@@ -2734,4 +2734,126 @@ router.delete("/settings/ai-agents/:agentType", adminOnly, async (req, res) => {
   }
 });
 
+// ============================================================================
+// AGENT NAMES CUSTOMIZATION
+// ============================================================================
+
+// Default agent names (fallback)
+const DEFAULT_AGENT_NAMES = {
+  main: 'Electro',
+  vsd: 'Shakira',
+  meca: 'Titan',
+  glo: 'Lumina',
+  hv: 'Voltaire',
+  mobile: 'Nomad',
+  atex: 'Phoenix',
+  switchboard: 'Matrix',
+  doors: 'Portal',
+  datahub: 'Nexus',
+  firecontrol: 'Blaze'
+};
+
+// GET /api/admin/settings/ai-agents/names - Get all custom agent names
+router.get("/settings/ai-agents/names", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+
+    const result = await pool.query(
+      `SELECT key, text_value FROM app_settings WHERE key LIKE 'ai_agent_name_%'`
+    );
+
+    // Build names object with defaults
+    const names = { ...DEFAULT_AGENT_NAMES };
+    result.rows.forEach(row => {
+      const agentType = row.key.replace('ai_agent_name_', '');
+      if (row.text_value && VALID_AGENT_TYPES.includes(agentType)) {
+        names[agentType] = row.text_value;
+      }
+    });
+
+    res.json({ names, defaults: DEFAULT_AGENT_NAMES });
+  } catch (err) {
+    console.error("[settings/ai-agents/names GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/settings/ai-agents/names - Update agent names
+router.put("/settings/ai-agents/names", adminOnly, async (req, res) => {
+  try {
+    const { names } = req.body;
+
+    if (!names || typeof names !== 'object') {
+      return res.status(400).json({ error: "Invalid names object" });
+    }
+
+    await ensureAppSettingsTable();
+
+    // Update each agent name
+    for (const [agentType, name] of Object.entries(names)) {
+      if (!VALID_AGENT_TYPES.includes(agentType)) continue;
+      if (!name || typeof name !== 'string') continue;
+
+      const key = `ai_agent_name_${agentType}`;
+      const trimmedName = name.trim().substring(0, 50); // Max 50 chars
+
+      if (trimmedName === DEFAULT_AGENT_NAMES[agentType]) {
+        // If it's the default, remove custom entry
+        await pool.query(`DELETE FROM app_settings WHERE key = $1`, [key]);
+      } else {
+        await pool.query(`
+          INSERT INTO app_settings (key, text_value, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (key) DO UPDATE SET
+            text_value = EXCLUDED.text_value,
+            updated_at = NOW()
+        `, [key, trimmedName]);
+      }
+    }
+
+    res.json({ ok: true, message: "Agent names updated" });
+  } catch (err) {
+    console.error("[settings/ai-agents/names PUT] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/settings/ai-agents/:agentType/name - Update single agent name
+router.put("/settings/ai-agents/:agentType/name", adminOnly, async (req, res) => {
+  try {
+    const { agentType } = req.params;
+    const { name } = req.body;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    if (!name || typeof name !== 'string') {
+      return res.status(400).json({ error: "Invalid name" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = `ai_agent_name_${agentType}`;
+    const trimmedName = name.trim().substring(0, 50);
+
+    if (trimmedName === DEFAULT_AGENT_NAMES[agentType]) {
+      await pool.query(`DELETE FROM app_settings WHERE key = $1`, [key]);
+    } else {
+      await pool.query(`
+        INSERT INTO app_settings (key, text_value, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (key) DO UPDATE SET
+          text_value = EXCLUDED.text_value,
+          updated_at = NOW()
+      `, [key, trimmedName]);
+    }
+
+    res.json({ ok: true, name: trimmedName });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/name PUT] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

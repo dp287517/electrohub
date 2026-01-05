@@ -992,11 +992,6 @@ Demande-moi n'importe quoi !`,
                     {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
                   </span>
                   <div className="flex items-center gap-2">
-                    {message.provider && (
-                      <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase">
-                        {message.provider === 'multi-model' ? '🔥 Multi-AI' : message.provider}
-                      </span>
-                    )}
                     {/* Feedback buttons for assistant messages */}
                     {message.role === 'assistant' && !message.isError && (
                       <div className="flex items-center gap-1 ml-2">

@@ -149,13 +149,8 @@ function createChatV2Router(pool) {
       if (handoffMessage) {
         finalContent = handoffMessage + finalContent;
         console.log(`[CHAT-V2] 🔄 Handoff: main → ${detectedAgent} (${AGENTS_INFO[detectedAgent]?.name})`);
-      } else if (detectedAgent !== 'main') {
-        // Si pas de handoff mais agent spécialisé, ajouter une intro courte
-        const agent = AGENTS_INFO[detectedAgent];
-        if (agent) {
-          finalContent = `${agent.emoji} **${agent.name}**: ${finalContent}`;
-        }
       }
+      // Note: On n'ajoute PAS de préfixe supplémentaire car OpenAI le fait déjà dans sa réponse
 
       // Construire la réponse
       const chatResponse = {
@@ -339,9 +334,9 @@ function generateHandoffMessage(fromAgent, toAgent) {
   if (!to || fromAgent === toAgent) return null;
 
   const handoffPhrases = [
-    `${from.emoji} *${from.name}*: Ah, ça c'est pour ${to.name} ! Je te le/la passe...\n\n${to.emoji} **${to.name}** (${to.description}): `,
-    `${from.emoji} *${from.name}*: Cette question concerne les ${to.description.toLowerCase()}, je laisse ${to.name} prendre le relais !\n\n${to.emoji} **${to.name}**: `,
-    `${from.emoji} *${from.name}*: Je passe la main à ${to.name}, notre ${to.description.toLowerCase()}.\n\n${to.emoji} **${to.name}**: `
+    `${from.emoji} *${from.name}*: Ah, ça c'est pour ${to.name} ! Je te le/la passe...\n\n${to.emoji} **${to.name}**: Salut ! `,
+    `${from.emoji} *${from.name}*: ${to.name} est le pro pour ça, je lui laisse la main !\n\n${to.emoji} **${to.name}**: Hey ! `,
+    `${from.emoji} *${from.name}*: Je passe le relais à ${to.name} !\n\n${to.emoji} **${to.name}**: Coucou ! `
   ];
 
   return handoffPhrases[Math.floor(Math.random() * handoffPhrases.length)];
