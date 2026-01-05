@@ -22,6 +22,20 @@ const uploadMemory = multer({
   }
 });
 
+// Multer config pour upload de vidéos (stockage en mémoire)
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (_req, file, cb) => {
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (validTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files allowed (MP4, WebM, OGG)'), false);
+    }
+  }
+});
+
 const router = express.Router();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
@@ -2353,7 +2367,7 @@ router.get("/settings/ai-video/speaking", async (req, res) => {
 });
 
 // POST /api/admin/settings/ai-video/idle - Upload idle video (admin only)
-router.post("/settings/ai-video/idle", adminOnly, uploadMemory.single('video'), async (req, res) => {
+router.post("/settings/ai-video/idle", adminOnly, uploadVideo.single('video'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No video file provided" });
@@ -2391,7 +2405,7 @@ router.post("/settings/ai-video/idle", adminOnly, uploadMemory.single('video'), 
 });
 
 // POST /api/admin/settings/ai-video/speaking - Upload speaking video (admin only)
-router.post("/settings/ai-video/speaking", adminOnly, uploadMemory.single('video'), async (req, res) => {
+router.post("/settings/ai-video/speaking", adminOnly, uploadVideo.single('video'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No video file provided" });
