@@ -563,7 +563,8 @@ const DetailPanel = ({
   onStartCheck,
   isPlaced,
   showToast,
-  settings
+  settings,
+  onOpenLightbox
 }) => {
   const [files, setFiles] = useState([]);
   const [history, setHistory] = useState([]);
@@ -643,10 +644,34 @@ const DetailPanel = ({
         </div>
 
         <div className="flex items-start gap-4">
-          <div
-            onClick={() => photoInputRef.current?.click()}
-            className="w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center cursor-pointer hover:bg-white/30 transition-colors overflow-hidden"
-          >
+          <div className="relative">
+            <div
+              onClick={() => {
+                if (door.photo_url) {
+                  onOpenLightbox(api.doors.photoUrl(door.id), door.name || "Photo porte");
+                } else {
+                  photoInputRef.current?.click();
+                }
+              }}
+              className="w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center cursor-pointer hover:bg-white/30 transition-colors overflow-hidden"
+            >
+              {door.photo_url ? (
+                <img src={api.doors.photoUrl(door.id)} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <Camera size={24} />
+              )}
+            </div>
+            {/* Button to change photo */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                photoInputRef.current?.click();
+              }}
+              className="absolute -bottom-1 -right-1 w-7 h-7 bg-white rounded-full shadow-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
+              title="Changer la photo"
+            >
+              <Edit3 size={14} className="text-gray-600" />
+            </button>
             <input
               ref={photoInputRef}
               type="file"
@@ -654,11 +679,6 @@ const DetailPanel = ({
               className="hidden"
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(door.id, e.target.files[0])}
             />
-            {door.photo_url ? (
-              <img src={api.doors.photoUrl(door.id)} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <Camera size={24} />
-            )}
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-xl font-bold truncate">{door.name}</h2>
@@ -1452,6 +1472,23 @@ export default function Doors() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Lightbox state
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [lightboxTitle, setLightboxTitle] = useState("");
+
+  const openLightbox = useCallback((src, title = "") => {
+    setLightboxSrc(src);
+    setLightboxTitle(title);
+    setLightboxOpen(true);
+  }, []);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxOpen(false);
+    setLightboxSrc(null);
+    setLightboxTitle("");
+  }, []);
+
   // Load doors
   const loadDoors = useCallback(async () => {
     setIsLoading(true);
@@ -1949,6 +1986,7 @@ export default function Doors() {
               isPlaced={isPlaced(selectedDoor?.id)}
               showToast={showToast}
               settings={settings}
+              onOpenLightbox={openLightbox}
             />
           )}
         </div>
@@ -2022,6 +2060,44 @@ export default function Doors() {
           type={toast.type}
           onClose={() => setToast(null)}
         />
+      )}
+
+      {/* Lightbox for photo preview */}
+      {lightboxOpen && lightboxSrc && (
+        <div
+          className="fixed inset-0 z-[10001] bg-black/90 flex items-center justify-center p-4"
+          onClick={closeLightbox}
+        >
+          <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
+            {/* Close button */}
+            <button
+              onClick={closeLightbox}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 transition-colors text-lg font-medium flex items-center gap-2"
+            >
+              <span>Fermer</span>
+              <X size={24} />
+            </button>
+
+            {/* Title */}
+            {lightboxTitle && (
+              <div className="absolute -top-12 left-0 text-white text-lg font-medium truncate max-w-[70%]">
+                {lightboxTitle}
+              </div>
+            )}
+
+            {/* Image */}
+            <img
+              src={lightboxSrc}
+              alt={lightboxTitle || "Photo agrandie"}
+              className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+
+            {/* Instructions */}
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 text-gray-400 text-sm">
+              Cliquez en dehors de l'image pour fermer
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
