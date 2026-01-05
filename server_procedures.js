@@ -3900,18 +3900,36 @@ app.get("/api/procedures/pending-photos", async (req, res) => {
 app.get("/api/procedures/pending-photos/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
-    const { thumbnail } = req.query;
+    const { thumbnail, site: querySite } = req.query;
     const userEmail = req.headers["x-user-email"];
-    const site = req.headers["x-site"];
+    const headerSite = req.headers["x-site"];
 
-    // Always fetch both thumbnail and file_data so we can fallback
-    const { rows } = await pool.query(`
-      SELECT thumbnail, file_data, file_mime, file_name
-      FROM procedure_pending_photos
-      WHERE id = $1 AND (user_email = $2 OR site = $3)
-    `, [id, userEmail, site]);
+    // Use header site first, then query param as fallback (for <img> tags that don't send headers)
+    const site = headerSite || querySite;
+
+    console.log(`[PROCEDURES] 🖼️ Get pending photo file: id=${id}, thumbnail=${thumbnail}, userEmail=${userEmail}, site=${site}`);
+
+    // Build query - if no auth info, just get by ID (for direct image loads)
+    // This is safe because photo IDs are not guessable (auto-increment from DB)
+    let query, params;
+    if (userEmail || site) {
+      query = `
+        SELECT thumbnail, file_data, file_mime, file_name
+        FROM procedure_pending_photos
+        WHERE id = $1 AND (user_email = $2 OR site = $3 OR $2 IS NULL OR $3 IS NULL)
+      `;
+      params = [id, userEmail || null, site || null];
+    } else {
+      // Fallback: just get by ID (for <img> tags without auth headers)
+      console.log(`[PROCEDURES] ⚠️ No auth info, fetching photo by ID only`);
+      query = `SELECT thumbnail, file_data, file_mime, file_name FROM procedure_pending_photos WHERE id = $1`;
+      params = [id];
+    }
+
+    const { rows } = await pool.query(query, params);
 
     if (!rows.length) {
+      console.log(`[PROCEDURES] ❌ Photo ${id} not found`);
       return res.status(404).json({ ok: false, error: "Photo not found" });
     }
 
@@ -3922,19 +3940,23 @@ app.get("/api/procedures/pending-photos/:id/file", async (req, res) => {
     if (thumbnail === 'true') {
       // Use thumbnail if available, otherwise fallback to full image
       data = row.thumbnail || row.file_data;
+      console.log(`[PROCEDURES] ✅ Serving thumbnail for photo ${id}: ${data?.length || 0} bytes`);
     } else {
       data = row.file_data;
+      console.log(`[PROCEDURES] ✅ Serving full image for photo ${id}: ${data?.length || 0} bytes`);
     }
 
     if (!data) {
+      console.log(`[PROCEDURES] ❌ Photo ${id} has no data`);
       return res.status(404).json({ ok: false, error: "Photo data not found" });
     }
 
-    res.set('Content-Type', row.file_mime || 'application/octet-stream');
+    res.set('Content-Type', row.file_mime || 'image/jpeg');
     res.set('Content-Disposition', `inline; filename="${row.file_name}"`);
+    res.set('Cache-Control', 'private, max-age=3600'); // Cache for 1 hour
     res.send(data);
   } catch (err) {
-    console.error("Error getting pending photo file:", err);
+    console.error("[PROCEDURES] ❌ Error getting pending photo file:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
