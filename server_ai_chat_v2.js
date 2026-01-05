@@ -188,17 +188,24 @@ function createChatV2Router(pool) {
       // Extraire le contenu final
       let finalContent = assistantMessage.content || 'Désolé, je n\'ai pas pu générer de réponse.';
 
+      // Extraire l'agent précédent de la conversation (pour garder le contexte)
+      const previousAgent = clientContext?.previousAgentType || 'main';
+
       // Détecter l'agent approprié basé sur le message et les tools utilisés
-      const detectedAgent = detectAgentType(message, toolResults);
+      const detectedAgent = detectAgentType(message, toolResults, previousAgent);
 
       // Obtenir les infos de l'agent avec nom personnalisé
       const agentInfo = getAgentInfo(detectedAgent, customNames);
       const mainAgentInfo = getAgentInfo('main', customNames);
 
       // Générer un message de passage de relais si l'agent change
-      // (depuis l'agent principal vers un spécialiste)
-      const handoffMessage = detectedAgent !== 'main'
-        ? generateHandoffMessageWithNames(mainAgentInfo, agentInfo)
+      // (depuis l'agent principal vers un spécialiste, OU d'un spécialiste à un autre)
+      const isNewSpecialist = detectedAgent !== 'main' && detectedAgent !== previousAgent;
+      const handoffMessage = isNewSpecialist
+        ? generateHandoffMessageWithNames(
+            previousAgent !== 'main' ? getAgentInfo(previousAgent, customNames) : mainAgentInfo,
+            agentInfo
+          )
         : null;
 
       // Préfixer avec le message de handoff si applicable
@@ -407,9 +414,13 @@ function generateHandoffMessage(fromAgentType, toAgentType) {
 
 /**
  * Détecte l'agent IA approprié basé sur le message et les tools utilisés
- * Retourne: 'main' | 'vsd' | 'meca' | 'glo' | 'hv' | 'mobile' | 'atex' | 'switchboard' | 'doors' | 'datahub' | 'firecontrol'
+ * Si aucun agent spécifique n'est détecté, garde l'agent précédent (contexte de conversation)
+ * @param {string} message - Le message de l'utilisateur
+ * @param {Array} toolResults - Les résultats des tools appelés
+ * @param {string} previousAgent - L'agent précédent dans la conversation (pour garder le contexte)
+ * @returns {'main' | 'vsd' | 'meca' | 'glo' | 'hv' | 'mobile' | 'atex' | 'switchboard' | 'doors' | 'datahub' | 'firecontrol'}
  */
-function detectAgentType(message, toolResults) {
+function detectAgentType(message, toolResults, previousAgent = 'main') {
   const messageLower = message.toLowerCase();
 
   // Patterns de détection par type d'équipement
@@ -498,7 +509,7 @@ function detectAgentType(message, toolResults) {
     }
   }
 
-  // 2. Chercher les mots-clés dans le message
+  // 3. Chercher les mots-clés dans le message
   for (const [agentType, config] of Object.entries(agentPatterns)) {
     if (config.keywords.some(keyword => messageLower.includes(keyword))) {
       console.log(`[AGENT] Detected ${agentType} from keyword: ${config.keywords.find(k => messageLower.includes(k))}`);
@@ -506,7 +517,17 @@ function detectAgentType(message, toolResults) {
     }
   }
 
-  // 3. Par défaut, utiliser l'agent principal
+  // 4. Garder l'agent précédent si on est dans une conversation avec un spécialiste
+  // (sauf si on demande explicitement de revenir à Electro ou de changer de sujet)
+  const returnToMainKeywords = ['electro', 'retour', 'autre chose', 'autre sujet', 'merci', 'au revoir', 'bye'];
+  const wantsToReturn = returnToMainKeywords.some(k => messageLower.includes(k));
+
+  if (previousAgent && previousAgent !== 'main' && !wantsToReturn) {
+    console.log(`[AGENT] Keeping previous agent: ${previousAgent} (conversation context)`);
+    return previousAgent;
+  }
+
+  // 5. Par défaut, utiliser l'agent principal
   console.log('[AGENT] Using main agent (no specific context detected)');
   return 'main';
 }

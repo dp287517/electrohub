@@ -500,8 +500,15 @@ Demande-moi n'importe quoi !`,
     setIsSpeaking(true);
 
     try {
+      // Trouver le dernier agent utilisé dans la conversation
+      const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant');
+      const previousAgentType = lastAssistantMessage?.agentType || 'main';
+
       const response = await aiAssistant.chatWithPhoto(messageText, photoToSend, {
-        context,
+        context: {
+          ...context,
+          previousAgentType // Passer l'agent précédent pour garder le contexte
+        },
         conversationHistory: messages.slice(-10)
       });
 
