@@ -7670,7 +7670,7 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
         SELECT position_number, name, manufacturer, reference, in_amps, icu_ka, poles
         FROM devices
         WHERE switchboard_id = $1
-        ORDER BY position_number::int NULLS LAST, name
+        ORDER BY (NULLIF(regexp_replace(position_number, '[^0-9.]', '', 'g'), ''))::numeric NULLS LAST, name
       `, [record.switchboard_id]);
 
       if (devicesRes.rows.length > 0) {
@@ -8187,7 +8187,7 @@ app.get('/api/switchboard/controls/report/pdf', async (req, res) => {
           JOIN devices d ON cr.device_id = d.id
           LEFT JOIN control_templates ct ON cr.template_id = ct.id
           WHERE d.switchboard_id = $1 AND cr.site = $2
-          ORDER BY d.position_number::int NULLS LAST, cr.performed_at DESC
+          ORDER BY (NULLIF(regexp_replace(d.position_number, '[^0-9.]', '', 'g'), ''))::numeric NULLS LAST, cr.performed_at DESC
         `, [sbId, site]);
 
         const deviceControls = deviceControlsRes.rows;
