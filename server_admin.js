@@ -1236,6 +1236,112 @@ router.get("/users/pending", adminOnly, async (req, res) => {
   }
 });
 
+// GET /api/admin/users/debug/:email - Debug pourquoi un utilisateur n'apparaît pas en pending
+router.get("/users/debug/:email", adminOnly, async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email).toLowerCase();
+    console.log(`[ADMIN] Debug user: ${email}`);
+
+    const debug = {
+      email,
+      timestamp: new Date().toISOString(),
+      findings: [],
+      recommendation: null
+    };
+
+    // 1. Vérifier dans auth_audit_log
+    const auditResult = await pool.query(`
+      SELECT action, ts, success, site_id, company_id, details
+      FROM auth_audit_log
+      WHERE LOWER(email) = $1
+      ORDER BY ts DESC
+      LIMIT 20
+    `, [email]);
+    debug.auth_audit_log = auditResult.rows;
+
+    if (auditResult.rows.length === 0) {
+      debug.findings.push("❌ Aucune entrée dans auth_audit_log - l'utilisateur ne s'est peut-être jamais connecté via Haleon");
+    } else {
+      debug.findings.push(`✓ ${auditResult.rows.length} entrées trouvées dans auth_audit_log`);
+
+      // Vérifier s'il y a un LOGIN_PENDING
+      const hasLoginPending = auditResult.rows.some(r => r.action === 'LOGIN_PENDING');
+      const hasNewUserPending = auditResult.rows.some(r => r.action === 'NEW_USER_PENDING');
+      const hasSuccessfulLogin = auditResult.rows.some(r => r.action === 'LOGIN' && r.success === true);
+
+      if (!hasLoginPending && !hasNewUserPending) {
+        debug.findings.push("❌ Aucun événement LOGIN_PENDING ou NEW_USER_PENDING - l'utilisateur était peut-être déjà validé lors de sa connexion");
+      }
+      if (hasLoginPending) {
+        debug.findings.push("✓ L'utilisateur a un événement LOGIN_PENDING");
+      }
+      if (hasSuccessfulLogin) {
+        // Vérifier si LOGIN est après LOGIN_PENDING
+        const lastPending = auditResult.rows.find(r => r.action === 'LOGIN_PENDING');
+        const lastLogin = auditResult.rows.find(r => r.action === 'LOGIN' && r.success === true);
+        if (lastPending && lastLogin && new Date(lastLogin.ts) > new Date(lastPending.ts)) {
+          debug.findings.push("⚠️ L'utilisateur a eu un LOGIN réussi APRÈS son dernier LOGIN_PENDING - il est considéré comme validé");
+        }
+      }
+    }
+
+    // 2. Vérifier dans users table
+    const usersResult = await pool.query(`
+      SELECT id, email, name, is_active, site_id, department_id, company_id, role, created_at
+      FROM users
+      WHERE LOWER(email) = $1
+    `, [email]);
+    debug.users_table = usersResult.rows[0] || null;
+
+    if (usersResult.rows.length > 0) {
+      const user = usersResult.rows[0];
+      if (user.is_active === true) {
+        debug.findings.push(`❌ L'utilisateur existe dans la table 'users' avec is_active=TRUE - il est EXCLU de la liste pending car déjà validé`);
+        debug.recommendation = "L'utilisateur est déjà validé. Si vous voulez le remettre en pending, désactivez-le (is_active=FALSE) dans la table users.";
+      } else {
+        debug.findings.push(`✓ L'utilisateur existe dans 'users' mais is_active=FALSE`);
+      }
+    } else {
+      debug.findings.push("✓ L'utilisateur n'existe PAS dans la table 'users'");
+    }
+
+    // 3. Vérifier dans haleon_users table
+    const haleonResult = await pool.query(`
+      SELECT id, email, name, is_validated, site_id, department_id, created_at
+      FROM haleon_users
+      WHERE LOWER(email) = $1
+    `, [email]);
+    debug.haleon_users_table = haleonResult.rows[0] || null;
+
+    if (haleonResult.rows.length > 0) {
+      const hu = haleonResult.rows[0];
+      debug.findings.push(`✓ L'utilisateur existe dans haleon_users (is_validated=${hu.is_validated})`);
+    } else {
+      debug.findings.push("⚠️ L'utilisateur n'existe PAS dans haleon_users");
+    }
+
+    // 4. Conclusion
+    const shouldBeInPending =
+      auditResult.rows.some(r => r.action === 'LOGIN_PENDING') &&
+      (!usersResult.rows[0]?.is_active);
+
+    debug.should_appear_in_pending = shouldBeInPending;
+
+    if (!debug.recommendation) {
+      if (shouldBeInPending) {
+        debug.recommendation = "L'utilisateur DEVRAIT apparaître dans la liste pending. S'il n'apparaît pas, il y a peut-être un bug.";
+      } else if (!auditResult.rows.some(r => r.action === 'LOGIN_PENDING')) {
+        debug.recommendation = "L'utilisateur n'a jamais eu d'événement LOGIN_PENDING. Vérifiez qu'il s'est bien connecté via haleon-tool.io";
+      }
+    }
+
+    res.json(debug);
+  } catch (err) {
+    console.error(`[ADMIN] /users/debug ERROR:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/users/validate/by-email - Valider un utilisateur par EMAIL
 // IMPORTANT: Cette route doit être AVANT validate/:id pour éviter que "by-email" soit interprété comme un ID
 // STRATÉGIE: Crée l'utilisateur dans la table "users" avec is_active=TRUE
