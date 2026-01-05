@@ -1748,6 +1748,8 @@ async function executeToolCall(toolCall, handlers) {
     if (!handler) {
       return {
         tool_call_id: toolCall.id,
+        toolName: name,
+        args,
         success: false,
         error: `Tool "${name}" not found`
       };
@@ -1758,12 +1760,16 @@ async function executeToolCall(toolCall, handlers) {
 
     return {
       tool_call_id: toolCall.id,
+      toolName: name,
+      args,
       ...result
     };
   } catch (error) {
     console.error(`[TOOL] ${name} error:`, error.message);
     return {
       tool_call_id: toolCall.id,
+      toolName: name,
+      args: JSON.parse(argsString || '{}'),
       success: false,
       error: error.message
     };
