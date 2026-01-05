@@ -1383,6 +1383,23 @@ async function ensureSchema() {
     );
   `);
 
+  // Category links - link procedures to equipment categories (all ATEX, all switchboards, DataHub category, etc.)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS procedure_category_links (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      procedure_id UUID REFERENCES procedures(id) ON DELETE CASCADE,
+      equipment_type TEXT NOT NULL,
+      category_id UUID,
+      category_name TEXT,
+      building TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(procedure_id, equipment_type, COALESCE(category_id, '00000000-0000-0000-0000-000000000000'), COALESCE(building, ''))
+    );
+  `);
+  try {
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_procedure_category_links_procedure ON procedure_category_links(procedure_id);`);
+  } catch {}
+
   // Procedure files (attachments, existing procedures to analyze)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS procedure_files (
@@ -4942,6 +4959,12 @@ app.get("/api/procedures/:id", async (req, res) => {
       [id]
     );
 
+    // Get category links
+    const { rows: categoryLinks } = await pool.query(
+      `SELECT * FROM procedure_category_links WHERE procedure_id = $1`,
+      [id]
+    );
+
     // Get files
     const { rows: files } = await pool.query(
       `SELECT id, filename, mimetype, size_bytes, file_type, created_at
@@ -4953,6 +4976,7 @@ app.get("/api/procedures/:id", async (req, res) => {
       ...procedure,
       steps,
       equipment_links: equipmentLinks,
+      category_links: categoryLinks,
       files,
     });
   } catch (err) {
@@ -5379,6 +5403,164 @@ app.delete("/api/procedures/:id/equipment/:linkId", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("Error removing equipment link:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- CATEGORY LINKS (link to all equipment of a type/category) ---
+
+// Get available equipment types and their categories
+app.get("/api/procedures/equipment-categories", async (req, res) => {
+  try {
+    const site = req.query.site || req.headers["x-site"];
+
+    // Define equipment types with their labels
+    const equipmentTypes = [
+      { type: 'switchboard', label: 'Armoires électriques', table: 'switchboards', hasCategories: false },
+      { type: 'vsd', label: 'Variateurs de vitesse', table: 'vsd_equipments', hasCategories: false },
+      { type: 'meca', label: 'Équipements mécaniques', table: 'meca_equipments', hasCategories: false },
+      { type: 'atex', label: 'Équipements ATEX', table: 'atex_equipments', hasCategories: false },
+      { type: 'hv', label: 'Haute Tension', table: 'hv_equipments', hasCategories: false },
+      { type: 'glo', label: 'UPS/Batteries/Éclairage', table: 'glo_equipments', hasCategories: false },
+      { type: 'mobile', label: 'Équipements mobiles', table: 'me_equipments', hasCategories: false },
+      { type: 'doors', label: 'Portes coupe-feu', table: 'doors', hasCategories: false },
+      { type: 'datahub', label: 'DataHub', table: 'dh_items', hasCategories: true },
+    ];
+
+    const result = [];
+
+    for (const eqType of equipmentTypes) {
+      let count = 0;
+      let categories = [];
+      let buildings = [];
+
+      try {
+        // Count total items
+        const countResult = await pool.query(
+          `SELECT COUNT(*) as count FROM ${eqType.table} WHERE site = $1`,
+          [site]
+        );
+        count = parseInt(countResult.rows[0]?.count || 0);
+
+        // Get distinct buildings
+        const buildingCol = eqType.table === 'me_equipments' ? 'location' : 'building';
+        const buildingsResult = await pool.query(
+          `SELECT DISTINCT ${buildingCol} as building FROM ${eqType.table} WHERE site = $1 AND ${buildingCol} IS NOT NULL AND ${buildingCol} != '' ORDER BY ${buildingCol}`,
+          [site]
+        );
+        buildings = buildingsResult.rows.map(r => r.building);
+
+        // Get categories for DataHub
+        if (eqType.hasCategories) {
+          const categoriesResult = await pool.query(
+            `SELECT c.id, c.name, c.color, c.icon, COUNT(i.id) as item_count
+             FROM dh_categories c
+             LEFT JOIN dh_items i ON i.category_id = c.id AND i.site = $1
+             WHERE c.site = $1
+             GROUP BY c.id
+             ORDER BY c.sort_order, c.name`,
+            [site]
+          );
+          categories = categoriesResult.rows;
+        }
+      } catch (e) {
+        // Table might not exist
+      }
+
+      if (count > 0) {
+        result.push({
+          ...eqType,
+          count,
+          categories,
+          buildings
+        });
+      }
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error("Error getting equipment categories:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Count equipment matching a category link
+app.get("/api/procedures/category-count", async (req, res) => {
+  try {
+    const { equipment_type, category_id, building } = req.query;
+    const site = req.query.site || req.headers["x-site"];
+
+    const tableMap = {
+      'switchboard': 'switchboards',
+      'vsd': 'vsd_equipments',
+      'meca': 'meca_equipments',
+      'atex': 'atex_equipments',
+      'hv': 'hv_equipments',
+      'glo': 'glo_equipments',
+      'mobile': 'me_equipments',
+      'doors': 'doors',
+      'datahub': 'dh_items',
+    };
+
+    const table = tableMap[equipment_type];
+    if (!table) {
+      return res.status(400).json({ error: 'Type d\'équipement invalide' });
+    }
+
+    let query = `SELECT COUNT(*) as count FROM ${table} WHERE site = $1`;
+    const params = [site];
+
+    if (category_id && equipment_type === 'datahub') {
+      query += ` AND category_id = $${params.length + 1}`;
+      params.push(category_id);
+    }
+
+    if (building) {
+      const buildingCol = equipment_type === 'mobile' ? 'location' : 'building';
+      query += ` AND ${buildingCol} = $${params.length + 1}`;
+      params.push(building);
+    }
+
+    const { rows } = await pool.query(query, params);
+    res.json({ count: parseInt(rows[0]?.count || 0) });
+  } catch (err) {
+    console.error("Error counting category equipment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add category link
+app.post("/api/procedures/:id/category", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { equipment_type, category_id, category_name, building } = req.body;
+
+    const { rows } = await pool.query(
+      `INSERT INTO procedure_category_links (procedure_id, equipment_type, category_id, category_name, building)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (procedure_id, equipment_type, COALESCE(category_id, '00000000-0000-0000-0000-000000000000'), COALESCE(building, ''))
+       DO UPDATE SET category_name = $4
+       RETURNING *`,
+      [id, equipment_type, category_id || null, category_name || null, building || null]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error("Error adding category link:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove category link
+app.delete("/api/procedures/:id/category/:linkId", async (req, res) => {
+  try {
+    const { linkId } = req.params;
+
+    await pool.query(`DELETE FROM procedure_category_links WHERE id = $1`, [linkId]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error removing category link:", err);
     res.status(500).json({ error: err.message });
   }
 });
