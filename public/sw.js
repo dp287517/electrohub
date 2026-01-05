@@ -237,6 +237,9 @@ self.addEventListener('fetch', (event) => {
   // Skip API calls (don't cache)
   if (event.request.url.includes('/api/')) return;
 
+  // Skip external API calls (CORS issues)
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
