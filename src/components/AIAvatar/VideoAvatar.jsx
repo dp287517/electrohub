@@ -54,19 +54,34 @@ export function refreshVideoCache(agentType = null) {
   }
 }
 
-// Noms d'affichage des agents
+// Noms et personnalités des agents IA
 export const AGENT_NAMES = {
   main: 'Electro',
   vsd: 'Shakira',
-  meca: 'Méca',
-  glo: 'GLO',
-  hv: 'HV',
-  mobile: 'Mobile',
-  atex: 'ATEX',
-  switchboard: 'Switch',
-  doors: 'Doors',
-  datahub: 'Data',
-  firecontrol: 'Fire'
+  meca: 'Titan',
+  glo: 'Lumina',
+  hv: 'Voltaire',
+  mobile: 'Nomad',
+  atex: 'Phoenix',
+  switchboard: 'Matrix',
+  doors: 'Portal',
+  datahub: 'Nexus',
+  firecontrol: 'Blaze'
+};
+
+// Descriptions des spécialités de chaque agent
+export const AGENT_DESCRIPTIONS = {
+  main: 'Assistant principal ElectroHub',
+  vsd: 'Spécialiste des variateurs de fréquence',
+  meca: 'Expert en équipements mécaniques',
+  glo: 'Spécialiste éclairage de sécurité',
+  hv: 'Expert haute tension',
+  mobile: 'Spécialiste équipements mobiles',
+  atex: 'Expert zones ATEX et explosives',
+  switchboard: 'Spécialiste tableaux électriques',
+  doors: 'Expert portes et accès',
+  datahub: 'Spécialiste capteurs et monitoring',
+  firecontrol: 'Expert sécurité incendie'
 };
 
 // Tailles prédéfinies

@@ -136,10 +136,26 @@ function createChatV2Router(pool) {
       }
 
       // Extraire le contenu final
-      const finalContent = assistantMessage.content || 'Désolé, je n\'ai pas pu générer de réponse.';
+      let finalContent = assistantMessage.content || 'Désolé, je n\'ai pas pu générer de réponse.';
 
       // Détecter l'agent approprié basé sur le message et les tools utilisés
       const detectedAgent = detectAgentType(message, toolResults);
+
+      // Générer un message de passage de relais si l'agent change
+      // (depuis l'agent principal vers un spécialiste)
+      const handoffMessage = detectedAgent !== 'main' ? generateHandoffMessage('main', detectedAgent) : null;
+
+      // Préfixer avec le message de handoff si applicable
+      if (handoffMessage) {
+        finalContent = handoffMessage + finalContent;
+        console.log(`[CHAT-V2] 🔄 Handoff: main → ${detectedAgent} (${AGENTS_INFO[detectedAgent]?.name})`);
+      } else if (detectedAgent !== 'main') {
+        // Si pas de handoff mais agent spécialisé, ajouter une intro courte
+        const agent = AGENTS_INFO[detectedAgent];
+        if (agent) {
+          finalContent = `${agent.emoji} **${agent.name}**: ${finalContent}`;
+        }
+      }
 
       // Construire la réponse
       const chatResponse = {
@@ -147,6 +163,8 @@ function createChatV2Router(pool) {
         provider: 'openai',
         model: OPENAI_MODEL,
         agentType: detectedAgent,
+        agentName: AGENTS_INFO[detectedAgent]?.name || 'Electro',
+        agentEmoji: AGENTS_INFO[detectedAgent]?.emoji || '⚡',
         tools_used: toolResults.map(r => ({
           name: r.tool_call_id?.split('_')[0] || 'unknown',
           success: r.success
@@ -240,6 +258,23 @@ function createChatV2Router(pool) {
 function buildSystemPrompt(site, clientContext) {
   let prompt = SIMPLIFIED_SYSTEM_PROMPT;
 
+  // Ajouter les informations sur l'équipe d'agents IA
+  prompt += `\n\n## ÉQUIPE D'AGENTS IA ELECTROHUB
+Tu fais partie d'une équipe d'agents IA spécialisés. Voici tes collègues:
+- ⚡ **Electro** (main): Assistant principal, répond aux questions générales
+- 🎛️ **Shakira** (vsd): Spécialiste variateurs de fréquence
+- ⚙️ **Titan** (meca): Expert équipements mécaniques (moteurs, pompes, compresseurs)
+- 💡 **Lumina** (glo): Spécialiste éclairage de sécurité (BAES, blocs autonomes)
+- ⚡ **Voltaire** (hv): Expert haute tension (transformateurs, cellules HT)
+- 📱 **Nomad** (mobile): Spécialiste équipements mobiles
+- 🔥 **Phoenix** (atex): Expert zones ATEX et atmosphères explosives
+- 🔌 **Matrix** (switchboard): Spécialiste tableaux électriques (TGBT, TD)
+- 🚪 **Portal** (doors): Expert portes et accès
+- 📊 **Nexus** (datahub): Spécialiste capteurs et monitoring
+- 🧯 **Blaze** (firecontrol): Expert sécurité incendie
+
+Quand une question concerne un domaine spécifique, le système te passera automatiquement au spécialiste approprié.`;
+
   // Ajouter le contexte utilisateur
   if (clientContext?.user) {
     prompt += `\n\n## CONTEXTE UTILISATEUR
@@ -277,6 +312,39 @@ function formatConversationHistory(history) {
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
     }));
+}
+
+// Informations sur les agents IA
+const AGENTS_INFO = {
+  main: { name: 'Electro', description: 'Assistant principal ElectroHub', emoji: '⚡' },
+  vsd: { name: 'Shakira', description: 'Spécialiste des variateurs de fréquence', emoji: '🎛️' },
+  meca: { name: 'Titan', description: 'Expert en équipements mécaniques', emoji: '⚙️' },
+  glo: { name: 'Lumina', description: 'Spécialiste éclairage de sécurité', emoji: '💡' },
+  hv: { name: 'Voltaire', description: 'Expert haute tension', emoji: '⚡' },
+  mobile: { name: 'Nomad', description: 'Spécialiste équipements mobiles', emoji: '📱' },
+  atex: { name: 'Phoenix', description: 'Expert zones ATEX et explosives', emoji: '🔥' },
+  switchboard: { name: 'Matrix', description: 'Spécialiste tableaux électriques', emoji: '🔌' },
+  doors: { name: 'Portal', description: 'Expert portes et accès', emoji: '🚪' },
+  datahub: { name: 'Nexus', description: 'Spécialiste capteurs et monitoring', emoji: '📊' },
+  firecontrol: { name: 'Blaze', description: 'Expert sécurité incendie', emoji: '🧯' }
+};
+
+/**
+ * Génère un message de passage de relais entre agents
+ */
+function generateHandoffMessage(fromAgent, toAgent) {
+  const from = AGENTS_INFO[fromAgent] || AGENTS_INFO.main;
+  const to = AGENTS_INFO[toAgent];
+
+  if (!to || fromAgent === toAgent) return null;
+
+  const handoffPhrases = [
+    `${from.emoji} *${from.name}*: Ah, ça c'est pour ${to.name} ! Je te le/la passe...\n\n${to.emoji} **${to.name}** (${to.description}): `,
+    `${from.emoji} *${from.name}*: Cette question concerne les ${to.description.toLowerCase()}, je laisse ${to.name} prendre le relais !\n\n${to.emoji} **${to.name}**: `,
+    `${from.emoji} *${from.name}*: Je passe la main à ${to.name}, notre ${to.description.toLowerCase()}.\n\n${to.emoji} **${to.name}**: `
+  ];
+
+  return handoffPhrases[Math.floor(Math.random() * handoffPhrases.length)];
 }
 
 /**
