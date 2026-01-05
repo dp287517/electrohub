@@ -470,6 +470,12 @@ export const api = {
     // DDR-specific endpoints (for element_filter = 'ddr' templates)
     listSwitchboardsWithDDR: () => get("/api/switchboard/controls/switchboards-with-ddr"),
     listDDRDevices: (switchboardIds) => get("/api/switchboard/controls/ddr-devices", { switchboard_ids: switchboardIds.join(',') }),
+
+    // Device controls by board (for displaying on Switchboards page)
+    getDeviceControlsByBoard: (boardId) => get(`/api/switchboard/controls/device-controls-by-board/${boardId}`),
+
+    // Get existing control dates by frequency (for date alignment)
+    getExistingDatesByBoard: (boardId) => get(`/api/switchboard/controls/existing-dates/${boardId}`),
   },
 
   switchboardMaps: {
