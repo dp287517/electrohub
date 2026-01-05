@@ -355,8 +355,25 @@ export default function Procedures() {
 
   const handleProcedureCreated = (procedure) => {
     setShowCreator(false);
-    setSelectedProcedure(procedure.id);
+    if (procedure?.id) {
+      setSelectedProcedure(procedure.id);
+    }
     loadData();
+  };
+
+  // Handle modal close - also refresh if it was a background creation
+  const handleCreatorClose = (result) => {
+    setShowCreator(false);
+    // If closed after background processing started, refresh after a delay
+    // to allow the procedure to be created in the background
+    if (result?.background) {
+      console.log('[Procedures] Background creation started, will refresh in 3s');
+      // Immediate refresh in case it's already done
+      loadData();
+      // Also refresh after 3s and 8s to catch slower creations
+      setTimeout(() => loadData(), 3000);
+      setTimeout(() => loadData(), 8000);
+    }
   };
 
   const activeFiltersCount = (selectedCategory ? 1 : 0) + (selectedStatus ? 1 : 0);
@@ -834,7 +851,7 @@ export default function Procedures() {
       {showCreator && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end lg:items-center justify-center z-50 animate-fade-in">
           <div className="w-full lg:max-w-lg lg:mx-4 overflow-hidden bg-white rounded-t-3xl lg:rounded-2xl lg:shadow-2xl animate-slide-up lg:animate-scale-in">
-            <ProcedureCreator onProcedureCreated={handleProcedureCreated} onClose={() => setShowCreator(false)} />
+            <ProcedureCreator onProcedureCreated={handleProcedureCreated} onClose={handleCreatorClose} />
           </div>
         </div>
       )}
