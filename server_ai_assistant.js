@@ -583,15 +583,26 @@ function detectProcedureIntent(message, conversationHistory = []) {
 
   // 2e. TROUBLESHOOTING - Rechercher des dépannages
   const troubleshootingPatterns = [
-    /d[ée]pannages?(?:\s+(?:des?|du|r[ée]cents?|derniers?))?/i,
-    /(?:derniers?|r[ée]cents?)\s+d[ée]pannages?/i,
-    /interventions?\s+(?:des?|du|r[ée]centes?|derni[èe]res?)/i,
+    // Patterns simples avec "dépannage"
+    /^d[ée]pannages?$/i,                                     // "dépannage" seul
+    /^derniers?\s+d[ée]pannages?$/i,                         // "dernier dépannage" exact
+    /derniers?\s+d[ée]pannages?/i,                           // "derniers dépannages"
+    /d[ée]pannages?\s+r[ée]cents?/i,                         // "dépannages récents"
+    /d[ée]pannages?\s+(?:des?|du)/i,                         // "dépannages des/du"
+    /(?:les?\s+)?d[ée]pannages?\s+(?:des?\s+)?(?:\d+)/i,     // "les dépannages des 7"
+    // Patterns avec "derniers jours"
+    /d[ée]pannages?\s+(?:des?\s+)?(?:\d+)\s+(?:derniers?\s+)?jours?/i,
+    /(?:\d+)\s+(?:derniers?\s+)?jours?\s+(?:de\s+)?d[ée]pannages?/i,
+    // Patterns avec interventions/réparations
     /(?:dernières?|r[ée]centes?)\s+interventions?/i,
-    /r[ée]parations?\s+(?:des?|du|r[ée]centes?|derni[èe]res?)/i,
+    /interventions?\s+r[ée]centes?/i,
     /historique\s+(?:des?\s+)?(?:d[ée]pannages?|interventions?|r[ée]parations?)/i,
     /(?:pannes?|probl[èe]mes?)\s+(?:r[ée]solus?|r[ée]gl[ée]s?)/i,
-    /(?:\d+)\s+derniers?\s+jours?\s+(?:d[ée]pannages?|interventions?)/i,
-    /d[ée]pannages?\s+(?:des?\s+)?(?:\d+)\s+derniers?\s+jours?/i,
+    // Patterns généraux
+    /voir\s+(?:les?\s+)?d[ée]pannages?/i,
+    /cherche[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
+    /liste[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
+    /montre[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
     /(?:qu'?est-ce\s+qu'?on\s+a\s+)?r[ée]par[ée]/i
   ];
   if (troubleshootingPatterns.some(p => p.test(m))) {
