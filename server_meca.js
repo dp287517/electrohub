@@ -18,6 +18,8 @@ import { createCanvas } from "canvas";
 import { extractTenantFromRequest, getTenantFilter, enrichTenantWithSiteId } from "./lib/tenant-filter.js";
 import { notifyEquipmentCreated, notifyEquipmentDeleted, notifyMaintenanceCompleted } from "./lib/push-notify.js";
 import { createAuditTrail, AUDIT_ACTIONS } from "./lib/audit-trail.js";
+import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
@@ -353,6 +355,9 @@ async function ensureSchema() {
       ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS ui_status TEXT DEFAULT '';
     EXCEPTION WHEN duplicate_column THEN NULL; END $$;
   `);
+
+  // 📝 AUDIT TRAIL - Create meca_audit_log table
+  await audit.ensureTable();
 }
 
 // -------------------------------------------------
@@ -368,6 +373,160 @@ async function logEvent(action, details = {}, user = {}) {
   } catch {
     // on ne bloque jamais l'appli pour un log
   }
+}
+
+// -------------------------------------------------
+// IA (OpenAI / Gemini) - Photo Analysis
+// -------------------------------------------------
+const MECA_PROMPT = `Tu es un assistant d'inspection d'équipements électromécaniques (pompes, moteurs, ventilateurs, portes automatiques, etc.). Extrait des photos les informations suivantes:
+- name (nom ou tag de l'équipement)
+- equipment_type (type: pompe, moteur, ventilateur, porte automatique, ascenseur, etc.)
+- manufacturer (fabricant)
+- model (modèle)
+- serial_number (numéro de série)
+- year (année de fabrication si visible)
+- power_kw (puissance en kW, nombre décimal)
+- voltage (tension, ex: "400V", "230V")
+- current_a (courant nominal en A, nombre décimal)
+- speed_rpm (vitesse de rotation si applicable)
+- ip_rating (indice de protection IP si visible, ex: "IP55")
+- drive_type (type d'entraînement: direct, courroie, accouplement...)
+- fluid (fluide si applicable: eau, air, etc.)
+- flow_m3h (débit en m³/h si applicable)
+- pressure_bar (pression en bar si applicable)
+
+IMPORTANT: Réponds UNIQUEMENT avec un objet JSON valide contenant ces champs. Pas de texte avant ou après. Utilise null pour les champs non trouvés.`;
+
+function parseMecaResult(rawContent) {
+  let data = {};
+  try {
+    let cleaned = rawContent.trim();
+    if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
+    if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
+    if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
+    data = JSON.parse(cleaned.trim());
+  } catch {
+    console.error("[MECA-AI] JSON parse error");
+    data = {};
+  }
+  return {
+    name: data.name != null ? String(data.name) : "",
+    equipment_type: data.equipment_type != null ? String(data.equipment_type) : "",
+    manufacturer: data.manufacturer != null ? String(data.manufacturer) : "",
+    model: data.model != null ? String(data.model) : "",
+    serial_number: data.serial_number != null ? String(data.serial_number) : "",
+    year: data.year != null ? String(data.year) : "",
+    power_kw: data.power_kw != null ? Number(data.power_kw) : null,
+    voltage: data.voltage != null ? String(data.voltage) : "",
+    current_a: data.current_a != null ? Number(data.current_a) : null,
+    speed_rpm: data.speed_rpm != null ? Number(data.speed_rpm) : null,
+    ip_rating: data.ip_rating != null ? String(data.ip_rating) : "",
+    drive_type: data.drive_type != null ? String(data.drive_type) : "",
+    fluid: data.fluid != null ? String(data.fluid) : "",
+    flow_m3h: data.flow_m3h != null ? Number(data.flow_m3h) : null,
+    pressure_bar: data.pressure_bar != null ? Number(data.pressure_bar) : null,
+  };
+}
+
+function openaiClient() {
+  const key = process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_MECA;
+  if (!key) return null;
+  return new OpenAI({ apiKey: key });
+}
+
+async function mecaExtractWithGemini(images) {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+  const imageParts = images.map((img) => ({
+    inlineData: { data: img.data, mimeType: img.mime },
+  }));
+
+  console.log("[MECA-AI] Calling Gemini...");
+  const result = await model.generateContent([MECA_PROMPT, ...imageParts]);
+  const rawContent = result.response.text();
+  console.log("[MECA-AI] Gemini response received");
+
+  return parseMecaResult(rawContent);
+}
+
+async function mecaExtractWithOpenAI(client, images) {
+  const model = process.env.MECA_OPENAI_MODEL || "gpt-4o-mini";
+  console.log(`[MECA-AI] Calling OpenAI (${model})...`);
+
+  const resp = await client.chat.completions.create({
+    model,
+    messages: [
+      { role: "system", content: MECA_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
+          ...images.map((im) => ({
+            type: "image_url",
+            image_url: { url: `data:${im.mime};base64,${im.data}` },
+          })),
+        ],
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  });
+
+  const rawContent = resp.choices?.[0]?.message?.content || "{}";
+  console.log("[MECA-AI] OpenAI response received");
+  return parseMecaResult(rawContent);
+}
+
+async function mecaExtractFromFiles(openaiClientInstance, files) {
+  if (!files?.length) throw new Error("no files");
+
+  console.log(`[MECA-AI] Analyzing ${files.length} photo(s)...`);
+
+  const images = await Promise.all(
+    files.map(async (f) => ({
+      name: f.originalname,
+      mime: f.mimetype,
+      data: (await fsp.readFile(f.path)).toString("base64"),
+    }))
+  );
+
+  const hasOpenAI = !!openaiClientInstance;
+  const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+
+  console.log(`[MECA-AI] Providers: OpenAI=${hasOpenAI}, Gemini=${hasGemini}`);
+
+  if (hasOpenAI) {
+    try {
+      const result = await mecaExtractWithOpenAI(openaiClientInstance, images);
+      console.log("[MECA-AI] ✅ Extracted (OpenAI):", result);
+      return result;
+    } catch (openaiErr) {
+      console.error("[MECA-AI] OpenAI failed:", openaiErr.message);
+
+      const isQuotaError = openaiErr.status === 429 || openaiErr.message?.includes("429") || openaiErr.message?.includes("quota");
+
+      if (hasGemini && isQuotaError) {
+        console.log("[MECA-AI] ⚡ Fallback to Gemini...");
+        const result = await mecaExtractWithGemini(images);
+        console.log("[MECA-AI] ✅ Extracted (Gemini fallback):", result);
+        return result;
+      }
+      throw openaiErr;
+    }
+  }
+
+  if (hasGemini) {
+    console.log("[MECA-AI] Using Gemini (no OpenAI key)...");
+    const result = await mecaExtractWithGemini(images);
+    console.log("[MECA-AI] ✅ Extracted (Gemini):", result);
+    return result;
+  }
+
+  throw new Error("No AI provider configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
 }
 
 // -------------------------------------------------
@@ -2090,6 +2249,20 @@ app.get("/api/meca/management-monitoring", async (req, res) => {
     if (!res.headersSent) {
       res.status(500).json({ ok: false, error: e.message });
     }
+  }
+});
+
+// -------------------------------------------------
+// AI Photo Analysis Endpoint
+// -------------------------------------------------
+app.post("/api/meca/analyzePhotoBatch", multerFiles.array("files", 5), async (req, res) => {
+  try {
+    const client = openaiClient();
+    const extracted = await mecaExtractFromFiles(client, req.files || []);
+    res.json({ ok: true, extracted });
+  } catch (e) {
+    console.error("[MECA-AI] analyzePhotoBatch error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
