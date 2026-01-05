@@ -12,6 +12,7 @@ import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
 import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
 import troubleshootingRouter, { initTroubleshootingTables } from "./server_troubleshooting.js";
+import { createChatV2Router } from "./server_ai_chat_v2.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -10073,6 +10074,14 @@ console.log('[Push] Push router mounted');
 console.log('[Troubleshooting] Mounting troubleshooting router at /api/troubleshooting');
 app.use("/api/troubleshooting", troubleshootingRouter);
 console.log('[Troubleshooting] Troubleshooting router mounted');
+
+/* ================================================================
+   🤖 AI Chat V2 - Function Calling Architecture
+   ================================================================ */
+console.log('[AI-V2] Mounting AI Chat V2 router at /api/ai-assistant');
+const chatV2Router = createChatV2Router(pool);
+app.use("/api/ai-assistant", chatV2Router);
+console.log('[AI-V2] AI Chat V2 router mounted - Function calling enabled');
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
