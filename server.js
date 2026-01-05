@@ -3195,6 +3195,164 @@ async function executeAIAction(action, params, site) {
         };
       }
 
+      case 'searchTroubleshooting': {
+        // Search troubleshooting records
+        const { days = 7, building, severity, equipment_type, technician, keyword } = params;
+
+        let sql = `
+          SELECT tr.id, tr.title, tr.description, tr.severity, tr.category,
+                 tr.equipment_type, tr.equipment_name, tr.equipment_code,
+                 tr.building_code, tr.floor, tr.zone, tr.technician_name,
+                 tr.solution, tr.parts_replaced, tr.duration_minutes,
+                 tr.created_at,
+                 (SELECT COUNT(*) FROM troubleshooting_photos WHERE record_id = tr.id) as photo_count
+          FROM troubleshooting_records tr
+          WHERE tr.created_at >= NOW() - INTERVAL '${parseInt(days) || 7} days'
+        `;
+        const queryParams = [];
+
+        if (building) {
+          queryParams.push(`%${building}%`);
+          sql += ` AND tr.building_code ILIKE $${queryParams.length}`;
+        }
+        if (severity) {
+          queryParams.push(severity);
+          sql += ` AND tr.severity = $${queryParams.length}`;
+        }
+        if (equipment_type) {
+          queryParams.push(equipment_type);
+          sql += ` AND tr.equipment_type = $${queryParams.length}`;
+        }
+        if (technician) {
+          queryParams.push(`%${technician}%`);
+          sql += ` AND tr.technician_name ILIKE $${queryParams.length}`;
+        }
+        if (keyword) {
+          queryParams.push(`%${keyword}%`);
+          sql += ` AND (tr.title ILIKE $${queryParams.length} OR tr.description ILIKE $${queryParams.length} OR tr.solution ILIKE $${queryParams.length})`;
+        }
+
+        sql += ` ORDER BY tr.created_at DESC LIMIT 20`;
+
+        const result = await pool.query(sql, queryParams);
+        const records = result.rows;
+
+        if (records.length === 0) {
+          return {
+            success: true,
+            found: false,
+            count: 0,
+            records: [],
+            message: `🔧 Aucun dépannage trouvé sur les ${days} derniers jours${building ? ` pour le bâtiment ${building}` : ''}.`
+          };
+        }
+
+        const severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', cosmetic: '⚪' };
+        const recordsList = records.slice(0, 10).map((r, i) => {
+          const date = new Date(r.created_at).toLocaleDateString('fr-FR');
+          return `${i+1}. **${r.title}** ${severityEmoji[r.severity] || '⚪'}\n   • ${r.equipment_name || 'Équipement non spécifié'} | ${date}\n   • Technicien: ${r.technician_name || 'Non spécifié'}${r.solution ? `\n   • Solution: ${r.solution.substring(0, 80)}...` : ''}`;
+        }).join('\n\n');
+
+        return {
+          success: true,
+          found: true,
+          count: records.length,
+          records: records.map(r => ({
+            id: r.id,
+            title: r.title,
+            severity: r.severity,
+            equipment: r.equipment_name,
+            building: r.building_code,
+            technician: r.technician_name,
+            date: r.created_at,
+            hasPhotos: r.photo_count > 0
+          })),
+          message: `🔧 **${records.length} dépannage(s)** sur les ${days} derniers jours:\n\n${recordsList}\n\n→ Dis-moi un numéro pour les détails ou télécharger le PDF.`
+        };
+      }
+
+      case 'getTroubleshootingStats': {
+        // Get troubleshooting statistics
+        const { days = 30 } = params;
+
+        // Count by severity
+        const severityResult = await pool.query(`
+          SELECT severity, COUNT(*) as count
+          FROM troubleshooting_records
+          WHERE created_at >= NOW() - INTERVAL '${parseInt(days) || 30} days'
+          GROUP BY severity
+        `);
+
+        // Count by building
+        const buildingResult = await pool.query(`
+          SELECT building_code, COUNT(*) as count
+          FROM troubleshooting_records
+          WHERE created_at >= NOW() - INTERVAL '${parseInt(days) || 30} days'
+            AND building_code IS NOT NULL
+          GROUP BY building_code
+          ORDER BY count DESC
+          LIMIT 5
+        `);
+
+        // Most problematic equipment
+        const equipmentResult = await pool.query(`
+          SELECT equipment_name, equipment_type, COUNT(*) as count
+          FROM troubleshooting_records
+          WHERE created_at >= NOW() - INTERVAL '${parseInt(days) || 30} days'
+            AND equipment_name IS NOT NULL
+          GROUP BY equipment_name, equipment_type
+          ORDER BY count DESC
+          LIMIT 5
+        `);
+
+        // Total count
+        const totalResult = await pool.query(`
+          SELECT COUNT(*) as total
+          FROM troubleshooting_records
+          WHERE created_at >= NOW() - INTERVAL '${parseInt(days) || 30} days'
+        `);
+
+        const total = parseInt(totalResult.rows[0]?.total) || 0;
+        const severityStats = {};
+        severityResult.rows.forEach(r => { severityStats[r.severity] = parseInt(r.count); });
+
+        const severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', cosmetic: '⚪' };
+        let statsText = `📊 **Statistiques dépannages** (${days} derniers jours)\n\n`;
+        statsText += `**Total:** ${total} intervention(s)\n\n`;
+
+        if (Object.keys(severityStats).length > 0) {
+          statsText += `**Par sévérité:**\n`;
+          Object.entries(severityStats).forEach(([sev, count]) => {
+            statsText += `${severityEmoji[sev] || '⚪'} ${sev}: ${count}\n`;
+          });
+          statsText += `\n`;
+        }
+
+        if (buildingResult.rows.length > 0) {
+          statsText += `**Par bâtiment:**\n`;
+          buildingResult.rows.forEach(r => {
+            statsText += `🏢 ${r.building_code}: ${r.count} intervention(s)\n`;
+          });
+          statsText += `\n`;
+        }
+
+        if (equipmentResult.rows.length > 0) {
+          statsText += `**Équipements les plus problématiques:**\n`;
+          equipmentResult.rows.forEach((r, i) => {
+            statsText += `${i+1}. ${r.equipment_name} (${r.equipment_type}): ${r.count}x\n`;
+          });
+        }
+
+        return {
+          success: true,
+          total,
+          bySeverity: severityStats,
+          byBuilding: buildingResult.rows,
+          problematicEquipment: equipmentResult.rows,
+          message: statsText
+        };
+      }
+
       default:
         return { success: false, message: `Action inconnue: ${action}` };
     }
