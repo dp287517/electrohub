@@ -297,6 +297,9 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_vsd_events_ts ON vsd_events(ts DESC);
   `);
+
+  // 📝 AUDIT TRAIL - Create vsd_audit_log table
+  await audit.ensureTable();
 }
 // -------------------------------------------------
 // Helpers
