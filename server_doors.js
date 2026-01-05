@@ -901,7 +901,7 @@ app.put("/api/doors/doors/:id", async (req, res) => {
       }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, door: result.rows[0] });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
