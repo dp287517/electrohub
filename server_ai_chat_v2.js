@@ -340,6 +340,31 @@ Quand une question concerne un domaine spécifique, le système te passera autom
 - Utilisateur: ${clientContext.user.name || clientContext.user.email || 'Technicien'}`;
   }
 
+  // 🔥 IMPORTANT: Contexte de l'équipement courant (depuis MiniElectro)
+  if (clientContext?.currentEquipment) {
+    const eq = clientContext.currentEquipment;
+    prompt += `\n\n## ⚠️ ÉQUIPEMENT EN COURS DE CONSULTATION
+**L'utilisateur est actuellement sur la fiche de cet équipement spécifique. Toutes les questions concernent CET équipement.**
+
+- **Nom**: ${eq.name || eq.code || 'N/A'}
+- **Code**: ${eq.code || 'N/A'}
+- **Type**: ${eq.type || 'N/A'}
+- **ID en base**: ${eq.id || 'N/A'}
+- **Bâtiment**: ${eq.building || 'N/A'}
+- **Étage**: ${eq.floor || 'N/A'}
+- **Zone**: ${eq.zone || 'N/A'}
+- **Localisation**: ${eq.location || 'N/A'}
+- **Fabricant**: ${eq.manufacturer || 'N/A'}
+- **Modèle**: ${eq.model || 'N/A'}
+- **N° série**: ${eq.serialNumber || 'N/A'}
+- **Puissance**: ${eq.power || 'N/A'}
+- **Statut contrôle**: ${eq.status || 'N/A'}
+- **Dernier contrôle**: ${eq.lastControl || 'N/A'}
+- **Description**: ${eq.description || 'N/A'}
+
+**INSTRUCTIONS**: Quand l'utilisateur demande "état", "historique", "dépannages", etc., il parle de CET équipement (ID: ${eq.id}). Utilise les fonctions search_equipment, search_troubleshooting, get_controls avec les paramètres appropriés pour récupérer les données de cet équipement.`;
+  }
+
   // Ajouter un résumé minimal du contexte si disponible
   if (clientContext?.summary) {
     prompt += `\n\n## RÉSUMÉ DU SITE
