@@ -20,8 +20,10 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineEleme
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Note: PPE minimum est Cat. 1 pour tout travail sous tension (bonne pratique de sécurité)
+// Cat. 0 n'est plus utilisé - le backend renvoie maintenant Cat. 1 minimum
 const PPE_COLORS = {
-  0: { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300', fill: 'bg-green-500' },
+  0: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300', fill: 'bg-blue-500' }, // Cat. 1 (énergie faible) - même couleur que Cat. 1
   1: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300', fill: 'bg-blue-500' },
   2: { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-300', fill: 'bg-yellow-500' },
   3: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-300', fill: 'bg-orange-500' },
@@ -30,7 +32,7 @@ const PPE_COLORS = {
 };
 
 const PPE_REQUIREMENTS = {
-  0: { clothing: 'Vêtements non-fondants', gloves: 'Non requis', face: 'Lunettes de sécurité' },
+  0: { clothing: 'Chemise FR + Pantalon FR', gloves: 'Cuir', face: 'Écran facial classe 1', note: '(énergie faible < 1.2 cal/cm²)' }, // Même équipement que Cat. 1
   1: { clothing: 'Chemise FR + Pantalon FR', gloves: 'Cuir', face: 'Écran facial classe 1' },
   2: { clothing: 'Combinaison FR 8 cal/cm²', gloves: 'Cuir + sous-gants', face: 'Écran facial classe 2' },
   3: { clothing: 'Combinaison FR 25 cal/cm²', gloves: 'Gants isolants classe 0', face: 'Cagoule FR + écran' },
