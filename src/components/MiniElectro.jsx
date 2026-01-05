@@ -1,10 +1,10 @@
 // MiniElectro - Assistant IA contextuel pour chaque équipement
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles, MessageCircle, FileText, AlertTriangle, CheckCircle,
   Download, ExternalLink, X, ChevronDown, ChevronUp, Zap,
   Search, Wrench, Calendar, BarChart3, Loader2, RefreshCw,
-  BookOpen, Link2, PlusCircle, History, Image
+  BookOpen, Link2, PlusCircle, History, Image, Send
 } from 'lucide-react';
 import { post, get, API_BASE } from '../lib/api';
 import TroubleshootingWizard, { TroubleshootingHistory } from './TroubleshootingWizard';
@@ -46,6 +46,13 @@ export default function MiniElectro({
   const [customIconUrl, setCustomIconUrl] = useState(null);
   const [showTroubleshooting, setShowTroubleshooting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+
+  // Chat state
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
+  const [isSending, setIsSending] = useState(false);
+  const chatContainerRef = useRef(null);
 
   // Charger l'icône personnalisée au montage
   useEffect(() => {
@@ -123,6 +130,75 @@ export default function MiniElectro({
         results: null,
         error: 'Erreur lors de la recherche'
       });
+    }
+  };
+
+  // Chat avec l'IA
+  const sendChatMessage = async (e) => {
+    e?.preventDefault();
+    if (!chatMessage.trim() || isSending) return;
+
+    const userMessage = chatMessage.trim();
+    setChatMessage('');
+    setIsSending(true);
+
+    // Ajouter le message utilisateur à l'historique
+    setChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
+
+    try {
+      const response = await post('/api/ai-assistant/chat', {
+        message: userMessage,
+        context: {
+          equipment: {
+            id: equipment.id,
+            name: equipment.name || equipment.equipment_name,
+            type: equipmentType,
+            manufacturer: equipment.manufacturer || equipment.brand,
+            model: equipment.model || equipment.manufacturer_ref,
+            building: equipment.building || equipment.building_code,
+            floor: equipment.floor,
+            zone: equipment.zone
+          }
+        },
+        conversationHistory: chatHistory.slice(-10) // Garder les 10 derniers messages
+      });
+
+      // Ajouter la réponse de l'IA
+      setChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: response.message || response.response || 'Désolé, je n\'ai pas pu répondre.',
+        actions: response.actions
+      }]);
+
+      // Scroll vers le bas
+      setTimeout(() => {
+        chatContainerRef.current?.scrollTo({
+          top: chatContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }, 100);
+    } catch (error) {
+      console.error('Chat error:', error);
+      setChatHistory(prev => [...prev, {
+        role: 'assistant',
+        content: 'Désolé, une erreur est survenue. Réessaie.'
+      }]);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // Gérer les actions suggérées
+  const handleChatAction = (action) => {
+    if (action.prompt) {
+      setChatMessage(action.prompt);
+      // Envoyer automatiquement
+      setTimeout(() => {
+        const fakeEvent = { preventDefault: () => {} };
+        sendChatMessage(fakeEvent);
+      }, 100);
+    } else if (action.url) {
+      window.open(action.url, '_blank');
     }
   };
 
@@ -386,8 +462,125 @@ export default function MiniElectro({
                     <RefreshCw className="w-3.5 h-3.5" />
                     Réanalyser
                   </button>
+                  <button
+                    onClick={() => setShowChat(!showChat)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors ${
+                      showChat
+                        ? 'bg-indigo-500 text-white'
+                        : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    Discuter
+                  </button>
                 </div>
               </div>
+
+              {/* Chat Interface */}
+              {showChat && (
+                <div className="pt-3 border-t border-indigo-100">
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    {/* Chat messages */}
+                    <div
+                      ref={chatContainerRef}
+                      className="h-48 overflow-y-auto p-3 space-y-3"
+                    >
+                      {chatHistory.length === 0 ? (
+                        <div className="text-center text-gray-400 text-sm py-8">
+                          <MessageCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                          <p>Pose-moi une question sur cet équipement!</p>
+                          <div className="flex flex-wrap gap-2 justify-center mt-3">
+                            <button
+                              onClick={() => {
+                                setChatMessage('Historique des dépannages');
+                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                              }}
+                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                            >
+                              🔧 Dépannages
+                            </button>
+                            <button
+                              onClick={() => {
+                                setChatMessage('Problèmes fréquents');
+                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                              }}
+                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                            >
+                              ⚠️ Problèmes
+                            </button>
+                            <button
+                              onClick={() => {
+                                setChatMessage('Prochains contrôles');
+                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                              }}
+                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                            >
+                              📅 Contrôles
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        chatHistory.map((msg, i) => (
+                          <div
+                            key={i}
+                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div
+                              className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+                                msg.role === 'user'
+                                  ? 'bg-indigo-500 text-white'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}
+                            >
+                              <p className="whitespace-pre-wrap">{msg.content}</p>
+                              {/* Actions suggérées */}
+                              {msg.actions && msg.actions.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {msg.actions.slice(0, 3).map((action, j) => (
+                                    <button
+                                      key={j}
+                                      onClick={() => handleChatAction(action)}
+                                      className="px-2 py-0.5 bg-white/20 hover:bg-white/30 rounded text-xs"
+                                    >
+                                      {action.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {isSending && (
+                        <div className="flex justify-start">
+                          <div className="bg-gray-100 rounded-xl px-3 py-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Input */}
+                    <form onSubmit={sendChatMessage} className="border-t border-gray-200 p-2 flex gap-2">
+                      <input
+                        type="text"
+                        value={chatMessage}
+                        onChange={(e) => setChatMessage(e.target.value)}
+                        placeholder="Pose une question..."
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        disabled={isSending}
+                      />
+                      <button
+                        type="submit"
+                        disabled={!chatMessage.trim() || isSending}
+                        className="p-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
 
               {/* Historique des dépannages */}
               {showHistory && equipment?.id && (
