@@ -2595,7 +2595,20 @@ export const api = {
     // LV devices (for downstream connection)
     listLvDevices: (params = {}) => get("/api/hv/lv-devices", params),
 
-    // Photos
+    // Equipment profile photo
+    equipmentPhotoUrl: (equipmentId, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/hv/equipments/${encodeURIComponent(equipmentId)}/photo?site=${currentSite()}`, bust),
+    uploadEquipmentPhoto: (equipmentId, file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("photo", file);
+      if (email) fd.append("user_email", email);
+      if (name) fd.append("user_name", name);
+      return upload(`/api/hv/equipments/${encodeURIComponent(equipmentId)}/photo`, fd);
+    },
+    deleteEquipmentPhoto: (equipmentId) => del(`/api/hv/equipments/${encodeURIComponent(equipmentId)}/photo`),
+
+    // Device photos (gallery)
     uploadPhotos: (deviceId, files) => {
       const fd = new FormData();
       files.forEach((f) => fd.append("photos", f));
