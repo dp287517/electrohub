@@ -1392,12 +1392,13 @@ async function ensureSchema() {
       category_id UUID,
       category_name TEXT,
       building TEXT,
-      created_at TIMESTAMPTZ DEFAULT now(),
-      UNIQUE(procedure_id, equipment_type, COALESCE(category_id, '00000000-0000-0000-0000-000000000000'), COALESCE(building, ''))
+      created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
   try {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_procedure_category_links_procedure ON procedure_category_links(procedure_id);`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_procedure_category_links_unique
+      ON procedure_category_links(procedure_id, equipment_type, COALESCE(category_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(building, ''));`);
   } catch {}
 
   // Procedure files (attachments, existing procedures to analyze)
@@ -5535,11 +5536,28 @@ app.post("/api/procedures/:id/category", async (req, res) => {
     const { id } = req.params;
     const { equipment_type, category_id, category_name, building } = req.body;
 
+    // Check if link already exists
+    const existing = await pool.query(
+      `SELECT * FROM procedure_category_links
+       WHERE procedure_id = $1 AND equipment_type = $2
+       AND COALESCE(category_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+       AND COALESCE(building, '') = COALESCE($4, '')`,
+      [id, equipment_type, category_id || null, building || null]
+    );
+
+    if (existing.rows.length > 0) {
+      // Update existing
+      const { rows } = await pool.query(
+        `UPDATE procedure_category_links SET category_name = $1 WHERE id = $2 RETURNING *`,
+        [category_name || null, existing.rows[0].id]
+      );
+      return res.json(rows[0]);
+    }
+
+    // Insert new
     const { rows } = await pool.query(
       `INSERT INTO procedure_category_links (procedure_id, equipment_type, category_id, category_name, building)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (procedure_id, equipment_type, COALESCE(category_id, '00000000-0000-0000-0000-000000000000'), COALESCE(building, ''))
-       DO UPDATE SET category_name = $4
        RETURNING *`,
       [id, equipment_type, category_id || null, category_name || null, building || null]
     );
