@@ -34,6 +34,53 @@ const MAX_CONVERSATION_HISTORY = 10; // Messages à garder
 // CHAT V2 HANDLER
 // ============================================================================
 
+// Cache pour les noms d'agents personnalisés
+let customAgentNamesCache = null;
+let customAgentNamesCacheTime = 0;
+const CACHE_TTL = 60000; // 1 minute
+
+/**
+ * Charge les noms d'agents personnalisés depuis la DB
+ */
+async function loadCustomAgentNames(pool) {
+  // Utiliser le cache si encore valide
+  if (customAgentNamesCache && Date.now() - customAgentNamesCacheTime < CACHE_TTL) {
+    return customAgentNamesCache;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT key, text_value FROM app_settings WHERE key LIKE 'ai_agent_name_%'`
+    );
+
+    const customNames = {};
+    result.rows.forEach(row => {
+      const agentType = row.key.replace('ai_agent_name_', '');
+      if (row.text_value) {
+        customNames[agentType] = row.text_value;
+      }
+    });
+
+    customAgentNamesCache = customNames;
+    customAgentNamesCacheTime = Date.now();
+    return customNames;
+  } catch (err) {
+    console.error('[CHAT-V2] Error loading custom agent names:', err);
+    return {};
+  }
+}
+
+/**
+ * Obtient les infos d'un agent avec nom personnalisé si disponible
+ */
+function getAgentInfo(agentType, customNames = {}) {
+  const defaultInfo = AGENTS_INFO[agentType] || AGENTS_INFO.main;
+  return {
+    ...defaultInfo,
+    name: customNames[agentType] || defaultInfo.name
+  };
+}
+
 /**
  * Crée le router Express pour le chat v2
  */
@@ -63,6 +110,9 @@ function createChatV2Router(pool) {
       if (!message) {
         return res.status(400).json({ error: 'Message requis' });
       }
+
+      // Charger les noms personnalisés des agents
+      const customNames = await loadCustomAgentNames(pool);
 
       console.log(`[CHAT-V2] 🚀 Message: "${message.substring(0, 80)}..." | Site: ${site}`);
 
@@ -141,21 +191,22 @@ function createChatV2Router(pool) {
       // Détecter l'agent approprié basé sur le message et les tools utilisés
       const detectedAgent = detectAgentType(message, toolResults);
 
+      // Obtenir les infos de l'agent avec nom personnalisé
+      const agentInfo = getAgentInfo(detectedAgent, customNames);
+      const mainAgentInfo = getAgentInfo('main', customNames);
+
       // Générer un message de passage de relais si l'agent change
       // (depuis l'agent principal vers un spécialiste)
-      const handoffMessage = detectedAgent !== 'main' ? generateHandoffMessage('main', detectedAgent) : null;
+      const handoffMessage = detectedAgent !== 'main'
+        ? generateHandoffMessageWithNames(mainAgentInfo, agentInfo)
+        : null;
 
       // Préfixer avec le message de handoff si applicable
       if (handoffMessage) {
         finalContent = handoffMessage + finalContent;
-        console.log(`[CHAT-V2] 🔄 Handoff: main → ${detectedAgent} (${AGENTS_INFO[detectedAgent]?.name})`);
-      } else if (detectedAgent !== 'main') {
-        // Si pas de handoff mais agent spécialisé, ajouter une intro courte
-        const agent = AGENTS_INFO[detectedAgent];
-        if (agent) {
-          finalContent = `${agent.emoji} **${agent.name}**: ${finalContent}`;
-        }
+        console.log(`[CHAT-V2] 🔄 Handoff: ${mainAgentInfo.name} → ${agentInfo.name}`);
       }
+      // Note: On n'ajoute PAS de préfixe supplémentaire car OpenAI le fait déjà dans sa réponse
 
       // Construire la réponse
       const chatResponse = {
@@ -163,8 +214,8 @@ function createChatV2Router(pool) {
         provider: 'openai',
         model: OPENAI_MODEL,
         agentType: detectedAgent,
-        agentName: AGENTS_INFO[detectedAgent]?.name || 'Electro',
-        agentEmoji: AGENTS_INFO[detectedAgent]?.emoji || '⚡',
+        agentName: agentInfo.name,
+        agentEmoji: agentInfo.emoji,
         tools_used: toolResults.map(r => ({
           name: r.tool_call_id?.split('_')[0] || 'unknown',
           success: r.success
@@ -330,21 +381,28 @@ const AGENTS_INFO = {
 };
 
 /**
- * Génère un message de passage de relais entre agents
+ * Génère un message de passage de relais entre agents (avec noms personnalisés)
  */
-function generateHandoffMessage(fromAgent, toAgent) {
-  const from = AGENTS_INFO[fromAgent] || AGENTS_INFO.main;
-  const to = AGENTS_INFO[toAgent];
-
-  if (!to || fromAgent === toAgent) return null;
+function generateHandoffMessageWithNames(fromAgent, toAgent) {
+  if (!fromAgent || !toAgent) return null;
 
   const handoffPhrases = [
-    `${from.emoji} *${from.name}*: Ah, ça c'est pour ${to.name} ! Je te le/la passe...\n\n${to.emoji} **${to.name}** (${to.description}): `,
-    `${from.emoji} *${from.name}*: Cette question concerne les ${to.description.toLowerCase()}, je laisse ${to.name} prendre le relais !\n\n${to.emoji} **${to.name}**: `,
-    `${from.emoji} *${from.name}*: Je passe la main à ${to.name}, notre ${to.description.toLowerCase()}.\n\n${to.emoji} **${to.name}**: `
+    `${fromAgent.emoji} *${fromAgent.name}*: Ah, ça c'est pour ${toAgent.name} ! Je te le/la passe...\n\n${toAgent.emoji} **${toAgent.name}**: Salut ! `,
+    `${fromAgent.emoji} *${fromAgent.name}*: ${toAgent.name} est le/la pro pour ça, je lui laisse la main !\n\n${toAgent.emoji} **${toAgent.name}**: Hey ! `,
+    `${fromAgent.emoji} *${fromAgent.name}*: Je passe le relais à ${toAgent.name} !\n\n${toAgent.emoji} **${toAgent.name}**: Coucou ! `
   ];
 
   return handoffPhrases[Math.floor(Math.random() * handoffPhrases.length)];
+}
+
+/**
+ * Génère un message de passage de relais entre agents (version legacy avec types)
+ */
+function generateHandoffMessage(fromAgentType, toAgentType) {
+  const from = AGENTS_INFO[fromAgentType] || AGENTS_INFO.main;
+  const to = AGENTS_INFO[toAgentType];
+  if (!to) return null;
+  return generateHandoffMessageWithNames(from, to);
 }
 
 /**
