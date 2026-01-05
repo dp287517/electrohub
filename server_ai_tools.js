@@ -477,36 +477,36 @@ function createToolHandlers(pool, site) {
 
       let query = `
         SELECT
-          t.id, t.title, t.description, t.severity, t.status,
-          t.solution, t.technician_name, t.created_at, t.resolved_at,
-          t.equipment_id, t.equipment_type, t.equipment_name,
-          t.building, t.floor, t.duration_minutes
-        FROM troubleshooting t
-        WHERE t.site = $1
-          AND t.created_at >= NOW() - INTERVAL '${parseInt(days)} days'
+          tr.id, tr.title, tr.description, tr.severity, tr.status,
+          tr.solution, tr.technician_name, tr.started_at, tr.completed_at,
+          tr.equipment_id, tr.equipment_type, tr.equipment_name,
+          tr.building_code, tr.floor, tr.duration_minutes
+        FROM troubleshooting_records tr
+        WHERE tr.site = $1
+          AND tr.started_at >= NOW() - INTERVAL '${parseInt(days)} days'
       `;
       const queryParams = [site];
       let paramIndex = 2;
 
       if (severity && severity !== 'all') {
-        query += ` AND t.severity = $${paramIndex}`;
+        query += ` AND tr.severity = $${paramIndex}`;
         queryParams.push(severity);
         paramIndex++;
       }
 
       if (building) {
-        query += ` AND UPPER(t.building) = $${paramIndex}`;
+        query += ` AND UPPER(tr.building_code) = $${paramIndex}`;
         queryParams.push(building.toUpperCase());
         paramIndex++;
       }
 
       if (equipment_name) {
-        query += ` AND LOWER(t.equipment_name) LIKE $${paramIndex}`;
+        query += ` AND LOWER(tr.equipment_name) LIKE $${paramIndex}`;
         queryParams.push(`%${equipment_name.toLowerCase()}%`);
         paramIndex++;
       }
 
-      query += ` ORDER BY t.created_at DESC LIMIT ${Math.min(parseInt(limit) || 10, 50)}`;
+      query += ` ORDER BY tr.started_at DESC LIMIT ${Math.min(parseInt(limit) || 10, 50)}`;
 
       try {
         const result = await pool.query(query, queryParams);
@@ -525,10 +525,10 @@ function createToolHandlers(pool, site) {
             solution: r.solution?.substring(0, 200),
             technician: r.technician_name,
             equipment: r.equipment_name,
-            building: r.building,
+            building: r.building_code,
             floor: r.floor,
-            date: r.created_at,
-            resolved_at: r.resolved_at,
+            date: r.started_at,
+            completed_at: r.completed_at,
             duration_minutes: r.duration_minutes
           })),
           // Message formaté pour l'IA
@@ -1143,8 +1143,8 @@ function createToolHandlers(pool, site) {
                 severity,
                 COUNT(*) as count,
                 AVG(duration_minutes) as avg_duration
-              FROM troubleshooting
-              WHERE site = $1 AND created_at >= NOW() - INTERVAL '30 days'
+              FROM troubleshooting_records
+              WHERE site = $1 AND started_at >= NOW() - INTERVAL '30 days'
               GROUP BY severity
             `, [site]);
 
