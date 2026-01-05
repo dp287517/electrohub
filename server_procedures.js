@@ -3723,10 +3723,23 @@ app.post("/api/procedures/pending-photos", uploadPendingPhoto.single("photo"), a
   try {
     const userEmail = req.headers["x-user-email"];
     const site = req.headers["x-site"];
-    const { session_id, draft_id, caption } = req.body;
+    const { session_id, caption } = req.body;
+    let { draft_id } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ ok: false, error: "No photo provided" });
+    }
+
+    // Verify draft_id exists if provided (may have been deleted by cleanup-orphans)
+    if (draft_id) {
+      const draftCheck = await pool.query(
+        `SELECT id FROM procedure_drafts WHERE id = $1`,
+        [draft_id]
+      );
+      if (draftCheck.rows.length === 0) {
+        console.warn(`[PROCEDURES] Draft ${draft_id} no longer exists, saving photo with session_id only`);
+        draft_id = null; // Clear invalid draft_id to avoid FK violation
+      }
     }
 
     const { buffer, mimetype, originalname } = req.file;
