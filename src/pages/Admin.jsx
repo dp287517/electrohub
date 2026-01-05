@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
-  FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX
+  FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX, Bug
 } from 'lucide-react';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
@@ -139,6 +139,24 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(null);
   const [validateModalUser, setValidateModalUser] = useState(null); // User being configured for validation
+  const [debugEmail, setDebugEmail] = useState('');
+  const [debugResult, setDebugResult] = useState(null);
+  const [debugLoading, setDebugLoading] = useState(false);
+
+  const handleDebugUser = async () => {
+    if (!debugEmail.trim()) return;
+    setDebugLoading(true);
+    setDebugResult(null);
+    try {
+      const response = await fetch(`${API_BASE}/users/debug/${encodeURIComponent(debugEmail.trim())}`, getAuthOptions());
+      const data = await response.json();
+      setDebugResult(data);
+    } catch (err) {
+      setDebugResult({ error: err.message, findings: ['Erreur lors du diagnostic'] });
+    } finally {
+      setDebugLoading(false);
+    }
+  };
 
   const fetchPending = useCallback(async () => {
     setLoading(true);
@@ -221,6 +239,126 @@ function PendingUsersTab({ sites, departments, onRefresh }) {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Debug Tool */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Bug size={18} className="text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">Diagnostic utilisateur</span>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">
+          Un utilisateur ne s'affiche pas dans la liste ? Entrez son email pour diagnostiquer le problème.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="email"
+            value={debugEmail}
+            onChange={(e) => setDebugEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleDebugUser()}
+            placeholder="email@haleon.com"
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          />
+          <button
+            onClick={handleDebugUser}
+            disabled={debugLoading || !debugEmail.trim()}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {debugLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            Diagnostiquer
+          </button>
+        </div>
+
+        {/* Debug Results */}
+        {debugResult && (
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-medium text-gray-900">Résultat pour: {debugResult.email}</span>
+              <button onClick={() => setDebugResult(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Findings */}
+            <div className="space-y-2 mb-4">
+              {debugResult.findings?.map((finding, idx) => (
+                <p key={idx} className="text-sm text-gray-700">{finding}</p>
+              ))}
+            </div>
+
+            {/* Recommendation */}
+            {debugResult.recommendation && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-800 font-medium">Recommandation:</p>
+                <p className="text-sm text-blue-700 mt-1">{debugResult.recommendation}</p>
+              </div>
+            )}
+
+            {/* Auth Audit Log */}
+            {debugResult.auth_audit_log?.length > 0 && (
+              <div className="mt-4">
+                <p className="text-xs font-medium text-gray-500 mb-2">Historique des connexions (dernières 20):</p>
+                <div className="max-h-40 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Date</th>
+                        <th className="px-2 py-1 text-left">Action</th>
+                        <th className="px-2 py-1 text-left">Succès</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {debugResult.auth_audit_log.map((log, idx) => (
+                        <tr key={idx} className="border-t border-gray-100">
+                          <td className="px-2 py-1">{new Date(log.ts).toLocaleString('fr-FR')}</td>
+                          <td className="px-2 py-1">
+                            <span className={`px-1.5 py-0.5 rounded text-xs ${
+                              log.action === 'LOGIN' ? 'bg-green-100 text-green-700' :
+                              log.action === 'LOGIN_PENDING' ? 'bg-amber-100 text-amber-700' :
+                              log.action === 'NEW_USER_PENDING' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-700'
+                            }`}>
+                              {log.action}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1">{log.success ? '✓' : '✗'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Tables Status */}
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="p-2 bg-white rounded border">
+                <p className="text-xs font-medium text-gray-500">Table users</p>
+                <p className="text-sm">
+                  {debugResult.users_table ? (
+                    <span className={debugResult.users_table.is_active ? 'text-green-600' : 'text-amber-600'}>
+                      {debugResult.users_table.is_active ? '✓ Actif' : '⏳ Inactif'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">Non trouvé</span>
+                  )}
+                </p>
+              </div>
+              <div className="p-2 bg-white rounded border">
+                <p className="text-xs font-medium text-gray-500">Table haleon_users</p>
+                <p className="text-sm">
+                  {debugResult.haleon_users_table ? (
+                    <span className={debugResult.haleon_users_table.is_validated ? 'text-green-600' : 'text-amber-600'}>
+                      {debugResult.haleon_users_table.is_validated ? '✓ Validé' : '⏳ Non validé'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">Non trouvé</span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Pending users list */}
