@@ -3042,43 +3042,46 @@ export default function Switchboards() {
               </div>
             </AnimatedCard>
 
-            {/* Control Status Section - Enhanced to show ALL controls */}
+            {/* Control Status Section - Enhanced to show ALL controls (board + devices) */}
             <AnimatedCard delay={50}>
               <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+                {/* Header with global stats */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className={`p-2 rounded-xl ${
-                      controlStatuses[selectedBoard.id]?.status === 'overdue' ? 'bg-red-100' :
-                      controlStatuses[selectedBoard.id]?.status === 'pending' ? 'bg-blue-100' : 'bg-gray-100'
+                      (controlStatuses[selectedBoard.id]?.status === 'overdue' || Object.values(deviceControls).some(dc => dc.status === 'overdue')) ? 'bg-red-100' :
+                      (controlStatuses[selectedBoard.id]?.status === 'pending' || Object.values(deviceControls).some(dc => dc.status === 'pending')) ? 'bg-blue-100' : 'bg-gray-100'
                     }`}>
                       <ClipboardCheck size={20} className={
-                        controlStatuses[selectedBoard.id]?.status === 'overdue' ? 'text-red-600' :
-                        controlStatuses[selectedBoard.id]?.status === 'pending' ? 'text-blue-600' : 'text-gray-400'
+                        (controlStatuses[selectedBoard.id]?.status === 'overdue' || Object.values(deviceControls).some(dc => dc.status === 'overdue')) ? 'text-red-600' :
+                        (controlStatuses[selectedBoard.id]?.status === 'pending' || Object.values(deviceControls).some(dc => dc.status === 'pending')) ? 'text-blue-600' : 'text-gray-400'
                       } />
                     </div>
                     <div>
                       <h4 className="font-medium text-gray-900">
                         Contrôles planifiés
-                        {controlStatuses[selectedBoard.id]?.controls?.length > 0 && (
+                        {((controlStatuses[selectedBoard.id]?.controls?.length || 0) + Object.keys(deviceControls).length) > 0 && (
                           <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
-                            {controlStatuses[selectedBoard.id].controls.length}
+                            {(controlStatuses[selectedBoard.id]?.controls?.length || 0) + Object.keys(deviceControls).length}
                           </span>
                         )}
                       </h4>
-                      <div className="flex items-center gap-2 mt-1">
-                        {controlStatuses[selectedBoard.id]?.overdueCount > 0 && (
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {/* Board overdue count */}
+                        {((controlStatuses[selectedBoard.id]?.overdueCount || 0) + Object.values(deviceControls).filter(dc => dc.status === 'overdue').length) > 0 && (
                           <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full flex items-center gap-1">
                             <AlertTriangle size={10} />
-                            {controlStatuses[selectedBoard.id].overdueCount} en retard
+                            {(controlStatuses[selectedBoard.id]?.overdueCount || 0) + Object.values(deviceControls).filter(dc => dc.status === 'overdue').length} en retard
                           </span>
                         )}
-                        {controlStatuses[selectedBoard.id]?.pendingCount > 0 && (
+                        {/* Board pending count */}
+                        {((controlStatuses[selectedBoard.id]?.pendingCount || 0) + Object.values(deviceControls).filter(dc => dc.status === 'pending').length) > 0 && (
                           <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full flex items-center gap-1">
                             <CheckCircle size={10} />
-                            {controlStatuses[selectedBoard.id].pendingCount} planifié(s)
+                            {(controlStatuses[selectedBoard.id]?.pendingCount || 0) + Object.values(deviceControls).filter(dc => dc.status === 'pending').length} planifié(s)
                           </span>
                         )}
-                        {!controlStatuses[selectedBoard.id]?.controls?.length && (
+                        {!controlStatuses[selectedBoard.id]?.controls?.length && Object.keys(deviceControls).length === 0 && (
                           <span className="text-sm text-gray-400">Aucun contrôle planifié</span>
                         )}
                       </div>
@@ -3104,35 +3107,122 @@ export default function Switchboards() {
                   </div>
                 </div>
 
-                {/* List all controls */}
+                {/* SECTION 1: Board-level controls */}
                 {controlStatuses[selectedBoard.id]?.controls?.length > 0 && (
-                  <div className="border-t pt-3 space-y-2">
-                    {controlStatuses[selectedBoard.id].controls.map((ctrl, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule_id=${ctrl.schedule_id}`)}
-                        className={`flex items-center justify-between p-2 rounded-lg text-sm cursor-pointer transition-all ${
-                          ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200 hover:bg-red-100' : 'bg-blue-50 border border-blue-200 hover:bg-blue-100'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          {ctrl.status === 'overdue' ? (
-                            <AlertTriangle size={14} className="text-red-600" />
-                          ) : (
-                            <CheckCircle size={14} className="text-blue-600" />
-                          )}
-                          <span className={ctrl.status === 'overdue' ? 'text-red-700 font-medium' : 'text-blue-700'}>
-                            {ctrl.template_name}
-                          </span>
+                  <div className="border-t pt-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap size={14} className="text-amber-500" />
+                      <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Contrôles Tableau</span>
+                      <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">
+                        {controlStatuses[selectedBoard.id].controls.length}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {controlStatuses[selectedBoard.id].controls.map((ctrl, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => navigate(`/app/switchboard-controls?tab=schedules&schedule_id=${ctrl.schedule_id}`)}
+                          className={`flex items-center justify-between p-2 rounded-lg text-sm cursor-pointer transition-all ${
+                            ctrl.status === 'overdue' ? 'bg-red-50 border border-red-200 hover:bg-red-100' : 'bg-blue-50 border border-blue-200 hover:bg-blue-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            {ctrl.status === 'overdue' ? (
+                              <AlertTriangle size={14} className="text-red-600" />
+                            ) : (
+                              <CheckCircle size={14} className="text-blue-600" />
+                            )}
+                            <span className={ctrl.status === 'overdue' ? 'text-red-700 font-medium' : 'text-blue-700'}>
+                              {ctrl.template_name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}`}>
+                              {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
+                            </span>
+                            <ChevronRight size={14} className={ctrl.status === 'overdue' ? 'text-red-400' : 'text-blue-400'} />
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs ${ctrl.status === 'overdue' ? 'text-red-600' : 'text-blue-600'}`}>
-                            {ctrl.next_due ? new Date(ctrl.next_due).toLocaleDateString('fr-FR') : '-'}
-                          </span>
-                          <ChevronRight size={14} className={ctrl.status === 'overdue' ? 'text-red-400' : 'text-blue-400'} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* SECTION 2: Device-level controls (DDR and others) */}
+                {Object.keys(deviceControls).length > 0 && (
+                  <div className={`${controlStatuses[selectedBoard.id]?.controls?.length > 0 ? 'border-t mt-3' : 'border-t'} pt-3`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <ShieldCheck size={14} className="text-purple-500" />
+                      <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Contrôles Disjoncteurs</span>
+                      <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded">
+                        {Object.keys(deviceControls).length} appareils
+                      </span>
+                    </div>
+
+                    {/* Summary by control type */}
+                    {(() => {
+                      // Group controls by template
+                      const controlsByTemplate = {};
+                      Object.entries(deviceControls).forEach(([deviceId, dc]) => {
+                        dc.controls.forEach(ctrl => {
+                          const key = `${ctrl.template_id}_${ctrl.template_name}`;
+                          if (!controlsByTemplate[key]) {
+                            controlsByTemplate[key] = {
+                              template_name: ctrl.template_name,
+                              element_filter: ctrl.element_filter,
+                              next_due_date: ctrl.next_due_date,
+                              is_overdue: ctrl.is_overdue,
+                              count: 0,
+                              overdue_count: 0
+                            };
+                          }
+                          controlsByTemplate[key].count++;
+                          if (ctrl.is_overdue) controlsByTemplate[key].overdue_count++;
+                        });
+                      });
+
+                      return (
+                        <div className="space-y-2">
+                          {Object.values(controlsByTemplate).map((group, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`)}
+                              className={`flex items-center justify-between p-2 rounded-lg text-sm cursor-pointer transition-all ${
+                                group.overdue_count > 0 ? 'bg-red-50 border border-red-200 hover:bg-red-100' : 'bg-purple-50 border border-purple-200 hover:bg-purple-100'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                {group.overdue_count > 0 ? (
+                                  <AlertTriangle size={14} className="text-red-600" />
+                                ) : (
+                                  <ShieldCheck size={14} className="text-purple-600" />
+                                )}
+                                <span className={group.overdue_count > 0 ? 'text-red-700 font-medium' : 'text-purple-700'}>
+                                  {group.template_name}
+                                </span>
+                                {group.element_filter === 'ddr' && (
+                                  <span className="text-xs px-1.5 py-0.5 bg-purple-200 text-purple-800 rounded">DDR</span>
+                                )}
+                                <span className="text-xs text-gray-500">
+                                  ({group.count} appareil{group.count > 1 ? 's' : ''})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {group.overdue_count > 0 && (
+                                  <span className="text-xs px-1.5 py-0.5 bg-red-200 text-red-700 rounded">
+                                    {group.overdue_count} en retard
+                                  </span>
+                                )}
+                                <span className={`text-xs ${group.overdue_count > 0 ? 'text-red-600' : 'text-purple-600'}`}>
+                                  {group.next_due_date ? new Date(group.next_due_date).toLocaleDateString('fr-FR') : '-'}
+                                </span>
+                                <ChevronRight size={14} className={group.overdue_count > 0 ? 'text-red-400' : 'text-purple-400'} />
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })()}
                   </div>
                 )}
               </div>
