@@ -1728,10 +1728,16 @@ function VsdPlansTab() {
 // ============== SETTINGS TAB ==============
 function SettingsTab() {
   const [aiIconInfo, setAiIconInfo] = useState(null);
+  const [aiVideoInfo, setAiVideoInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(null); // 'idle' | 'speaking' | null
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [idleVideoUrl, setIdleVideoUrl] = useState(null);
+  const [speakingVideoUrl, setSpeakingVideoUrl] = useState(null);
   const fileInputRef = useRef(null);
+  const idleVideoInputRef = useRef(null);
+  const speakingVideoInputRef = useRef(null);
 
   // Fetch AI icon info
   const fetchAiIconInfo = useCallback(async () => {
@@ -1746,14 +1752,33 @@ function SettingsTab() {
       }
     } catch (err) {
       console.error('Error fetching AI icon info:', err);
-    } finally {
-      setLoading(false);
+    }
+  }, []);
+
+  // Fetch AI video info
+  const fetchAiVideoInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-video/info`, getAuthOptions());
+      const data = await res.json();
+      setAiVideoInfo(data);
+      if (data.hasIdleVideo) {
+        setIdleVideoUrl(`${API_BASE}/settings/ai-video/idle?t=${Date.now()}`);
+      } else {
+        setIdleVideoUrl(null);
+      }
+      if (data.hasSpeakingVideo) {
+        setSpeakingVideoUrl(`${API_BASE}/settings/ai-video/speaking?t=${Date.now()}`);
+      } else {
+        setSpeakingVideoUrl(null);
+      }
+    } catch (err) {
+      console.error('Error fetching AI video info:', err);
     }
   }, []);
 
   useEffect(() => {
-    fetchAiIconInfo();
-  }, [fetchAiIconInfo]);
+    Promise.all([fetchAiIconInfo(), fetchAiVideoInfo()]).finally(() => setLoading(false));
+  }, [fetchAiIconInfo, fetchAiVideoInfo]);
 
   // Handle file selection
   const handleFileSelect = async (e) => {
@@ -1824,6 +1849,83 @@ function SettingsTab() {
       }
     } catch (err) {
       alert('Error removing icon: ' + err.message);
+    }
+  };
+
+  // Handle video file selection
+  const handleVideoSelect = async (e, videoType) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (!validTypes.includes(file.type)) {
+      alert('Please select a valid video file (MP4, WebM, or OGG)');
+      return;
+    }
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File size must be less than 10MB');
+      return;
+    }
+
+    setUploadingVideo(videoType);
+    try {
+      const formData = new FormData();
+      formData.append('video', file);
+
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/settings/ai-video/${videoType}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: formData
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        await fetchAiVideoInfo();
+        alert(`${videoType === 'idle' ? 'Idle' : 'Speaking'} video uploaded successfully!`);
+      } else {
+        throw new Error(data.error || 'Upload failed');
+      }
+    } catch (err) {
+      alert('Error uploading video: ' + err.message);
+    } finally {
+      setUploadingVideo(null);
+      if (videoType === 'idle' && idleVideoInputRef.current) {
+        idleVideoInputRef.current.value = '';
+      }
+      if (videoType === 'speaking' && speakingVideoInputRef.current) {
+        speakingVideoInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Handle delete videos
+  const handleDeleteVideos = async () => {
+    if (!confirm('Remove all custom AI videos and revert to animated avatar?')) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-video`, {
+        ...getAuthOptions(),
+        method: 'DELETE'
+      });
+
+      if (res.ok) {
+        setIdleVideoUrl(null);
+        setSpeakingVideoUrl(null);
+        setAiVideoInfo({ hasIdleVideo: false, hasSpeakingVideo: false });
+        alert('AI videos removed');
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Delete failed');
+      }
+    } catch (err) {
+      alert('Error removing videos: ' + err.message);
     }
   };
 
@@ -1942,6 +2044,179 @@ function SettingsTab() {
                       <p className="font-medium text-amber-800">Note</p>
                       <p className="text-amber-700">The new icon will appear for all users after they refresh their browser.</p>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* AI Video Avatar Settings */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-purple-50 to-pink-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
+              <Sparkles size={20} className="text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">AI Video Avatar</h3>
+              <p className="text-sm text-gray-500">Upload animated videos for the AI assistant (plays instead of static icon)</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Idle Video */}
+                <div className="border border-gray-200 rounded-xl p-4">
+                  <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+                    <Clock size={18} className="text-blue-500" />
+                    Vidéo Repos (Idle)
+                  </h4>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Vidéo jouée en boucle quand l'IA est inactive
+                  </p>
+
+                  {idleVideoUrl ? (
+                    <div className="space-y-3">
+                      <video
+                        src={idleVideoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        className="w-full h-32 object-cover rounded-lg bg-gray-100"
+                      />
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-green-600 flex items-center gap-1">
+                          <Check size={14} /> Vidéo active
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400">
+                      <span>Pas de vidéo</span>
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <input
+                      ref={idleVideoInputRef}
+                      type="file"
+                      accept="video/mp4,video/webm,video/ogg"
+                      onChange={(e) => handleVideoSelect(e, 'idle')}
+                      className="hidden"
+                      id="idle-video-upload"
+                    />
+                    <label
+                      htmlFor="idle-video-upload"
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-medium cursor-pointer transition-colors w-full justify-center ${
+                        uploadingVideo === 'idle'
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {uploadingVideo === 'idle' ? (
+                        <><Loader2 size={18} className="animate-spin" /> Upload...</>
+                      ) : (
+                        <><Upload size={18} /> {idleVideoUrl ? 'Remplacer' : 'Uploader'}</>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {/* Speaking Video */}
+                <div className="border border-gray-200 rounded-xl p-4">
+                  <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+                    <Sparkles size={18} className="text-purple-500" />
+                    Vidéo Parle (Speaking)
+                  </h4>
+                  <p className="text-sm text-gray-500 mb-4">
+                    Vidéo jouée quand l'IA répond/parle
+                  </p>
+
+                  {speakingVideoUrl ? (
+                    <div className="space-y-3">
+                      <video
+                        src={speakingVideoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        className="w-full h-32 object-cover rounded-lg bg-gray-100"
+                      />
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-green-600 flex items-center gap-1">
+                          <Check size={14} /> Vidéo active
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400">
+                      <span>Pas de vidéo</span>
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <input
+                      ref={speakingVideoInputRef}
+                      type="file"
+                      accept="video/mp4,video/webm,video/ogg"
+                      onChange={(e) => handleVideoSelect(e, 'speaking')}
+                      className="hidden"
+                      id="speaking-video-upload"
+                    />
+                    <label
+                      htmlFor="speaking-video-upload"
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-medium cursor-pointer transition-colors w-full justify-center ${
+                        uploadingVideo === 'speaking'
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-purple-600 text-white hover:bg-purple-700'
+                      }`}
+                    >
+                      {uploadingVideo === 'speaking' ? (
+                        <><Loader2 size={18} className="animate-spin" /> Upload...</>
+                      ) : (
+                        <><Upload size={18} /> {speakingVideoUrl ? 'Remplacer' : 'Uploader'}</>
+                      )}
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Delete all videos button */}
+              {(idleVideoUrl || speakingVideoUrl) && (
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleDeleteVideos}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 size={18} />
+                    Supprimer toutes les vidéos
+                  </button>
+                </div>
+              )}
+
+              {/* Info box */}
+              <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <Sparkles size={18} className="text-purple-500 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-medium text-purple-800">Conseils pour les vidéos</p>
+                    <ul className="text-purple-700 mt-1 space-y-1 list-disc list-inside">
+                      <li>Format: MP4, WebM ou OGG (max 10MB)</li>
+                      <li>Durée recommandée: 2-5 secondes en boucle</li>
+                      <li>Résolution: 256x256 ou 512x512 pixels</li>
+                      <li>La vidéo "repos" est jouée en continu</li>
+                      <li>La vidéo "parle" est jouée pendant les réponses</li>
+                    </ul>
                   </div>
                 </div>
               </div>
