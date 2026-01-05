@@ -15,6 +15,7 @@ import {
   analyzeReport,
   saveDraft,
   getDrafts,
+  getDraft,
   resumeDraft,
   deleteDraft,
   cleanupOrphanDrafts,
@@ -123,51 +124,99 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
   }, [sessionId, draftId, mode, collectedData, currentStep]);
 
   // CRITICAL: Restore active session from localStorage on mount
+  // WITH VALIDATION: Check that the draft still exists before restoring
   useEffect(() => {
-    const savedSession = localStorage.getItem('activeProcedureSession');
-    if (savedSession && mode === 'choose') {
+    const validateAndRestoreSession = async () => {
+      const savedSession = localStorage.getItem('activeProcedureSession');
+      console.log('[ProcedureCreator] 🔍 Checking localStorage for saved session...');
+
+      if (!savedSession) {
+        console.log('[ProcedureCreator] ℹ️ No saved session in localStorage');
+        return;
+      }
+
+      if (mode !== 'choose') {
+        console.log('[ProcedureCreator] ℹ️ Not in choose mode, skipping restoration');
+        return;
+      }
+
       try {
         const session = JSON.parse(savedSession);
-        // Only restore if session is less than 24 hours old
-        if (session.sessionId && (Date.now() - session.timestamp) < 24 * 60 * 60 * 1000) {
-          console.log('[ProcedureCreator] Restoring session from localStorage:', session.sessionId);
-          setSessionId(session.sessionId);
-          setDraftId(session.draftId);
-          setMode(session.mode || 'guided');
-          setCollectedData(session.collectedData || {});
-          setCurrentStep(session.currentStep || 'steps');
+        console.log('[ProcedureCreator] 📋 Found saved session:', {
+          sessionId: session.sessionId,
+          draftId: session.draftId,
+          title: session.collectedData?.title,
+          timestamp: new Date(session.timestamp).toISOString(),
+          ageHours: ((Date.now() - session.timestamp) / (1000 * 60 * 60)).toFixed(1)
+        });
 
-          // Build restoration message with last step info
-          const rawSteps = session.collectedData?.raw_steps || [];
-          const stepsCount = rawSteps.length;
-          const lastStep = rawSteps[rawSteps.length - 1];
-
-          let restorationMessage = `📋 **"${session.collectedData?.title || 'Procédure en cours'}"**\n\n`;
-          restorationMessage += `✅ ${stepsCount} étape(s) enregistrée(s)\n\n`;
-
-          if (lastStep) {
-            const lastStepDesc = lastStep.raw_text || lastStep.title || 'Étape sans description';
-            const truncated = lastStepDesc.length > 60 ? lastStepDesc.substring(0, 60) + '...' : lastStepDesc;
-            restorationMessage += `📸 Dernière étape: "${truncated}"`;
-            if (lastStep.has_photo || lastStep.photo) {
-              restorationMessage += ` (avec photo)`;
-            }
-            restorationMessage += `\n\n`;
-          }
-
-          restorationMessage += `➡️ Continuez à ajouter des étapes ou dites "terminé".`;
-
-          setMessages([{
-            role: 'assistant',
-            content: restorationMessage,
-            photo: lastStep?.photo // Include photo URL if available
-          }]);
+        // Check if session is too old (24 hours)
+        if (!session.sessionId || (Date.now() - session.timestamp) >= 24 * 60 * 60 * 1000) {
+          console.log('[ProcedureCreator] ⏰ Session too old (>24h), clearing localStorage');
+          localStorage.removeItem('activeProcedureSession');
+          return;
         }
+
+        // CRITICAL: Validate that the draft still exists in database
+        if (session.draftId) {
+          console.log('[ProcedureCreator] 🔍 Validating draft exists in DB:', session.draftId);
+          try {
+            const draftResult = await getDraft(session.draftId);
+            if (!draftResult || draftResult.error || draftResult.ok === false) {
+              console.log('[ProcedureCreator] ❌ Draft no longer exists in DB, clearing localStorage');
+              localStorage.removeItem('activeProcedureSession');
+              return;
+            }
+            console.log('[ProcedureCreator] ✅ Draft validated:', draftResult.title || draftResult.draft?.title);
+          } catch (e) {
+            console.log('[ProcedureCreator] ❌ Draft validation failed (likely deleted), clearing localStorage:', e.message);
+            localStorage.removeItem('activeProcedureSession');
+            return;
+          }
+        }
+
+        // All validations passed - restore the session
+        console.log('[ProcedureCreator] ✅ Restoring validated session');
+        setSessionId(session.sessionId);
+        setDraftId(session.draftId);
+        setMode(session.mode || 'guided');
+        setCollectedData(session.collectedData || {});
+        setCurrentStep(session.currentStep || 'steps');
+
+        // Build restoration message with last step info
+        const rawSteps = session.collectedData?.raw_steps || [];
+        const stepsCount = rawSteps.length;
+        const lastStep = rawSteps[rawSteps.length - 1];
+
+        let restorationMessage = `📋 **"${session.collectedData?.title || 'Procédure en cours'}"**\n\n`;
+        restorationMessage += `✅ ${stepsCount} étape(s) enregistrée(s)\n\n`;
+
+        if (lastStep) {
+          const lastStepDesc = lastStep.raw_text || lastStep.title || 'Étape sans description';
+          const truncated = lastStepDesc.length > 60 ? lastStepDesc.substring(0, 60) + '...' : lastStepDesc;
+          restorationMessage += `📸 Dernière étape: "${truncated}"`;
+          if (lastStep.has_photo || lastStep.photo) {
+            restorationMessage += ` (avec photo)`;
+          }
+          restorationMessage += `\n\n`;
+        }
+
+        restorationMessage += `➡️ Continuez à ajouter des étapes ou dites "terminé".`;
+
+        setMessages([{
+          role: 'assistant',
+          content: restorationMessage,
+          photo: lastStep?.photo // Include photo URL if available
+        }]);
+
+        console.log('[ProcedureCreator] ✅ Session restored successfully');
       } catch (e) {
-        console.error('Error restoring session:', e);
+        console.error('[ProcedureCreator] ❌ Error restoring session:', e);
         localStorage.removeItem('activeProcedureSession');
       }
-    }
+    };
+
+    validateAndRestoreSession();
   }, []);
 
   // Clear localStorage when procedure is completed or modal closed
@@ -253,17 +302,53 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
 
   // Upload photo immediately to server
   const uploadPhotoToServer = async (file) => {
-    if (!file) return null;
+    if (!file) {
+      console.log('[ProcedureCreator] 📷 No file to upload');
+      return null;
+    }
+
+    console.log('[ProcedureCreator] 📷 Starting photo upload:', {
+      fileName: file.name,
+      fileSize: file.size,
+      sessionId,
+      draftId
+    });
+
     setUploadingPhoto(true);
     try {
       const result = await uploadPendingPhoto(file, sessionId, draftId);
+      console.log('[ProcedureCreator] 📷 Upload result:', result);
+
       if (result.ok !== false && result.photo) {
         setServerPendingPhotos(prev => [...prev, result.photo]);
-        console.log(`[ProcedureCreator] Photo uploaded to server: ${result.photo.id}`);
+        console.log(`[ProcedureCreator] ✅ Photo uploaded successfully: ${result.photo.id}`);
         return result.photo;
       }
+
+      // Handle specific errors
+      if (result.error) {
+        console.error('[ProcedureCreator] ❌ Upload error:', result.error);
+
+        // Check if error is due to deleted draft (foreign key violation)
+        if (result.error.includes('foreign key') || result.error.includes('draft') || result.error.includes('not present')) {
+          console.log('[ProcedureCreator] 🔄 Draft was deleted, clearing session and retrying...');
+
+          // Clear invalid session
+          localStorage.removeItem('activeProcedureSession');
+          setDraftId(null);
+          setSessionId(null);
+          setCollectedData({});
+          setMessages([]);
+          setMode('choose');
+
+          alert('Le brouillon a été supprimé. Veuillez recommencer une nouvelle procédure.');
+          return null;
+        }
+
+        alert(`Erreur: ${result.error}`);
+      }
     } catch (e) {
-      console.error('Error uploading photo:', e);
+      console.error('[ProcedureCreator] ❌ Error uploading photo:', e);
       alert('Erreur lors de l\'upload de la photo. Veuillez réessayer.');
     } finally {
       setUploadingPhoto(false);
