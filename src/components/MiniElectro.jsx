@@ -8,25 +8,7 @@ import {
 } from 'lucide-react';
 import { post, get, API_BASE } from '../lib/api';
 import TroubleshootingWizard, { TroubleshootingHistory } from './TroubleshootingWizard';
-
-// Cache global pour l'icône personnalisée Electro (même système que AnimatedAvatar)
-let electroIconCache = { checked: false, url: null };
-
-async function getElectroIcon() {
-  if (electroIconCache.checked) return electroIconCache.url;
-
-  try {
-    const res = await fetch('/api/admin/settings/ai-icon/info');
-    const data = await res.json();
-    if (data.hasCustomIcon) {
-      electroIconCache.url = `/api/admin/settings/ai-icon?t=${Date.now()}`;
-    }
-  } catch (e) {
-    // Silently fail - use default icon
-  }
-  electroIconCache.checked = true;
-  return electroIconCache.url;
-}
+import { VideoAvatar, AGENT_NAMES } from './AIAvatar/VideoAvatar';
 
 /**
  * MiniElectro - Assistant IA contextuel qui apparaît sur chaque équipement
@@ -43,23 +25,18 @@ export default function MiniElectro({
   const [analysis, setAnalysis] = useState(null);
   const [docSearch, setDocSearch] = useState({ loading: false, results: null, error: null });
   const [showDocSearch, setShowDocSearch] = useState(false);
-  const [customIconUrl, setCustomIconUrl] = useState(null);
   const [showTroubleshooting, setShowTroubleshooting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
-  // Chat state
-  const [showChat, setShowChat] = useState(false);
+  // Chat state - show by default for direct interaction
+  const [showChat, setShowChat] = useState(true);
   const [chatMessage, setChatMessage] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const chatContainerRef = useRef(null);
 
-  // Charger l'icône personnalisée au montage
-  useEffect(() => {
-    getElectroIcon().then(url => {
-      if (url) setCustomIconUrl(url);
-    });
-  }, []);
+  // Nom de l'agent pour ce type d'équipement
+  const agentName = AGENT_NAMES[equipmentType] || AGENT_NAMES.main;
 
   // Analyser l'équipement au montage ou quand il change
   const analyzeEquipment = useCallback(async () => {
@@ -240,15 +217,11 @@ export default function MiniElectro({
       >
         <div className="flex items-center gap-3">
           <div className="relative">
-            {customIconUrl ? (
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg overflow-hidden">
-                <img src={customIconUrl} alt="Electro" className="w-8 h-8 object-cover" />
-              </div>
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
-                <Zap className="w-5 h-5 text-white" />
-              </div>
-            )}
+            <VideoAvatar
+              agentType={equipmentType}
+              size="sm"
+              speaking={isLoading || isSending}
+            />
             {hasIssues && (
               <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
                 <span className="text-[10px] text-white font-bold">{analysis.issues.length}</span>
@@ -256,7 +229,7 @@ export default function MiniElectro({
             )}
           </div>
           <div className="text-left">
-            <p className="font-semibold text-gray-900 text-sm">Electro</p>
+            <p className="font-semibold text-gray-900 text-sm">{agentName}</p>
             <p className="text-xs text-gray-500">
               {isLoading ? 'Analyse en cours...' :
                hasIssues ? `${analysis.issues.length} point(s) d'attention` :
@@ -278,9 +251,147 @@ export default function MiniElectro({
       {/* Contenu expandable */}
       {isExpanded && (
         <div className="px-4 pb-4 space-y-4">
+          {/* Chat Interface - Direct et visible en premier */}
+          {showChat && (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {/* Chat messages */}
+              <div
+                ref={chatContainerRef}
+                className="h-52 overflow-y-auto p-3 space-y-3"
+              >
+                {chatHistory.length === 0 ? (
+                  <div className="text-center text-gray-500 text-sm py-4">
+                    <div className="flex justify-center mb-3">
+                      <VideoAvatar
+                        agentType={equipmentType}
+                        size="md"
+                        speaking={false}
+                      />
+                    </div>
+                    <p className="font-medium text-gray-700">Salut ! Je suis {agentName}</p>
+                    <p className="text-xs text-gray-400 mt-1">Pose-moi une question sur cet équipement</p>
+                    <div className="flex flex-wrap gap-2 justify-center mt-4">
+                      <button
+                        onClick={() => {
+                          setChatMessage('Quel est l\'état de cet équipement ?');
+                          setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                        }}
+                        className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-full text-xs font-medium transition-colors"
+                      >
+                        📊 État
+                      </button>
+                      <button
+                        onClick={() => {
+                          setChatMessage('Historique des dépannages');
+                          setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                        }}
+                        className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full text-xs font-medium transition-colors"
+                      >
+                        🔧 Dépannages
+                      </button>
+                      <button
+                        onClick={() => {
+                          setChatMessage('Quels sont les problèmes fréquents ?');
+                          setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                        }}
+                        className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-full text-xs font-medium transition-colors"
+                      >
+                        ⚠️ Problèmes
+                      </button>
+                      <button
+                        onClick={() => {
+                          setChatMessage('Quand est le prochain contrôle ?');
+                          setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
+                        }}
+                        className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-full text-xs font-medium transition-colors"
+                      >
+                        📅 Contrôles
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  chatHistory.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}
+                    >
+                      {/* Avatar pour les messages assistant */}
+                      {msg.role === 'assistant' && (
+                        <div className="flex-shrink-0">
+                          <VideoAvatar
+                            agentType={equipmentType}
+                            size="xs"
+                            speaking={false}
+                          />
+                        </div>
+                      )}
+                      <div
+                        className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${
+                          msg.role === 'user'
+                            ? 'bg-indigo-500 text-white'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        {/* Actions suggérées */}
+                        {msg.actions && msg.actions.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {msg.actions.slice(0, 3).map((action, j) => (
+                              <button
+                                key={j}
+                                onClick={() => handleChatAction(action)}
+                                className="px-2 py-0.5 bg-white/20 hover:bg-white/30 rounded text-xs"
+                              >
+                                {action.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+                {isSending && (
+                  <div className="flex justify-start gap-2">
+                    <div className="flex-shrink-0">
+                      <VideoAvatar
+                        agentType={equipmentType}
+                        size="xs"
+                        speaking={true}
+                      />
+                    </div>
+                    <div className="bg-gray-100 rounded-xl px-3 py-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input */}
+              <form onSubmit={sendChatMessage} className="border-t border-gray-200 p-2 flex gap-2">
+                <input
+                  type="text"
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  placeholder={`Demande à ${agentName}...`}
+                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  disabled={isSending}
+                />
+                <button
+                  type="submit"
+                  disabled={!chatMessage.trim() || isSending}
+                  className="p-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
+          )}
+
           {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
+              <span className="ml-2 text-sm text-gray-500">Analyse en cours...</span>
             </div>
           ) : (
             <>
@@ -462,125 +573,8 @@ export default function MiniElectro({
                     <RefreshCw className="w-3.5 h-3.5" />
                     Réanalyser
                   </button>
-                  <button
-                    onClick={() => setShowChat(!showChat)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors ${
-                      showChat
-                        ? 'bg-indigo-500 text-white'
-                        : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
-                    }`}
-                  >
-                    <MessageCircle className="w-3.5 h-3.5" />
-                    Discuter
-                  </button>
                 </div>
               </div>
-
-              {/* Chat Interface */}
-              {showChat && (
-                <div className="pt-3 border-t border-indigo-100">
-                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                    {/* Chat messages */}
-                    <div
-                      ref={chatContainerRef}
-                      className="h-48 overflow-y-auto p-3 space-y-3"
-                    >
-                      {chatHistory.length === 0 ? (
-                        <div className="text-center text-gray-400 text-sm py-8">
-                          <MessageCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                          <p>Pose-moi une question sur cet équipement!</p>
-                          <div className="flex flex-wrap gap-2 justify-center mt-3">
-                            <button
-                              onClick={() => {
-                                setChatMessage('Historique des dépannages');
-                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
-                              }}
-                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
-                            >
-                              🔧 Dépannages
-                            </button>
-                            <button
-                              onClick={() => {
-                                setChatMessage('Problèmes fréquents');
-                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
-                              }}
-                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
-                            >
-                              ⚠️ Problèmes
-                            </button>
-                            <button
-                              onClick={() => {
-                                setChatMessage('Prochains contrôles');
-                                setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
-                              }}
-                              className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
-                            >
-                              📅 Contrôles
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        chatHistory.map((msg, i) => (
-                          <div
-                            key={i}
-                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                          >
-                            <div
-                              className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
-                                msg.role === 'user'
-                                  ? 'bg-indigo-500 text-white'
-                                  : 'bg-gray-100 text-gray-800'
-                              }`}
-                            >
-                              <p className="whitespace-pre-wrap">{msg.content}</p>
-                              {/* Actions suggérées */}
-                              {msg.actions && msg.actions.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-2">
-                                  {msg.actions.slice(0, 3).map((action, j) => (
-                                    <button
-                                      key={j}
-                                      onClick={() => handleChatAction(action)}
-                                      className="px-2 py-0.5 bg-white/20 hover:bg-white/30 rounded text-xs"
-                                    >
-                                      {action.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                      {isSending && (
-                        <div className="flex justify-start">
-                          <div className="bg-gray-100 rounded-xl px-3 py-2">
-                            <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Input */}
-                    <form onSubmit={sendChatMessage} className="border-t border-gray-200 p-2 flex gap-2">
-                      <input
-                        type="text"
-                        value={chatMessage}
-                        onChange={(e) => setChatMessage(e.target.value)}
-                        placeholder="Pose une question..."
-                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                        disabled={isSending}
-                      />
-                      <button
-                        type="submit"
-                        disabled={!chatMessage.trim() || isSending}
-                        className="p-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </form>
-                  </div>
-                </div>
-              )}
 
               {/* Historique des dépannages */}
               {showHistory && equipment?.id && (
