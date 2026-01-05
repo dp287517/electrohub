@@ -18,6 +18,9 @@ import {
   addEquipmentLink,
   removeEquipmentLink,
   searchEquipment,
+  getEquipmentCategories,
+  addCategoryLink,
+  removeCategoryLink,
   downloadProcedurePdf,
   downloadMethodStatementPdf,
   downloadWorkMethodPdf,
@@ -216,8 +219,15 @@ function EquipmentLink({ link, isEditing, onRemove }) {
   const typeLabels = {
     switchboard: 'Armoire',
     vsd: 'VSD',
-    meca: 'Meca',
+    meca: 'Méca',
     atex: 'ATEX',
+    hv: 'HT',
+    glo: 'UPS',
+    mobile: 'Mobile',
+    doors: 'Porte',
+    datahub: 'DataHub',
+    projects: 'Projet',
+    oibt: 'OIBT',
   };
 
   return (
@@ -248,6 +258,12 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
   const [showAddEquipment, setShowAddEquipment] = useState(false);
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentResults, setEquipmentResults] = useState([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [equipmentCategories, setEquipmentCategories] = useState([]);
+  const [selectedEqType, setSelectedEqType] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedBuilding, setSelectedBuilding] = useState('');
+  const [loadingCategories, setLoadingCategories] = useState(false);
   const [downloading, setDownloading] = useState(null); // null, 'rams', 'method', 'procedure', 'all'
   const [showPrintMenu, setShowPrintMenu] = useState(false);
   const [showAssistant, setShowAssistant] = useState(aiGuidedMode); // Auto-open AI if from QR code
@@ -529,6 +545,56 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
       loadProcedure();
     } catch (error) {
       console.error('Error removing equipment link:', error);
+    }
+  };
+
+  // Category link handlers
+  const loadEquipmentCategories = async () => {
+    setLoadingCategories(true);
+    try {
+      const categories = await getEquipmentCategories();
+      setEquipmentCategories(categories);
+    } catch (error) {
+      console.error('Error loading equipment categories:', error);
+    } finally {
+      setLoadingCategories(false);
+    }
+  };
+
+  const handleOpenCategoryModal = () => {
+    setShowAddCategory(true);
+    loadEquipmentCategories();
+  };
+
+  const handleAddCategoryLink = async () => {
+    if (!selectedEqType) return;
+
+    const eqType = equipmentCategories.find(c => c.type === selectedEqType);
+    const category = eqType?.categories?.find(c => c.id === selectedCategory);
+
+    try {
+      await addCategoryLink(procedureId, {
+        equipment_type: selectedEqType,
+        category_id: selectedCategory || null,
+        category_name: category?.name || null,
+        building: selectedBuilding || null,
+      });
+      setShowAddCategory(false);
+      setSelectedEqType('');
+      setSelectedCategory('');
+      setSelectedBuilding('');
+      loadProcedure();
+    } catch (error) {
+      console.error('Error adding category link:', error);
+    }
+  };
+
+  const handleRemoveCategoryLink = async (linkId) => {
+    try {
+      await removeCategoryLink(procedureId, linkId);
+      loadProcedure();
+    } catch (error) {
+      console.error('Error removing category link:', error);
     }
   };
 
@@ -1027,18 +1093,119 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-gray-500 flex items-center gap-2">
               <Link2 className="w-4 h-4" />
-              Équipements liés ({procedure.equipment_links?.length || 0})
+              Équipements liés ({(procedure.equipment_links?.length || 0) + (procedure.category_links?.length || 0)})
             </h3>
             {isEditing && (
-              <button
-                onClick={() => setShowAddEquipment(true)}
-                className="text-sm text-violet-600 hover:text-violet-700 flex items-center gap-1"
-              >
-                <Plus className="w-4 h-4" />
-                Lier un équipement
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleOpenCategoryModal}
+                  className="text-sm text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
+                >
+                  <Building className="w-4 h-4" />
+                  Lier par catégorie
+                </button>
+                <button
+                  onClick={() => setShowAddEquipment(true)}
+                  className="text-sm text-violet-600 hover:text-violet-700 flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" />
+                  Lier un équipement
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Add by Category Modal */}
+          {showAddCategory && (
+            <div className="mb-4 p-4 bg-emerald-50 rounded-xl space-y-3 border border-emerald-200">
+              <div className="text-sm font-medium text-emerald-800 mb-2">
+                Lier à une catégorie d'équipements
+              </div>
+
+              {loadingCategories ? (
+                <div className="flex items-center gap-2 text-gray-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Chargement des catégories...
+                </div>
+              ) : (
+                <>
+                  {/* Equipment Type Selection */}
+                  <select
+                    value={selectedEqType}
+                    onChange={(e) => {
+                      setSelectedEqType(e.target.value);
+                      setSelectedCategory('');
+                      setSelectedBuilding('');
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg bg-white"
+                  >
+                    <option value="">Sélectionner un type d'équipement</option>
+                    {equipmentCategories.map((cat) => (
+                      <option key={cat.type} value={cat.type}>
+                        {cat.label} ({cat.count} équipements)
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Sub-category for DataHub */}
+                  {selectedEqType === 'datahub' && (
+                    <select
+                      value={selectedCategory}
+                      onChange={(e) => setSelectedCategory(e.target.value)}
+                      className="w-full px-3 py-2 border rounded-lg bg-white"
+                    >
+                      <option value="">Toutes les catégories DataHub</option>
+                      {equipmentCategories
+                        .find(c => c.type === 'datahub')
+                        ?.categories?.map((cat) => (
+                          <option key={cat.id} value={cat.id}>
+                            {cat.name} ({cat.item_count} items)
+                          </option>
+                        ))}
+                    </select>
+                  )}
+
+                  {/* Building filter */}
+                  {selectedEqType && (
+                    <select
+                      value={selectedBuilding}
+                      onChange={(e) => setSelectedBuilding(e.target.value)}
+                      className="w-full px-3 py-2 border rounded-lg bg-white"
+                    >
+                      <option value="">Tous les bâtiments</option>
+                      {equipmentCategories
+                        .find(c => c.type === selectedEqType)
+                        ?.buildings?.map((b) => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                    </select>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleAddCategoryLink}
+                      disabled={!selectedEqType}
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Ajouter
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAddCategory(false);
+                        setSelectedEqType('');
+                        setSelectedCategory('');
+                        setSelectedBuilding('');
+                      }}
+                      className="text-sm text-gray-500 hover:text-gray-700 px-3 py-2"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {showAddEquipment && (
             <div className="mb-4 p-4 bg-gray-50 rounded-xl space-y-3">
@@ -1075,19 +1242,72 @@ export default function ProcedureViewer({ procedureId, onClose, onDeleted, isMob
             </div>
           )}
 
-          <div className="flex flex-wrap gap-2">
-            {(procedure.equipment_links || []).map((link) => (
-              <EquipmentLink
-                key={link.id}
-                link={link}
-                isEditing={isEditing}
-                onRemove={handleRemoveEquipment}
-              />
-            ))}
-            {(procedure.equipment_links || []).length === 0 && (
-              <span className="text-gray-400 text-sm">Aucun équipement lié</span>
-            )}
-          </div>
+          {/* Category Links */}
+          {(procedure.category_links || []).length > 0 && (
+            <div className="mb-3">
+              <div className="text-xs text-gray-500 mb-2 font-medium">Par catégorie:</div>
+              <div className="flex flex-wrap gap-2">
+                {(procedure.category_links || []).map((link) => {
+                  const typeLabels = {
+                    switchboard: 'Armoires',
+                    vsd: 'VSD',
+                    meca: 'Méca',
+                    atex: 'ATEX',
+                    hv: 'HT',
+                    glo: 'UPS/Batteries',
+                    mobile: 'Mobile',
+                    doors: 'Portes',
+                    datahub: 'DataHub',
+                  };
+
+                  let label = typeLabels[link.equipment_type] || link.equipment_type;
+                  if (link.category_name) label += ` > ${link.category_name}`;
+                  if (link.building) label += ` (${link.building})`;
+
+                  return (
+                    <div
+                      key={link.id}
+                      className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"
+                    >
+                      <Building className="w-4 h-4 text-emerald-600" />
+                      <span className="text-sm text-emerald-800">{label}</span>
+                      {isEditing && (
+                        <button
+                          onClick={() => handleRemoveCategoryLink(link.id)}
+                          className="ml-auto text-emerald-400 hover:text-red-600"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Individual Equipment Links */}
+          {(procedure.equipment_links || []).length > 0 && (
+            <div>
+              {(procedure.category_links || []).length > 0 && (
+                <div className="text-xs text-gray-500 mb-2 font-medium">Individuels:</div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {(procedure.equipment_links || []).map((link) => (
+                  <EquipmentLink
+                    key={link.id}
+                    link={link}
+                    isEditing={isEditing}
+                    onRemove={handleRemoveEquipment}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(procedure.equipment_links || []).length === 0 && (procedure.category_links || []).length === 0 && (
+            <span className="text-gray-400 text-sm">Aucun équipement lié</span>
+          )}
         </div>
 
         {/* Metadata */}

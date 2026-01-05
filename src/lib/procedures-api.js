@@ -154,6 +154,37 @@ export async function searchEquipment(query, type = null) {
   return response.json();
 }
 
+// ==================== CATEGORY LINKS ====================
+
+export async function getEquipmentCategories() {
+  const response = await fetchWithAuth(`${API_BASE}/equipment-categories`);
+  return response.json();
+}
+
+export async function getCategoryCount(equipmentType, categoryId = null, building = null) {
+  const params = new URLSearchParams({ equipment_type: equipmentType });
+  if (categoryId) params.append('category_id', categoryId);
+  if (building) params.append('building', building);
+
+  const response = await fetchWithAuth(`${API_BASE}/category-count?${params}`);
+  return response.json();
+}
+
+export async function addCategoryLink(procedureId, linkData) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/category`, {
+    method: 'POST',
+    body: JSON.stringify(linkData),
+  });
+  return response.json();
+}
+
+export async function removeCategoryLink(procedureId, linkId) {
+  const response = await fetchWithAuth(`${API_BASE}/${procedureId}/category/${linkId}`, {
+    method: 'DELETE',
+  });
+  return response.json();
+}
+
 // ==================== DRAFTS (Auto-save for resume) ====================
 
 export async function saveDraft(draftData) {
