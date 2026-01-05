@@ -3236,6 +3236,22 @@ async function processPanelScan(jobId, images, site, switchboardId, userEmail) {
     console.log(`[PANEL SCAN] ${'─'.repeat(50)}`);
 
     let listingData = [];
+    let existingListingData = [];
+
+    // First, load existing listing data from switchboard settings
+    try {
+      const boardResult = await quickQuery(
+        `SELECT settings FROM switchboards WHERE id = $1 AND site = $2`,
+        [switchboardId, site]
+      );
+      if (boardResult?.rows?.[0]?.settings?.listing_data?.entries) {
+        existingListingData = boardResult.rows[0].settings.listing_data.entries;
+        console.log(`[PANEL SCAN] Found existing listing data: ${existingListingData.length} entries (scanned at: ${boardResult.rows[0].settings.listing_data.scanned_at || 'unknown'})`);
+      }
+    } catch (loadErr) {
+      console.warn(`[PANEL SCAN] Could not load existing listing: ${loadErr.message}`);
+    }
+
     try {
       // Quick detection prompt
       const listingDetectPrompt = `Analyse ces images et identifie si certaines sont des DOCUMENTS PAPIER (listing/nomenclature de tableau électrique) vs des PHOTOS DU TABLEAU lui-même.
@@ -3294,8 +3310,9 @@ Réponds en JSON:
       console.log(`[PANEL SCAN] Listing detection: has_listing=${listingResult.has_listing_photos}, entries=${listingResult.listing_data?.length || 0}`);
 
       if (listingResult.has_listing_photos && listingResult.listing_data?.length > 0) {
+        // New listing detected in photos - use it and save
         listingData = listingResult.listing_data.filter(e => e.position);
-        console.log(`[PANEL SCAN] Extracted ${listingData.length} entries from listing photos:`);
+        console.log(`[PANEL SCAN] ✅ NEW LISTING: Extracted ${listingData.length} entries from listing photos:`);
         listingData.forEach(e => console.log(`[PANEL SCAN]   - ${e.position}: ${e.designation || '?'} (${e.poles || '?'}P, ${e.in_amps || '?'}A)`));
 
         // Save listing data to switchboard settings for future use
@@ -3317,13 +3334,25 @@ Réponds en JSON:
             }),
             site
           ]);
-          console.log(`[PANEL SCAN] Saved listing data to switchboard settings`);
+          console.log(`[PANEL SCAN] Saved NEW listing data to switchboard settings`);
         } catch (dbErr) {
           console.warn(`[PANEL SCAN] Failed to save listing data: ${dbErr.message}`);
         }
+      } else if (existingListingData.length > 0) {
+        // No new listing in photos but we have existing data - REUSE IT!
+        listingData = existingListingData;
+        console.log(`[PANEL SCAN] ♻️ REUSING existing listing data: ${listingData.length} entries`);
+        console.log(`[PANEL SCAN] (No listing photo detected in current scan, using previously saved data)`);
+      } else {
+        console.log(`[PANEL SCAN] ⚠️ No listing data available (none in photos, none saved)`);
       }
     } catch (listingErr) {
       console.warn(`[PANEL SCAN] Listing detection failed (non-blocking): ${listingErr.message}`);
+      // If detection fails but we have existing data, use it as fallback
+      if (existingListingData.length > 0) {
+        listingData = existingListingData;
+        console.log(`[PANEL SCAN] ♻️ Using existing listing as fallback after detection error: ${listingData.length} entries`);
+      }
     }
 
     job.progress = 10;
@@ -4878,50 +4907,9 @@ app.post('/api/switchboard/analyze-panel', upload.array('photos', 15), async (re
     }
 
     // ============================================================
-    // PROTECTION: Check if there's already an active job for this switchboard
+    // NOTE: Parallel scans allowed on same switchboard
+    // Multiple scans can now run simultaneously on the same tableau
     // ============================================================
-    for (const [existingJobId, existingJob] of panelScanJobs) {
-      if (existingJob.switchboard_id === switchboard_id &&
-          existingJob.site === site &&
-          (existingJob.status === 'pending' || existingJob.status === 'analyzing')) {
-        // Job already in progress for this switchboard - return it instead of creating a new one
-        console.log(`[PANEL SCAN] Active job ${existingJobId} already exists for switchboard ${switchboard_id}, returning existing job`);
-        return res.json({
-          job_id: existingJobId,
-          status: existingJob.status,
-          progress: existingJob.progress,
-          message: existingJob.message || 'Analyse en cours...',
-          poll_url: `/api/switchboard/panel-scan-job/${existingJobId}`,
-          reused: true
-        });
-      }
-    }
-
-    // Also check database for recent jobs (in case server restarted)
-    try {
-      const recentJob = await pool.query(`
-        SELECT id, status, progress, message FROM panel_scan_jobs
-        WHERE switchboard_id = $1 AND site = $2
-          AND status IN ('pending', 'analyzing')
-          AND created_at > NOW() - INTERVAL '30 minutes'
-        ORDER BY created_at DESC LIMIT 1
-      `, [switchboard_id, site]);
-
-      if (recentJob.rows.length > 0) {
-        const job = recentJob.rows[0];
-        console.log(`[PANEL SCAN] Found active job ${job.id} in database for switchboard ${switchboard_id}`);
-        return res.json({
-          job_id: job.id,
-          status: job.status,
-          progress: job.progress,
-          message: job.message || 'Analyse en cours...',
-          poll_url: `/api/switchboard/panel-scan-job/${job.id}`,
-          reused: true
-        });
-      }
-    } catch (dbErr) {
-      console.warn('[PANEL SCAN] Could not check for existing jobs in DB:', dbErr.message);
-    }
 
     // Create job ID
     const jobId = `ps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
