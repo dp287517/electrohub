@@ -398,6 +398,30 @@ export default function ProcedureCreator({ onProcedureCreated, onClose, initialC
     setIsLoading(true);
     try {
       await deleteDraft(draftIdToDelete);
+
+      // CRITICAL FIX: Clear localStorage if deleted draft matches active session
+      // This prevents the deleted draft from reappearing when reopening the page
+      const savedSession = localStorage.getItem('activeProcedureSession');
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          if (session.draftId === draftIdToDelete) {
+            localStorage.removeItem('activeProcedureSession');
+            console.log('[ProcedureCreator] Cleared localStorage for deleted draft:', draftIdToDelete);
+            // Also reset current state if we're in the same session
+            if (draftId === draftIdToDelete) {
+              setDraftId(null);
+              setSessionId(null);
+              setCollectedData({});
+              setMessages([]);
+            }
+          }
+        } catch (e) {
+          // If parsing fails, clear it anyway to be safe
+          localStorage.removeItem('activeProcedureSession');
+        }
+      }
+
       // Refresh drafts list - handle {ok, drafts} response format
       const result = await getDrafts();
       const updatedDrafts = Array.isArray(result) ? result : result.drafts || [];
