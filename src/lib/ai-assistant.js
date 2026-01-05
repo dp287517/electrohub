@@ -13,9 +13,25 @@ let contextCache = null;
 let contextCacheTime = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
+// ============================================================================
+// CONFIGURATION - Chat V2 avec Function Calling
+// ============================================================================
+// Mettre à true pour activer le nouveau système IA avec function calling
+// Cela permettra à l'IA de décider elle-même quelles données récupérer
+//
+// ⚠️ ATTENTION: V2 ne supporte pas encore:
+// - Guidage étape par étape (procedureGuidance)
+// - Sessions de guidage temps réel (procedureAssistSessionId)
+// - Import de documents (expectsFile)
+// - Analyse de rapports (reportAnalysis)
+//
+// Laisser à false jusqu'à ce que ces fonctionnalités soient migrées
+const USE_CHAT_V2 = false; // 🔒 Désactivé par défaut - tester via /chat-v2
+
 class AIAssistant {
   constructor() {
     this.baseUrl = '/api/ai-assistant';
+    this.useV2 = USE_CHAT_V2;
   }
 
   /**
@@ -313,6 +329,99 @@ class AIAssistant {
   }
 
   /**
+   * Chat V2 avec Function Calling - Nouvelle architecture IA
+   * L'IA décide elle-même quelles fonctions appeler pour accéder aux données.
+   *
+   * @param {string} message - Message de l'utilisateur
+   * @param {object} options - Options de configuration
+   * @returns {Promise<object>} Réponse structurée avec données
+   */
+  async chatV2(message, options = {}) {
+    const {
+      context = null,
+      conversationHistory = []
+    } = options;
+
+    try {
+      // Construire un contexte minimal pour l'IA (elle récupérera les données via les tools)
+      const minimalContext = context || {
+        user: this.getCurrentUser(),
+        summary: await this.getMinimalSummary()
+      };
+
+      const data = await post(`${this.baseUrl}/chat-v2`, {
+        message,
+        context: minimalContext,
+        conversationHistory: conversationHistory.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      });
+
+      return {
+        message: data.message,
+        actions: data.actions || [],
+        provider: data.provider,
+        model: data.model,
+        tools_used: data.tools_used || [],
+
+        // Procedure integration
+        proceduresFound: data.proceduresFound || null,
+        procedureToOpen: data.procedureToOpen || null,
+        procedureDetails: data.procedureDetails || null,
+        openProcedureCreator: data.openProcedureCreator || false,
+        procedureCreatorContext: data.procedureCreatorContext || null,
+        startGuidance: data.startGuidance || false,
+
+        // Equipment & Map integration
+        equipmentList: data.equipmentList || null,
+        showMap: data.showMap || false,
+        locationEquipment: data.locationEquipment || null,
+        locationEquipmentType: data.locationEquipmentType || null,
+
+        // Data lists
+        troubleshootingRecords: data.troubleshootingRecords || null,
+        controlsList: data.controlsList || null,
+        ncList: data.ncList || null,
+
+        // Charts
+        chart: data.chart || null,
+
+        // Error flag
+        error: data.error || false
+      };
+    } catch (error) {
+      console.error('Erreur chat V2:', error);
+
+      // Fallback vers le chat v1
+      console.log('Fallback vers chat V1...');
+      return this.chat(message, options);
+    }
+  }
+
+  /**
+   * Récupère un résumé minimal pour le contexte (utilisé par chatV2)
+   */
+  async getMinimalSummary() {
+    try {
+      const context = await this.getGlobalContext();
+      return {
+        totalEquipments: context.totalEquipments || 0,
+        overdueControls: context.overdueControls || 0,
+        upcomingControls: context.upcomingControls || 0,
+        buildingCount: Object.keys(context.buildings || {}).length
+      };
+    } catch (error) {
+      return {
+        totalEquipments: 0,
+        overdueControls: 0,
+        upcomingControls: 0,
+        buildingCount: 0
+      };
+    }
+  }
+
+  /**
    * Chat avec photo - pour création de procédures et analyses visuelles
    * @param {string} message - Message de l'utilisateur
    * @param {File|null} photo - Fichier photo optionnel
@@ -328,8 +437,13 @@ class AIAssistant {
       // Préparer le contexte
       const fullContext = context || await this.getGlobalContext();
 
-      // Si pas de photo, utiliser le chat normal
+      // Si pas de photo, utiliser le chat approprié (v2 ou v1)
       if (!photo) {
+        // 🚀 Utiliser le nouveau système V2 si activé
+        if (this.useV2) {
+          console.log('[AI] Using Chat V2 with function calling');
+          return this.chatV2(message, options);
+        }
         return this.chat(message, options);
       }
 
