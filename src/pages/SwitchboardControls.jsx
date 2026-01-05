@@ -1842,6 +1842,8 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
 
   // Date alignment states (for aligning controls with same frequency)
   const [existingDatesByFrequency, setExistingDatesByFrequency] = useState({}); // { frequency_months: date }
+  const [existingControlsByFrequency, setExistingControlsByFrequency] = useState({}); // { frequency_months: { template_name, next_due_date } }
+  const [hasExistingControls, setHasExistingControls] = useState(false);
   const [suggestedDate, setSuggestedDate] = useState(null);
 
   // Get selected template's element_filter
@@ -1972,9 +1974,17 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
         api.switchboardControls.getExistingDatesByBoard(firstBoardId)
           .then(res => {
             setExistingDatesByFrequency(res.dates_by_frequency || {});
+            setExistingControlsByFrequency(res.controls_by_frequency || {});
+            setHasExistingControls(res.has_controls || false);
           })
           .catch(e => console.warn('Load existing dates error:', e));
       }
+    } else {
+      // Reset when no switchboard selected
+      setExistingDatesByFrequency({});
+      setExistingControlsByFrequency({});
+      setHasExistingControls(false);
+      setSuggestedDate(null);
     }
   }, [targetType, selectedSwitchboardsForDevices]);
 
@@ -2540,9 +2550,40 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
               )}
 
               {/* Date selector for DDR controls (they don't inherit from switchboard schedule) */}
-              {isDDRControl && selectedSwitchboardsForDevices.size > 0 && (
+              {isDDRControl && selectedSwitchboardsForDevices.size > 0 && selectedTemplate && (
                 <div className="mt-3">
                   <label className="block text-sm font-medium mb-1">Date du prochain contrôle</label>
+
+                  {/* Case 1: Aligned with existing control of same frequency */}
+                  {suggestedDate && nextDueDate === suggestedDate && existingControlsByFrequency[selectedTemplate.frequency_months] && (
+                    <div className="mb-2 p-2 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-xs text-green-700">
+                        <strong>✓ Alignement automatique :</strong> Le tableau a déjà un contrôle "{existingControlsByFrequency[selectedTemplate.frequency_months].template_name}" prévu le {new Date(suggestedDate).toLocaleDateString('fr-FR')} avec la même périodicité ({selectedTemplate.frequency_months === 12 ? 'annuel' : selectedTemplate.frequency_months === 6 ? 'semestriel' : selectedTemplate.frequency_months === 3 ? 'trimestriel' : selectedTemplate.frequency_months === 1 ? 'mensuel' : `${selectedTemplate.frequency_months} mois`}).
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Case 2: Has controls but different frequency */}
+                  {hasExistingControls && !existingDatesByFrequency[selectedTemplate.frequency_months] && (
+                    <div className="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-xs text-amber-700">
+                        <strong>⚠ Périodicité différente :</strong> Le tableau a des contrôles planifiés mais avec une périodicité différente. Veuillez choisir une date pour ce nouveau contrôle {selectedTemplate.frequency_months === 12 ? 'annuel' : selectedTemplate.frequency_months === 6 ? 'semestriel' : selectedTemplate.frequency_months === 3 ? 'trimestriel' : selectedTemplate.frequency_months === 1 ? 'mensuel' : `tous les ${selectedTemplate.frequency_months} mois`}.
+                      </p>
+                      <div className="mt-1 text-xs text-amber-600">
+                        Contrôles existants : {Object.values(existingControlsByFrequency).map(c => `${c.template_name} (${new Date(c.next_due_date).toLocaleDateString('fr-FR')})`).join(', ')}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Case 3: No existing controls */}
+                  {!hasExistingControls && (
+                    <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-xs text-blue-700">
+                        <strong>ℹ Premier contrôle :</strong> Aucun contrôle planifié sur ce tableau. Choisissez une date de référence pour les contrôles {selectedTemplate.frequency_months === 12 ? 'annuels' : selectedTemplate.frequency_months === 6 ? 'semestriels' : selectedTemplate.frequency_months === 3 ? 'trimestriels' : selectedTemplate.frequency_months === 1 ? 'mensuels' : `tous les ${selectedTemplate.frequency_months} mois`}.
+                      </p>
+                    </div>
+                  )}
+
                   <input
                     type="date"
                     value={nextDueDate}
@@ -2552,14 +2593,6 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
                     }}
                     className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
                   />
-                  {suggestedDate && nextDueDate === suggestedDate && selectedTemplate && (
-                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
-                      <p className="text-xs text-green-700 flex items-center gap-1">
-                        <span>✓</span>
-                        <strong>Alignement automatique :</strong> Cette date correspond à un contrôle {selectedTemplate.frequency_months === 12 ? 'annuel' : selectedTemplate.frequency_months === 6 ? 'semestriel' : selectedTemplate.frequency_months === 3 ? 'trimestriel' : selectedTemplate.frequency_months === 1 ? 'mensuel' : `tous les ${selectedTemplate.frequency_months} mois`} existant sur ce tableau
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
             </div>

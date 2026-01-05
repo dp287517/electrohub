@@ -7443,6 +7443,7 @@ app.get('/api/switchboard/controls/device-controls-by-board/:boardId', async (re
 });
 
 // Get existing control dates by frequency for a switchboard (for date alignment)
+// Looks at SWITCHBOARD controls (not device controls) to suggest alignment
 app.get('/api/switchboard/controls/existing-dates/:boardId', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -7450,47 +7451,41 @@ app.get('/api/switchboard/controls/existing-dates/:boardId', async (req, res) =>
 
     const { boardId } = req.params;
 
-    // Get distinct frequencies and their next_due_dates for this switchboard's devices
+    // Get switchboard controls with their frequency and next_due_date
     const { rows } = await quickQuery(`
-      SELECT DISTINCT
+      SELECT
         ct.frequency_months,
+        ct.name as template_name,
         cs.next_due_date
       FROM control_schedules cs
       INNER JOIN control_templates ct ON cs.template_id = ct.id
-      INNER JOIN devices d ON cs.device_id = d.id
-      WHERE cs.site = $1 AND d.switchboard_id = $2 AND cs.device_id IS NOT NULL
+      WHERE cs.site = $1 AND cs.switchboard_id = $2
       ORDER BY ct.frequency_months, cs.next_due_date
     `, [site, boardId]);
 
-    // Group by frequency, keeping the most common date per frequency
+    // Group by frequency
     const datesByFrequency = {};
+    const controlsByFrequency = {};
+
     rows.forEach(r => {
       const freq = r.frequency_months;
-      if (!datesByFrequency[freq]) {
-        datesByFrequency[freq] = {};
-      }
       const dateStr = r.next_due_date ? r.next_due_date.toISOString().split('T')[0] : null;
-      if (dateStr) {
-        datesByFrequency[freq][dateStr] = (datesByFrequency[freq][dateStr] || 0) + 1;
+
+      if (!datesByFrequency[freq]) {
+        datesByFrequency[freq] = dateStr;
+        controlsByFrequency[freq] = {
+          template_name: r.template_name,
+          next_due_date: dateStr,
+          frequency_months: freq
+        };
       }
     });
 
-    // Get the most common date for each frequency
-    const result = {};
-    Object.keys(datesByFrequency).forEach(freq => {
-      const dates = datesByFrequency[freq];
-      let maxCount = 0;
-      let mostCommonDate = null;
-      Object.keys(dates).forEach(date => {
-        if (dates[date] > maxCount) {
-          maxCount = dates[date];
-          mostCommonDate = date;
-        }
-      });
-      result[freq] = mostCommonDate;
+    res.json({
+      dates_by_frequency: datesByFrequency,
+      controls_by_frequency: controlsByFrequency,
+      has_controls: rows.length > 0
     });
-
-    res.json({ dates_by_frequency: result });
   } catch (e) {
     console.error('[CONTROLS] Existing dates error:', e.message);
     res.status(500).json({ error: e.message });
