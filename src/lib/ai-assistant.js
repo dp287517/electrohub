@@ -385,6 +385,11 @@ class AIAssistant {
         model: data.model,
         tools_used: data.tools_used || [],
 
+        // Agent qui répond (pour afficher le bon avatar)
+        agentType: data.agentType || 'main',
+        agentName: data.agentName || null,
+        agentEmoji: data.agentEmoji || null,
+
         // Procedure integration
         proceduresFound: data.proceduresFound || null,
         procedureToOpen: data.procedureToOpen || null,
