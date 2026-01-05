@@ -284,11 +284,19 @@ app.post('/api/hv/equipments', async (req, res) => {
       console.log('[HV EQUIPMENT CREATE] ❌ Missing site - returning 400');
       return res.status(400).json({ error: 'Missing site' });
     }
-    const { name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality } = req.body;
+    const { name, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality } = req.body;
+    let { code } = req.body;
+
+    // Auto-generate code if not provided
+    if (!code) {
+      code = `HV-${Date.now().toString(36).toUpperCase()}`;
+      console.log('[HV EQUIPMENT CREATE]   🔧 Auto-generated code:', code);
+    }
+
     console.log('[HV EQUIPMENT CREATE]   📝 Extracted: name=', name, ', code=', code);
-    if (!name || !code) {
-      console.log('[HV EQUIPMENT CREATE] ❌ Missing name or code - returning 400');
-      return res.status(400).json({ error: 'Name and code are required' });
+    if (!name) {
+      console.log('[HV EQUIPMENT CREATE] ❌ Missing name - returning 400');
+      return res.status(400).json({ error: 'Name is required' });
     }
     console.log('[HV EQUIPMENT CREATE]   💾 Inserting into database...');
     const r = await pool.query(`
