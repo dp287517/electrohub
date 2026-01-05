@@ -25,19 +25,22 @@ const TOOLS_DEFINITIONS = [
     type: "function",
     function: {
       name: "search_troubleshooting",
-      description: `Recherche les dépannages, interventions, réparations ou pannes dans l'historique.
+      description: `Recherche les dépannages, interventions, réparations, pannes ou incidents dans l'historique.
 
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "derniers dépannages", "interventions récentes", "pannes de la semaine"
+- "panne", "incident", "défaillance", "problème", "dysfonctionnement"
 - "qu'est-ce qui a été réparé", "problèmes résolus"
+- "breakdown", "failure", "issue", "trouble"
 - "historique des interventions", "dépannages critiques"
-- Toute question sur des réparations passées ou des pannes`,
+- "combien de pannes", "fréquence des pannes"
+- Toute question sur des réparations passées, pannes ou incidents`,
       parameters: {
         type: "object",
         properties: {
           days: {
             type: "number",
-            description: "Nombre de jours à remonter dans l'historique (défaut: 7)"
+            description: "Nombre de jours à remonter dans l'historique (défaut: 7, utilise 30 ou 90 pour plus de données)"
           },
           severity: {
             type: "string",
@@ -52,9 +55,145 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
             type: "string",
             description: "Nom ou partie du nom de l'équipement à chercher"
           },
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "all"],
+            description: "Type d'équipement (variateur=vsd, tableau=switchboard)"
+          },
           limit: {
             type: "number",
             description: "Nombre maximum de résultats (défaut: 10, max: 50)"
+          }
+        }
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // ANALYSE DE FIABILITÉ ÉQUIPEMENTS
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "analyze_equipment_reliability",
+      description: `Analyse la fiabilité des équipements : trouve les plus problématiques, ceux avec le plus de pannes.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "équipement avec le plus de pannes", "le plus problématique"
+- "équipements les moins fiables", "les plus défaillants"
+- "quel VSD tombe le plus en panne", "variateur problématique"
+- "classement par nombre de pannes", "top des pannes"
+- "analyse de fiabilité", "MTBF", "taux de panne"
+- "quel tableau a le plus de problèmes"
+- Toute analyse comparative de fiabilité entre équipements`,
+      parameters: {
+        type: "object",
+        properties: {
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "all"],
+            description: "Type d'équipement à analyser (variateur=vsd, tableau=switchboard)"
+          },
+          period_days: {
+            type: "number",
+            description: "Période d'analyse en jours (défaut: 90)"
+          },
+          building: {
+            type: "string",
+            description: "Filtrer par bâtiment"
+          },
+          top_n: {
+            type: "number",
+            description: "Nombre d'équipements à retourner dans le classement (défaut: 10)"
+          },
+          metric: {
+            type: "string",
+            enum: ["failure_count", "downtime", "severity_score"],
+            description: "Métrique de classement: nombre de pannes, temps d'arrêt, ou score de sévérité"
+          }
+        }
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // ANALYSE PAR BÂTIMENT
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "analyze_by_building",
+      description: `Analyse les données par bâtiment : pannes, contrôles, NC, équipements.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "analyse par bâtiment", "comparaison des bâtiments"
+- "quel bâtiment a le plus de pannes/problèmes"
+- "état du bâtiment X", "situation par bâtiment"
+- "répartition par bâtiment", "distribution géographique"
+- "bâtiment le plus critique", "zone à problèmes"
+- Toute comparaison ou analyse par localisation`,
+      parameters: {
+        type: "object",
+        properties: {
+          analysis_type: {
+            type: "string",
+            enum: ["failures", "controls", "nc", "equipment_count", "overview"],
+            description: "Type d'analyse: pannes, contrôles, NC, comptage équipements, ou vue globale"
+          },
+          period_days: {
+            type: "number",
+            description: "Période d'analyse en jours (défaut: 30)"
+          },
+          building: {
+            type: "string",
+            description: "Bâtiment spécifique à analyser (sinon tous)"
+          },
+          generate_chart: {
+            type: "boolean",
+            description: "Générer un graphique comparatif"
+          }
+        }
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // PRIORITÉS DE MAINTENANCE
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_maintenance_priorities",
+      description: `Identifie les priorités de maintenance : équipements nécessitant attention urgente.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "quels équipements nécessitent plus de maintenance"
+- "priorités de maintenance", "urgences maintenance"
+- "qu'est-ce qui a besoin d'attention", "à surveiller"
+- "équipements critiques", "risque de panne"
+- "planning de maintenance recommandé"
+- "où concentrer les efforts", "quoi réparer en premier"
+- Toute question sur les priorités ou recommandations de maintenance`,
+      parameters: {
+        type: "object",
+        properties: {
+          criteria: {
+            type: "string",
+            enum: ["overdue_controls", "frequent_failures", "old_equipment", "high_severity_nc", "combined"],
+            description: "Critère de priorisation: contrôles en retard, pannes fréquentes, équipements vieux, NC critiques, ou combiné"
+          },
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "all"],
+            description: "Type d'équipement à analyser"
+          },
+          building: {
+            type: "string",
+            description: "Filtrer par bâtiment"
+          },
+          limit: {
+            type: "number",
+            description: "Nombre de résultats (défaut: 15)"
           }
         }
       }
@@ -539,6 +678,339 @@ function createToolHandlers(pool, site) {
       } catch (error) {
         console.error('[TOOL] search_troubleshooting error:', error.message);
         return { success: false, error: error.message, records: [] };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // ANALYSE DE FIABILITÉ ÉQUIPEMENTS
+    // -----------------------------------------------------------------------
+    analyze_equipment_reliability: async (params) => {
+      const { equipment_type = 'all', period_days = 90, building, top_n = 10, metric = 'failure_count' } = params;
+
+      try {
+        // Requête pour trouver les équipements avec le plus de pannes
+        let query = `
+          SELECT
+            tr.equipment_name,
+            tr.equipment_type,
+            tr.building_code,
+            COUNT(*) as failure_count,
+            SUM(tr.duration_minutes) as total_downtime,
+            SUM(CASE WHEN tr.severity = 'critical' THEN 3 WHEN tr.severity = 'major' THEN 2 ELSE 1 END) as severity_score,
+            MAX(tr.started_at) as last_failure,
+            array_agg(DISTINCT tr.title) as failure_titles
+          FROM troubleshooting_records tr
+          WHERE tr.site = $1
+            AND tr.started_at >= NOW() - INTERVAL '${parseInt(period_days)} days'
+        `;
+        const queryParams = [site];
+        let paramIndex = 2;
+
+        if (equipment_type && equipment_type !== 'all') {
+          query += ` AND tr.equipment_type = $${paramIndex}`;
+          queryParams.push(equipment_type);
+          paramIndex++;
+        }
+
+        if (building) {
+          query += ` AND UPPER(tr.building_code) = $${paramIndex}`;
+          queryParams.push(building.toUpperCase());
+          paramIndex++;
+        }
+
+        query += ` GROUP BY tr.equipment_name, tr.equipment_type, tr.building_code`;
+
+        // Ordre selon la métrique
+        const orderBy = {
+          'failure_count': 'failure_count DESC',
+          'downtime': 'total_downtime DESC',
+          'severity_score': 'severity_score DESC'
+        }[metric] || 'failure_count DESC';
+
+        query += ` ORDER BY ${orderBy} LIMIT ${Math.min(parseInt(top_n) || 10, 50)}`;
+
+        const result = await pool.query(query, queryParams);
+
+        // Calculer le total pour pourcentages
+        const totalFailures = result.rows.reduce((sum, r) => sum + parseInt(r.failure_count), 0);
+
+        return {
+          success: true,
+          period_days,
+          equipment_type,
+          metric_used: metric,
+          total_failures_analyzed: totalFailures,
+          rankings: result.rows.map((r, index) => ({
+            rank: index + 1,
+            equipment_name: r.equipment_name,
+            equipment_type: r.equipment_type,
+            building: r.building_code,
+            failure_count: parseInt(r.failure_count),
+            percentage: totalFailures > 0 ? Math.round((parseInt(r.failure_count) / totalFailures) * 100) : 0,
+            total_downtime_minutes: parseInt(r.total_downtime) || 0,
+            severity_score: parseInt(r.severity_score),
+            last_failure: r.last_failure,
+            common_issues: r.failure_titles.slice(0, 3)
+          })),
+          summary: result.rows.length === 0
+            ? `Aucune donnée de fiabilité sur les ${period_days} derniers jours.`
+            : `Top ${result.rows.length} équipements les plus problématiques sur ${period_days} jours.`
+        };
+      } catch (error) {
+        console.error('[TOOL] analyze_equipment_reliability error:', error.message);
+        return { success: false, error: error.message, rankings: [] };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // ANALYSE PAR BÂTIMENT
+    // -----------------------------------------------------------------------
+    analyze_by_building: async (params) => {
+      const { analysis_type = 'overview', period_days = 30, building, generate_chart = false } = params;
+
+      try {
+        let results = {};
+        let chartData = null;
+
+        // Si un bâtiment spécifique est demandé
+        if (building) {
+          // Analyse détaillée d'un bâtiment
+          const [failures, controls, nc, equipment] = await Promise.all([
+            pool.query(`
+              SELECT COUNT(*) as count, severity
+              FROM troubleshooting_records
+              WHERE site = $1 AND UPPER(building_code) = $2
+                AND started_at >= NOW() - INTERVAL '${parseInt(period_days)} days'
+              GROUP BY severity
+            `, [site, building.toUpperCase()]),
+            pool.query(`
+              SELECT COUNT(*) as total,
+                COUNT(*) FILTER (WHERE next_control_date < CURRENT_DATE) as overdue
+              FROM scheduled_controls sc
+              JOIN switchboards s ON sc.switchboard_id = s.id
+              WHERE s.site = $1 AND UPPER(s.building_code) = $2
+            `, [site, building.toUpperCase()]),
+            pool.query(`
+              SELECT COUNT(*) as count, status
+              FROM non_conformities
+              WHERE site = $1 AND UPPER(building) = $2
+              GROUP BY status
+            `, [site, building.toUpperCase()]),
+            pool.query(`
+              SELECT COUNT(*) as count
+              FROM switchboards
+              WHERE site = $1 AND UPPER(building_code) = $2
+            `, [site, building.toUpperCase()])
+          ]);
+
+          results = {
+            building: building.toUpperCase(),
+            period_days,
+            failures: {
+              total: failures.rows.reduce((sum, r) => sum + parseInt(r.count), 0),
+              by_severity: failures.rows
+            },
+            controls: {
+              total: parseInt(controls.rows[0]?.total || 0),
+              overdue: parseInt(controls.rows[0]?.overdue || 0)
+            },
+            non_conformities: {
+              total: nc.rows.reduce((sum, r) => sum + parseInt(r.count), 0),
+              by_status: nc.rows
+            },
+            equipment_count: parseInt(equipment.rows[0]?.count || 0)
+          };
+        } else {
+          // Comparaison entre bâtiments
+          const buildingStats = await pool.query(`
+            SELECT
+              s.building_code,
+              COUNT(DISTINCT s.id) as equipment_count,
+              (SELECT COUNT(*) FROM troubleshooting_records tr
+               WHERE tr.site = $1 AND tr.building_code = s.building_code
+               AND tr.started_at >= NOW() - INTERVAL '${parseInt(period_days)} days') as failure_count,
+              (SELECT COUNT(*) FROM scheduled_controls sc2
+               JOIN switchboards s2 ON sc2.switchboard_id = s2.id
+               WHERE s2.site = $1 AND s2.building_code = s.building_code
+               AND sc2.next_control_date < CURRENT_DATE) as overdue_controls
+            FROM switchboards s
+            WHERE s.site = $1 AND s.building_code IS NOT NULL
+            GROUP BY s.building_code
+            ORDER BY failure_count DESC
+          `, [site]);
+
+          results = {
+            comparison: buildingStats.rows.map(b => ({
+              building: b.building_code,
+              equipment_count: parseInt(b.equipment_count),
+              failures: parseInt(b.failure_count),
+              overdue_controls: parseInt(b.overdue_controls)
+            })),
+            period_days,
+            most_problematic: buildingStats.rows[0]?.building_code || 'N/A'
+          };
+
+          if (generate_chart) {
+            chartData = {
+              type: 'bar',
+              title: `Pannes par bâtiment (${period_days} jours)`,
+              labels: buildingStats.rows.map(b => `Bât. ${b.building_code}`),
+              data: buildingStats.rows.map(b => parseInt(b.failure_count))
+            };
+          }
+        }
+
+        return {
+          success: true,
+          analysis_type,
+          ...results,
+          chart: chartData,
+          summary: building
+            ? `Analyse du bâtiment ${building.toUpperCase()} sur ${period_days} jours.`
+            : `Comparaison de ${results.comparison?.length || 0} bâtiments sur ${period_days} jours.`
+        };
+      } catch (error) {
+        console.error('[TOOL] analyze_by_building error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // PRIORITÉS DE MAINTENANCE
+    // -----------------------------------------------------------------------
+    get_maintenance_priorities: async (params) => {
+      const { criteria = 'combined', equipment_type = 'all', building, limit = 15 } = params;
+
+      try {
+        let priorities = [];
+
+        // Contrôles en retard
+        if (criteria === 'overdue_controls' || criteria === 'combined') {
+          let query = `
+            SELECT
+              s.id, s.name as equipment_name, s.code, s.building_code, s.floor,
+              'switchboard' as equipment_type,
+              sc.next_control_date,
+              EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int as days_overdue,
+              'overdue_control' as priority_reason,
+              CASE
+                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date) > 30 THEN 'critical'
+                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date) > 14 THEN 'high'
+                ELSE 'medium'
+              END as priority_level
+            FROM scheduled_controls sc
+            JOIN switchboards s ON sc.switchboard_id = s.id
+            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+          `;
+          const queryParams = [site];
+
+          if (building) {
+            query += ` AND UPPER(s.building_code) = $2`;
+            queryParams.push(building.toUpperCase());
+          }
+
+          query += ` ORDER BY days_overdue DESC LIMIT ${Math.min(parseInt(limit), 50)}`;
+
+          const result = await pool.query(query, queryParams);
+          priorities.push(...result.rows);
+        }
+
+        // Équipements avec pannes fréquentes
+        if (criteria === 'frequent_failures' || criteria === 'combined') {
+          let query = `
+            SELECT
+              tr.equipment_name, tr.equipment_type, tr.building_code as building_code,
+              COUNT(*) as failure_count,
+              'frequent_failures' as priority_reason,
+              CASE
+                WHEN COUNT(*) >= 5 THEN 'critical'
+                WHEN COUNT(*) >= 3 THEN 'high'
+                ELSE 'medium'
+              END as priority_level
+            FROM troubleshooting_records tr
+            WHERE tr.site = $1 AND tr.started_at >= NOW() - INTERVAL '90 days'
+          `;
+          const queryParams = [site];
+          let paramIndex = 2;
+
+          if (equipment_type && equipment_type !== 'all') {
+            query += ` AND tr.equipment_type = $${paramIndex}`;
+            queryParams.push(equipment_type);
+            paramIndex++;
+          }
+
+          if (building) {
+            query += ` AND UPPER(tr.building_code) = $${paramIndex}`;
+            queryParams.push(building.toUpperCase());
+          }
+
+          query += ` GROUP BY tr.equipment_name, tr.equipment_type, tr.building_code
+                     HAVING COUNT(*) >= 2
+                     ORDER BY failure_count DESC LIMIT ${Math.min(parseInt(limit), 30)}`;
+
+          const result = await pool.query(query, queryParams);
+          priorities.push(...result.rows.map(r => ({
+            ...r,
+            failure_count: parseInt(r.failure_count)
+          })));
+        }
+
+        // NC critiques ouvertes
+        if (criteria === 'high_severity_nc' || criteria === 'combined') {
+          let query = `
+            SELECT
+              nc.equipment_name, nc.equipment_type, nc.building as building_code,
+              nc.title, nc.severity, nc.created_at,
+              'critical_nc' as priority_reason,
+              nc.severity as priority_level
+            FROM non_conformities nc
+            WHERE nc.site = $1 AND nc.status = 'open' AND nc.severity IN ('critical', 'major')
+          `;
+          const queryParams = [site];
+
+          if (building) {
+            query += ` AND UPPER(nc.building) = $2`;
+            queryParams.push(building.toUpperCase());
+          }
+
+          query += ` ORDER BY CASE nc.severity WHEN 'critical' THEN 1 ELSE 2 END, nc.created_at ASC
+                     LIMIT ${Math.min(parseInt(limit), 30)}`;
+
+          const result = await pool.query(query, queryParams);
+          priorities.push(...result.rows);
+        }
+
+        // Trier par niveau de priorité
+        const priorityOrder = { critical: 1, high: 2, major: 2, medium: 3 };
+        priorities.sort((a, b) => (priorityOrder[a.priority_level] || 4) - (priorityOrder[b.priority_level] || 4));
+
+        // Limiter le total
+        priorities = priorities.slice(0, parseInt(limit));
+
+        return {
+          success: true,
+          criteria,
+          equipment_type,
+          building: building || 'all',
+          total_priorities: priorities.length,
+          priorities: priorities.map((p, i) => ({
+            rank: i + 1,
+            equipment_name: p.equipment_name || p.name,
+            equipment_type: p.equipment_type,
+            building: p.building_code,
+            priority_level: p.priority_level,
+            reason: p.priority_reason,
+            details: p.days_overdue ? `${p.days_overdue} jours de retard`
+                   : p.failure_count ? `${p.failure_count} pannes en 90j`
+                   : p.title || 'NC ouverte'
+          })),
+          summary: priorities.length === 0
+            ? 'Aucune priorité de maintenance identifiée.'
+            : `${priorities.length} équipements nécessitant attention (${priorities.filter(p => p.priority_level === 'critical').length} critiques).`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_maintenance_priorities error:', error.message);
+        return { success: false, error: error.message, priorities: [] };
       }
     },
 
@@ -1318,40 +1790,86 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 - Aider les techniciens avec les équipements électriques, procédures et contrôles
 - Utiliser les FONCTIONS disponibles pour accéder aux VRAIES données
 - Répondre de façon concise, utile et actionnable
+- Fournir des analyses pertinentes et des recommandations
 
 ## RÈGLES CRITIQUES
-1. **UTILISE LES FONCTIONS** pour accéder aux données (dépannages, procédures, équipements, contrôles)
-2. **NE JAMAIS INVENTER** de données - si tu n'as pas l'info, utilise une fonction pour la récupérer
+1. **UTILISE TOUJOURS LES FONCTIONS** pour accéder aux données réelles
+2. **NE JAMAIS INVENTER** de données - utilise une fonction pour récupérer l'info
 3. **SOIS BREF** - Pas de blabla, des réponses directes et structurées
 4. **PROPOSE TOUJOURS** une action suivante ou des options
+5. **ANALYSE INTELLIGEMMENT** - Combine les données pour donner des insights utiles
 
 ## QUAND UTILISER LES FONCTIONS
 
 | Demande utilisateur | Fonction à utiliser |
 |---------------------|---------------------|
-| "derniers dépannages", "interventions", "pannes" | search_troubleshooting |
-| "procédure pour...", "comment faire..." | search_procedures |
-| "ouvre/montre la procédure" | open_procedure_modal |
-| "équipements du bâtiment X" | search_equipment |
-| "contrôles en retard", "planning" | get_controls |
-| "NC ouvertes", "non-conformités" | get_non_conformities |
-| "montre sur la carte" | show_map |
-| "statistiques", "vue d'ensemble" | get_statistics |
-| "documentation", "fiche technique" | search_documentation |
+| "derniers dépannages", "pannes", "incidents", "interventions" | search_troubleshooting |
+| "équipement le plus problématique", "plus de pannes", "moins fiable" | analyze_equipment_reliability |
+| "analyse par bâtiment", "quel bâtiment a le plus de problèmes" | analyze_by_building |
+| "priorités maintenance", "quoi réparer en premier", "urgences" | get_maintenance_priorities |
+| "procédure pour...", "comment faire...", "mode opératoire" | search_procedures |
+| "ouvre/montre la procédure", "affiche la procédure" | open_procedure_modal |
+| "équipements du bâtiment", "trouve le tableau", "où est..." | search_equipment |
+| "contrôles en retard", "planning contrôles", "prochains contrôles" | get_controls |
+| "NC ouvertes", "non-conformités", "anomalies" | get_non_conformities |
+| "montre sur la carte", "localise", "plan" | show_map |
+| "statistiques", "vue d'ensemble", "résumé", "combien de..." | get_statistics |
+| "documentation", "fiche technique", "datasheet", "manuel" | search_documentation |
+
+## SYNONYMES IMPORTANTS
+- Panne = dépannage = incident = défaillance = breakdown = dysfonctionnement
+- VSD = variateur = variateur de fréquence = drive
+- Tableau = switchboard = armoire = coffret = TGBT
+- NC = non-conformité = anomalie = écart
 
 ## FORMAT DE RÉPONSE
-- Utilise des emojis pour la lisibilité: 🔧 📋 ⚠️ ✅ 📍 🗺️
+- Utilise des emojis: 🔧 📋 ⚠️ ✅ 📍 🗺️ 📊 🏭 ⚡
 - **Gras** pour les éléments importants
 - Listes à puces pour les énumérations
 - Termine par une question ou proposition d'action
 
 ## EXEMPLES
 
-❌ MAUVAIS: "Je vais chercher les dépannages..." (sans utiliser de fonction)
-✅ BON: [Utilise search_troubleshooting] puis "🔧 **3 dépannages** cette semaine..."
+**Recherche simple:**
+User: "montre moi les dernières pannes"
+→ [Utilise search_troubleshooting avec days=7]
+→ "🔧 **3 pannes** cette semaine:
+   1. VSD Pompe 12 - Surchauffe (critique)
+   2. Tableau TGBT-02 - Défaut terre
+   3. Moteur M05 - Vibrations
 
-❌ MAUVAIS: "Il existe peut-être une procédure pour ça"
-✅ BON: [Utilise search_procedures] puis "📋 **Procédure trouvée**: Contrôle des prises..."`;
+   Veux-tu les détails d'une panne ?"
+
+**Analyse de fiabilité:**
+User: "quel variateur tombe le plus en panne ?"
+→ [Utilise analyze_equipment_reliability avec equipment_type='vsd']
+→ "📊 **Top 3 VSD problématiques** (90 derniers jours):
+   1. 🥇 VSD-P12 - 5 pannes (42% du total)
+   2. 🥈 VSD-C03 - 2 pannes
+   3. 🥉 VSD-M08 - 1 panne
+
+   Le VSD-P12 nécessite une attention particulière. Voir les détails ?"
+
+**Analyse par bâtiment:**
+User: "quel bâtiment a le plus de problèmes ?"
+→ [Utilise analyze_by_building avec generate_chart=true]
+→ "🏭 **Analyse par bâtiment** (30 jours):
+   • Bât. 02: 8 pannes, 3 contrôles en retard ⚠️
+   • Bât. 05: 4 pannes, 1 contrôle en retard
+   • Bât. 01: 2 pannes, 0 contrôle en retard ✅
+
+   Le bâtiment 02 concentre 50% des problèmes."
+
+**Priorités maintenance:**
+User: "qu'est-ce qui a besoin d'attention ?"
+→ [Utilise get_maintenance_priorities avec criteria='combined']
+→ "🚨 **5 priorités critiques**:
+   1. TGBT-02 - Contrôle en retard de 45 jours
+   2. VSD-P12 - 5 pannes en 90 jours
+   3. NC-0234 - Défaut isolation (critique)
+
+   Par quoi veux-tu commencer ?"`;
+
 
 // ============================================================================
 // EXPORTS
