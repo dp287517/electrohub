@@ -18,7 +18,15 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 // ============================================================================
 // Mettre à true pour activer le nouveau système IA avec function calling
 // Cela permettra à l'IA de décider elle-même quelles données récupérer
-const USE_CHAT_V2 = true; // 🚀 Nouveau système activé
+//
+// ⚠️ ATTENTION: V2 ne supporte pas encore:
+// - Guidage étape par étape (procedureGuidance)
+// - Sessions de guidage temps réel (procedureAssistSessionId)
+// - Import de documents (expectsFile)
+// - Analyse de rapports (reportAnalysis)
+//
+// Laisser à false jusqu'à ce que ces fonctionnalités soient migrées
+const USE_CHAT_V2 = false; // 🔒 Désactivé par défaut - tester via /chat-v2
 
 class AIAssistant {
   constructor() {
