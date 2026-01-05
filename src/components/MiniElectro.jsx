@@ -35,8 +35,26 @@ export default function MiniElectro({
   const [isSending, setIsSending] = useState(false);
   const chatContainerRef = useRef(null);
 
-  // Nom de l'agent pour ce type d'équipement
-  const agentName = AGENT_NAMES[equipmentType] || AGENT_NAMES.main;
+  // Noms personnalisés des agents (depuis la base de données)
+  const [customAgentNames, setCustomAgentNames] = useState(null);
+
+  // Charger les noms personnalisés des agents au montage
+  useEffect(() => {
+    const fetchAgentNames = async () => {
+      try {
+        const response = await get('/api/admin/settings/ai-agents/names');
+        if (response && typeof response === 'object') {
+          setCustomAgentNames(response);
+        }
+      } catch (error) {
+        console.debug('Using default agent names');
+      }
+    };
+    fetchAgentNames();
+  }, []);
+
+  // Nom de l'agent pour ce type d'équipement (personnalisé ou par défaut)
+  const agentName = customAgentNames?.[equipmentType] || customAgentNames?.main || AGENT_NAMES[equipmentType] || AGENT_NAMES.main;
 
   // Analyser l'équipement au montage ou quand il change
   const analyzeEquipment = useCallback(async () => {
