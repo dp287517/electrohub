@@ -356,7 +356,16 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                         className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg
                           ${selectedEquipment?.id === eq.id ? 'bg-amber-100 text-amber-700' : 'text-gray-600 hover:bg-gray-100'}`}
                       >
-                        <Zap size={14} className="text-amber-500" />
+                        {eq.has_photo ? (
+                          <img
+                            src={api.hv.equipmentPhotoUrl(eq.id, { bust: false })}
+                            alt=""
+                            className="w-6 h-6 rounded-lg object-cover flex-shrink-0"
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        ) : (
+                          <Zap size={14} className="text-amber-500 flex-shrink-0" />
+                        )}
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{eq.name || 'Équipement'}</p>
                           <p className="text-xs text-gray-400 truncate">{eq.voltage_kv || 20}kV • {eq.regime_neutral}</p>
@@ -381,14 +390,49 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
 
 // ==================== EDIT FORM ====================
 
-const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, lvDevices }) => {
+const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, lvDevices, onPhotoUpdated }) => {
   const isNew = !equipment?.id;
   const [form, setForm] = useState({
     name: '', code: '', building_code: '', floor: '', room: '',
-    regime_neutral: 'TN-S', is_principal: false, voltage_kv: 20,
-    short_circuit_ka: 25, notes: ''
+    regime_neutral: 'TN-S', is_principal: false, notes: ''
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [photoVersion, setPhotoVersion] = useState(Date.now());
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !equipment?.id) return;
+
+    setIsUploadingPhoto(true);
+    try {
+      await api.hv.uploadEquipmentPhoto(equipment.id, file);
+      setPhotoVersion(Date.now());
+      onPhotoUpdated?.({ ...equipment, has_photo: true });
+      showToast?.('Photo uploadée !', 'success');
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      showToast?.('Erreur lors de l\'upload', 'error');
+    } finally {
+      setIsUploadingPhoto(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
+
+  const handlePhotoDelete = async () => {
+    if (!equipment?.id || !equipment?.has_photo) return;
+
+    try {
+      await api.hv.deleteEquipmentPhoto(equipment.id);
+      setPhotoVersion(Date.now());
+      onPhotoUpdated?.({ ...equipment, has_photo: false });
+      showToast?.('Photo supprimée', 'success');
+    } catch (err) {
+      console.error('Photo delete error:', err);
+      showToast?.('Erreur lors de la suppression', 'error');
+    }
+  };
 
   useEffect(() => {
     if (equipment?.id) {
@@ -400,8 +444,6 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
         room: equipment.room || '',
         regime_neutral: equipment.regime_neutral || 'TN-S',
         is_principal: !!equipment.is_principal,
-        voltage_kv: equipment.voltage_kv || 20,
-        short_circuit_ka: equipment.short_circuit_ka || 25,
         notes: equipment.notes || ''
       });
     }
@@ -411,6 +453,10 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
     e?.preventDefault();
     if (!form.name?.trim()) {
       showToast?.('Le nom est requis', 'error');
+      return;
+    }
+    if (!form.code?.trim()) {
+      showToast?.('Le code est requis', 'error');
       return;
     }
     setIsSaving(true);
@@ -453,11 +499,78 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
               className={inputBaseClass} placeholder="Ex: Cellule arrivée HTA" />
           </div>
           <div>
-            <label className={labelClass}>Code</label>
+            <label className={labelClass}>Code *</label>
             <input type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))}
               className={inputBaseClass} placeholder="Ex: HV-01" />
           </div>
         </div>
+
+        {/* Profile Photo - only for existing equipment */}
+        {!isNew && (
+          <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border border-amber-100">
+            <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Camera size={18} className="text-amber-600" />
+              Photo de profil
+            </h4>
+            <div className="flex items-center gap-4">
+              {/* Photo preview */}
+              <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-gray-100 border-2 border-amber-200 flex-shrink-0">
+                {equipment?.has_photo ? (
+                  <img
+                    src={`${api.hv.equipmentPhotoUrl(equipment.id, { bust: false })}&v=${photoVersion}`}
+                    alt="Photo équipement"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                      e.target.nextSibling.style.display = 'flex';
+                    }}
+                  />
+                ) : null}
+                <div
+                  className={`absolute inset-0 flex flex-col items-center justify-center text-gray-400 ${equipment?.has_photo ? 'hidden' : ''}`}
+                  style={{ display: equipment?.has_photo ? 'none' : 'flex' }}
+                >
+                  <Camera size={32} className="mb-1" />
+                  <span className="text-xs">Aucune photo</span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-col gap-2">
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={isUploadingPhoto}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-colors text-sm font-medium"
+                >
+                  {isUploadingPhoto ? (
+                    <RefreshCw size={16} className="animate-spin" />
+                  ) : (
+                    <Upload size={16} />
+                  )}
+                  {equipment?.has_photo ? 'Changer' : 'Ajouter'}
+                </button>
+                {equipment?.has_photo && (
+                  <button
+                    type="button"
+                    onClick={handlePhotoDelete}
+                    className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors text-sm font-medium"
+                  >
+                    <Trash2 size={16} />
+                    Supprimer
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Location */}
         <div className="p-4 bg-gray-50 rounded-2xl">
@@ -490,18 +603,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
             <Zap size={18} className="text-amber-600" />
             Caractéristiques électriques
           </h4>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className={labelClass}>Tension (kV)</label>
-              <select value={form.voltage_kv} onChange={e => setForm(f => ({ ...f, voltage_kv: Number(e.target.value) }))} className={selectBaseClass}>
-                {VOLTAGE_CLASSES.map(v => <option key={v} value={v}>{v} kV</option>)}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Icc (kA)</label>
-              <input type="number" step="0.1" value={form.short_circuit_ka} onChange={e => setForm(f => ({ ...f, short_circuit_ka: Number(e.target.value) }))}
-                className={inputBaseClass} placeholder="Ex: 25" />
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Régime de neutre</label>
               <select value={form.regime_neutral} onChange={e => setForm(f => ({ ...f, regime_neutral: e.target.value }))} className={selectBaseClass}>
@@ -840,8 +942,21 @@ const DetailPanel = ({
         </div>
 
         <div className="flex items-start gap-4">
-          <div className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center ${equipment.is_principal ? 'bg-gradient-to-br from-amber-200 to-orange-300 text-amber-800' : 'bg-white/20'}`}>
-            <Zap size={28} />
+          <div className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center overflow-hidden ${equipment.is_principal ? 'bg-gradient-to-br from-amber-200 to-orange-300 text-amber-800' : 'bg-white/20'}`}>
+            {equipment.has_photo ? (
+              <img
+                src={api.hv.equipmentPhotoUrl(equipment.id, { bust: true })}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  e.target.nextSibling.style.display = 'flex';
+                }}
+              />
+            ) : null}
+            <div className={`w-full h-full flex items-center justify-center ${equipment.has_photo ? 'hidden' : ''}`}>
+              <Zap size={28} />
+            </div>
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-lg md:text-xl font-bold truncate">{equipment.name || 'Équipement HV'}</h2>
@@ -1627,6 +1742,10 @@ export default function HighVoltage() {
                 site={site}
                 switchboards={switchboards}
                 lvDevices={lvDevices}
+                onPhotoUpdated={(updated) => {
+                  setSelectedEquipment(updated);
+                  setEquipments(prev => prev.map(eq => eq.id === updated.id ? { ...eq, has_photo: updated.has_photo } : eq));
+                }}
               />
             ) : (
               <DetailPanel

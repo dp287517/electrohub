@@ -166,10 +166,15 @@ async function ensureSchema() {
       room TEXT,
       regime_neutral TEXT,
       is_principal BOOLEAN DEFAULT FALSE,
+      notes TEXT,
+      photo BYTEA,
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- Add notes and photo columns if they don't exist (for existing tables)
+    ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS notes TEXT;
+    ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS photo BYTEA;
     CREATE TABLE IF NOT EXISTS hv_devices (
       id SERIAL PRIMARY KEY,
       site TEXT NOT NULL,
@@ -253,7 +258,8 @@ app.get('/api/hv/equipments', async (req, res) => {
     const limit = Math.min(parseInt(pageSize, 10) || 18, 100);
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
     const sql = `
-      SELECT *,
+      SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality, created_at,
+      (photo IS NOT NULL) AS has_photo,
       (SELECT COUNT(*) FROM hv_devices WHERE hv_equipment_id = hv_equipments.id)::int AS devices_count
       FROM hv_equipments
       WHERE ${where.join(' AND ')}
@@ -269,12 +275,12 @@ app.get('/api/hv/equipments', async (req, res) => {
 app.post('/api/hv/equipments', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality } = req.body;
+    const { name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality } = req.body;
     if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
     const r = await pool.query(`
-      INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
+      INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [site, name, code, building_code, floor, room, regime_neutral, is_principal, notes || null, modes || {}, quality || {}]);
     const eq = r.rows[0];
 
     // 📝 AUDIT: Log création équipement HV
@@ -295,7 +301,10 @@ app.post('/api/hv/equipments', async (req, res) => {
 app.get('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
-    const r = await pool.query(`SELECT * FROM hv_equipments WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
+    const r = await pool.query(`
+      SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality, created_at,
+      (photo IS NOT NULL) AS has_photo
+      FROM hv_equipments WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
     res.json(r.rows[0]);
   } catch (e) { res.status(500).json({ error: 'Get failed', details: e.message }); }
@@ -304,12 +313,12 @@ app.get('/api/hv/equipments/:id', async (req, res) => {
 app.put('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality } = req.body;
+    const { name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality } = req.body;
     if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
     const r = await pool.query(`
-      UPDATE hv_equipments SET name=$3, code=$4, building_code=$5, floor=$6, room=$7, regime_neutral=$8, is_principal=$9, modes=$10, quality=$11
+      UPDATE hv_equipments SET name=$3, code=$4, building_code=$5, floor=$6, room=$7, regime_neutral=$8, is_principal=$9, notes=$10, modes=$11, quality=$12
       WHERE id=$1 AND site=$2 RETURNING *`,
-      [Number(req.params.id), site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
+      [Number(req.params.id), site, name, code, building_code, floor, room, regime_neutral, is_principal, notes || null, modes || {}, quality || {}]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
     const eq = r.rows[0];
 
@@ -350,6 +359,70 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
 
     res.json({ message: 'Deleted' });
   } catch (e) { res.status(500).json({ error: 'Delete failed', details: e.message }); }
+});
+
+// ---------------- Equipment Photo (profile photo) ----------------
+app.post('/api/hv/equipments/:id/photo', upload.single('photo'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid equipment ID' });
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+
+    const r = await pool.query(
+      `UPDATE hv_equipments SET photo = $1 WHERE id = $2 AND site = $3 RETURNING id`,
+      [req.file.buffer, id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Equipment not found' });
+
+    res.json({ success: true, id });
+  } catch (e) {
+    console.error('[HV EQUIPMENT PHOTO UPLOAD]', e.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+app.get('/api/hv/equipments/:id/photo', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid equipment ID' });
+
+    const r = await pool.query(`SELECT photo FROM hv_equipments WHERE id = $1 AND site = $2`, [id, site]);
+    if (!r.rows.length || !r.rows[0].photo) return res.status(404).json({ error: 'Photo not found' });
+
+    res.set('Content-Type', 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(r.rows[0].photo);
+  } catch (e) {
+    console.error('[HV EQUIPMENT PHOTO GET]', e.message);
+    res.status(500).json({ error: 'Get photo failed' });
+  }
+});
+
+app.delete('/api/hv/equipments/:id/photo', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid equipment ID' });
+
+    const r = await pool.query(
+      `UPDATE hv_equipments SET photo = NULL WHERE id = $1 AND site = $2 RETURNING id`,
+      [id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Equipment not found' });
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[HV EQUIPMENT PHOTO DELETE]', e.message);
+    res.status(500).json({ error: 'Delete photo failed' });
+  }
 });
 
 // ---------------- HV Devices & tree ----------------
