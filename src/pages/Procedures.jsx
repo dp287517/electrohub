@@ -255,7 +255,7 @@ export default function Procedures() {
   const [aiGuidedMode, setAiGuidedMode] = useState(false);
 
   // FIX: Get capture context to reopen modal after photo capture
-  const { shouldReopenModal, clearReopenSignal, shouldMinimizeModal, clearMinimizeSignal, captureCount, procedureInfo } = useProcedureCapture();
+  const { shouldReopenModal, clearReopenSignal, shouldMinimizeModal, clearMinimizeSignal, captureCount, procedureInfo, isCapturing } = useProcedureCapture();
 
   // FIX: Reopen the creator modal when returning from photo capture
   useEffect(() => {
@@ -277,7 +277,15 @@ export default function Procedures() {
 
   // CRITICAL: Auto-reopen modal if there's an active session in localStorage
   // This handles the case where user minimizes the app and comes back
+  // BUT: Don't reopen if user is already using the floating capture widget (isCapturing = true)
   useEffect(() => {
+    // FIX: If user is in capture mode with the floating widget, don't auto-reopen the modal
+    // The user can manually expand via the widget when they're ready
+    if (isCapturing) {
+      console.log('[Procedures] Capture mode active (widget visible), skipping auto-reopen');
+      return;
+    }
+
     const savedSession = localStorage.getItem('activeProcedureSession');
     if (savedSession && !showCreator) {
       try {
@@ -292,7 +300,7 @@ export default function Procedures() {
         localStorage.removeItem('activeProcedureSession');
       }
     }
-  }, []); // Run only on mount
+  }, [isCapturing]); // Run on mount and when isCapturing changes
 
   // Handle URL parameters for deep linking from QR codes
   useEffect(() => {
