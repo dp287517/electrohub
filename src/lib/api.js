@@ -1513,6 +1513,15 @@ export const api = {
       const qs = new URLSearchParams({ site, ...params }).toString();
       return `${API_BASE}/api/meca/report?${qs}`;
     },
+
+    // AI Photo Analysis
+    extractFromPhotos: (files = []) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload(`/api/meca/analyzePhotoBatch`, fd);
+    },
+
+    analyzePhotoBatch: (files = []) => api.meca.extractFromPhotos(files),
   },
 
   /** --- MECA MAPS --- */
