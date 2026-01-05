@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import { VideoAvatar } from './VideoAvatar';
 import AvatarChat from './AvatarChat';
 import AvatarSelector from './AvatarSelector';
 import { X, Sparkles, AlertTriangle, Calendar, Bell } from 'lucide-react';
@@ -169,10 +170,11 @@ export default function FloatingAssistant() {
           `}
           title={`Parler à ${avatar.name}`}
         >
-          <AnimatedAvatar
+          <VideoAvatar
             style={avatarStyle}
             size="md"
             speaking={isHovered}
+            fallbackToAnimated={true}
           />
 
           {/* Status indicator */}

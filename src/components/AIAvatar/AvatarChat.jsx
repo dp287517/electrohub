@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import { VideoAvatar } from './VideoAvatar';
 import MiniEquipmentPreview from './MiniEquipmentPreview';
 import {
   X, Send, Mic, MicOff, Settings,
@@ -611,12 +612,13 @@ Demande-moi n'importe quoi !`,
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-600 to-brand-700 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <AnimatedAvatar
+            <VideoAvatar
               style={avatarStyle}
               size="sm"
-              speaking={isSpeaking}
+              speaking={isSpeaking || isLoading}
               onClick={onChangeAvatar}
               className="cursor-pointer hover:scale-110 transition-transform"
+              fallbackToAnimated={true}
             />
             <div>
               <div className="flex items-center gap-2">

@@ -2271,4 +2271,173 @@ router.delete("/settings/ai-icon", adminOnly, async (req, res) => {
   }
 });
 
+// ============================================================================
+// AI VIDEO AVATAR ENDPOINTS
+// ============================================================================
+
+// GET /api/admin/settings/ai-video/info - Get AI video metadata
+router.get("/settings/ai-video/info", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    const result = await pool.query(`
+      SELECT key, mime_type, updated_at, LENGTH(binary_data) as size
+      FROM app_settings
+      WHERE key IN ('ai_video_idle', 'ai_video_speaking')
+    `);
+
+    const videos = {};
+    result.rows.forEach(row => {
+      if (row.key === 'ai_video_idle') {
+        videos.hasIdleVideo = true;
+        videos.idleMimeType = row.mime_type;
+        videos.idleSize = row.size;
+      } else if (row.key === 'ai_video_speaking') {
+        videos.hasSpeakingVideo = true;
+        videos.speakingMimeType = row.mime_type;
+        videos.speakingSize = row.size;
+      }
+    });
+
+    res.json({
+      hasIdleVideo: videos.hasIdleVideo || false,
+      hasSpeakingVideo: videos.hasSpeakingVideo || false,
+      ...videos
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-video/idle - Get idle video
+router.get("/settings/ai-video/idle", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = 'ai_video_idle'`
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No idle video found" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'video/mp4');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-video/idle GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-video/speaking - Get speaking video
+router.get("/settings/ai-video/speaking", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = 'ai_video_speaking'`
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No speaking video found" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'video/mp4');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-video/speaking GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-video/idle - Upload idle video (admin only)
+router.post("/settings/ai-video/idle", adminOnly, uploadMemory.single('video'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No video file provided" });
+    }
+
+    // Validate file type
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Invalid video format. Use MP4, WebM or OGG." });
+    }
+
+    // Limit file size (10MB)
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: "Video too large. Maximum 10MB." });
+    }
+
+    await ensureAppSettingsTable();
+
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ('ai_video_idle', $1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [buffer, mimetype]);
+
+    res.json({ ok: true, message: "Idle video uploaded successfully" });
+  } catch (err) {
+    console.error("[settings/ai-video/idle POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-video/speaking - Upload speaking video (admin only)
+router.post("/settings/ai-video/speaking", adminOnly, uploadMemory.single('video'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No video file provided" });
+    }
+
+    // Validate file type
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Invalid video format. Use MP4, WebM or OGG." });
+    }
+
+    // Limit file size (10MB)
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: "Video too large. Maximum 10MB." });
+    }
+
+    await ensureAppSettingsTable();
+
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ('ai_video_speaking', $1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [buffer, mimetype]);
+
+    res.json({ ok: true, message: "Speaking video uploaded successfully" });
+  } catch (err) {
+    console.error("[settings/ai-video/speaking POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/settings/ai-video - Remove all custom AI videos (admin only)
+router.delete("/settings/ai-video", adminOnly, async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+    await pool.query(`DELETE FROM app_settings WHERE key IN ('ai_video_idle', 'ai_video_speaking')`);
+    res.json({ ok: true, message: "AI videos removed" });
+  } catch (err) {
+    console.error("[settings/ai-video DELETE] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

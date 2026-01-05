@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import { VideoAvatar } from './VideoAvatar';
 import MiniEquipmentPreview from './MiniEquipmentPreview';
 import {
   X, Send, Mic, MicOff, Sparkles,
@@ -549,10 +550,11 @@ Comment puis-je vous aider avec cet équipement ?`,
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="relative">
-                <AnimatedAvatar
+                <VideoAvatar
                   style={avatarStyle}
                   size="sm"
-                  speaking={isSpeaking}
+                  speaking={isSpeaking || isLoading}
+                  fallbackToAnimated={true}
                 />
                 <div className={`absolute -bottom-1 -right-1 p-1 rounded-full bg-white shadow-sm`}>
                   <EquipmentIcon className={`w-3 h-3 ${config.textColor}`} />
