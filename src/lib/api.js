@@ -466,6 +466,10 @@ export const api = {
     deleteDraftAttachment: (id) => del(`/api/switchboard/controls/drafts/attachments/${id}`),
     draftAttachmentUrl: (id, thumbnail = false) =>
       `${API_BASE}/api/switchboard/controls/drafts/attachments/${id}/file?site=${currentSite()}${thumbnail ? "&thumbnail=true" : ""}`,
+
+    // DDR-specific endpoints (for element_filter = 'ddr' templates)
+    listSwitchboardsWithDDR: () => get("/api/switchboard/controls/switchboards-with-ddr"),
+    listDDRDevices: (switchboardIds) => get("/api/switchboard/controls/ddr-devices", { switchboard_ids: switchboardIds.join(',') }),
   },
 
   switchboardMaps: {
