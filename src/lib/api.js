@@ -476,6 +476,21 @@ export const api = {
 
     // Get existing control dates by frequency (for date alignment)
     getExistingDatesByBoard: (boardId) => get(`/api/switchboard/controls/existing-dates/${boardId}`),
+
+    // Bulk PDF report with filters
+    reportPdfUrl: (params = {}) => {
+      const queryParts = [`site=${currentSite()}`];
+      if (params.switchboard_ids?.length) queryParts.push(`switchboard_ids=${params.switchboard_ids.join(',')}`);
+      if (params.template_ids?.length) queryParts.push(`template_ids=${params.template_ids.join(',')}`);
+      if (params.buildings?.length) queryParts.push(`buildings=${params.buildings.join(',')}`);
+      if (params.status && params.status !== 'all') queryParts.push(`status=${params.status}`);
+      if (params.date_from) queryParts.push(`date_from=${params.date_from}`);
+      if (params.date_to) queryParts.push(`date_to=${params.date_to}`);
+      if (params.performers?.length) queryParts.push(`performers=${params.performers.join(',')}`);
+      if (params.equipment_type) queryParts.push(`equipment_type=${params.equipment_type}`);
+      if (params.include_devices) queryParts.push(`include_devices=true`);
+      return `${API_BASE}/api/switchboard/controls/report/pdf?${queryParts.join('&')}`;
+    },
   },
 
   switchboardMaps: {

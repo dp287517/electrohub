@@ -241,6 +241,7 @@ export default function SwitchboardControls() {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showControlModal, setShowControlModal] = useState(false);
+  const [showPdfExportModal, setShowPdfExportModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [selectedSchedule, setSelectedSchedule] = useState(null);
 
@@ -800,6 +801,15 @@ export default function SwitchboardControls() {
                   ✕ Reset
                 </button>
               )}
+              {activeTab === "history" && (
+                <button
+                  onClick={() => setShowPdfExportModal(true)}
+                  className="px-4 py-2.5 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 flex items-center gap-2 ml-auto"
+                >
+                  <span>📄</span>
+                  Exporter PDF
+                </button>
+              )}
             </div>
 
             {/* Expanded Filters */}
@@ -1111,6 +1121,15 @@ export default function SwitchboardControls() {
           }}
         />
       )}
+
+      {showPdfExportModal && (
+        <PdfExportModal
+          filters={filters}
+          filterOptions={filterOptions}
+          records={filteredRecords}
+          onClose={() => setShowPdfExportModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1410,13 +1429,47 @@ function OverdueTab({ overdueList, onStartControl, navigate }) {
 }
 
 // ============================================================
-// HISTORY TAB - Responsive
+// HISTORY TAB - Responsive with improved PDF download
 // ============================================================
 function HistoryTab({ records, navigate }) {
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [downloadError, setDownloadError] = useState(null);
+
   const statusConfig = {
     conform: { bg: "bg-green-100", text: "text-green-800", icon: "✅", label: "Conforme" },
     non_conform: { bg: "bg-red-100", text: "text-red-800", icon: "❌", label: "Non conforme" },
     partial: { bg: "bg-yellow-100", text: "text-yellow-800", icon: "⚠️", label: "Partiel" },
+  };
+
+  // Download PDF with proper error handling
+  const handleDownloadPdf = async (record) => {
+    setDownloadingId(record.id);
+    setDownloadError(null);
+    try {
+      const url = api.switchboardControls.recordPdfUrl(record.id);
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+        throw new Error(errorData.error || `Erreur ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      const equipName = record.switchboard_code || record.device_position || record.id;
+      a.download = `controle_${equipName}_${new Date(record.performed_at).toLocaleDateString('fr-FR').replace(/\//g, '-')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error('PDF download error:', e);
+      setDownloadError({ id: record.id, message: e.message });
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   if (records.length === 0) {
@@ -1434,6 +1487,9 @@ function HistoryTab({ records, navigate }) {
       {records.map((r, idx) => {
         const status = statusConfig[r.status] || statusConfig.partial;
         const equipDisplay = getEquipmentDisplay(r);
+        const isDownloading = downloadingId === r.id;
+        const hasError = downloadError?.id === r.id;
+
         return (
           <div
             key={r.id}
@@ -1463,6 +1519,11 @@ function HistoryTab({ records, navigate }) {
                   <span>📅 {new Date(r.performed_at).toLocaleDateString("fr-FR")}</span>
                   <span>👤 {r.performed_by}</span>
                 </div>
+                {hasError && (
+                  <div className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                    <span>❌</span> {downloadError.message}
+                  </div>
+                )}
               </div>
 
               {/* Navigation - All equipment types */}
@@ -1478,15 +1539,27 @@ function HistoryTab({ records, navigate }) {
                 </div>
               )}
 
-              {/* PDF Button */}
-              <a
-                href={api.switchboardControls.recordPdfUrl(r.id)}
-                target="_blank"
-                rel="noreferrer"
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium text-sm flex items-center gap-2"
+              {/* PDF Button - Improved with error handling */}
+              <button
+                onClick={() => handleDownloadPdf(r)}
+                disabled={isDownloading}
+                className={`px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-all ${
+                  isDownloading
+                    ? 'bg-gray-200 text-gray-500 cursor-wait'
+                    : hasError
+                    ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
               >
-                📄 PDF
-              </a>
+                {isDownloading ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    Chargement...
+                  </>
+                ) : (
+                  <>📄 PDF</>
+                )}
+              </button>
             </div>
           </div>
         );
@@ -3140,6 +3213,281 @@ function ControlModal({ schedule, onClose, onComplete }) {
             className="flex-1 px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "⏳ Enregistrement..." : "✓ Valider le contrôle"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PDF EXPORT MODAL - Export controls with filters
+// ============================================================
+function PdfExportModal({ filters: currentFilters, filterOptions, records, onClose }) {
+  const [exportFilters, setExportFilters] = useState({
+    switchboardIds: currentFilters.switchboardIds || [],
+    templateIds: currentFilters.templateIds || [],
+    buildings: currentFilters.buildings || [],
+    status: currentFilters.status || 'all',
+    dateFrom: currentFilters.dateFrom || '',
+    dateTo: currentFilters.dateTo || '',
+    performers: currentFilters.performers || [],
+    equipmentType: '', // 'switchboard', 'device', 'vsd', 'meca', 'mobile', 'hv', 'glo', 'datahub', or '' for all
+    includeDevices: true, // Include device control tables for switchboard reports
+  });
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const equipmentTypes = [
+    { value: '', label: 'Tous les types' },
+    { value: 'switchboard', label: 'Tableaux electriques' },
+    { value: 'device', label: 'Disjoncteurs' },
+    { value: 'vsd', label: 'Variateurs (VSD)' },
+    { value: 'meca', label: 'Equipements mecaniques' },
+    { value: 'mobile', label: 'Equipements mobiles' },
+    { value: 'hv', label: 'Haute tension (HT)' },
+    { value: 'glo', label: 'GLO' },
+    { value: 'datahub', label: 'DataHub' },
+  ];
+
+  const handleExport = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const url = api.switchboardControls.reportPdfUrl({
+        switchboard_ids: exportFilters.switchboardIds,
+        template_ids: exportFilters.templateIds,
+        buildings: exportFilters.buildings,
+        status: exportFilters.status,
+        date_from: exportFilters.dateFrom,
+        date_to: exportFilters.dateTo,
+        performers: exportFilters.performers,
+        equipment_type: exportFilters.equipmentType,
+        include_devices: exportFilters.includeDevices,
+      });
+
+      // Use fetch to handle errors properly
+      const response = await fetch(url);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+        throw new Error(errorData.error || `Erreur ${response.status}`);
+      }
+
+      // Download the PDF
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `rapport_controles_${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+
+      onClose();
+    } catch (e) {
+      console.error('PDF export error:', e);
+      setError(e.message || 'Erreur lors de la generation du PDF');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Preview count based on current filters
+  const previewCount = records.length;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-fadeIn">
+      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+        {/* Header */}
+        <div className="sticky top-0 bg-gradient-to-r from-emerald-500 to-green-600 text-white p-5 rounded-t-2xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">📄</span>
+              <div>
+                <h2 className="text-xl font-bold">Exporter en PDF</h2>
+                <p className="text-sm text-white/80">Generez un rapport de controles</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-full transition-colors">
+              <span className="text-2xl">✕</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="p-5 space-y-5">
+          {/* Quick Stats */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 rounded-xl">
+                <span className="text-2xl">📊</span>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{previewCount}</p>
+                <p className="text-sm text-gray-500">controles seront inclus (filtres actuels)</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Equipment Type Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Type d'equipement</label>
+            <select
+              value={exportFilters.equipmentType}
+              onChange={(e) => setExportFilters(f => ({ ...f, equipmentType: e.target.value }))}
+              className="w-full border border-gray-200 rounded-xl p-3 bg-white text-gray-900 focus:ring-2 focus:ring-emerald-500"
+            >
+              {equipmentTypes.map(type => (
+                <option key={type.value} value={type.value}>{type.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Filters Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Status */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Statut</label>
+              <select
+                value={exportFilters.status}
+                onChange={(e) => setExportFilters(f => ({ ...f, status: e.target.value }))}
+                className="w-full border border-gray-200 rounded-xl p-3 bg-white text-gray-900 focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="all">Tous les statuts</option>
+                <option value="conform">Conformes uniquement</option>
+                <option value="non_conform">Non conformes uniquement</option>
+                <option value="partial">Partiels uniquement</option>
+              </select>
+            </div>
+
+            {/* Date Range */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Periode</label>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={exportFilters.dateFrom}
+                  onChange={(e) => setExportFilters(f => ({ ...f, dateFrom: e.target.value }))}
+                  className="flex-1 border border-gray-200 rounded-xl p-3 text-sm bg-white text-gray-900"
+                  placeholder="Du"
+                />
+                <input
+                  type="date"
+                  value={exportFilters.dateTo}
+                  onChange={(e) => setExportFilters(f => ({ ...f, dateTo: e.target.value }))}
+                  className="flex-1 border border-gray-200 rounded-xl p-3 text-sm bg-white text-gray-900"
+                  placeholder="Au"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Switchboard Filter */}
+          {filterOptions.switchboards?.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Tableaux ({exportFilters.switchboardIds.length > 0 ? `${exportFilters.switchboardIds.length} selectionne(s)` : 'Tous'})
+              </label>
+              <select
+                multiple
+                value={exportFilters.switchboardIds.map(String)}
+                onChange={(e) => {
+                  const selected = Array.from(e.target.selectedOptions, o => Number(o.value));
+                  setExportFilters(f => ({ ...f, switchboardIds: selected }));
+                }}
+                className="w-full border border-gray-200 rounded-xl p-2 bg-white text-gray-900 h-24"
+              >
+                {filterOptions.switchboards.map(sb => (
+                  <option key={sb.id} value={sb.id}>{sb.code} - {sb.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">Ctrl+clic pour multi-selection. Aucune selection = Tous</p>
+            </div>
+          )}
+
+          {/* Building Filter */}
+          {filterOptions.buildings?.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Batiments</label>
+              <div className="flex flex-wrap gap-2">
+                {filterOptions.buildings.map(b => (
+                  <button
+                    key={b}
+                    onClick={() => {
+                      setExportFilters(f => ({
+                        ...f,
+                        buildings: f.buildings.includes(b)
+                          ? f.buildings.filter(x => x !== b)
+                          : [...f.buildings, b]
+                      }));
+                    }}
+                    className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                      exportFilters.buildings.includes(b)
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {b}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Include Devices Option */}
+          <div className="bg-blue-50 rounded-xl p-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={exportFilters.includeDevices}
+                onChange={(e) => setExportFilters(f => ({ ...f, includeDevices: e.target.checked }))}
+                className="mt-1 w-5 h-5 text-emerald-500 rounded focus:ring-emerald-500"
+              />
+              <div>
+                <p className="font-medium text-gray-900">Inclure les controles des disjoncteurs</p>
+                <p className="text-sm text-gray-500">
+                  Pour chaque tableau, affiche un tableau detaille avec les controles de chaque disjoncteur
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+              <span className="text-2xl">❌</span>
+              <div>
+                <p className="font-medium text-red-800">Erreur</p>
+                <p className="text-sm text-red-600">{error}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 bg-gray-50 p-4 border-t rounded-b-2xl flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-3 bg-gray-200 rounded-xl hover:bg-gray-300 font-medium transition-colors"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex-1 px-4 py-3 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-xl font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
+          >
+            {exporting ? (
+              <>
+                <span className="animate-spin">⏳</span>
+                Generation en cours...
+              </>
+            ) : (
+              <>
+                📄 Telecharger le PDF
+              </>
+            )}
           </button>
         </div>
       </div>
