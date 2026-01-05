@@ -5912,7 +5912,8 @@ function pdfCalculateArcFlash(bolted_fault_ka, arc_duration_s, working_distance_
   const E = Math.pow(10, lgE) * (arc_duration_s / 0.2);
   const E_cal = E / 4.184;
   const AFB = working_distance_mm * Math.pow(Math.max(E / 1.2, 0.01), 0.5);
-  const cats = [{ l: 0, m: 1.2, n: 'Aucun PPE requis' }, { l: 1, m: 4, n: 'PPE Cat. 1' }, { l: 2, m: 8, n: 'PPE Cat. 2' }, { l: 3, m: 25, n: 'PPE Cat. 3' }, { l: 4, m: 40, n: 'PPE Cat. 4' }, { l: 5, m: 9999, n: 'DANGER' }];
+  // PPE minimum Cat. 1 pour tout travail sous tension (bonne pratique de sécurité IEC 61482 / NFPA 70E)
+  const cats = [{ l: 1, m: 1.2, n: 'PPE Cat. 1 (énergie faible)' }, { l: 1, m: 4, n: 'PPE Cat. 1' }, { l: 2, m: 8, n: 'PPE Cat. 2' }, { l: 3, m: 25, n: 'PPE Cat. 3' }, { l: 4, m: 40, n: 'PPE Cat. 4' }, { l: 5, m: 9999, n: 'DANGER' }];
   const ppe = cats.find(p => E_cal <= p.m) || cats[5];
   return { incident_energy_cal: E_cal, arc_current_ka: Iarc, arc_flash_boundary_mm: AFB, ppe_category: ppe.l, ppe_name: ppe.n, arc_duration_ms: arc_duration_s * 1000 };
 }
@@ -6148,7 +6149,8 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       // ═══════════════════════════════════════════════════════════════════
       const tripTime = (mainDev.in_amps || 100) > 63 ? 0.05 : 0.02;
       const af = pdfCalculateArcFlash(fla.Ik_kA, tripTime, 455);
-      const ppeColor = af.ppe_category === 0 ? colors.success : af.ppe_category <= 2 ? colors.warning : colors.danger;
+      // Couleurs PPE: Cat. 1 = bleu, Cat. 2 = jaune/warning, Cat. 3+ = rouge/danger
+      const ppeColor = af.ppe_category <= 1 ? colors.blue : af.ppe_category <= 2 ? colors.warning : colors.danger;
 
       drawRoundedRect(40, currentY, 515, 95, 8, '#ffffff', colors.grayBorder);
 
