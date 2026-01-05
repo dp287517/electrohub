@@ -75,6 +75,87 @@ const AVATAR_STYLES = {
     secondaryColor: '#DB2777',
     accentColor: '#F472B6',
     icon: 'heart'
+  },
+  // Styles spécifiques aux agents IA
+  vsd: {
+    name: 'Shakira',
+    description: 'Spécialiste variateurs',
+    primaryColor: '#F97316',
+    secondaryColor: '#EA580C',
+    accentColor: '#FB923C',
+    icon: 'zap'
+  },
+  meca: {
+    name: 'Titan',
+    description: 'Expert mécanique',
+    primaryColor: '#64748B',
+    secondaryColor: '#475569',
+    accentColor: '#94A3B8',
+    icon: 'ai'
+  },
+  glo: {
+    name: 'Lumina',
+    description: 'Spécialiste éclairage',
+    primaryColor: '#FBBF24',
+    secondaryColor: '#F59E0B',
+    accentColor: '#FDE68A',
+    icon: 'star'
+  },
+  hv: {
+    name: 'Voltaire',
+    description: 'Expert haute tension',
+    primaryColor: '#DC2626',
+    secondaryColor: '#B91C1C',
+    accentColor: '#F87171',
+    icon: 'bolt'
+  },
+  mobile: {
+    name: 'Nomad',
+    description: 'Équipements mobiles',
+    primaryColor: '#0D9488',
+    secondaryColor: '#0F766E',
+    accentColor: '#5EEAD4',
+    icon: 'leaf'
+  },
+  atex: {
+    name: 'Phoenix',
+    description: 'Expert zones ATEX',
+    primaryColor: '#F43F5E',
+    secondaryColor: '#E11D48',
+    accentColor: '#FDA4AF',
+    icon: 'zap'
+  },
+  switchboard: {
+    name: 'Matrix',
+    description: 'Tableaux électriques',
+    primaryColor: '#8B5CF6',
+    secondaryColor: '#7C3AED',
+    accentColor: '#C4B5FD',
+    icon: 'ai'
+  },
+  doors: {
+    name: 'Portal',
+    description: 'Expert portes et accès',
+    primaryColor: '#06B6D4',
+    secondaryColor: '#0891B2',
+    accentColor: '#67E8F9',
+    icon: 'star'
+  },
+  datahub: {
+    name: 'Nexus',
+    description: 'Capteurs et monitoring',
+    primaryColor: '#22C55E',
+    secondaryColor: '#16A34A',
+    accentColor: '#86EFAC',
+    icon: 'ai'
+  },
+  firecontrol: {
+    name: 'Blaze',
+    description: 'Sécurité incendie',
+    primaryColor: '#EF4444',
+    secondaryColor: '#DC2626',
+    accentColor: '#FCA5A5',
+    icon: 'heart'
   }
 };
 

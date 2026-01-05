@@ -186,12 +186,14 @@ const VideoAvatar = forwardRef(({
     }
   }, [speaking, hasVideo]);
 
-  // Si pas de vidéo, utiliser AnimatedAvatar
+  // Si pas de vidéo, utiliser AnimatedAvatar avec le style de l'agent
   if (!hasVideo && fallbackToAnimated) {
+    // Utiliser le style de l'agent si disponible, sinon le style par défaut
+    const agentStyle = agentType && agentType !== 'main' ? agentType : style;
     return (
       <div className={`relative ${className}`}>
         <AnimatedAvatar
-          style={style}
+          style={agentStyle}
           size={size}
           speaking={speaking}
           onClick={onClick}
