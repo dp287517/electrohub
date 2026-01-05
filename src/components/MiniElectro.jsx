@@ -340,7 +340,12 @@ export default function MiniElectro({
                       </button>
                       <button
                         onClick={() => {
-                          setChatMessage('Quel est l\'état de cet équipement ?');
+                          // Question complète incluant l'état des contrôles
+                          const building = equipment?.building || equipment?.building_code;
+                          const stateQuestion = building
+                            ? `Quel est l'état de cet équipement ? Y a-t-il des contrôles en retard dans le bâtiment ${building} ?`
+                            : 'Quel est l\'état de cet équipement ?';
+                          setChatMessage(stateQuestion);
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
                         }}
                         className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-full text-xs font-medium transition-colors"
@@ -358,7 +363,12 @@ export default function MiniElectro({
                       </button>
                       <button
                         onClick={() => {
-                          setChatMessage('Quand est le prochain contrôle ?');
+                          // Inclure le bâtiment dans la question pour contextualiser
+                          const building = equipment?.building || equipment?.building_code;
+                          const controlQuestion = building
+                            ? `Y a-t-il des contrôles en retard ou à venir pour le bâtiment ${building} ?`
+                            : 'Quels sont les contrôles en retard ou à venir ?';
+                          setChatMessage(controlQuestion);
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
                         }}
                         className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-full text-xs font-medium transition-colors"
