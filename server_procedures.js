@@ -1782,12 +1782,24 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, upload
       [JSON.stringify(conversation), sessionId]
     );
 
+    // Filter out photo_base64 from response to prevent mobile crashes
+    const lightweightData = {
+      ...session.collected_data,
+      raw_steps: (session.collected_data?.raw_steps || []).map(step => ({
+        step_number: step.step_number,
+        raw_text: step.raw_text,
+        photo: step.photo,
+        has_photo: step.has_photo
+        // Exclude photo_base64
+      }))
+    };
+
     return {
       message: statusMessage,
       currentStep: 'steps',
       expectsPhoto: true,
       procedureReady: false,
-      collectedData: session.collected_data
+      collectedData: lightweightData
     };
   }
 
@@ -1821,12 +1833,25 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, upload
 
     console.log(`[PROC] Fast mode: stored raw step ${stepNumber}${photoBase64 ? ` with photo (${photoBase64.length} chars base64)` : ''}`);
 
+    // CRITICAL FIX: Return lightweight collectedData without photo_base64 to prevent mobile crashes
+    // The photos are stored in DB and will be retrieved during finalization
+    const lightweightCollectedData = {
+      ...newCollectedData,
+      raw_steps: rawSteps.map(step => ({
+        step_number: step.step_number,
+        raw_text: step.raw_text,
+        photo: step.photo,
+        has_photo: step.has_photo
+        // Deliberately exclude photo_base64 from response to client
+      }))
+    };
+
     return {
       message: `✓ Étape ${stepNumber} enregistrée. Décrivez l'étape suivante + 📸 photo, ou dites "terminé".`,
       currentStep: 'steps',
       expectsPhoto: true,
       procedureReady: false,
-      collectedData: newCollectedData
+      collectedData: lightweightCollectedData
     };
   }
 
@@ -1921,13 +1946,25 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, upload
     ]
   );
 
+  // CRITICAL FIX: Return lightweight collectedData without photo_base64 to prevent mobile crashes
+  const lightweightCollectedData = {
+    ...newCollectedData,
+    raw_steps: rawSteps.map(step => ({
+      step_number: step.step_number,
+      raw_text: step.raw_text,
+      photo: step.photo,
+      has_photo: step.has_photo
+      // Exclude photo_base64 from response to client
+    }))
+  };
+
   return {
     message: aiResponse.message,
     currentStep: newPhase,
     expectsPhoto: aiResponse.expectsPhoto,
     procedureReady: aiResponse.procedureReady,
     needsProcessing, // Flag for frontend to show "please wait"
-    collectedData: newCollectedData
+    collectedData: lightweightCollectedData
   };
 }
 
@@ -3800,20 +3837,35 @@ app.get("/api/procedures/pending-photos/:id/file", async (req, res) => {
     const userEmail = req.headers["x-user-email"];
     const site = req.headers["x-site"];
 
-    const column = thumbnail === 'true' ? 'thumbnail' : 'file_data';
+    // Always fetch both thumbnail and file_data so we can fallback
     const { rows } = await pool.query(`
-      SELECT ${column} as data, file_mime, file_name
+      SELECT thumbnail, file_data, file_mime, file_name
       FROM procedure_pending_photos
       WHERE id = $1 AND (user_email = $2 OR site = $3)
     `, [id, userEmail, site]);
 
-    if (!rows.length || !rows[0].data) {
+    if (!rows.length) {
       return res.status(404).json({ ok: false, error: "Photo not found" });
     }
 
-    res.set('Content-Type', rows[0].file_mime || 'application/octet-stream');
-    res.set('Content-Disposition', `inline; filename="${rows[0].file_name}"`);
-    res.send(rows[0].data);
+    const row = rows[0];
+
+    // Determine which data to send: prefer thumbnail if requested, fallback to file_data
+    let data;
+    if (thumbnail === 'true') {
+      // Use thumbnail if available, otherwise fallback to full image
+      data = row.thumbnail || row.file_data;
+    } else {
+      data = row.file_data;
+    }
+
+    if (!data) {
+      return res.status(404).json({ ok: false, error: "Photo data not found" });
+    }
+
+    res.set('Content-Type', row.file_mime || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${row.file_name}"`);
+    res.send(data);
   } catch (err) {
     console.error("Error getting pending photo file:", err);
     res.status(500).json({ ok: false, error: err.message });
@@ -3939,13 +3991,26 @@ app.post("/api/procedures/ai/resume/:draftId", async (req, res) => {
 
     console.log(`[PROC] Resumed draft ${draftId} → session ${sessionId}, phase: ${resumePhase}, raw_steps: ${stepsCount}`);
 
+    // CRITICAL FIX: Return lightweight collectedData without photo_base64 to prevent mobile crashes
+    const lightweightCollectedData = {
+      ...resumeCollectedData,
+      raw_steps: rawStepsFromDraft.map(step => ({
+        step_number: step.step_number,
+        raw_text: step.raw_text,
+        photo: step.photo,
+        has_photo: step.has_photo,
+        from_draft: step.from_draft
+        // Exclude photo_base64 from response to client
+      }))
+    };
+
     res.json({
       ok: true,
       sessionId,
       resumedFrom: draft.id,
       phase: resumePhase,
       currentStep: resumePhase,
-      collectedData: resumeCollectedData,
+      collectedData: lightweightCollectedData,
       message: `Brouillon "${draft.title || 'sans titre'}" restauré. ${stepsCount} étape(s) existante(s). Continuons !`
     });
   } catch (err) {
@@ -5632,10 +5697,22 @@ app.post("/api/procedures/ai/process/:sessionId", async (req, res) => {
   try {
     const processedData = await processRawSteps(sessionId);
 
+    // CRITICAL FIX: Return lightweight collectedData without photo_base64 to prevent mobile crashes
+    const lightweightData = {
+      ...processedData,
+      raw_steps: (processedData.raw_steps || []).map(step => ({
+        step_number: step.step_number,
+        raw_text: step.raw_text,
+        photo: step.photo,
+        has_photo: step.has_photo
+        // Exclude photo_base64 from response to client
+      }))
+    };
+
     res.json({
       ok: true,
       message: `✅ ${processedData.title} - ${processedData.steps?.length || 0} étapes traitées. EPI: ${processedData.ppe_required?.join(', ') || 'Standard'}. Risque: ${processedData.risk_level || 'medium'}. Prêt à créer!`,
-      collectedData: processedData,
+      collectedData: lightweightData,
       procedureReady: true
     });
   } catch (err) {
