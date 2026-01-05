@@ -119,9 +119,15 @@ router.post('/create', async (req, res) => {
       photos = []
     } = req.body;
 
-    // Validate required fields
-    if (!equipment_type || !title || !description || !technician_name) {
-      return res.status(400).json({ error: 'Champs requis manquants: equipment_type, title, description, technician_name' });
+    // Get user info from request if not provided
+    const finalTechnicianName = technician_name || req.user?.name || req.user?.email?.split('@')[0] || 'Technicien';
+    const finalTechnicianEmail = technician_email || req.user?.email || '';
+    const finalEquipmentType = equipment_type || 'generic';
+    const finalTitle = title || 'Dépannage sans titre';
+
+    // Validate required fields - only title is truly required now
+    if (!finalTitle) {
+      return res.status(400).json({ error: 'Le titre est requis' });
     }
 
     // Insert main record
@@ -138,12 +144,12 @@ router.post('/create', async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'completed')
       RETURNING *
     `, [
-      site, equipment_type, equipment_id, equipment_name, equipment_code,
+      site, finalEquipmentType, equipment_id, equipment_name, equipment_code,
       building_code, floor, zone, room,
-      title, description, root_cause, solution, parts_replaced,
-      category, severity, fault_type,
-      started_at || new Date(), completed_at || new Date(), duration_minutes, downtime_minutes,
-      technician_name, technician_email,
+      finalTitle, description || '', root_cause, solution, parts_replaced,
+      category, severity || 'minor', fault_type,
+      started_at || new Date(), completed_at || new Date(), duration_minutes || 0, downtime_minutes || 0,
+      finalTechnicianName, finalTechnicianEmail,
       ai_diagnosis, ai_recommendations
     ]);
 
@@ -159,7 +165,7 @@ router.post('/create', async (req, res) => {
       }
     }
 
-    console.log(`[TROUBLESHOOTING] ✅ Created record ${record.id} for ${equipment_type} - ${equipment_name}`);
+    console.log(`[TROUBLESHOOTING] ✅ Created record ${record.id} for ${finalEquipmentType} - ${equipment_name}`);
     res.json({ success: true, id: record.id, record });
   } catch (error) {
     console.error('[TROUBLESHOOTING] Create error:', error);

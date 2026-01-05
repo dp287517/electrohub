@@ -159,7 +159,7 @@ function PhotoStep({ photos, setPhotos, onNext }) {
 
       {/* Photos preview */}
       {photos.length > 0 && (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {photos.map((photo) => (
             <div key={photo.id} className="relative group">
               <div className="aspect-video rounded-xl overflow-hidden border border-gray-200">
@@ -211,7 +211,7 @@ function PhotoStep({ photos, setPhotos, onNext }) {
       <div className="flex justify-end">
         <button
           onClick={onNext}
-          className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium flex items-center gap-2 hover:from-blue-600 hover:to-indigo-700 transition-all"
+          className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-indigo-700 transition-all"
         >
           {photos.length === 0 ? 'Passer' : 'Continuer'}
           <ChevronRight size={18} />
@@ -251,7 +251,7 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
         {/* Problem description */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Description du problème *
+            Description du problème
           </label>
           <textarea
             value={formData.description}
@@ -325,18 +325,18 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
         )}
       </div>
 
-      <div className="flex justify-between">
+      <div className="flex flex-col-reverse sm:flex-row gap-3 sm:justify-between">
         <button
           onClick={onBack}
-          className="px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors"
+          className="w-full sm:w-auto px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors"
         >
           <ChevronLeft size={18} />
           Retour
         </button>
         <button
           onClick={onNext}
-          disabled={!formData.title || !formData.description}
-          className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-xl font-medium flex items-center gap-2 hover:from-purple-600 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!formData.title}
+          className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-purple-600 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Continuer
           <ChevronRight size={18} />
@@ -363,7 +363,7 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         <label className="block text-sm font-medium text-gray-700 mb-3">
           Sévérité *
         </label>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {SEVERITY_OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -389,7 +389,7 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         <label className="block text-sm font-medium text-gray-700 mb-3">
           Catégorie
         </label>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {CATEGORY_OPTIONS.map((option) => {
             const Icon = option.icon;
             return (
@@ -439,7 +439,7 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
       </div>
 
       {/* Duration */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Durée intervention (min)
@@ -466,10 +466,10 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         </div>
       </div>
 
-      <div className="flex justify-between">
+      <div className="flex flex-col-reverse sm:flex-row gap-3 sm:justify-between">
         <button
           onClick={onBack}
-          className="px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors"
+          className="w-full sm:w-auto px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors"
         >
           <ChevronLeft size={18} />
           Retour
@@ -477,7 +477,7 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         <button
           onClick={onNext}
           disabled={!formData.severity}
-          className="px-6 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-medium flex items-center gap-2 hover:from-orange-600 hover:to-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-orange-600 hover:to-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Continuer
           <ChevronRight size={18} />
@@ -577,10 +577,10 @@ function SummaryStep({ formData, photos, equipment, onBack, onSubmit, isSubmitti
         )}
       </div>
 
-      <div className="flex justify-between">
+      <div className="flex flex-col-reverse sm:flex-row gap-3 sm:justify-between">
         <button
           onClick={onBack}
-          className="px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center gap-2 hover:bg-gray-50 transition-colors"
+          className="w-full sm:w-auto px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors"
         >
           <ChevronLeft size={18} />
           Retour
@@ -588,7 +588,7 @@ function SummaryStep({ formData, photos, equipment, onBack, onSubmit, isSubmitti
         <button
           onClick={onSubmit}
           disabled={isSubmitting}
-          className="px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium flex items-center gap-2 hover:from-green-600 hover:to-emerald-700 transition-all disabled:opacity-50"
+          className="w-full sm:w-auto px-6 sm:px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-green-600 hover:to-emerald-700 transition-all disabled:opacity-50"
         >
           {isSubmitting ? (
             <>
@@ -620,27 +620,29 @@ function SuccessScreen({ recordId, onClose, onViewReport, onNewTroubleshooting }
         Votre intervention a été sauvegardée avec succès.
       </p>
 
-      <div className="flex flex-col sm:flex-row gap-3 justify-center">
+      <div className="flex flex-col gap-3 justify-center">
         <button
           onClick={onViewReport}
-          className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-indigo-700 transition-all"
+          className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-indigo-700 transition-all"
         >
           <Download size={18} />
           Télécharger le rapport PDF
         </button>
-        <button
-          onClick={onNewTroubleshooting}
-          className="px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors"
-        >
-          <Plus size={18} />
-          Nouveau dépannage
-        </button>
-        <button
-          onClick={onClose}
-          className="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors"
-        >
-          Fermer
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={onNewTroubleshooting}
+            className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors"
+          >
+            <Plus size={18} />
+            Nouveau dépannage
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors"
+          >
+            Fermer
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -676,9 +678,38 @@ export default function TroubleshootingWizard({
   const [success, setSuccess] = useState(false);
   const [recordId, setRecordId] = useState(null);
 
-  // Get user info from localStorage
-  const userEmail = localStorage.getItem('userEmail') || '';
-  const userName = localStorage.getItem('userName') || userEmail.split('@')[0];
+  // Get user info from localStorage (multiple fallback pattern)
+  const getUserInfo = () => {
+    let email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    let name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+
+    // Try eh_user JSON object
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        email = email || eu.email;
+        name = name || eu.name;
+      } catch (e) {}
+    }
+
+    // Try user JSON object
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        email = email || u.email;
+        name = name || u.name;
+      } catch (e) {}
+    }
+
+    return {
+      email: email || '',
+      name: name || (email ? email.split('@')[0] : 'Technicien')
+    };
+  };
+
+  const userInfo = getUserInfo();
+  const userEmail = userInfo.email;
+  const userName = userInfo.name;
 
   // Reset wizard when opening
   useEffect(() => {
@@ -801,18 +832,18 @@ export default function TroubleshootingWizard({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-2 sm:p-4">
+      <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-2xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-6 text-white">
+        <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 p-4 sm:p-6 text-white">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-white/20 rounded-xl">
-                <Wrench size={24} />
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
+                <Wrench size={20} className="sm:w-6 sm:h-6" />
               </div>
-              <div>
-                <h2 className="text-xl font-bold">Dépannage</h2>
-                <p className="text-white/80 text-sm">
+              <div className="min-w-0">
+                <h2 className="text-lg sm:text-xl font-bold">Dépannage</h2>
+                <p className="text-white/80 text-xs sm:text-sm truncate">
                   {equipment?.name || equipment?.equipment_name || 'Équipement'}
                 </p>
               </div>
@@ -846,7 +877,7 @@ export default function TroubleshootingWizard({
         </div>
 
         {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+        <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(95vh-150px)] sm:max-h-[calc(90vh-180px)]">
           {success ? (
             <SuccessScreen
               recordId={recordId}
