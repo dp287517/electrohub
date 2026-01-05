@@ -4,9 +4,29 @@ import {
   Sparkles, MessageCircle, FileText, AlertTriangle, CheckCircle,
   Download, ExternalLink, X, ChevronDown, ChevronUp, Zap,
   Search, Wrench, Calendar, BarChart3, Loader2, RefreshCw,
-  BookOpen, Link2, PlusCircle
+  BookOpen, Link2, PlusCircle, History, Image
 } from 'lucide-react';
-import { post } from '../lib/api';
+import { post, get, API_BASE } from '../lib/api';
+import TroubleshootingWizard, { TroubleshootingHistory } from './TroubleshootingWizard';
+
+// Cache global pour l'icône personnalisée Electro (même système que AnimatedAvatar)
+let electroIconCache = { checked: false, url: null };
+
+async function getElectroIcon() {
+  if (electroIconCache.checked) return electroIconCache.url;
+
+  try {
+    const res = await fetch('/api/admin/settings/ai-icon/info');
+    const data = await res.json();
+    if (data.hasCustomIcon) {
+      electroIconCache.url = `/api/admin/settings/ai-icon?t=${Date.now()}`;
+    }
+  } catch (e) {
+    // Silently fail - use default icon
+  }
+  electroIconCache.checked = true;
+  return electroIconCache.url;
+}
 
 /**
  * MiniElectro - Assistant IA contextuel qui apparaît sur chaque équipement
@@ -14,7 +34,7 @@ import { post } from '../lib/api';
  */
 export default function MiniElectro({
   equipment,
-  equipmentType = 'generic', // vsd, meca, atex, glo, datahub, hv, mobile, doors
+  equipmentType = 'generic', // vsd, meca, atex, glo, datahub, hv, mobile, doors, switchboard
   onAction,
   className = ''
 }) {
@@ -23,6 +43,16 @@ export default function MiniElectro({
   const [analysis, setAnalysis] = useState(null);
   const [docSearch, setDocSearch] = useState({ loading: false, results: null, error: null });
   const [showDocSearch, setShowDocSearch] = useState(false);
+  const [customIconUrl, setCustomIconUrl] = useState(null);
+  const [showTroubleshooting, setShowTroubleshooting] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Charger l'icône personnalisée au montage
+  useEffect(() => {
+    getElectroIcon().then(url => {
+      if (url) setCustomIconUrl(url);
+    });
+  }, []);
 
   // Analyser l'équipement au montage ou quand il change
   const analyzeEquipment = useCallback(async () => {
@@ -134,9 +164,15 @@ export default function MiniElectro({
       >
         <div className="flex items-center gap-3">
           <div className="relative">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
+            {customIconUrl ? (
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg overflow-hidden">
+                <img src={customIconUrl} alt="Electro" className="w-8 h-8 object-cover" />
+              </div>
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
+                <Zap className="w-5 h-5 text-white" />
+              </div>
+            )}
             {hasIssues && (
               <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
                 <span className="text-[10px] text-white font-bold">{analysis.issues.length}</span>
@@ -144,7 +180,7 @@ export default function MiniElectro({
             )}
           </div>
           <div className="text-left">
-            <p className="font-semibold text-gray-900 text-sm">Mini Electro</p>
+            <p className="font-semibold text-gray-900 text-sm">Electro</p>
             <p className="text-xs text-gray-500">
               {isLoading ? 'Analyse en cours...' :
                hasIssues ? `${analysis.issues.length} point(s) d'attention` :
@@ -310,6 +346,25 @@ export default function MiniElectro({
               {/* Quick Actions */}
               <div className="pt-2 border-t border-indigo-100">
                 <div className="flex flex-wrap gap-2">
+                  {/* DÉPANNAGE - Action principale */}
+                  <button
+                    onClick={() => setShowTroubleshooting(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full text-xs font-medium hover:from-orange-600 hover:to-red-600 transition-all shadow-sm"
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    Dépannage
+                  </button>
+                  <button
+                    onClick={() => setShowHistory(!showHistory)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors ${
+                      showHistory
+                        ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                        : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    Historique
+                  </button>
                   <button
                     onClick={searchDocumentation}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors"
@@ -334,6 +389,20 @@ export default function MiniElectro({
                 </div>
               </div>
 
+              {/* Historique des dépannages */}
+              {showHistory && equipment?.id && (
+                <div className="pt-3 border-t border-indigo-100">
+                  <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">
+                    Historique des dépannages
+                  </p>
+                  <TroubleshootingHistory
+                    equipmentId={equipment.id}
+                    equipmentType={equipmentType}
+                    limit={3}
+                  />
+                </div>
+              )}
+
               {/* Stats rapides */}
               {analysis?.stats && (
                 <div className="grid grid-cols-3 gap-2 pt-2 border-t border-indigo-100">
@@ -349,6 +418,17 @@ export default function MiniElectro({
           )}
         </div>
       )}
+
+      {/* Wizard de dépannage */}
+      <TroubleshootingWizard
+        isOpen={showTroubleshooting}
+        onClose={() => setShowTroubleshooting(false)}
+        equipment={equipment}
+        equipmentType={equipmentType}
+        onSuccess={(record) => {
+          onAction?.('troubleshootingCreated', record);
+        }}
+      />
     </div>
   );
 }

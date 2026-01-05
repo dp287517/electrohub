@@ -11,6 +11,7 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
 import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
+import troubleshootingRouter, { initTroubleshootingTables } from "./server_troubleshooting.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -7183,6 +7184,73 @@ app.post("/api/ai-assistant/analyze-equipment", express.json(), async (req, res)
 });
 
 // ============================================================
+// TROUBLESHOOTING PHOTO ANALYSIS ENDPOINT
+// ============================================================
+app.post("/api/ai-assistant/analyze-troubleshooting", express.json({ limit: '50mb' }), async (req, res) => {
+  try {
+    const { photos, equipment } = req.body;
+
+    if (!photos || photos.length === 0) {
+      return res.json({ success: true, suggestion: null });
+    }
+
+    console.log(`[AI] 🔧 Analyzing troubleshooting photos for ${equipment?.name || 'unknown equipment'}`);
+
+    // Build AI prompt with photos
+    const messages = [
+      {
+        role: "system",
+        content: `Tu es un expert technicien en maintenance industrielle. On te montre des photos d'un dépannage.
+Analyse les photos et fournis:
+1. Une description du problème visible
+2. Une suggestion de cause probable
+3. Une recommandation de solution
+
+Équipement: ${equipment?.name || 'Non spécifié'} (${equipment?.type || 'Type inconnu'})
+Code: ${equipment?.code || 'N/A'}
+
+Réponds en français, de manière concise (2-3 phrases max).`
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: `Analyse ces ${photos.length} photo(s) de dépannage:` },
+          ...photos.slice(0, 3).map(photo => ({
+            type: "image_url",
+            image_url: { url: photo.data, detail: "low" }
+          }))
+        ]
+      }
+    ];
+
+    try {
+      const result = await chatWithFallback(messages, {
+        max_tokens: 500,
+        temperature: 0.3
+      });
+
+      res.json({
+        success: true,
+        suggestion: result.content,
+        provider: result.provider
+      });
+    } catch (aiError) {
+      console.error('[AI] Troubleshooting analysis AI error:', aiError.message);
+      // Return generic suggestion on AI error
+      res.json({
+        success: true,
+        suggestion: "Vérifiez l'état général de l'équipement et documentez les anomalies observées. Consultez la documentation technique si disponible.",
+        provider: 'fallback'
+      });
+    }
+
+  } catch (error) {
+    console.error('[AI] Analyze troubleshooting error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================================
 // COMPREHENSIVE STATISTICS ENDPOINT
 // ============================================================
 app.get("/api/ai-assistant/statistics", async (req, res) => {
@@ -9841,6 +9909,13 @@ console.log('[Push] Mounting push router at /api/push');
 app.use("/api/push", pushRouter);
 console.log('[Push] Push router mounted');
 
+/* ================================================================
+   🔧 Troubleshooting API Routes - Système de dépannage avec IA
+   ================================================================ */
+console.log('[Troubleshooting] Mounting troubleshooting router at /api/troubleshooting');
+app.use("/api/troubleshooting", troubleshootingRouter);
+console.log('[Troubleshooting] Troubleshooting router mounted');
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 const __public = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
@@ -9964,6 +10039,9 @@ async function initEssentialTables() {
     await addColumnIfNotExists('departments', 'description', 'TEXT');
     await addColumnIfNotExists('departments', 'is_active', 'BOOLEAN DEFAULT TRUE');
     console.log('[init] ✅ Table departments vérifiée + colonnes ajoutées');
+
+    // Initialize troubleshooting tables
+    await initTroubleshootingTables(pool);
 
   } catch (err) {
     console.error('[init] ⚠️ Error creating essential tables:', err.message);
