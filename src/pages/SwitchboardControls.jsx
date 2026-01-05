@@ -462,9 +462,11 @@ export default function SwitchboardControls() {
         if (!matchSearch) return false;
       }
 
-      // Switchboard filter
-      if (filters.switchboardIds.length > 0 && !filters.switchboardIds.includes(s.switchboard_id)) {
-        return false;
+      // Switchboard filter - also includes device controls for those switchboards
+      if (filters.switchboardIds.length > 0) {
+        const matchesSwitchboard = filters.switchboardIds.includes(s.switchboard_id);
+        const matchesDeviceSwitchboard = filters.switchboardIds.includes(s.device_switchboard_id);
+        if (!matchesSwitchboard && !matchesDeviceSwitchboard) return false;
       }
 
       // Template filter
@@ -478,7 +480,12 @@ export default function SwitchboardControls() {
         const eqId = filters.equipmentId;
 
         // Match based on equipment type
-        if (eqType === 'switchboard' && String(s.switchboard_id) !== String(eqId)) return false;
+        // For switchboard filter: include both switchboard-level controls AND device controls for that switchboard
+        if (eqType === 'switchboard') {
+          const matchesSwitchboard = String(s.switchboard_id) === String(eqId);
+          const matchesDeviceSwitchboard = String(s.device_switchboard_id) === String(eqId);
+          if (!matchesSwitchboard && !matchesDeviceSwitchboard) return false;
+        }
         if (eqType === 'vsd' && String(s.vsd_equipment_id) !== String(eqId)) return false;
         if (eqType === 'meca' && String(s.meca_equipment_id) !== String(eqId)) return false;
         if (eqType === 'mobile_equipment' && String(s.mobile_equipment_id) !== String(eqId)) return false;
@@ -515,9 +522,11 @@ export default function SwitchboardControls() {
         if (!matchSearch) return false;
       }
 
-      // Switchboard filter
-      if (filters.switchboardIds.length > 0 && !filters.switchboardIds.includes(r.switchboard_id)) {
-        return false;
+      // Switchboard filter - also includes device records for those switchboards
+      if (filters.switchboardIds.length > 0) {
+        const matchesSwitchboard = filters.switchboardIds.includes(r.switchboard_id);
+        const matchesDeviceSwitchboard = filters.switchboardIds.includes(r.device_switchboard_id);
+        if (!matchesSwitchboard && !matchesDeviceSwitchboard) return false;
       }
 
       // Template filter
@@ -531,7 +540,12 @@ export default function SwitchboardControls() {
         const eqId = filters.equipmentId;
 
         // Match based on equipment type
-        if (eqType === 'switchboard' && String(r.switchboard_id) !== String(eqId)) return false;
+        // For switchboard filter: include both switchboard-level records AND device records for that switchboard
+        if (eqType === 'switchboard') {
+          const matchesSwitchboard = String(r.switchboard_id) === String(eqId);
+          const matchesDeviceSwitchboard = String(r.device_switchboard_id) === String(eqId);
+          if (!matchesSwitchboard && !matchesDeviceSwitchboard) return false;
+        }
         if (eqType === 'vsd' && String(r.vsd_equipment_id) !== String(eqId)) return false;
         if (eqType === 'meca' && String(r.meca_equipment_id) !== String(eqId)) return false;
         if (eqType === 'mobile_equipment' && String(r.mobile_equipment_id) !== String(eqId)) return false;
