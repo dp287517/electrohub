@@ -144,27 +144,47 @@ export default function MiniElectro({
     }
 
     try {
-      const response = await post('/api/ai-assistant/chat', {
-        message: userMessage,
+      // Construire les détails complets de l'équipement pour le contexte
+      const equipmentDetails = {
+        id: equipment.id,
+        name: equipment.name || equipment.equipment_name,
+        code: equipment.code || equipment.equipment_code,
+        type: equipmentType,
+        manufacturer: equipment.manufacturer || equipment.brand,
+        model: equipment.model || equipment.manufacturer_ref,
+        building: equipment.building || equipment.building_code,
+        floor: equipment.floor,
+        zone: equipment.zone,
+        location: equipment.location,
+        status: equipment.status || equipment.control_status,
+        lastControl: equipment.last_control_date || equipment.next_check_date,
+        serialNumber: equipment.serial_number,
+        power: equipment.power_kw || equipment.power,
+        description: equipment.description
+      };
+
+      // Enrichir le message avec le contexte de l'équipement
+      const contextualMessage = `[Contexte: Je suis sur l'équipement "${equipmentDetails.name || equipmentDetails.code}" (${equipmentType}) - Bâtiment: ${equipmentDetails.building || 'N/A'}, Étage: ${equipmentDetails.floor || 'N/A'}]\n\nQuestion: ${userMessage}`;
+
+      // Utiliser chat-v2 avec les tools pour des réponses intelligentes
+      const response = await post('/api/ai-assistant/chat-v2', {
+        message: contextualMessage,
         context: {
-          equipment: {
-            id: equipment.id,
-            name: equipment.name || equipment.equipment_name,
-            type: equipmentType,
-            manufacturer: equipment.manufacturer || equipment.brand,
-            model: equipment.model || equipment.manufacturer_ref,
-            building: equipment.building || equipment.building_code,
-            floor: equipment.floor,
-            zone: equipment.zone
-          }
+          currentEquipment: equipmentDetails,
+          equipmentType: equipmentType,
+          previousAgentType: equipmentType // Forcer l'agent spécialiste
         },
-        conversationHistory: chatHistory.slice(-10) // Garder les 10 derniers messages
+        conversationHistory: chatHistory.slice(-10).map(m => ({
+          role: m.role,
+          content: m.content
+        }))
       });
 
       // Ajouter la réponse de l'IA
       setChatHistory(prev => [...prev, {
         role: 'assistant',
         content: response.message || response.response || 'Désolé, je n\'ai pas pu répondre.',
+        agentType: response.agentType || equipmentType,
         actions: response.actions
       }]);
 
