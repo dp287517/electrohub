@@ -138,11 +138,15 @@ function createChatV2Router(pool) {
       // Extraire le contenu final
       const finalContent = assistantMessage.content || 'Désolé, je n\'ai pas pu générer de réponse.';
 
+      // Détecter l'agent approprié basé sur le message et les tools utilisés
+      const detectedAgent = detectAgentType(message, toolResults);
+
       // Construire la réponse
       const chatResponse = {
         message: finalContent,
         provider: 'openai',
         model: OPENAI_MODEL,
+        agentType: detectedAgent,
         tools_used: toolResults.map(r => ({
           name: r.tool_call_id?.split('_')[0] || 'unknown',
           success: r.success
@@ -273,6 +277,86 @@ function formatConversationHistory(history) {
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
     }));
+}
+
+/**
+ * Détecte l'agent IA approprié basé sur le message et les tools utilisés
+ * Retourne: 'main' | 'vsd' | 'meca' | 'glo' | 'hv' | 'mobile' | 'atex' | 'switchboard' | 'doors' | 'datahub' | 'firecontrol'
+ */
+function detectAgentType(message, toolResults) {
+  const messageLower = message.toLowerCase();
+
+  // Patterns de détection par type d'équipement
+  const agentPatterns = {
+    vsd: {
+      keywords: ['vsd', 'variateur', 'variateurs', 'frequency drive', 'convertisseur de fréquence', 'vfd', 'drive', 'drives'],
+      tools: ['search_vsd', 'get_vsd_details']
+    },
+    meca: {
+      keywords: ['meca', 'mécanique', 'mecanique', 'moteur', 'pompe', 'compresseur', 'ventilateur', 'agitateur', 'convoyeur', 'équipement mécanique'],
+      tools: ['search_meca', 'get_meca_details']
+    },
+    glo: {
+      keywords: ['glo', 'éclairage', 'eclairage', 'luminaire', 'baes', 'blocs autonomes', 'éclairage de sécurité', 'secours'],
+      tools: ['search_glo', 'get_glo_details']
+    },
+    hv: {
+      keywords: ['hv', 'haute tension', 'ht', 'high voltage', 'transformateur', 'cellule ht', 'poste de transformation'],
+      tools: ['search_hv', 'get_hv_details']
+    },
+    mobile: {
+      keywords: ['mobile', 'équipement mobile', 'portable', 'appareil mobile', 'outillage mobile', 'chariot'],
+      tools: ['search_mobile', 'get_mobile_details']
+    },
+    atex: {
+      keywords: ['atex', 'zone atex', 'explosion', 'explosif', 'zone ex', 'atmosphère explosive', 'drpce'],
+      tools: ['search_atex', 'get_atex_details']
+    },
+    switchboard: {
+      keywords: ['tableau', 'tableaux', 'armoire', 'switchboard', 'coffret', 'tgbt', 'td', 'tableau électrique', 'switchgear'],
+      tools: ['search_switchboard', 'get_switchboard_details', 'search_equipment']
+    },
+    doors: {
+      keywords: ['porte', 'portes', 'door', 'accès', 'entrée', 'sortie secours'],
+      tools: ['search_doors', 'get_doors_details']
+    },
+    datahub: {
+      keywords: ['datahub', 'data hub', 'capteur', 'capteurs', 'sensor', 'monitoring', 'mesure', 'télémétrie'],
+      tools: ['search_datahub', 'get_datahub_details']
+    },
+    firecontrol: {
+      keywords: ['incendie', 'fire', 'détection incendie', 'sprinkler', 'extincteur', 'alarme incendie', 'ssi', 'désenfumage'],
+      tools: ['search_fire_control', 'get_fire_control_details']
+    }
+  };
+
+  // 1. Vérifier d'abord les tools utilisés (priorité haute)
+  const toolsUsed = toolResults
+    .filter(r => r.success)
+    .map(r => {
+      // Extraire le nom du tool depuis tool_call_id
+      const parts = r.tool_call_id?.split('_call_');
+      return parts?.[0] || '';
+    });
+
+  for (const [agentType, config] of Object.entries(agentPatterns)) {
+    if (config.tools.some(tool => toolsUsed.includes(tool))) {
+      console.log(`[AGENT] Detected ${agentType} from tool usage`);
+      return agentType;
+    }
+  }
+
+  // 2. Chercher les mots-clés dans le message
+  for (const [agentType, config] of Object.entries(agentPatterns)) {
+    if (config.keywords.some(keyword => messageLower.includes(keyword))) {
+      console.log(`[AGENT] Detected ${agentType} from keyword: ${config.keywords.find(k => messageLower.includes(k))}`);
+      return agentType;
+    }
+  }
+
+  // 3. Par défaut, utiliser l'agent principal
+  console.log('[AGENT] Using main agent (no specific context detected)');
+  return 'main';
 }
 
 /**

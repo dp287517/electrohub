@@ -1,43 +1,73 @@
 /**
- * VideoAvatar - Composant d'avatar vidéo animé
+ * VideoAvatar - Composant d'avatar vidéo animé multi-agents
  *
  * Affiche une vidéo MP4 qui peut être en deux états:
  * - idle: vidéo en boucle quand l'IA est inactive
  * - speaking: vidéo en boucle quand l'IA parle/répond
  *
- * Supporte les vidéos personnalisées via l'API admin.
+ * Supporte les vidéos personnalisées par type d'agent via l'API admin.
+ * agentType: 'main' | 'vsd' | 'meca' | 'glo' | 'hv' | 'mobile' | 'atex' | 'switchboard' | 'doors' | 'datahub' | 'firecontrol'
  */
 
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 
-// Cache global pour les vidéos personnalisées
-let videoCache = { checked: false, idle: null, speaking: null };
+// Cache global pour les vidéos par type d'agent
+const videoCache = {};
 
-// Vérifier si des vidéos personnalisées existent
-async function checkCustomVideos() {
-  if (videoCache.checked) return videoCache;
+// Vérifier si des vidéos personnalisées existent pour un agent
+async function checkAgentVideos(agentType = 'main') {
+  // Si déjà en cache, retourner
+  if (videoCache[agentType]?.checked) {
+    return videoCache[agentType];
+  }
+
+  // Initialiser le cache pour cet agent
+  videoCache[agentType] = { checked: false, idle: null, speaking: null };
 
   try {
-    const res = await fetch('/api/admin/settings/ai-video/info');
+    const res = await fetch(`/api/admin/settings/ai-agents/${agentType}/info`);
     const data = await res.json();
+
     if (data.hasIdleVideo) {
-      videoCache.idle = `/api/admin/settings/ai-video/idle?t=${Date.now()}`;
+      videoCache[agentType].idle = `/api/admin/settings/ai-agents/${agentType}/idle?t=${Date.now()}`;
     }
     if (data.hasSpeakingVideo) {
-      videoCache.speaking = `/api/admin/settings/ai-video/speaking?t=${Date.now()}`;
+      videoCache[agentType].speaking = `/api/admin/settings/ai-agents/${agentType}/speaking?t=${Date.now()}`;
     }
   } catch (e) {
     // Silently fail - fallback to AnimatedAvatar
+    console.debug(`No custom videos for agent ${agentType}`);
   }
-  videoCache.checked = true;
-  return videoCache;
+
+  videoCache[agentType].checked = true;
+  return videoCache[agentType];
 }
 
-// Force refresh des vidéos (appelée après upload)
-export function refreshVideoCache() {
-  videoCache = { checked: false, idle: null, speaking: null };
+// Force refresh des vidéos pour un agent (appelée après upload)
+export function refreshVideoCache(agentType = null) {
+  if (agentType) {
+    delete videoCache[agentType];
+  } else {
+    // Effacer tout le cache
+    Object.keys(videoCache).forEach(key => delete videoCache[key]);
+  }
 }
+
+// Noms d'affichage des agents
+export const AGENT_NAMES = {
+  main: 'Electro',
+  vsd: 'Shakira',
+  meca: 'Méca',
+  glo: 'GLO',
+  hv: 'HV',
+  mobile: 'Mobile',
+  atex: 'ATEX',
+  switchboard: 'Switch',
+  doors: 'Doors',
+  datahub: 'Data',
+  firecontrol: 'Fire'
+};
 
 // Tailles prédéfinies
 const SIZES = {
@@ -54,16 +84,19 @@ const VideoAvatar = forwardRef(({
   speaking = false,
   onClick,
   className = '',
-  // Sources vidéo personnalisées (optionnel)
+  // Type d'agent pour charger les vidéos spécifiques
+  agentType = 'main',
+  // Sources vidéo personnalisées (optionnel - override agentType)
   idleVideoSrc = null,
   speakingVideoSrc = null,
   // Fallback vers AnimatedAvatar si pas de vidéo
-  fallbackToAnimated = true
+  fallbackToAnimated = true,
+  // Afficher le nom de l'agent
+  showAgentName = false
 }, ref) => {
   const [hasVideo, setHasVideo] = useState(false);
   const [idleUrl, setIdleUrl] = useState(idleVideoSrc);
   const [speakingUrl, setSpeakingUrl] = useState(speakingVideoSrc);
-  const [currentSrc, setCurrentSrc] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
   const idleVideoRef = useRef(null);
@@ -81,23 +114,32 @@ const VideoAvatar = forwardRef(({
       if (idleVideoRef.current) {
         idleVideoRef.current.play().catch(() => {});
       }
-    }
+    },
+    getAgentType: () => agentType,
+    getAgentName: () => AGENT_NAMES[agentType] || 'IA'
   }));
 
-  // Charger les vidéos personnalisées au montage
+  // Charger les vidéos personnalisées au montage ou quand agentType change
   useEffect(() => {
     if (!idleVideoSrc && !speakingVideoSrc) {
-      checkCustomVideos().then(cache => {
+      // Charger depuis l'API pour l'agent spécifié
+      checkAgentVideos(agentType).then(cache => {
         if (cache.idle || cache.speaking) {
           setHasVideo(true);
           setIdleUrl(cache.idle || cache.speaking);
           setSpeakingUrl(cache.speaking || cache.idle);
+        } else {
+          setHasVideo(false);
+          setIdleUrl(null);
+          setSpeakingUrl(null);
         }
       });
     } else {
       setHasVideo(true);
+      setIdleUrl(idleVideoSrc);
+      setSpeakingUrl(speakingVideoSrc);
     }
-  }, [idleVideoSrc, speakingVideoSrc]);
+  }, [agentType, idleVideoSrc, speakingVideoSrc]);
 
   // Gérer le changement d'état speaking
   useEffect(() => {
@@ -132,13 +174,19 @@ const VideoAvatar = forwardRef(({
   // Si pas de vidéo, utiliser AnimatedAvatar
   if (!hasVideo && fallbackToAnimated) {
     return (
-      <AnimatedAvatar
-        style={style}
-        size={size}
-        speaking={speaking}
-        onClick={onClick}
-        className={className}
-      />
+      <div className={`relative ${className}`}>
+        <AnimatedAvatar
+          style={style}
+          size={size}
+          speaking={speaking}
+          onClick={onClick}
+        />
+        {showAgentName && (
+          <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 px-1.5 py-0.5 bg-gray-900/75 text-white text-[9px] font-medium rounded whitespace-nowrap">
+            {AGENT_NAMES[agentType] || 'IA'}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -146,60 +194,69 @@ const VideoAvatar = forwardRef(({
   const avatarStyle = AVATAR_STYLES[style] || AVATAR_STYLES.ai;
 
   return (
-    <div
-      ref={containerRef}
-      onClick={onClick}
-      className={`relative overflow-hidden rounded-full cursor-pointer ${className}`}
-      style={{
-        width: dimensions.width,
-        height: dimensions.height,
-        backgroundColor: avatarStyle.primaryColor
-      }}
-    >
-      {/* Vidéo idle (toujours présente, opacité variable) */}
-      {idleUrl && (
-        <video
-          ref={idleVideoRef}
-          src={idleUrl}
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
-          style={{ opacity: speaking ? 0 : 1 }}
-          onLoadedData={() => setIsLoaded(true)}
-        />
-      )}
+    <div className={`relative ${showAgentName ? 'pb-4' : ''}`}>
+      <div
+        ref={containerRef}
+        onClick={onClick}
+        className={`relative overflow-hidden rounded-full cursor-pointer ${className}`}
+        style={{
+          width: dimensions.width,
+          height: dimensions.height,
+          backgroundColor: avatarStyle.primaryColor
+        }}
+      >
+        {/* Vidéo idle (toujours présente, opacité variable) */}
+        {idleUrl && (
+          <video
+            ref={idleVideoRef}
+            src={idleUrl}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
+            style={{ opacity: speaking ? 0 : 1 }}
+            onLoadedData={() => setIsLoaded(true)}
+          />
+        )}
 
-      {/* Vidéo speaking (superposée, opacité variable) */}
-      {speakingUrl && speakingUrl !== idleUrl && (
-        <video
-          ref={speakingVideoRef}
-          src={speakingUrl}
-          autoPlay={speaking}
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
-          style={{ opacity: speaking ? 1 : 0 }}
-        />
-      )}
+        {/* Vidéo speaking (superposée, opacité variable) */}
+        {speakingUrl && speakingUrl !== idleUrl && (
+          <video
+            ref={speakingVideoRef}
+            src={speakingUrl}
+            autoPlay={speaking}
+            loop
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
+            style={{ opacity: speaking ? 1 : 0 }}
+          />
+        )}
 
-      {/* Overlay de pulsation quand parle (si même vidéo) */}
-      {speaking && speakingUrl === idleUrl && (
-        <div
-          className="absolute inset-0 rounded-full animate-pulse"
-          style={{
-            boxShadow: `0 0 20px ${avatarStyle.accentColor}`,
-            pointerEvents: 'none'
-          }}
-        />
-      )}
+        {/* Overlay de pulsation quand parle (si même vidéo) */}
+        {speaking && speakingUrl === idleUrl && (
+          <div
+            className="absolute inset-0 rounded-full animate-pulse"
+            style={{
+              boxShadow: `0 0 20px ${avatarStyle.accentColor}`,
+              pointerEvents: 'none'
+            }}
+          />
+        )}
 
-      {/* Indicateur de chargement */}
-      {!isLoaded && hasVideo && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-800/50">
-          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+        {/* Indicateur de chargement */}
+        {!isLoaded && hasVideo && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-800/50">
+            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+      </div>
+
+      {/* Badge avec nom de l'agent */}
+      {showAgentName && (
+        <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 px-1.5 py-0.5 bg-gray-900/75 text-white text-[9px] font-medium rounded whitespace-nowrap">
+          {AGENT_NAMES[agentType] || 'IA'}
         </div>
       )}
     </div>
