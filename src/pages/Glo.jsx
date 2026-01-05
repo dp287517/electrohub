@@ -13,6 +13,7 @@ import {
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
+import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -264,6 +265,7 @@ const DetailPanel = ({
   onShare,
   onNavigateToMap,
   onPhotoUpload,
+  onImageClick,
   isPlaced,
   showToast,
   controlStatuses,
@@ -388,7 +390,16 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img src={api.glo.photoUrl(equipment.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+              <img
+                src={api.glo.photoUrl(equipment.id, { bust: true })}
+                alt=""
+                className="w-full h-full object-cover cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onImageClick) onImageClick(api.glo.photoUrl(equipment.id, { bust: true }), equipment.name || 'Equipement');
+                }}
+                title="Cliquez pour agrandir"
+              />
             ) : (
               <Camera size={24} />
             )}
@@ -1580,6 +1591,9 @@ export default function Glo() {
   // Control statuses (like Switchboards)
   const [controlStatuses, setControlStatuses] = useState({});
 
+  // Lightbox for image enlargement
+  const { lightbox, openLightbox, closeLightbox } = useLightbox();
+
   const loadEquipments = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -2047,6 +2061,7 @@ export default function Glo() {
                 onShare={(eq) => setShowShareModal(true)}
                 onNavigateToMap={handleNavigateToMap}
                 onPhotoUpload={handlePhotoUpload}
+                onImageClick={openLightbox}
                 isPlaced={placedIds.has(String(selectedEquipment.id))}
                 showToast={showToast}
                 controlStatuses={controlStatuses}
@@ -2208,6 +2223,15 @@ export default function Glo() {
       )}
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Image Lightbox */}
+      {lightbox.open && (
+        <ImageLightbox
+          src={lightbox.src}
+          title={lightbox.title}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 }
