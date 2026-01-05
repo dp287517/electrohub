@@ -1912,8 +1912,9 @@ app.get("/api/doors/maps/positions", async (req, res) => {
 
     let logical = logicalParam;
     if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      // Use vsd_plans since frontend now uses VSD shared plans
       const { rows } = await pool.query(
-        `SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
         [id]
       );
       logical = rows?.[0]?.logical_name || "";
@@ -2052,9 +2053,10 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
     } = req.body || {};
 
     // si plan_id fourni et logical_name manquant → on le résout
+    // Use vsd_plans since frontend now uses VSD shared plans
     if ((!logical_name || String(logical_name).trim() === "") && plan_id && /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
       const { rows } = await pool.query(
-        `SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`,
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
         [plan_id]
       );
       logical_name = rows?.[0]?.logical_name || null;
