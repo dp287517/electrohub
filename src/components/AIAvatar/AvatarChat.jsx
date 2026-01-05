@@ -10,7 +10,7 @@ import {
   Volume2, VolumeX, BarChart3, Play, Loader2,
   ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
   ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown,
-  MapPin
+  MapPin, FlaskConical
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator, ProcedureViewer } from '../Procedures';
@@ -125,6 +125,10 @@ export default function AvatarChat({
   const [showPredictions, setShowPredictions] = useState(false);
   // User profile
   const [userProfile, setUserProfile] = useState(null);
+  // V2 Mode (Function Calling) toggle
+  const [useV2Mode, setUseV2Mode] = useState(() => {
+    return aiAssistant.getUseV2();
+  });
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -214,6 +218,24 @@ Demande-moi n'importe quoi !`,
     if (newMuted) {
       stopSpeaking();
     }
+  };
+
+  // Toggle V2 Mode (Function Calling)
+  const toggleV2Mode = () => {
+    const newV2Mode = !useV2Mode;
+    setUseV2Mode(newV2Mode);
+    aiAssistant.setUseV2(newV2Mode);
+    // Show a feedback message in the chat
+    const modeMessage = {
+      id: Date.now(),
+      role: 'assistant',
+      content: newV2Mode
+        ? `🧪 **Mode Beta IA activé**\n\nJ'utilise maintenant le nouveau système avec Function Calling. Je vais récupérer les données intelligemment selon tes demandes.\n\n⚠️ Le guidage de procédures n'est pas encore supporté dans ce mode.`
+        : `✅ **Mode classique activé**\n\nJe reviens au système standard avec toutes les fonctionnalités (guidage, import, etc.).`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, modeMessage]);
+    speak(modeMessage.content);
   };
 
   // Audio ref for OpenAI TTS
@@ -602,12 +624,28 @@ Demande-moi n'importe quoi !`,
                 <Zap className="w-4 h-4 text-brand-200" />
               </div>
               <p className="text-xs text-brand-200">
-                {isLoading ? 'Réflexion...' : isSpeaking ? 'Parle...' : 'En ligne'}
+                {isLoading ? 'Réflexion...' : isSpeaking ? 'Parle...' : useV2Mode ? '🧪 Mode Beta' : 'En ligne'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1">
+            {/* V2 Beta Mode Toggle */}
+            <button
+              onClick={toggleV2Mode}
+              className={`p-2 rounded-lg transition-colors relative ${
+                useV2Mode ? 'bg-purple-500/30' : 'hover:bg-white/10'
+              }`}
+              title={useV2Mode ? 'Mode Beta IA actif - Cliquer pour désactiver' : 'Activer Mode Beta IA'}
+            >
+              <FlaskConical className={`w-5 h-5 ${useV2Mode ? 'text-purple-300' : 'text-white'}`} />
+              {useV2Mode && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-purple-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center">
+                  V2
+                </span>
+              )}
+            </button>
+
             {/* Predictions Button */}
             {predictions?.risks?.high > 0 && (
               <button

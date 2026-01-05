@@ -31,7 +31,27 @@ const USE_CHAT_V2 = false; // 🔒 Désactivé par défaut - tester via /chat-v2
 class AIAssistant {
   constructor() {
     this.baseUrl = '/api/ai-assistant';
-    this.useV2 = USE_CHAT_V2;
+    // Restaurer la préférence V2 depuis localStorage (si définie)
+    const savedV2Pref = localStorage.getItem('eh_ai_use_v2');
+    this.useV2 = savedV2Pref !== null ? savedV2Pref === 'true' : USE_CHAT_V2;
+  }
+
+  /**
+   * Active ou désactive le mode V2 (Function Calling)
+   * @param {boolean} enabled - true pour activer V2
+   */
+  setUseV2(enabled) {
+    this.useV2 = enabled;
+    localStorage.setItem('eh_ai_use_v2', enabled.toString());
+    console.log(`[AI] Mode V2 ${enabled ? 'activé' : 'désactivé'}`);
+    return this.useV2;
+  }
+
+  /**
+   * Retourne l'état actuel du mode V2
+   */
+  getUseV2() {
+    return this.useV2;
   }
 
   /**
