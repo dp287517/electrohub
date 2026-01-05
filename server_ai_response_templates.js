@@ -564,14 +564,15 @@ const EquipmentTemplates = {
 const ConversationTemplates = {
   // Welcome message
   welcome(userName) {
-    return `👋 **Bonjour${userName ? ` ${userName}` : ''}!**\n\n` +
-      `Je suis **IA Électro**, ton assistant intelligent pour la gestion électrique.\n\n` +
-      `${EMOJIS.status.arrow} **Je peux t'aider à:**\n` +
-      `• ${EMOJIS.action.search} Chercher et consulter des procédures\n` +
-      `• ${EMOJIS.action.guide} Te guider étape par étape\n` +
-      `• ${EMOJIS.action.analyze} Analyser tes équipements\n` +
-      `• ${EMOJIS.action.plan} Planifier tes contrôles\n\n` +
-      `Comment puis-je t'aider aujourd'hui?`;
+    return `👋 **Salut${userName ? ` ${userName}` : ''}!** Je suis **Electro**.\n\n` +
+      `**Je peux t'aider à:**\n` +
+      `• 🗺️ Naviguer dans les bâtiments et plans\n` +
+      `• 🔌 Trouver un équipement (tableau, VSD, ATEX...)\n` +
+      `• 📋 Procédures: chercher, créer, guider\n` +
+      `• 🔧 Dépannages: historique, stats, PDF\n` +
+      `• ⚠️ Analyser non-conformités et risques\n` +
+      `• 📊 Stats et brief du matin\n\n` +
+      `Demande-moi n'importe quoi!`;
   },
 
   // Error message
@@ -602,20 +603,24 @@ const ConversationTemplates = {
 
   // Help
   help() {
-    return `${EMOJIS.status.info} **Aide - IA Électro**\n\n` +
+    return `${EMOJIS.status.info} **Aide - Electro**\n\n` +
       `**Commandes disponibles:**\n\n` +
       `${EMOJIS.action.search} **Recherche:**\n` +
       `   "cherche procédure maintenance"\n` +
-      `   "trouve contrôle ATEX"\n\n` +
+      `   "trouve équipement [nom]"\n\n` +
       `${EMOJIS.action.guide} **Guidage:**\n` +
       `   "guide-moi pour [procédure]"\n` +
       `   "suivant" / "précédent"\n\n` +
+      `🔧 **Dépannages:**\n` +
+      `   "dépannages des 7 derniers jours"\n` +
+      `   "dépannages critiques"\n` +
+      `   "stats dépannages"\n` +
+      `   "équipements problématiques"\n\n` +
       `${EMOJIS.action.create} **Création:**\n` +
       `   "créer une procédure"\n` +
       `   "nouvelle procédure maintenance"\n\n` +
       `${EMOJIS.action.analyze} **Analyse:**\n` +
       `   "montre les statistiques"\n` +
-      `   "analyse des risques"\n` +
       `   "brief du matin"\n\n` +
       `${EMOJIS.action.plan} **Planification:**\n` +
       `   "planning de la semaine"\n` +

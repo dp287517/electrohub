@@ -430,6 +430,38 @@ Quand l'utilisateur veut CRÉER une NOUVELLE procédure:
 - ⚠️ pour les avertissements
 - ⚡ pour les étapes en cours
 
+## DÉPANNAGES - HISTORIQUE ET RECHERCHE
+
+### Rechercher des dépannages
+Quand l'utilisateur demande les dépannages, interventions, réparations:
+- Tu cherches dans l'historique des dépannages
+- Tu AFFICHES la liste avec: titre, équipement, date, sévérité, technicien
+- Tu proposes de filtrer par date, équipement, sévérité, bâtiment
+
+**Patterns de recherche:**
+- "dépannages des 7 derniers jours" → Filtre par date
+- "dépannages sur [équipement/bâtiment]" → Filtre par lieu
+- "derniers dépannages critiques" → Filtre par sévérité
+- "interventions de [technicien]" → Filtre par technicien
+- "statistiques dépannages" → Stats globales
+
+**Format de réponse:**
+🔧 **[X] dépannage(s) trouvé(s):**
+
+1. **[Titre]** - [Sévérité]
+   • Équipement: [Nom] | [Date]
+   • Technicien: [Nom]
+   • [Solution courte]
+
+→ Dis-moi un numéro pour les détails ou télécharger le PDF.
+
+### Statistiques dépannages
+Tu peux analyser:
+- Équipements les plus problématiques
+- Répartition par bâtiment/zone
+- Tendances mensuelles
+- Types de pannes fréquentes
+
 ## Équipements disponibles
 Switchboards, VSD, Meca, ATEX, HV, GLO, Datahub, Projects, OIBT, Doors, Mobile Equipment`;
 
@@ -450,6 +482,8 @@ const INTENT_TYPES = {
   DRAFTS: 'drafts',           // Voir les brouillons/procédures incomplètes
   PENDING_SIGNATURES: 'pending_signatures', // Signatures en attente
   STATS: 'stats',             // Statistiques/comptage de procédures
+  TROUBLESHOOTING: 'troubleshooting', // Rechercher des dépannages
+  TROUBLESHOOTING_STATS: 'troubleshooting_stats', // Stats dépannages
   NONE: 'none'                // Pas d'intention procédure
 };
 
@@ -545,6 +579,49 @@ function detectProcedureIntent(message, conversationHistory = []) {
   ];
   if (statsPatterns.some(p => p.test(m))) {
     return { type: INTENT_TYPES.STATS };
+  }
+
+  // 2e. TROUBLESHOOTING - Rechercher des dépannages
+  const troubleshootingPatterns = [
+    /d[ée]pannages?(?:\s+(?:des?|du|r[ée]cents?|derniers?))?/i,
+    /(?:derniers?|r[ée]cents?)\s+d[ée]pannages?/i,
+    /interventions?\s+(?:des?|du|r[ée]centes?|derni[èe]res?)/i,
+    /(?:dernières?|r[ée]centes?)\s+interventions?/i,
+    /r[ée]parations?\s+(?:des?|du|r[ée]centes?|derni[èe]res?)/i,
+    /historique\s+(?:des?\s+)?(?:d[ée]pannages?|interventions?|r[ée]parations?)/i,
+    /(?:pannes?|probl[èe]mes?)\s+(?:r[ée]solus?|r[ée]gl[ée]s?)/i,
+    /(?:\d+)\s+derniers?\s+jours?\s+(?:d[ée]pannages?|interventions?)/i,
+    /d[ée]pannages?\s+(?:des?\s+)?(?:\d+)\s+derniers?\s+jours?/i,
+    /(?:qu'?est-ce\s+qu'?on\s+a\s+)?r[ée]par[ée]/i
+  ];
+  if (troubleshootingPatterns.some(p => p.test(m))) {
+    // Extract time range if mentioned
+    const daysMatch = m.match(/(\d+)\s+(?:derniers?)?\s*jours?/i);
+    const days = daysMatch ? parseInt(daysMatch[1]) : 7;
+    // Extract filters if mentioned
+    const buildingMatch = m.match(/(?:b[âa]timent|building)\s+([A-Za-z0-9]+)/i);
+    const severityMatch = m.match(/(?:critiques?|majeurs?|mineurs?)/i);
+    return {
+      type: INTENT_TYPES.TROUBLESHOOTING,
+      query: m,
+      filters: {
+        days,
+        building: buildingMatch?.[1],
+        severity: severityMatch?.[0]?.toLowerCase()
+      }
+    };
+  }
+
+  // 2f. TROUBLESHOOTING_STATS - Statistiques dépannages
+  const troubleshootingStatsPatterns = [
+    /(?:stats?|statistiques?)\s+(?:des?\s+)?d[ée]pannages?/i,
+    /d[ée]pannages?\s+(?:stats?|statistiques?)/i,
+    /(?:[ée]quipements?|machines?)\s+(?:les?\s+)?plus\s+probl[ée]matiques?/i,
+    /(?:analyse|analyser)\s+(?:des?\s+)?(?:pannes?|d[ée]pannages?)/i,
+    /tendances?\s+(?:des?\s+)?(?:pannes?|d[ée]pannages?)/i
+  ];
+  if (troubleshootingStatsPatterns.some(p => p.test(m))) {
+    return { type: INTENT_TYPES.TROUBLESHOOTING_STATS };
   }
 
   // 3. GUIDE - Demande de guidage
@@ -1545,6 +1622,182 @@ app.post("/chat", async (req, res) => {
             console.error('[STATS] Error:', e);
             return res.json({
               message: `❌ Erreur lors du calcul des statistiques.`,
+              provider: 'system'
+            });
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // TROUBLESHOOTING: Rechercher des dépannages
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.TROUBLESHOOTING: {
+          try {
+            const filters = intent.filters || {};
+            const days = filters.days || 7;
+
+            let sql = `
+              SELECT tr.id, tr.title, tr.description, tr.severity, tr.category,
+                     tr.equipment_type, tr.equipment_name, tr.equipment_code,
+                     tr.building_code, tr.floor, tr.zone, tr.technician_name,
+                     tr.solution, tr.parts_replaced, tr.duration_minutes,
+                     tr.created_at,
+                     (SELECT COUNT(*) FROM troubleshooting_photos WHERE record_id = tr.id) as photo_count
+              FROM troubleshooting_records tr
+              WHERE tr.created_at >= NOW() - INTERVAL '${parseInt(days)} days'
+            `;
+            const queryParams = [];
+
+            if (filters.building) {
+              queryParams.push(`%${filters.building}%`);
+              sql += ` AND tr.building_code ILIKE $${queryParams.length}`;
+            }
+            if (filters.severity) {
+              const severityMap = { critiques: 'critical', majeurs: 'major', mineurs: 'minor' };
+              queryParams.push(severityMap[filters.severity] || filters.severity);
+              sql += ` AND tr.severity = $${queryParams.length}`;
+            }
+
+            sql += ` ORDER BY tr.created_at DESC LIMIT 20`;
+
+            const result = await pool.query(sql, queryParams);
+            const records = result.rows;
+
+            if (records.length === 0) {
+              return res.json({
+                message: `🔧 **Aucun dépannage** sur les ${days} derniers jours${filters.building ? ` pour le bâtiment ${filters.building}` : ''}.\n\nC'est une bonne nouvelle ! 👍`,
+                actions: [
+                  { label: '📊 Stats dépannages', prompt: 'Statistiques dépannages' },
+                  { label: '🔙 30 derniers jours', prompt: 'Dépannages des 30 derniers jours' }
+                ],
+                provider: 'system'
+              });
+            }
+
+            const severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', cosmetic: '⚪' };
+            let response = `🔧 **${records.length} dépannage(s)** sur les ${days} derniers jours:\n\n`;
+
+            records.slice(0, 10).forEach((r, i) => {
+              const date = new Date(r.created_at).toLocaleDateString('fr-FR');
+              response += `${i+1}. **${r.title || 'Sans titre'}** ${severityEmoji[r.severity] || '⚪'}\n`;
+              response += `   • ${r.equipment_name || 'Équipement non spécifié'} | ${date}\n`;
+              response += `   • Technicien: ${r.technician_name || 'Non spécifié'}`;
+              if (r.solution) {
+                response += `\n   • Solution: ${r.solution.substring(0, 60)}...`;
+              }
+              response += `\n\n`;
+            });
+
+            response += `→ Dis un numéro pour les détails ou télécharger le PDF.`;
+
+            return res.json({
+              message: response,
+              troubleshootingRecords: records.map((r, i) => ({
+                id: r.id,
+                title: r.title,
+                severity: r.severity,
+                index: i + 1
+              })),
+              actions: [
+                { label: '📊 Stats', prompt: 'Statistiques dépannages' },
+                { label: '🔍 Critiques', prompt: 'Dépannages critiques' },
+                { label: '📅 30j', prompt: 'Dépannages des 30 derniers jours' }
+              ],
+              provider: 'system'
+            });
+          } catch (e) {
+            console.error('[TROUBLESHOOTING] Error:', e);
+            return res.json({
+              message: `❌ Erreur lors de la recherche des dépannages: ${e.message}`,
+              provider: 'system'
+            });
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // TROUBLESHOOTING_STATS: Statistiques des dépannages
+        // -----------------------------------------------------------------
+        case INTENT_TYPES.TROUBLESHOOTING_STATS: {
+          try {
+            const days = 30;
+
+            // Count by severity
+            const severityResult = await pool.query(`
+              SELECT severity, COUNT(*) as count
+              FROM troubleshooting_records
+              WHERE created_at >= NOW() - INTERVAL '${days} days'
+              GROUP BY severity
+            `);
+
+            // Count by building
+            const buildingResult = await pool.query(`
+              SELECT building_code, COUNT(*) as count
+              FROM troubleshooting_records
+              WHERE created_at >= NOW() - INTERVAL '${days} days'
+                AND building_code IS NOT NULL AND building_code != ''
+              GROUP BY building_code
+              ORDER BY count DESC
+              LIMIT 5
+            `);
+
+            // Most problematic equipment
+            const equipmentResult = await pool.query(`
+              SELECT equipment_name, equipment_type, COUNT(*) as count
+              FROM troubleshooting_records
+              WHERE created_at >= NOW() - INTERVAL '${days} days'
+                AND equipment_name IS NOT NULL AND equipment_name != ''
+              GROUP BY equipment_name, equipment_type
+              ORDER BY count DESC
+              LIMIT 5
+            `);
+
+            // Total count
+            const totalResult = await pool.query(`
+              SELECT COUNT(*) as total
+              FROM troubleshooting_records
+              WHERE created_at >= NOW() - INTERVAL '${days} days'
+            `);
+
+            const total = parseInt(totalResult.rows[0]?.total) || 0;
+            const severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', cosmetic: '⚪' };
+
+            let response = `📊 **Statistiques dépannages** (${days} derniers jours)\n\n`;
+            response += `**Total:** ${total} intervention(s)\n\n`;
+
+            if (severityResult.rows.length > 0) {
+              response += `**Par sévérité:**\n`;
+              severityResult.rows.forEach(r => {
+                response += `${severityEmoji[r.severity] || '⚪'} ${r.severity}: ${r.count}\n`;
+              });
+              response += `\n`;
+            }
+
+            if (buildingResult.rows.length > 0) {
+              response += `**Par bâtiment:**\n`;
+              buildingResult.rows.forEach(r => {
+                response += `🏢 ${r.building_code}: ${r.count} intervention(s)\n`;
+              });
+              response += `\n`;
+            }
+
+            if (equipmentResult.rows.length > 0) {
+              response += `**⚠️ Équipements les plus problématiques:**\n`;
+              equipmentResult.rows.forEach((r, i) => {
+                response += `${i+1}. ${r.equipment_name} (${r.equipment_type || 'N/A'}): ${r.count}x\n`;
+              });
+            }
+
+            return res.json({
+              message: response,
+              actions: [
+                { label: '🔧 Voir les dépannages', prompt: 'Dépannages des 7 derniers jours' },
+                { label: '🔴 Critiques', prompt: 'Dépannages critiques' }
+              ],
+              provider: 'system'
+            });
+          } catch (e) {
+            console.error('[TROUBLESHOOTING_STATS] Error:', e);
+            return res.json({
+              message: `❌ Erreur lors du calcul des statistiques: ${e.message}`,
               provider: 'system'
             });
           }
