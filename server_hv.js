@@ -273,15 +273,30 @@ app.get('/api/hv/equipments', async (req, res) => {
 });
 
 app.post('/api/hv/equipments', async (req, res) => {
+  console.log('[HV EQUIPMENT CREATE] 🔵 Request received');
+  console.log('[HV EQUIPMENT CREATE]   📋 Headers X-Site:', req.header('X-Site'));
+  console.log('[HV EQUIPMENT CREATE]   📋 Query site:', req.query.site);
+  console.log('[HV EQUIPMENT CREATE]   📋 Body:', JSON.stringify(req.body, null, 2));
   try {
-    const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+    const site = siteOf(req);
+    console.log('[HV EQUIPMENT CREATE]   🏢 Resolved site:', site || '(empty)');
+    if (!site) {
+      console.log('[HV EQUIPMENT CREATE] ❌ Missing site - returning 400');
+      return res.status(400).json({ error: 'Missing site' });
+    }
     const { name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality } = req.body;
-    if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
+    console.log('[HV EQUIPMENT CREATE]   📝 Extracted: name=', name, ', code=', code);
+    if (!name || !code) {
+      console.log('[HV EQUIPMENT CREATE] ❌ Missing name or code - returning 400');
+      return res.status(400).json({ error: 'Name and code are required' });
+    }
+    console.log('[HV EQUIPMENT CREATE]   💾 Inserting into database...');
     const r = await pool.query(`
       INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [site, name, code, building_code, floor, room, regime_neutral, is_principal, notes || null, modes || {}, quality || {}]);
     const eq = r.rows[0];
+    console.log('[HV EQUIPMENT CREATE] ✅ Created equipment id:', eq.id, ', name:', eq.name);
 
     // 📝 AUDIT: Log création équipement HV
     try {
@@ -295,7 +310,11 @@ app.post('/api/hv/equipments', async (req, res) => {
     }
 
     res.status(201).json(eq);
-  } catch (e) { res.status(500).json({ error: 'Create failed', details: e.message }); }
+  } catch (e) {
+    console.error('[HV EQUIPMENT CREATE] ❌ Error:', e.message);
+    console.error('[HV EQUIPMENT CREATE]   Stack:', e.stack);
+    res.status(500).json({ error: 'Create failed', details: e.message });
+  }
 });
 
 app.get('/api/hv/equipments/:id', async (req, res) => {
