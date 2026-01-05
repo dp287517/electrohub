@@ -640,13 +640,21 @@ export default function ArcFlash() {
       didParseCell: (data) => {
         if (data.column.index === 3 && data.section === 'body') {
           const cat = parseInt(data.cell.text[0]);
-          if (cat >= 4) data.cell.styles.textColor = [127, 29, 29];
-          else if (cat >= 3) data.cell.styles.textColor = [220, 38, 38];
-          else if (cat >= 2) data.cell.styles.textColor = [245, 158, 11];
+          // Couleurs par catégorie PPE (Cat. 1 minimum pour tout travail sous tension)
+          if (cat >= 4) data.cell.styles.textColor = [127, 29, 29];      // Rouge foncé
+          else if (cat >= 3) data.cell.styles.textColor = [220, 38, 38]; // Rouge
+          else if (cat >= 2) data.cell.styles.textColor = [180, 120, 0]; // Jaune foncé
+          else if (cat >= 1) data.cell.styles.textColor = [30, 64, 175]; // Bleu
           data.cell.styles.fontStyle = 'bold';
         }
       }
     });
+
+    // Note de sécurité PPE minimum
+    const finalY = pdf.lastAutoTable.finalY + 10;
+    pdf.setFontSize(9);
+    pdf.setTextColor(100);
+    pdf.text('Note: PPE Cat. 1 minimum requis pour tout travail sur installation électrique sous tension (IEC 61482 / NFPA 70E)', 14, finalY);
 
     pdf.save(`ArcFlash_report_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
