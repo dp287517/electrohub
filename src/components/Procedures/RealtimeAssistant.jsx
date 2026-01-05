@@ -151,6 +151,9 @@ export default function RealtimeAssistant({ procedureId, procedureTitle, onClose
   const [suggestedActions, setSuggestedActions] = useState([]);
   const [needsPhoto, setNeedsPhoto] = useState(false);
   const [photoAnalysis, setPhotoAnalysis] = useState(null);
+  const [stepPhotos, setStepPhotos] = useState([]); // Array of {stepNumber, url}
+  const [currentStepPhoto, setCurrentStepPhoto] = useState(null); // URL of current step's photo
+  const [showPhotoLightbox, setShowPhotoLightbox] = useState(false);
 
   const messagesEndRef = useRef(null);
   const photoInputRef = useRef(null);
@@ -182,6 +185,8 @@ export default function RealtimeAssistant({ procedureId, procedureTitle, onClose
       setEmergencyStop(data.emergencyStop || false);
       setSuggestedActions(data.suggestedActions || []);
       setNeedsPhoto(data.needsPhoto || false);
+      setStepPhotos(data.stepPhotos || []);
+      setCurrentStepPhoto(data.currentStepPhoto || null);
 
       setMessages([{ role: 'assistant', content: data.message }]);
     } catch (error) {
@@ -230,6 +235,10 @@ export default function RealtimeAssistant({ procedureId, procedureTitle, onClose
       setSuggestedActions(data.suggestedActions || []);
       setNeedsPhoto(data.needsPhoto || false);
       setPhotoAnalysis(data.photoAnalysis);
+      // Update current step photo if step changed
+      if (data.currentStepPhoto !== undefined) {
+        setCurrentStepPhoto(data.currentStepPhoto);
+      }
 
       setMessages(prev => [
         ...prev,
@@ -304,6 +313,25 @@ export default function RealtimeAssistant({ procedureId, procedureTitle, onClose
         {warning && !emergencyStop && (
           <div className="px-4 pt-4">
             <WarningBanner warning={warning} />
+          </div>
+        )}
+
+        {/* Current Step Photo */}
+        {currentStepPhoto && (
+          <div className="px-4 pt-4 flex-shrink-0">
+            <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-3 border border-violet-200">
+              <div className="flex items-center gap-2 mb-2">
+                <Camera className="w-4 h-4 text-violet-600" />
+                <span className="text-sm font-medium text-violet-800">Photo de référence - Étape {currentStep}</span>
+              </div>
+              <img
+                src={currentStepPhoto}
+                alt={`Étape ${currentStep}`}
+                className="w-full max-h-40 object-contain rounded-lg cursor-pointer hover:opacity-90 transition-opacity border border-violet-200 bg-white"
+                onClick={() => setShowPhotoLightbox(true)}
+                title="Cliquez pour agrandir"
+              />
+            </div>
           </div>
         )}
 
@@ -406,6 +434,42 @@ export default function RealtimeAssistant({ procedureId, procedureTitle, onClose
           </div>
         </div>
       </div>
+
+      {/* Photo Lightbox */}
+      {showPhotoLightbox && currentStepPhoto && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setShowPhotoLightbox(false)}
+        >
+          <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
+            {/* Close button */}
+            <button
+              onClick={() => setShowPhotoLightbox(false)}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 transition-colors text-lg font-medium flex items-center gap-2"
+            >
+              <span>Fermer</span>
+              <X className="w-6 h-6" />
+            </button>
+
+            {/* Title */}
+            <div className="absolute -top-12 left-0 text-white text-lg font-medium">
+              Étape {currentStep} - Photo de référence
+            </div>
+
+            {/* Image */}
+            <img
+              src={currentStepPhoto}
+              alt={`Étape ${currentStep}`}
+              className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+
+            {/* Instructions */}
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 text-gray-400 text-sm">
+              Cliquez en dehors de l'image pour fermer
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
