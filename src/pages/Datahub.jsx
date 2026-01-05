@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import MiniElectro from '../components/MiniElectro';
+import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
 
 // Icon mapping for dynamic category icons
 const ICON_MAP = {
@@ -333,7 +334,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
 };
 
 // Detail Panel with photo and files support
-const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlaced, categories, onPhotoUpload, onRefresh }) => {
+const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlaced, categories, onPhotoUpload, onRefresh, onImageClick }) => {
   if (!item) return null;
   const cat = categories?.find(c => c.id === item.category_id);
   const IconComp = ICON_MAP[cat?.icon] || Database;
@@ -413,8 +414,13 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
               <img
                 src={api.datahub.photoUrl(item.id, { bust: true }) + `&t=${photoKey}`}
                 alt=""
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onImageClick) onImageClick(api.datahub.photoUrl(item.id, { bust: true }), item.name);
+                }}
                 onError={(e) => { e.target.style.display = 'none'; }}
+                title="Cliquez pour agrandir"
               />
             ) : (
               <IconComp size={32} className="text-white" />
@@ -856,6 +862,9 @@ export default function Datahub() {
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
 
+  // Lightbox for image enlargement
+  const { lightbox, openLightbox, closeLightbox } = useLightbox();
+
   const loadItems = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -1086,6 +1095,7 @@ export default function Datahub() {
               onEdit={(i) => { setSelectedItem(i); setViewMode('edit'); }}
               onDelete={(i) => { setDeleteTarget(i); setShowDeleteModal(true); }}
               onNavigateToMap={handleNavigateToMap}
+              onImageClick={openLightbox}
               isPlaced={isPlaced(selectedItem?.id)} />
           ) : viewMode === 'edit' ? (
             <EditForm item={selectedItem} categories={categories} onSave={handleSaveItem} showToast={showToast}
@@ -1235,6 +1245,15 @@ export default function Datahub() {
         categories={categories} onCategoriesChange={loadCategories} showToast={showToast} />
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Image Lightbox */}
+      {lightbox.open && (
+        <ImageLightbox
+          src={lightbox.src}
+          title={lightbox.title}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 }

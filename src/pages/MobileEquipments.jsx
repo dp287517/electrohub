@@ -13,6 +13,7 @@ import {
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
+import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
 import AuditHistory from '../components/AuditHistory.jsx';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
@@ -550,6 +551,7 @@ const DetailPanel = ({
   onShare,
   onNavigateToMap,
   onPhotoUpload,
+  onImageClick,
   isPlaced,
   showToast,
   controlStatuses,
@@ -660,7 +662,16 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img src={api.mobileEquipment.photoUrl(equipment.id)} alt="" className="w-full h-full object-cover" />
+              <img
+                src={api.mobileEquipment.photoUrl(equipment.id)}
+                alt=""
+                className="w-full h-full object-cover cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onImageClick) onImageClick(api.mobileEquipment.photoUrl(equipment.id), equipment.name);
+                }}
+                title="Cliquez pour agrandir"
+              />
             ) : (
               <Camera size={24} />
             )}
@@ -1308,6 +1319,9 @@ export default function MobileEquipments() {
   const [reportFilters, setReportFilters] = useState({ building: '', status: '', category: '' });
   const [reportLoading, setReportLoading] = useState(false);
 
+  // Lightbox for image enlargement
+  const { lightbox, openLightbox, closeLightbox } = useLightbox();
+
   // QR Codes bulk download modal
   const [showQRModal, setShowQRModal] = useState(false);
 
@@ -1813,6 +1827,7 @@ export default function MobileEquipments() {
               onShare={(e) => setShowShareModal(true)}
               onNavigateToMap={handleNavigateToMap}
               onPhotoUpload={handlePhotoUpload}
+              onImageClick={openLightbox}
               isPlaced={isPlaced(selectedEquipment?.id)}
               showToast={showToast}
               controlStatuses={controlStatuses}
@@ -2195,6 +2210,15 @@ export default function MobileEquipments() {
           message={toast.message}
           type={toast.type}
           onClose={() => setToast(null)}
+        />
+      )}
+
+      {/* Image Lightbox */}
+      {lightbox.open && (
+        <ImageLightbox
+          src={lightbox.src}
+          title={lightbox.title}
+          onClose={closeLightbox}
         />
       )}
     </div>
