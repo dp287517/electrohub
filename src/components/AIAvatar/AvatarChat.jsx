@@ -509,6 +509,7 @@ Demande-moi n'importe quoi !`,
         id: Date.now() + 1,
         role: 'assistant',
         content: response.message,
+        agentType: response.agentType || 'main', // Agent qui répond (pour vidéo avatar)
         actions: response.actions,
         sources: response.sources,
         chart: response.chart,
@@ -767,10 +768,21 @@ Demande-moi n'importe quoi !`,
           {messages.map((message) => (
             <div
               key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex gap-2 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
+              {/* Agent Avatar for assistant messages */}
+              {message.role === 'assistant' && (
+                <div className="flex-shrink-0 pt-1">
+                  <VideoAvatar
+                    agentType={message.agentType || 'main'}
+                    size="xs"
+                    speaking={isSpeaking && message.id === messages[messages.length - 1]?.id}
+                    showAgentName={false}
+                  />
+                </div>
+              )}
               <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
                   message.role === 'user'
                     ? 'bg-brand-600 text-white'
                     : message.isError

@@ -1739,6 +1739,79 @@ function SettingsTab() {
   const idleVideoInputRef = useRef(null);
   const speakingVideoInputRef = useRef(null);
 
+  // Multi-agent video system
+  const [agentsList, setAgentsList] = useState([]);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [uploadingAgentVideo, setUploadingAgentVideo] = useState(null); // 'agentType-idle' | 'agentType-speaking' | null
+
+  // Fetch AI agents list with video status
+  const fetchAgentsList = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/settings/ai-agents/list`, getAuthOptions());
+      const data = await res.json();
+      if (data.agents) {
+        setAgentsList(data.agents);
+      }
+    } catch (err) {
+      console.error('Error fetching agents list:', err);
+    }
+  }, []);
+
+  // Upload video for specific agent
+  const handleAgentVideoUpload = async (file, agentType, videoType) => {
+    if (!file) return;
+
+    const uploadKey = `${agentType}-${videoType}`;
+    setUploadingAgentVideo(uploadKey);
+
+    try {
+      const formData = new FormData();
+      formData.append('video', file);
+
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/settings/ai-agents/${agentType}/${videoType}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      await fetchAgentsList();
+    } catch (err) {
+      console.error('Error uploading agent video:', err);
+      alert('Erreur: ' + err.message);
+    } finally {
+      setUploadingAgentVideo(null);
+    }
+  };
+
+  // Delete videos for specific agent
+  const handleDeleteAgentVideos = async (agentType) => {
+    const agent = agentsList.find(a => a.type === agentType);
+    if (!confirm(`Supprimer les vidéos de ${agent?.name || agentType} ?`)) return;
+
+    try {
+      const token = localStorage.getItem('eh_token');
+      await fetch(`${API_BASE}/settings/ai-agents/${agentType}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      await fetchAgentsList();
+    } catch (err) {
+      console.error('Error deleting agent videos:', err);
+    }
+  };
+
   // Fetch AI icon info
   const fetchAiIconInfo = useCallback(async () => {
     try {
@@ -1777,8 +1850,8 @@ function SettingsTab() {
   }, []);
 
   useEffect(() => {
-    Promise.all([fetchAiIconInfo(), fetchAiVideoInfo()]).finally(() => setLoading(false));
-  }, [fetchAiIconInfo, fetchAiVideoInfo]);
+    Promise.all([fetchAiIconInfo(), fetchAiVideoInfo(), fetchAgentsList()]).finally(() => setLoading(false));
+  }, [fetchAiIconInfo, fetchAiVideoInfo, fetchAgentsList]);
 
   // Handle file selection
   const handleFileSelect = async (e) => {
@@ -2217,6 +2290,220 @@ function SettingsTab() {
                       <li>La vidéo "repos" est jouée en continu</li>
                       <li>La vidéo "parle" est jouée pendant les réponses</li>
                     </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Multi-Agent Video System */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-purple-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+              <Users size={20} className="text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">Agents IA Spécialisés</h3>
+              <p className="text-sm text-gray-500">Configurez les vidéos avatars pour chaque agent IA spécialisé</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Agent cards grid */}
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {agentsList.map((agent) => {
+                  const isExpanded = selectedAgent === agent.type;
+                  const hasVideos = agent.hasIdleVideo || agent.hasSpeakingVideo;
+                  const isUploading = uploadingAgentVideo?.startsWith(agent.type);
+
+                  // Agent-specific colors
+                  const agentColors = {
+                    main: { bg: 'bg-blue-500', light: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-600' },
+                    vsd: { bg: 'bg-green-500', light: 'bg-green-50', border: 'border-green-200', text: 'text-green-600' },
+                    meca: { bg: 'bg-orange-500', light: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-600' },
+                    glo: { bg: 'bg-emerald-500', light: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600' },
+                    hv: { bg: 'bg-amber-500', light: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600' },
+                    mobile: { bg: 'bg-cyan-500', light: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-600' },
+                    atex: { bg: 'bg-purple-500', light: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600' },
+                    switchboard: { bg: 'bg-indigo-500', light: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-600' },
+                    doors: { bg: 'bg-rose-500', light: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-600' },
+                    datahub: { bg: 'bg-teal-500', light: 'bg-teal-50', border: 'border-teal-200', text: 'text-teal-600' },
+                    firecontrol: { bg: 'bg-red-500', light: 'bg-red-50', border: 'border-red-200', text: 'text-red-600' }
+                  };
+                  const colors = agentColors[agent.type] || agentColors.main;
+
+                  return (
+                    <div
+                      key={agent.type}
+                      className={`border rounded-xl overflow-hidden transition-all ${
+                        isExpanded ? `${colors.border} shadow-lg` : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      {/* Agent header */}
+                      <button
+                        onClick={() => setSelectedAgent(isExpanded ? null : agent.type)}
+                        className={`w-full p-4 flex items-center justify-between transition-colors ${
+                          isExpanded ? colors.light : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-full ${colors.bg} flex items-center justify-center`}>
+                            {agent.hasIdleVideo ? (
+                              <video
+                                src={`${API_BASE}/settings/ai-agents/${agent.type}/idle?t=${Date.now()}`}
+                                autoPlay
+                                loop
+                                muted
+                                playsInline
+                                className="w-10 h-10 rounded-full object-cover"
+                              />
+                            ) : (
+                              <Sparkles size={18} className="text-white" />
+                            )}
+                          </div>
+                          <div className="text-left">
+                            <p className="font-medium text-gray-900">{agent.name}</p>
+                            <div className="flex items-center gap-2 text-xs">
+                              {hasVideos ? (
+                                <span className="text-green-600 flex items-center gap-1">
+                                  <Check size={12} />
+                                  {agent.hasIdleVideo && agent.hasSpeakingVideo ? '2 vidéos' : '1 vidéo'}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">Pas de vidéo</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <ChevronDown
+                          size={18}
+                          className={`text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+
+                      {/* Expanded content */}
+                      {isExpanded && (
+                        <div className="p-4 border-t border-gray-100 space-y-4">
+                          <div className="grid grid-cols-2 gap-3">
+                            {/* Idle video */}
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-700 flex items-center gap-1">
+                                <Clock size={12} /> Repos
+                              </p>
+                              {agent.hasIdleVideo ? (
+                                <video
+                                  src={`${API_BASE}/settings/ai-agents/${agent.type}/idle?t=${Date.now()}`}
+                                  autoPlay
+                                  loop
+                                  muted
+                                  playsInline
+                                  className="w-full h-20 object-cover rounded-lg bg-gray-100"
+                                />
+                              ) : (
+                                <div className="w-full h-20 bg-gray-100 rounded-lg flex items-center justify-center">
+                                  <span className="text-xs text-gray-400">Vide</span>
+                                </div>
+                              )}
+                              <label className="block">
+                                <input
+                                  type="file"
+                                  accept="video/mp4,video/webm,video/ogg"
+                                  onChange={(e) => handleAgentVideoUpload(e.target.files?.[0], agent.type, 'idle')}
+                                  className="hidden"
+                                />
+                                <span className={`inline-flex items-center justify-center gap-1 w-full px-2 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors ${
+                                  uploadingAgentVideo === `${agent.type}-idle`
+                                    ? 'bg-gray-100 text-gray-400 cursor-wait'
+                                    : `${colors.bg} text-white hover:opacity-90`
+                                }`}>
+                                  {uploadingAgentVideo === `${agent.type}-idle` ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Upload...</>
+                                  ) : (
+                                    <><Upload size={12} /> {agent.hasIdleVideo ? 'Remplacer' : 'Uploader'}</>
+                                  )}
+                                </span>
+                              </label>
+                            </div>
+
+                            {/* Speaking video */}
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-700 flex items-center gap-1">
+                                <Sparkles size={12} /> Parle
+                              </p>
+                              {agent.hasSpeakingVideo ? (
+                                <video
+                                  src={`${API_BASE}/settings/ai-agents/${agent.type}/speaking?t=${Date.now()}`}
+                                  autoPlay
+                                  loop
+                                  muted
+                                  playsInline
+                                  className="w-full h-20 object-cover rounded-lg bg-gray-100"
+                                />
+                              ) : (
+                                <div className="w-full h-20 bg-gray-100 rounded-lg flex items-center justify-center">
+                                  <span className="text-xs text-gray-400">Vide</span>
+                                </div>
+                              )}
+                              <label className="block">
+                                <input
+                                  type="file"
+                                  accept="video/mp4,video/webm,video/ogg"
+                                  onChange={(e) => handleAgentVideoUpload(e.target.files?.[0], agent.type, 'speaking')}
+                                  className="hidden"
+                                />
+                                <span className={`inline-flex items-center justify-center gap-1 w-full px-2 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors ${
+                                  uploadingAgentVideo === `${agent.type}-speaking`
+                                    ? 'bg-gray-100 text-gray-400 cursor-wait'
+                                    : `${colors.bg} text-white hover:opacity-90`
+                                }`}>
+                                  {uploadingAgentVideo === `${agent.type}-speaking` ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Upload...</>
+                                  ) : (
+                                    <><Upload size={12} /> {agent.hasSpeakingVideo ? 'Remplacer' : 'Uploader'}</>
+                                  )}
+                                </span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {/* Delete button */}
+                          {hasVideos && (
+                            <button
+                              onClick={() => handleDeleteAgentVideos(agent.type)}
+                              className="w-full px-3 py-1.5 text-xs text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-1"
+                            >
+                              <Trash2 size={12} />
+                              Supprimer les vidéos
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Status summary */}
+              <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <Users size={18} className="text-indigo-500 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-medium text-indigo-800">
+                      {agentsList.filter(a => a.hasIdleVideo || a.hasSpeakingVideo).length} / {agentsList.length} agents configurés
+                    </p>
+                    <p className="text-indigo-600 mt-1">
+                      Chaque agent spécialisé peut avoir sa propre vidéo avatar. L'agent approprié sera automatiquement sélectionné en fonction du contexte de la question.
+                    </p>
                   </div>
                 </div>
               </div>

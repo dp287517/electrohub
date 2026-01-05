@@ -2454,4 +2454,284 @@ router.delete("/settings/ai-video", adminOnly, async (req, res) => {
   }
 });
 
+// ============================================================================
+// MULTI-AGENT VIDEO AVATAR ENDPOINTS
+// Support for equipment-specific AI agents (vsd, meca, glo, hv, mobile, atex, switchboard, doors, datahub)
+// ============================================================================
+
+// Valid agent types for video avatars
+const VALID_AGENT_TYPES = ['main', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'switchboard', 'doors', 'datahub', 'firecontrol'];
+
+// Agent display names
+const AGENT_NAMES = {
+  main: 'Electro (Principal)',
+  vsd: 'Shakira (Variateurs)',
+  meca: 'Méca (Équipements Mécaniques)',
+  glo: 'GLO (Éclairage de Sécurité)',
+  hv: 'HV (Haute Tension)',
+  mobile: 'Mobile (Équipements Mobiles)',
+  atex: 'ATEX (Zones Explosives)',
+  switchboard: 'Switch (Tableaux Électriques)',
+  doors: 'Doors (Portes)',
+  datahub: 'Data (Datahub)',
+  firecontrol: 'Fire (Contrôle Incendie)'
+};
+
+// GET /api/admin/settings/ai-agents/list - Get all agent types and their video status
+router.get("/settings/ai-agents/list", async (req, res) => {
+  try {
+    await ensureAppSettingsTable();
+
+    // Get all agent videos from database
+    const result = await pool.query(`
+      SELECT key, mime_type, updated_at, LENGTH(binary_data) as size
+      FROM app_settings
+      WHERE key LIKE 'ai_video_%'
+    `);
+
+    // Build agent list with video status
+    const agents = VALID_AGENT_TYPES.map(agentType => {
+      const idleKey = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
+      const speakingKey = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+
+      const idleRow = result.rows.find(r => r.key === idleKey);
+      const speakingRow = result.rows.find(r => r.key === speakingKey);
+
+      return {
+        type: agentType,
+        name: AGENT_NAMES[agentType],
+        hasIdleVideo: !!idleRow,
+        hasSpeakingVideo: !!speakingRow,
+        idleSize: idleRow?.size || 0,
+        speakingSize: speakingRow?.size || 0,
+        updatedAt: idleRow?.updated_at || speakingRow?.updated_at || null
+      };
+    });
+
+    res.json({ agents });
+  } catch (err) {
+    console.error("[settings/ai-agents/list GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-agents/:agentType/info - Get video info for specific agent
+router.get("/settings/ai-agents/:agentType/info", async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: `Invalid agent type. Valid types: ${VALID_AGENT_TYPES.join(', ')}` });
+    }
+
+    await ensureAppSettingsTable();
+
+    const idleKey = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
+    const speakingKey = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+
+    const result = await pool.query(`
+      SELECT key, mime_type, updated_at, LENGTH(binary_data) as size
+      FROM app_settings
+      WHERE key IN ($1, $2)
+    `, [idleKey, speakingKey]);
+
+    const videos = {};
+    result.rows.forEach(row => {
+      if (row.key === idleKey) {
+        videos.hasIdleVideo = true;
+        videos.idleMimeType = row.mime_type;
+        videos.idleSize = row.size;
+      } else if (row.key === speakingKey) {
+        videos.hasSpeakingVideo = true;
+        videos.speakingMimeType = row.mime_type;
+        videos.speakingSize = row.size;
+      }
+    });
+
+    res.json({
+      agentType,
+      name: AGENT_NAMES[agentType],
+      hasIdleVideo: videos.hasIdleVideo || false,
+      hasSpeakingVideo: videos.hasSpeakingVideo || false,
+      ...videos
+    });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/info GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-agents/:agentType/idle - Get idle video for agent
+router.get("/settings/ai-agents/:agentType/idle", async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
+
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = $1`,
+      [key]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No idle video found for this agent" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'video/mp4');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/idle GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/ai-agents/:agentType/speaking - Get speaking video for agent
+router.get("/settings/ai-agents/:agentType/speaking", async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = $1`,
+      [key]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No speaking video found for this agent" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'video/mp4');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/speaking GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-agents/:agentType/idle - Upload idle video for agent
+router.post("/settings/ai-agents/:agentType/idle", adminOnly, uploadVideo.single('video'), async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No video file provided" });
+    }
+
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Invalid video format. Use MP4, WebM or OGG." });
+    }
+
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: "Video too large. Maximum 10MB." });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [key, buffer, mimetype]);
+
+    res.json({ ok: true, message: `Idle video uploaded for ${AGENT_NAMES[agentType]}` });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/idle POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-agents/:agentType/speaking - Upload speaking video for agent
+router.post("/settings/ai-agents/:agentType/speaking", adminOnly, uploadVideo.single('video'), async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No video file provided" });
+    }
+
+    const validTypes = ['video/mp4', 'video/webm', 'video/ogg'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Invalid video format. Use MP4, WebM or OGG." });
+    }
+
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: "Video too large. Maximum 10MB." });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [key, buffer, mimetype]);
+
+    res.json({ ok: true, message: `Speaking video uploaded for ${AGENT_NAMES[agentType]}` });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/speaking POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/settings/ai-agents/:agentType - Remove videos for specific agent
+router.delete("/settings/ai-agents/:agentType", adminOnly, async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const idleKey = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
+    const speakingKey = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+
+    await pool.query(`DELETE FROM app_settings WHERE key IN ($1, $2)`, [idleKey, speakingKey]);
+
+    res.json({ ok: true, message: `Videos removed for ${AGENT_NAMES[agentType]}` });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType DELETE] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
