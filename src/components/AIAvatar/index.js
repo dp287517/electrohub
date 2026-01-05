@@ -1,4 +1,5 @@
 export { AnimatedAvatar, AVATAR_STYLES, refreshCustomIcon } from './AnimatedAvatar';
+export { VideoAvatar, refreshVideoCache, VIDEO_AVATAR_SIZES } from './VideoAvatar';
 export { default as AvatarSelector } from './AvatarSelector';
 export { default as AvatarChat } from './AvatarChat';
 export { default as FloatingAssistant } from './FloatingAssistant';
