@@ -7858,6 +7858,468 @@ app.get('/api/switchboard/controls/records/:id/pdf', async (req, res) => {
 });
 
 // ============================================================
+// BULK CONTROLS REPORT PDF - Export filtered controls
+// ============================================================
+app.get('/api/switchboard/controls/report/pdf', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    // Parse filters from query params
+    const {
+      switchboard_ids,
+      template_ids,
+      buildings,
+      status,
+      date_from,
+      date_to,
+      performers,
+      equipment_type, // 'switchboard', 'device', 'vsd', 'meca', 'mobile', 'hv', 'glo', 'datahub'
+      include_devices // 'true' to include device table for switchboard controls
+    } = req.query;
+
+    // Build dynamic query with filters
+    let query = `
+      SELECT cr.*,
+             ct.name as template_name, ct.checklist_items as template_items, ct.target_type,
+             sb.name as switchboard_name, sb.code as switchboard_code,
+             sb.building_code, sb.floor, sb.room,
+             d.name as device_name, d.position_number as device_position,
+             vsd.tag as vsd_tag, vsd.designation as vsd_designation,
+             meca.tag as meca_tag, meca.designation as meca_designation,
+             mobile.tag as mobile_tag, mobile.designation as mobile_designation,
+             hv.tag as hv_tag, hv.designation as hv_designation,
+             glo.tag as glo_tag, glo.designation as glo_designation,
+             dh.name as datahub_name
+      FROM control_records cr
+      LEFT JOIN control_templates ct ON cr.template_id = ct.id
+      LEFT JOIN switchboards sb ON cr.switchboard_id = sb.id
+      LEFT JOIN devices d ON cr.device_id = d.id
+      LEFT JOIN vsd_equipment vsd ON cr.vsd_equipment_id = vsd.id
+      LEFT JOIN meca_equipment meca ON cr.meca_equipment_id = meca.id
+      LEFT JOIN mobile_equipment mobile ON cr.mobile_equipment_id = mobile.id
+      LEFT JOIN hv_equipment hv ON cr.hv_equipment_id = hv.id
+      LEFT JOIN glo_equipment glo ON cr.glo_equipment_id = glo.id
+      LEFT JOIN datahub_equipment dh ON cr.datahub_equipment_id = dh.id
+      WHERE cr.site = $1
+    `;
+    const params = [site];
+    let paramIdx = 2;
+
+    // Apply filters
+    if (switchboard_ids) {
+      const ids = switchboard_ids.split(',').map(Number).filter(n => !isNaN(n));
+      if (ids.length) {
+        query += ` AND cr.switchboard_id = ANY($${paramIdx++}::int[])`;
+        params.push(ids);
+      }
+    }
+    if (template_ids) {
+      const ids = template_ids.split(',').map(Number).filter(n => !isNaN(n));
+      if (ids.length) {
+        query += ` AND cr.template_id = ANY($${paramIdx++}::int[])`;
+        params.push(ids);
+      }
+    }
+    if (buildings) {
+      const bldgs = buildings.split(',').filter(Boolean);
+      if (bldgs.length) {
+        query += ` AND sb.building_code = ANY($${paramIdx++}::text[])`;
+        params.push(bldgs);
+      }
+    }
+    if (status && status !== 'all') {
+      query += ` AND cr.status = $${paramIdx++}`;
+      params.push(status);
+    }
+    if (date_from) {
+      query += ` AND cr.performed_at >= $${paramIdx++}`;
+      params.push(date_from);
+    }
+    if (date_to) {
+      query += ` AND cr.performed_at <= $${paramIdx++}`;
+      params.push(date_to + 'T23:59:59');
+    }
+    if (performers) {
+      const perfs = performers.split(',').filter(Boolean);
+      if (perfs.length) {
+        query += ` AND cr.performed_by = ANY($${paramIdx++}::text[])`;
+        params.push(perfs);
+      }
+    }
+    if (equipment_type) {
+      switch (equipment_type) {
+        case 'switchboard':
+          query += ` AND cr.switchboard_id IS NOT NULL AND cr.device_id IS NULL`;
+          break;
+        case 'device':
+          query += ` AND cr.device_id IS NOT NULL`;
+          break;
+        case 'vsd':
+          query += ` AND cr.vsd_equipment_id IS NOT NULL`;
+          break;
+        case 'meca':
+          query += ` AND cr.meca_equipment_id IS NOT NULL`;
+          break;
+        case 'mobile':
+          query += ` AND cr.mobile_equipment_id IS NOT NULL`;
+          break;
+        case 'hv':
+          query += ` AND cr.hv_equipment_id IS NOT NULL`;
+          break;
+        case 'glo':
+          query += ` AND cr.glo_equipment_id IS NOT NULL`;
+          break;
+        case 'datahub':
+          query += ` AND cr.datahub_equipment_id IS NOT NULL`;
+          break;
+      }
+    }
+
+    query += ` ORDER BY cr.performed_at DESC LIMIT 500`;
+
+    const recordsRes = await quickQuery(query, params);
+    const records = recordsRes.rows;
+
+    if (records.length === 0) {
+      return res.status(404).json({ error: 'Aucun contrôle trouvé avec ces filtres' });
+    }
+
+    // Get site settings
+    const settings = await quickQuery(`SELECT logo, company_name FROM site_settings WHERE site = $1`, [site]);
+    const siteSettings = settings.rows[0] || {};
+
+    // Create PDF
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    const filename = `rapport_controles_${new Date().toISOString().split('T')[0]}.pdf`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    doc.pipe(res);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // COLORS - Green theme matching listing exports
+    // ═══════════════════════════════════════════════════════════════════
+    const colors = {
+      primary: '#30EA03',
+      primaryDark: '#22c55e',
+      blue: '#3b82f6',
+      blueDark: '#1e40af',
+      success: '#10b981',
+      warning: '#f59e0b',
+      danger: '#dc2626',
+      gray: '#6b7280',
+      grayLight: '#f3f4f6',
+      grayBorder: '#e5e7eb',
+      text: '#111827',
+      textMuted: '#6b7280',
+    };
+
+    const statusColors = { conform: '#059669', non_conform: '#dc2626', partial: '#d97706' };
+    const statusLabels = { conform: 'CONFORME', non_conform: 'NON CONFORME', partial: 'PARTIEL' };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HEADER FUNCTION - Reusable for each page
+    // ═══════════════════════════════════════════════════════════════════
+    const drawHeader = () => {
+      doc.rect(0, 0, 595, 70).fillColor(colors.primary).fill();
+      doc.rect(0, 63, 595, 7).fillColor(colors.primaryDark).fill();
+
+      let textStartX = 50;
+      if (siteSettings.logo) {
+        try {
+          doc.image(siteSettings.logo, 45, 8, { fit: [50, 50], align: 'center', valign: 'center' });
+          textStartX = 110;
+        } catch (e) {}
+      }
+
+      doc.font('Helvetica-Bold').fontSize(18).fillColor('#ffffff');
+      doc.text('RAPPORT DE CONTROLES', textStartX, 14, { width: 300 });
+
+      doc.font('Helvetica').fontSize(10).fillColor('rgba(255,255,255,0.9)');
+      doc.text(siteSettings.company_name || site, textStartX, 38);
+
+      // Date
+      doc.font('Helvetica').fontSize(9).fillColor('rgba(255,255,255,0.8)');
+      doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`, 400, 20, { align: 'right', width: 150 });
+
+      // Stats badge
+      doc.roundedRect(400, 38, 150, 22, 4).fillColor('rgba(255,255,255,0.2)').fill();
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#ffffff');
+      doc.text(`${records.length} contrôle${records.length > 1 ? 's' : ''}`, 400, 44, { width: 150, align: 'center' });
+    };
+
+    drawHeader();
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STATISTICS SUMMARY
+    // ═══════════════════════════════════════════════════════════════════
+    let y = 90;
+
+    // Count by status
+    const conformCount = records.filter(r => r.status === 'conform').length;
+    const nonConformCount = records.filter(r => r.status === 'non_conform').length;
+    const partialCount = records.filter(r => r.status === 'partial').length;
+
+    // Summary cards
+    const cardWidth = 165;
+    const cardHeight = 40;
+    const gap = 10;
+    const startX = 50;
+
+    // Conforme
+    doc.roundedRect(startX, y, cardWidth, cardHeight, 6).fillColor('#ecfdf5').fill();
+    doc.rect(startX, y + 4, 3, cardHeight - 8).fillColor(colors.success).fill();
+    doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted).text('Conformes', startX + 12, y + 8);
+    doc.font('Helvetica-Bold').fontSize(18).fillColor(colors.success).text(conformCount.toString(), startX + 12, y + 20);
+
+    // Non conforme
+    doc.roundedRect(startX + cardWidth + gap, y, cardWidth, cardHeight, 6).fillColor('#fef2f2').fill();
+    doc.rect(startX + cardWidth + gap, y + 4, 3, cardHeight - 8).fillColor(colors.danger).fill();
+    doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted).text('Non conformes', startX + cardWidth + gap + 12, y + 8);
+    doc.font('Helvetica-Bold').fontSize(18).fillColor(colors.danger).text(nonConformCount.toString(), startX + cardWidth + gap + 12, y + 20);
+
+    // Partiels
+    doc.roundedRect(startX + 2 * (cardWidth + gap), y, cardWidth, cardHeight, 6).fillColor('#fef3c7').fill();
+    doc.rect(startX + 2 * (cardWidth + gap), y + 4, 3, cardHeight - 8).fillColor(colors.warning).fill();
+    doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted).text('Partiels', startX + 2 * (cardWidth + gap) + 12, y + 8);
+    doc.font('Helvetica-Bold').fontSize(18).fillColor(colors.warning).text(partialCount.toString(), startX + 2 * (cardWidth + gap) + 12, y + 20);
+
+    y += cardHeight + 20;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CONTROLS TABLE
+    // ═══════════════════════════════════════════════════════════════════
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(colors.blueDark).text('Liste des controles', 50, y);
+    y += 20;
+
+    // Table header
+    doc.rect(40, y, 515, 22).fillColor(colors.grayLight).fill();
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.text);
+    doc.text('Date', 45, y + 7, { width: 55 });
+    doc.text('Equipement', 105, y + 7, { width: 130 });
+    doc.text('Modele', 240, y + 7, { width: 100 });
+    doc.text('Controleur', 345, y + 7, { width: 90 });
+    doc.text('Statut', 440, y + 7, { width: 70 });
+    doc.text('Pts', 515, y + 7, { width: 35, align: 'center' });
+    y += 22;
+
+    // Table rows
+    for (const record of records) {
+      if (y > 750) {
+        doc.addPage();
+        drawHeader();
+        y = 90;
+        // Re-draw table header
+        doc.rect(40, y, 515, 22).fillColor(colors.grayLight).fill();
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(colors.text);
+        doc.text('Date', 45, y + 7, { width: 55 });
+        doc.text('Equipement', 105, y + 7, { width: 130 });
+        doc.text('Modele', 240, y + 7, { width: 100 });
+        doc.text('Controleur', 345, y + 7, { width: 90 });
+        doc.text('Statut', 440, y + 7, { width: 70 });
+        doc.text('Pts', 515, y + 7, { width: 35, align: 'center' });
+        y += 22;
+      }
+
+      const rowHeight = 18;
+      const bgColor = records.indexOf(record) % 2 === 0 ? '#ffffff' : '#f9fafb';
+      doc.rect(40, y, 515, rowHeight).fillColor(bgColor).fill();
+
+      // Get equipment name
+      let equipName = '-';
+      if (record.switchboard_id && !record.device_id) {
+        equipName = `⚡ ${record.switchboard_code || record.switchboard_name || '-'}`;
+      } else if (record.device_id) {
+        equipName = `🔌 ${record.device_position || ''} - ${record.device_name || '-'}`;
+      } else if (record.vsd_equipment_id) {
+        equipName = `⚙️ ${record.vsd_tag || record.vsd_designation || '-'}`;
+      } else if (record.meca_equipment_id) {
+        equipName = `🔧 ${record.meca_tag || record.meca_designation || '-'}`;
+      } else if (record.mobile_equipment_id) {
+        equipName = `🚜 ${record.mobile_tag || record.mobile_designation || '-'}`;
+      } else if (record.hv_equipment_id) {
+        equipName = `⚡ ${record.hv_tag || record.hv_designation || '-'}`;
+      } else if (record.glo_equipment_id) {
+        equipName = `🔋 ${record.glo_tag || record.glo_designation || '-'}`;
+      } else if (record.datahub_equipment_id) {
+        equipName = `📊 ${record.datahub_name || '-'}`;
+      }
+
+      doc.font('Helvetica').fontSize(7).fillColor(colors.text);
+      doc.text(new Date(record.performed_at).toLocaleDateString('fr-FR'), 45, y + 5, { width: 55 });
+      doc.text(equipName.substring(0, 28), 105, y + 5, { width: 130 });
+      doc.text((record.template_name || '-').substring(0, 22), 240, y + 5, { width: 100 });
+      doc.text((record.performed_by || '-').substring(0, 18), 345, y + 5, { width: 90 });
+
+      // Status with color
+      const statusColor = statusColors[record.status] || colors.gray;
+      doc.roundedRect(440, y + 3, 60, 12, 3).fillColor(statusColor).fill();
+      doc.font('Helvetica-Bold').fontSize(6).fillColor('#ffffff');
+      doc.text(statusLabels[record.status] || record.status, 440, y + 6, { width: 60, align: 'center' });
+
+      // Checklist points count
+      const points = (record.checklist_results || []).length;
+      doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted);
+      doc.text(points.toString(), 515, y + 5, { width: 35, align: 'center' });
+
+      y += rowHeight;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DETAILED SWITCHBOARD CONTROLS (if include_devices=true)
+    // ═══════════════════════════════════════════════════════════════════
+    if (include_devices === 'true') {
+      // Group records by switchboard
+      const switchboardRecords = records.filter(r => r.switchboard_id && !r.device_id);
+      const switchboardIds = [...new Set(switchboardRecords.map(r => r.switchboard_id))];
+
+      for (const sbId of switchboardIds) {
+        const sbRecords = switchboardRecords.filter(r => r.switchboard_id === sbId);
+        if (sbRecords.length === 0) continue;
+
+        const sbInfo = sbRecords[0];
+
+        // Get device controls for this switchboard
+        const deviceControlsRes = await quickQuery(`
+          SELECT cr.*, d.position_number, d.name as device_name, d.manufacturer, d.reference, d.in_amps,
+                 ct.name as template_name
+          FROM control_records cr
+          JOIN devices d ON cr.device_id = d.id
+          LEFT JOIN control_templates ct ON cr.template_id = ct.id
+          WHERE d.switchboard_id = $1 AND cr.site = $2
+          ORDER BY d.position_number::int NULLS LAST, cr.performed_at DESC
+        `, [sbId, site]);
+
+        const deviceControls = deviceControlsRes.rows;
+
+        // New page for switchboard detail
+        doc.addPage();
+        drawHeader();
+        y = 90;
+
+        // Switchboard title
+        doc.roundedRect(40, y, 515, 35, 6).fillColor('#eff6ff').fill();
+        doc.font('Helvetica-Bold').fontSize(14).fillColor(colors.blueDark);
+        doc.text(`⚡ ${sbInfo.switchboard_code || ''} - ${sbInfo.switchboard_name || ''}`, 50, y + 8);
+        doc.font('Helvetica').fontSize(9).fillColor(colors.textMuted);
+        const location = [sbInfo.building_code, sbInfo.floor ? `Étage ${sbInfo.floor}` : null, sbInfo.room].filter(Boolean).join(' - ');
+        doc.text(location || '-', 50, y + 22);
+        y += 45;
+
+        // Switchboard control summary
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.text).text('Contrôles du tableau', 50, y);
+        y += 18;
+
+        for (const ctrl of sbRecords) {
+          if (y > 720) { doc.addPage(); drawHeader(); y = 90; }
+
+          const rowBg = ctrl.status === 'conform' ? '#ecfdf5' : ctrl.status === 'non_conform' ? '#fef2f2' : '#fef3c7';
+          doc.roundedRect(40, y, 515, 30, 4).fillColor(rowBg).fill();
+
+          doc.font('Helvetica').fontSize(8).fillColor(colors.text);
+          doc.text(`📅 ${new Date(ctrl.performed_at).toLocaleDateString('fr-FR')}`, 50, y + 6);
+          doc.text(`👤 ${ctrl.performed_by}`, 150, y + 6);
+          doc.text(`📋 ${ctrl.template_name || '-'}`, 280, y + 6);
+
+          const sColor = statusColors[ctrl.status] || colors.gray;
+          doc.roundedRect(470, y + 5, 75, 16, 3).fillColor(sColor).fill();
+          doc.font('Helvetica-Bold').fontSize(7).fillColor('#ffffff');
+          doc.text(statusLabels[ctrl.status] || ctrl.status, 470, y + 10, { width: 75, align: 'center' });
+
+          // Checklist summary
+          const results = ctrl.checklist_results || [];
+          const conformPts = results.filter(r => r.status === 'conform').length;
+          doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted);
+          doc.text(`${conformPts}/${results.length} points OK`, 50, y + 18);
+
+          y += 35;
+        }
+
+        // Device controls table
+        if (deviceControls.length > 0) {
+          y += 10;
+          if (y > 650) { doc.addPage(); drawHeader(); y = 90; }
+
+          doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.text).text(`Contrôles des disjoncteurs (${deviceControls.length})`, 50, y);
+          y += 18;
+
+          // Table header
+          doc.rect(40, y, 515, 20).fillColor(colors.grayLight).fill();
+          doc.font('Helvetica-Bold').fontSize(7).fillColor(colors.text);
+          doc.text('N°', 45, y + 6, { width: 25 });
+          doc.text('Disjoncteur', 75, y + 6, { width: 100 });
+          doc.text('Modèle ctrl', 180, y + 6, { width: 80 });
+          doc.text('Date', 265, y + 6, { width: 55 });
+          doc.text('Contrôleur', 325, y + 6, { width: 80 });
+          doc.text('Statut', 410, y + 6, { width: 65 });
+          doc.text('Points', 480, y + 6, { width: 70, align: 'center' });
+          y += 20;
+
+          for (const dc of deviceControls) {
+            if (y > 750) {
+              doc.addPage();
+              drawHeader();
+              y = 90;
+              // Re-draw header
+              doc.rect(40, y, 515, 20).fillColor(colors.grayLight).fill();
+              doc.font('Helvetica-Bold').fontSize(7).fillColor(colors.text);
+              doc.text('N°', 45, y + 6, { width: 25 });
+              doc.text('Disjoncteur', 75, y + 6, { width: 100 });
+              doc.text('Modèle ctrl', 180, y + 6, { width: 80 });
+              doc.text('Date', 265, y + 6, { width: 55 });
+              doc.text('Contrôleur', 325, y + 6, { width: 80 });
+              doc.text('Statut', 410, y + 6, { width: 65 });
+              doc.text('Points', 480, y + 6, { width: 70, align: 'center' });
+              y += 20;
+            }
+
+            const bg = deviceControls.indexOf(dc) % 2 === 0 ? '#ffffff' : '#f9fafb';
+            doc.rect(40, y, 515, 16).fillColor(bg).fill();
+
+            doc.font('Helvetica').fontSize(7).fillColor(colors.text);
+            doc.text(dc.position_number || '-', 45, y + 4, { width: 25 });
+            doc.text((dc.device_name || '-').substring(0, 20), 75, y + 4, { width: 100 });
+            doc.text((dc.template_name || '-').substring(0, 16), 180, y + 4, { width: 80 });
+            doc.text(new Date(dc.performed_at).toLocaleDateString('fr-FR'), 265, y + 4, { width: 55 });
+            doc.text((dc.performed_by || '-').substring(0, 14), 325, y + 4, { width: 80 });
+
+            const dcColor = statusColors[dc.status] || colors.gray;
+            doc.roundedRect(410, y + 2, 55, 12, 2).fillColor(dcColor).fill();
+            doc.font('Helvetica-Bold').fontSize(5).fillColor('#ffffff');
+            doc.text(statusLabels[dc.status] || dc.status, 410, y + 5, { width: 55, align: 'center' });
+
+            const pts = (dc.checklist_results || []).length;
+            const okPts = (dc.checklist_results || []).filter(r => r.status === 'conform').length;
+            doc.font('Helvetica').fontSize(7).fillColor(colors.textMuted);
+            doc.text(`${okPts}/${pts}`, 480, y + 4, { width: 70, align: 'center' });
+
+            y += 16;
+          }
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FOOTER ON ALL PAGES
+    // ═══════════════════════════════════════════════════════════════════
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.rect(0, 810, 595, 32).fillColor(colors.grayLight).fill();
+      doc.fontSize(7).fillColor(colors.textMuted);
+      doc.text(`Rapport de contrôles - ${siteSettings.company_name || site} - Généré le ${new Date().toLocaleDateString('fr-FR')}`, 50, 818, { width: 350 });
+      doc.text(`Page ${i + 1} / ${range.count}`, 400, 818, { width: 150, align: 'right' });
+    }
+
+    doc.end();
+
+  } catch (e) {
+    console.error('[CONTROLS] Bulk PDF report error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'PDF generation failed: ' + e.message });
+  }
+});
+
+// ============================================================
 // AUDIT TRAIL - Historique des modifications
 // ============================================================
 
