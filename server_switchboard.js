@@ -1022,9 +1022,15 @@ async function ensureSchema() {
       END IF;
 
       -- =====================================================
-      -- CONTROL TEMPLATES: Nouveaux target_type
+      -- CONTROL TEMPLATES: Nouveaux target_type + element_filter
       -- =====================================================
       -- Les target_type supportés sont maintenant: switchboard, device, vsd, meca, mobile_equipment
+      -- element_filter permet de filtrer par type d'élément (ex: 'ddr' pour ne cibler que les DDR)
+
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'control_templates' AND column_name = 'element_filter') THEN
+        ALTER TABLE control_templates ADD COLUMN element_filter TEXT;
+        -- Valeurs possibles: null (tous), 'ddr' (DDR uniquement), 'disjoncteur' (disjoncteurs non-DDR)
+      END IF;
 
       -- Supprimer l'ancienne contrainte si elle existe
       BEGIN
@@ -6329,17 +6335,17 @@ app.post('/api/switchboard/controls/templates', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { name, description, target_type, frequency_months, checklist_items } = req.body;
+    const { name, description, target_type, frequency_months, checklist_items, element_filter } = req.body;
     if (!name) return res.status(400).json({ error: 'Name required' });
 
     const createdBy = req.headers['x-user-email'] || req.headers['x-user-name'] || 'unknown';
 
     const { rows } = await quickQuery(`
-      INSERT INTO control_templates (site, name, description, target_type, frequency_months, checklist_items, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO control_templates (site, name, description, target_type, frequency_months, checklist_items, created_by, element_filter)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
     `, [site, name, description || null, target_type || 'switchboard', frequency_months || 12,
-        JSON.stringify(checklist_items || []), createdBy]);
+        JSON.stringify(checklist_items || []), createdBy, element_filter || null]);
 
     res.json({ template: rows[0] });
   } catch (e) {
@@ -6355,7 +6361,7 @@ app.put('/api/switchboard/controls/templates/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
     const { id } = req.params;
-    const { name, description, target_type, frequency_months, checklist_items, is_active } = req.body;
+    const { name, description, target_type, frequency_months, checklist_items, is_active, element_filter } = req.body;
 
     const { rows } = await quickQuery(`
       UPDATE control_templates
@@ -6365,11 +6371,12 @@ app.put('/api/switchboard/controls/templates/:id', async (req, res) => {
           frequency_months = COALESCE($4, frequency_months),
           checklist_items = COALESCE($5, checklist_items),
           is_active = COALESCE($6, is_active),
+          element_filter = $7,
           updated_at = NOW()
-      WHERE id = $7 AND site = $8
+      WHERE id = $8 AND site = $9
       RETURNING *
     `, [name, description, target_type, frequency_months,
-        checklist_items ? JSON.stringify(checklist_items) : null, is_active, id, site]);
+        checklist_items ? JSON.stringify(checklist_items) : null, is_active, element_filter !== undefined ? element_filter : null, id, site]);
 
     if (!rows.length) return res.status(404).json({ error: 'Template not found' });
     res.json({ template: rows[0] });
@@ -7283,6 +7290,74 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     res.json(results);
   } catch (e) {
     console.error('[CONTROLS] List equipment error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
+// SWITCHBOARDS WITH DDR COUNT (for DDR-specific control scheduling)
+// ============================================================
+app.get('/api/switchboard/controls/switchboards-with-ddr', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    // Get switchboards with their DDR count
+    const { rows } = await quickQuery(`
+      SELECT
+        s.id, s.code, s.name, s.building_code, s.floor, s.room,
+        COUNT(d.id) FILTER (WHERE d.is_differential = true) as ddr_count,
+        COUNT(d.id) as total_devices
+      FROM switchboards s
+      LEFT JOIN devices d ON d.switchboard_id = s.id
+      WHERE s.site = $1
+      GROUP BY s.id, s.code, s.name, s.building_code, s.floor, s.room
+      HAVING COUNT(d.id) FILTER (WHERE d.is_differential = true) > 0
+      ORDER BY s.code
+    `, [site]);
+
+    res.json({ switchboards: rows });
+  } catch (e) {
+    console.error('[CONTROLS] Switchboards with DDR error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get DDR devices for specific switchboards (for control scheduling)
+app.get('/api/switchboard/controls/ddr-devices', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { switchboard_ids } = req.query;
+    if (!switchboard_ids) return res.status(400).json({ error: 'switchboard_ids required' });
+
+    const ids = switchboard_ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+    if (ids.length === 0) return res.json({ devices: {} });
+
+    // Get DDR devices grouped by switchboard
+    const { rows } = await quickQuery(`
+      SELECT
+        d.id, d.name, d.switchboard_id, d.position_number,
+        d.differential_sensitivity_ma, d.differential_type
+      FROM devices d
+      INNER JOIN switchboards s ON s.id = d.switchboard_id
+      WHERE s.site = $1 AND d.switchboard_id = ANY($2) AND d.is_differential = true
+      ORDER BY d.switchboard_id, d.position_number
+    `, [site, ids]);
+
+    // Group by switchboard_id
+    const devicesBySwitchboard = {};
+    rows.forEach(d => {
+      if (!devicesBySwitchboard[d.switchboard_id]) {
+        devicesBySwitchboard[d.switchboard_id] = [];
+      }
+      devicesBySwitchboard[d.switchboard_id].push(d);
+    });
+
+    res.json({ devices: devicesBySwitchboard });
+  } catch (e) {
+    console.error('[CONTROLS] DDR devices error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

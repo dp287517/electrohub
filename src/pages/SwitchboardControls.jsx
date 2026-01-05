@@ -1506,23 +1506,35 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
           <div className="flex items-start justify-between mb-3">
             <div>
               <h4 className="font-bold text-gray-900">{t.name}</h4>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                t.target_type === 'switchboard' ? 'bg-blue-100 text-blue-700' :
-                t.target_type === 'vsd' ? 'bg-slate-100 text-slate-700' :
-                t.target_type === 'meca' ? 'bg-orange-100 text-orange-700' :
-                t.target_type === 'mobile_equipment' ? 'bg-cyan-100 text-cyan-700' :
-                t.target_type === 'hv' ? 'bg-amber-100 text-amber-700' :
-                t.target_type === 'glo' ? 'bg-emerald-100 text-emerald-700' :
-                'bg-purple-100 text-purple-700'
-              }`}>
-                {t.target_type === 'switchboard' ? '⚡ Tableau' :
-                 t.target_type === 'vsd' ? '⚙️ VSD' :
-                 t.target_type === 'meca' ? '🔧 Mécanique' :
-                 t.target_type === 'mobile_equipment' ? '🚜 Mobile' :
-                 t.target_type === 'hv' ? '⚡ HT' :
-                 t.target_type === 'glo' ? '🔋 GLO' :
-                 '🔌 Disjoncteur'}
-              </span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  t.target_type === 'switchboard' ? 'bg-blue-100 text-blue-700' :
+                  t.target_type === 'vsd' ? 'bg-slate-100 text-slate-700' :
+                  t.target_type === 'meca' ? 'bg-orange-100 text-orange-700' :
+                  t.target_type === 'mobile_equipment' ? 'bg-cyan-100 text-cyan-700' :
+                  t.target_type === 'hv' ? 'bg-amber-100 text-amber-700' :
+                  t.target_type === 'glo' ? 'bg-emerald-100 text-emerald-700' :
+                  'bg-purple-100 text-purple-700'
+                }`}>
+                  {t.target_type === 'switchboard' ? '⚡ Tableau' :
+                   t.target_type === 'vsd' ? '⚙️ VSD' :
+                   t.target_type === 'meca' ? '🔧 Mécanique' :
+                   t.target_type === 'mobile_equipment' ? '🚜 Mobile' :
+                   t.target_type === 'hv' ? '⚡ HT' :
+                   t.target_type === 'glo' ? '🔋 GLO' :
+                   '🔌 Disjoncteur'}
+                </span>
+                {t.element_filter === 'ddr' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                    DDR uniquement
+                  </span>
+                )}
+                {t.element_filter === 'non_ddr' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                    Non-DDR
+                  </span>
+                )}
+              </div>
             </div>
             <span className="text-2xl">{
               t.target_type === 'switchboard' ? '⚡' :
@@ -1563,6 +1575,7 @@ function TemplatesTab({ templates, onEdit, onDelete }) {
 function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
   const [name, setName] = useState(template?.name || "");
   const [targetType, setTargetType] = useState(template?.target_type || "switchboard");
+  const [elementFilter, setElementFilter] = useState(template?.element_filter || "");
   const [frequencyMonths, setFrequencyMonths] = useState(template?.frequency_months || 12);
   const [checklistItems, setChecklistItems] = useState(template?.checklist_items || []);
   const [saving, setSaving] = useState(false);
@@ -1595,6 +1608,7 @@ function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
       await onSave({
         name,
         target_type: targetType,
+        element_filter: targetType === 'device' ? (elementFilter || null) : null,
         frequency_months: Number(frequencyMonths),
         checklist_items: checklistItems,
       });
@@ -1637,7 +1651,10 @@ function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
               <label className="block text-sm font-medium mb-1">Type de cible</label>
               <select
                 value={targetType}
-                onChange={(e) => setTargetType(e.target.value)}
+                onChange={(e) => {
+                  setTargetType(e.target.value);
+                  if (e.target.value !== 'device') setElementFilter("");
+                }}
                 className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
               >
                 <option value="switchboard">⚡ Tableau électrique</option>
@@ -1681,6 +1698,27 @@ function TemplateModal({ template, datahubCategories = [], onClose, onSave }) {
               </select>
             </div>
           </div>
+
+          {/* Element Filter (only for device type) */}
+          {targetType === 'device' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Filtre par type d'élément</label>
+              <select
+                value={elementFilter}
+                onChange={(e) => setElementFilter(e.target.value)}
+                className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
+              >
+                <option value="">Tous les disjoncteurs</option>
+                <option value="ddr">DDR uniquement (Dispositifs Différentiels)</option>
+                <option value="non_ddr">Disjoncteurs non-DDR uniquement</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {elementFilter === 'ddr' && "Seuls les tableaux ayant des DDR seront proposés lors de la planification"}
+                {elementFilter === 'non_ddr' && "Seuls les disjoncteurs non-différentiels seront comptabilisés"}
+                {!elementFilter && "Tous les disjoncteurs du tableau seront inclus"}
+              </p>
+            </div>
+          )}
 
           {/* Checklist Items */}
           <div>
@@ -1797,6 +1835,17 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
   const [selectedSwitchboardsForDevices, setSelectedSwitchboardsForDevices] = useState(new Set());
   const [loadingDevices, setLoadingDevices] = useState(false);
 
+  // DDR-specific states (for element_filter = 'ddr' templates)
+  const [switchboardsWithDDR, setSwitchboardsWithDDR] = useState([]); // List of switchboards that have DDR devices
+  const [ddrDevicesBySwitchboard, setDdrDevicesBySwitchboard] = useState({}); // { switchboardId: [ddr_devices] }
+  const [loadingDDRData, setLoadingDDRData] = useState(false);
+
+  // Get selected template's element_filter
+  const selectedTemplate = (templates || []).find(t => t.id === Number(templateId));
+  const elementFilter = selectedTemplate?.element_filter || null;
+  const isDDRControl = elementFilter === 'ddr';
+  const isNonDDRControl = elementFilter === 'non_ddr';
+
   // Helper to check if targetType is a datahub category
   const isDatahubCategory = targetType.startsWith('datahub_');
   const datahubCategoryId = isDatahubCategory ? targetType.replace('datahub_', '') : null;
@@ -1883,6 +1932,33 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
     }
   }, [targetType, selectedSwitchboardsForDevices]);
 
+  // Load switchboards with DDR when DDR template is selected
+  useEffect(() => {
+    if (targetType === 'device' && isDDRControl) {
+      setLoadingDDRData(true);
+      api.switchboardControls.listSwitchboardsWithDDR()
+        .then(res => {
+          setSwitchboardsWithDDR(res.switchboards || []);
+        })
+        .catch(e => console.warn('Load switchboards with DDR error:', e))
+        .finally(() => setLoadingDDRData(false));
+    }
+  }, [targetType, isDDRControl]);
+
+  // Load DDR devices when switchboards are selected for DDR control
+  useEffect(() => {
+    if (targetType === 'device' && isDDRControl && selectedSwitchboardsForDevices.size > 0) {
+      const boardIds = Array.from(selectedSwitchboardsForDevices).filter(id => id && id !== 'undefined');
+      if (boardIds.length > 0) {
+        api.switchboardControls.listDDRDevices(boardIds)
+          .then(res => {
+            setDdrDevicesBySwitchboard(res.devices || {});
+          })
+          .catch(e => console.warn('Load DDR devices error:', e));
+      }
+    }
+  }, [targetType, isDDRControl, selectedSwitchboardsForDevices]);
+
   // Filter templates: for datahub categories, look for templates with target_type matching the category
   const filteredTemplates = (templates || []).filter((t) => {
     if (isDatahubCategory) {
@@ -1943,12 +2019,13 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
   };
 
   // Device-specific: filter switchboards that have scheduled controls
-  const switchboardsWithSchedules = (switchboards || []).filter(sb =>
-    switchboardSchedules[sb.id]?.next_due_date
-  );
+  // For DDR control: use switchboards with DDR, otherwise use switchboards with scheduled controls
+  const switchboardsForDeviceControl = isDDRControl
+    ? switchboardsWithDDR
+    : (switchboards || []).filter(sb => switchboardSchedules[sb.id]?.next_due_date);
 
   // Device-specific: filter by search
-  const filteredSwitchboardsForDevices = switchboardsWithSchedules.filter(sb => {
+  const filteredSwitchboardsForDevices = switchboardsForDeviceControl.filter(sb => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (sb.code || '').toLowerCase().includes(q) ||
@@ -1957,12 +2034,31 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
   });
 
   // Device-specific: count total devices from selected switchboards
+  // For DDR control: count only DDR devices
+  // For non-DDR control: count only non-DDR devices
   const getTotalDevicesCount = () => {
     let count = 0;
     for (const boardId of selectedSwitchboardsForDevices) {
-      count += (devicesBySwitchboard[boardId] || []).length;
+      if (isDDRControl) {
+        // Count DDR devices from ddrDevicesBySwitchboard
+        count += (ddrDevicesBySwitchboard[boardId] || []).length;
+      } else if (isNonDDRControl) {
+        // Count non-DDR devices
+        const allDevices = devicesBySwitchboard[boardId] || [];
+        count += allDevices.filter(d => !d.is_differential).length;
+      } else {
+        // Count all devices
+        count += (devicesBySwitchboard[boardId] || []).length;
+      }
     }
     return count;
+  };
+
+  // Get the appropriate device label based on element filter
+  const getDeviceLabel = () => {
+    if (isDDRControl) return 'DDR';
+    if (isNonDDRControl) return 'disjoncteur(s) non-DDR';
+    return 'disjoncteur(s)';
   };
 
   // Get equipment type label
@@ -2051,7 +2147,12 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
     if (targetType === 'device') {
       if (selectedSwitchboardsForDevices.size === 0) return alert("Sélectionnez au moins un tableau");
       const totalDevices = getTotalDevicesCount();
-      if (totalDevices === 0) return alert("Aucun disjoncteur trouvé dans les tableaux sélectionnés");
+      const noDevicesMsg = isDDRControl
+        ? "Aucun DDR trouvé dans les tableaux sélectionnés"
+        : isNonDDRControl
+          ? "Aucun disjoncteur non-DDR trouvé dans les tableaux sélectionnés"
+          : "Aucun disjoncteur trouvé dans les tableaux sélectionnés";
+      if (totalDevices === 0) return alert(noDevicesMsg);
 
       setSaving(true);
       setProgress({ current: 0, total: totalDevices });
@@ -2062,8 +2163,22 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
 
         // Iterate through selected switchboards and their devices
         for (const boardId of selectedSwitchboardsForDevices) {
-          const devices = devicesBySwitchboard[boardId] || [];
-          const schedule = switchboardSchedules[boardId];
+          // Get the appropriate device list based on element_filter
+          let devices;
+          if (isDDRControl) {
+            // Use only DDR devices
+            devices = ddrDevicesBySwitchboard[boardId] || [];
+          } else if (isNonDDRControl) {
+            // Use only non-DDR devices
+            const allDevices = devicesBySwitchboard[boardId] || [];
+            devices = allDevices.filter(d => !d.is_differential);
+          } else {
+            // Use all devices
+            devices = devicesBySwitchboard[boardId] || [];
+          }
+
+          // For DDR controls, we can use a date directly (not from switchboard schedule)
+          const schedule = isDDRControl ? null : switchboardSchedules[boardId];
           const deviceDate = schedule?.next_due_date || nextDueDate;
 
           for (const device of devices) {
@@ -2279,10 +2394,23 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
           {/* Device selection - linked to switchboard schedules */}
           {targetType === "device" && (
             <div>
-              <label className="block text-sm font-medium mb-1">Tableaux avec contrôles planifiés</label>
-              <p className="text-xs text-gray-500 mb-2">
-                Les disjoncteurs hériteront de la date de contrôle de leur tableau
-              </p>
+              <label className="block text-sm font-medium mb-1">
+                {isDDRControl ? 'Tableaux contenant des DDR' : 'Tableaux avec contrôles planifiés'}
+              </label>
+
+              {/* Info message based on control type */}
+              {isDDRControl ? (
+                <div className="p-2 bg-purple-50 border border-purple-200 rounded-lg mb-2">
+                  <p className="text-xs text-purple-700">
+                    <strong>Contrôle DDR :</strong> Seuls les tableaux ayant des DDR sont listés.
+                    Le contrôle sera créé uniquement pour les disjoncteurs différentiels.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500 mb-2">
+                  Les disjoncteurs hériteront de la date de contrôle de leur tableau
+                </p>
+              )}
 
               {/* Search */}
               <div className="mb-2">
@@ -2296,7 +2424,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
               </div>
 
               {/* Loading state */}
-              {loadingDevices && (
+              {(loadingDevices || loadingDDRData) && (
                 <div className="border rounded-xl p-4 text-center text-gray-500">
                   <div className="w-6 h-6 border-2 border-blue-200 rounded-full animate-spin border-t-blue-600 mx-auto mb-2" />
                   Chargement des planifications...
@@ -2304,13 +2432,16 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
               )}
 
               {/* Switchboard list with their scheduled dates */}
-              {!loadingDevices && (
+              {!loadingDevices && !loadingDDRData && (
                 <div className="border rounded-xl max-h-56 overflow-y-auto divide-y">
                   {filteredSwitchboardsForDevices.map((sb) => {
                     const schedule = switchboardSchedules[sb.id];
+                    // For DDR controls, get DDR count from switchboardsWithDDR, otherwise use loaded devices
+                    const ddrCount = isDDRControl ? (sb.ddr_count || 0) : 0;
                     const devices = devicesBySwitchboard[sb.id] || [];
+                    const deviceCount = isDDRControl ? ddrCount : devices.length;
                     const isSelected = selectedSwitchboardsForDevices.has(sb.id);
-                    const dateFormatted = schedule?.next_due_date
+                    const dateFormatted = !isDDRControl && schedule?.next_due_date
                       ? new Date(schedule.next_due_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })
                       : '';
 
@@ -2334,8 +2465,11 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
                           </p>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <p className="text-sm font-medium text-blue-700">{dateFormatted}</p>
-                          {isSelected && devices.length > 0 && (
+                          {dateFormatted && <p className="text-sm font-medium text-blue-700">{dateFormatted}</p>}
+                          {isDDRControl && (
+                            <p className="text-xs text-purple-600 font-medium">{ddrCount} DDR</p>
+                          )}
+                          {!isDDRControl && isSelected && devices.length > 0 && (
                             <p className="text-xs text-gray-500">{devices.length} disj.</p>
                           )}
                         </div>
@@ -2343,10 +2477,19 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
                       </label>
                     );
                   })}
-                  {filteredSwitchboardsForDevices.length === 0 && !loadingDevices && (
+                  {filteredSwitchboardsForDevices.length === 0 && !loadingDevices && !loadingDDRData && (
                     <div className="p-4 text-center text-gray-500 text-sm">
-                      <p>Aucun tableau avec contrôle planifié</p>
-                      <p className="text-xs mt-1">Planifiez d'abord des contrôles sur les tableaux</p>
+                      {isDDRControl ? (
+                        <>
+                          <p>Aucun tableau avec des DDR</p>
+                          <p className="text-xs mt-1">Vérifiez que vos tableaux ont des disjoncteurs différentiels</p>
+                        </>
+                      ) : (
+                        <>
+                          <p>Aucun tableau avec contrôle planifié</p>
+                          <p className="text-xs mt-1">Planifiez d'abord des contrôles sur les tableaux</p>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2358,9 +2501,22 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
                   <p className="text-sm text-blue-800">
                     <span className="font-medium">{selectedSwitchboardsForDevices.size}</span> tableau(x) sélectionné(s)
                     {getTotalDevicesCount() > 0 && (
-                      <span> → <span className="font-medium">{getTotalDevicesCount()}</span> disjoncteur(s) à contrôler</span>
+                      <span> → <span className="font-medium">{getTotalDevicesCount()}</span> {getDeviceLabel()} à contrôler</span>
                     )}
                   </p>
+                </div>
+              )}
+
+              {/* Date selector for DDR controls (they don't inherit from switchboard schedule) */}
+              {isDDRControl && selectedSwitchboardsForDevices.size > 0 && (
+                <div className="mt-3">
+                  <label className="block text-sm font-medium mb-1">Date du prochain contrôle</label>
+                  <input
+                    type="date"
+                    value={nextDueDate}
+                    onChange={(e) => setNextDueDate(e.target.value)}
+                    className="w-full border rounded-xl px-4 py-3 bg-white text-gray-900"
+                  />
                 </div>
               )}
             </div>
@@ -2477,7 +2633,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], preSel
             {saving
               ? `⏳ ${progress.current}/${progress.total}...`
               : targetType === 'device'
-                ? `✓ Planifier (${getTotalDevicesCount()} disj.)`
+                ? `✓ Planifier (${getTotalDevicesCount()} ${getDeviceLabel()})`
                 : `✓ Planifier (${selectedIds.size})`
             }
           </button>
