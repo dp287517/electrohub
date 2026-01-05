@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X, LogOut, LayoutDashboard, Zap, Shield, Sparkles, Bell } from 'lucide-react';
 import { ADMIN_EMAILS } from '../lib/permissions';
-import { AnimatedAvatar } from './AIAvatar/AnimatedAvatar';
+import { VideoAvatar } from './AIAvatar/VideoAvatar';
+import { AVATAR_STYLES } from './AIAvatar/AnimatedAvatar';
 import AvatarChat from './AIAvatar/AvatarChat';
 import AvatarSelector from './AIAvatar/AvatarSelector';
 import { useNotifications } from './Notifications/NotificationProvider';
@@ -168,7 +169,7 @@ export default function Navbar() {
                         className="relative group"
                         title="Parler à votre assistant IA"
                       >
-                        <AnimatedAvatar
+                        <VideoAvatar
                           style={avatarStyle}
                           size="sm"
                           speaking={avatarHovered}
@@ -249,7 +250,7 @@ export default function Navbar() {
                 }}
                 className="relative"
               >
-                <AnimatedAvatar
+                <VideoAvatar
                   style={avatarStyle}
                   size="md"
                   speaking={false}

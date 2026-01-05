@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
+import { VideoAvatar } from './VideoAvatar';
+import { AVATAR_STYLES } from './AnimatedAvatar';
 import { Check, X } from 'lucide-react';
 
 export default function AvatarSelector({ currentStyle, onSelect, onClose }) {
@@ -54,7 +55,7 @@ export default function AvatarSelector({ currentStyle, onSelect, onClose }) {
 
                 {/* Avatar */}
                 <div className="flex justify-center mb-3">
-                  <AnimatedAvatar
+                  <VideoAvatar
                     style={key}
                     size="lg"
                     speaking={previewSpeaking === key}
@@ -73,7 +74,7 @@ export default function AvatarSelector({ currentStyle, onSelect, onClose }) {
           {/* Selected Avatar Preview */}
           <div className="mt-6 p-4 bg-gray-50 rounded-xl">
             <div className="flex items-center gap-4">
-              <AnimatedAvatar
+              <VideoAvatar
                 style={selectedStyle}
                 size="xl"
                 speaking={true}
