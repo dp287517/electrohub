@@ -582,32 +582,15 @@ function detectProcedureIntent(message, conversationHistory = []) {
   }
 
   // 2e. TROUBLESHOOTING - Rechercher des dépannages
-  const troubleshootingPatterns = [
-    // Patterns simples avec "dépannage"
-    /^d[ée]pannages?$/i,                                     // "dépannage" seul
-    /^derniers?\s+d[ée]pannages?$/i,                         // "dernier dépannage" exact
-    /derniers?\s+d[ée]pannages?/i,                           // "derniers dépannages"
-    /d[ée]pannages?\s+r[ée]cents?/i,                         // "dépannages récents"
-    /d[ée]pannages?\s+(?:des?|du)/i,                         // "dépannages des/du"
-    /(?:les?\s+)?d[ée]pannages?\s+(?:des?\s+)?(?:\d+)/i,     // "les dépannages des 7"
-    // Patterns avec "derniers jours"
-    /d[ée]pannages?\s+(?:des?\s+)?(?:\d+)\s+(?:derniers?\s+)?jours?/i,
-    /(?:\d+)\s+(?:derniers?\s+)?jours?\s+(?:de\s+)?d[ée]pannages?/i,
-    // Patterns avec interventions/réparations
-    /(?:dernières?|r[ée]centes?)\s+interventions?/i,
-    /interventions?\s+r[ée]centes?/i,
-    /historique\s+(?:des?\s+)?(?:d[ée]pannages?|interventions?|r[ée]parations?)/i,
-    /(?:pannes?|probl[èe]mes?)\s+(?:r[ée]solus?|r[ée]gl[ée]s?)/i,
-    // Patterns généraux
-    /voir\s+(?:les?\s+)?d[ée]pannages?/i,
-    /cherche[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
-    /liste[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
-    /montre[r]?\s+(?:les?\s+)?d[ée]pannages?/i,
-    /(?:qu'?est-ce\s+qu'?on\s+a\s+)?r[ée]par[ée]/i
-  ];
-  if (troubleshootingPatterns.some(p => p.test(m))) {
+  // SIMPLE CHECK: si le message contient "dépannage" et n'est pas une demande de création
+  const containsDepannage = /d[ée]pannage/i.test(m);
+  const isCreateRequest = /(cr[ée]er|nouveau|nouvelle|ajouter|faire|enregistrer)\s+.*d[ée]pannage/i.test(m);
+  const isStatsRequest = /(stats?|statistiques?)\s+.*d[ée]pannage/i.test(m) || /d[ée]pannage.*\s+(stats?|statistiques?)/i.test(m);
+
+  if (containsDepannage && !isCreateRequest && !isStatsRequest) {
+    console.log(`[INTENT] Troubleshooting detected for: "${m}"`);
     // Extract time range if mentioned
-    const daysMatch = m.match(/(\d+)\s+(?:derniers?)?\s*jours?/i);
+    const daysMatch = m.match(/(\d+)\s*(?:derniers?)?\s*jours?/i);
     const days = daysMatch ? parseInt(daysMatch[1]) : 7;
     // Extract filters if mentioned
     const buildingMatch = m.match(/(?:b[âa]timent|building)\s+([A-Za-z0-9]+)/i);
@@ -1644,7 +1627,10 @@ app.post("/chat", async (req, res) => {
         case INTENT_TYPES.TROUBLESHOOTING: {
           try {
             const filters = intent.filters || {};
-            const days = filters.days || 7;
+            const days = filters.days || 30; // Default 30 jours
+            const equipmentContext = context?.equipment;
+
+            console.log(`[TROUBLESHOOTING] Searching with days=${days}, equipment=${equipmentContext?.name || 'all'}`);
 
             let sql = `
               SELECT tr.id, tr.title, tr.description, tr.severity, tr.category,
@@ -1658,6 +1644,18 @@ app.post("/chat", async (req, res) => {
             `;
             const queryParams = [];
 
+            // Si on est dans le contexte d'un équipement spécifique
+            if (equipmentContext?.id) {
+              queryParams.push(equipmentContext.id);
+              sql += ` AND (tr.equipment_id = $${queryParams.length}`;
+              // Aussi chercher par nom/code si l'ID ne match pas
+              if (equipmentContext.name) {
+                queryParams.push(`%${equipmentContext.name}%`);
+                sql += ` OR tr.equipment_name ILIKE $${queryParams.length}`;
+              }
+              sql += `)`;
+            }
+
             if (filters.building) {
               queryParams.push(`%${filters.building}%`);
               sql += ` AND tr.building_code ILIKE $${queryParams.length}`;
@@ -1670,22 +1668,29 @@ app.post("/chat", async (req, res) => {
 
             sql += ` ORDER BY tr.created_at DESC LIMIT 20`;
 
+            console.log(`[TROUBLESHOOTING] SQL:`, sql);
+            console.log(`[TROUBLESHOOTING] Params:`, queryParams);
+
             const result = await pool.query(sql, queryParams);
             const records = result.rows;
 
+            console.log(`[TROUBLESHOOTING] Found ${records.length} records`);
+
+            const equipmentLabel = equipmentContext?.name ? ` pour ${equipmentContext.name}` : '';
+
             if (records.length === 0) {
               return res.json({
-                message: `🔧 **Aucun dépannage** sur les ${days} derniers jours${filters.building ? ` pour le bâtiment ${filters.building}` : ''}.\n\nC'est une bonne nouvelle ! 👍`,
+                message: `🔧 **Aucun dépannage**${equipmentLabel} sur les ${days} derniers jours${filters.building ? ` (bâtiment ${filters.building})` : ''}.\n\nC'est une bonne nouvelle ! 👍`,
                 actions: [
                   { label: '📊 Stats dépannages', prompt: 'Statistiques dépannages' },
-                  { label: '🔙 30 derniers jours', prompt: 'Dépannages des 30 derniers jours' }
+                  { label: '🔙 Tous les dépannages', prompt: 'Tous les dépannages' }
                 ],
                 provider: 'system'
               });
             }
 
             const severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', cosmetic: '⚪' };
-            let response = `🔧 **${records.length} dépannage(s)** sur les ${days} derniers jours:\n\n`;
+            let response = `🔧 **${records.length} dépannage(s)**${equipmentLabel} (${days} derniers jours):\n\n`;
 
             records.slice(0, 10).forEach((r, i) => {
               const date = new Date(r.created_at).toLocaleDateString('fr-FR');
@@ -1693,7 +1698,7 @@ app.post("/chat", async (req, res) => {
               response += `   • ${r.equipment_name || 'Équipement non spécifié'} | ${date}\n`;
               response += `   • Technicien: ${r.technician_name || 'Non spécifié'}`;
               if (r.solution) {
-                response += `\n   • Solution: ${r.solution.substring(0, 60)}...`;
+                response += `\n   • Solution: ${r.solution.substring(0, 60)}${r.solution.length > 60 ? '...' : ''}`;
               }
               response += `\n\n`;
             });
@@ -1711,7 +1716,7 @@ app.post("/chat", async (req, res) => {
               actions: [
                 { label: '📊 Stats', prompt: 'Statistiques dépannages' },
                 { label: '🔍 Critiques', prompt: 'Dépannages critiques' },
-                { label: '📅 30j', prompt: 'Dépannages des 30 derniers jours' }
+                { label: '📅 90j', prompt: 'Dépannages des 90 derniers jours' }
               ],
               provider: 'system'
             });
