@@ -416,51 +416,77 @@ function detectAgentType(message, toolResults) {
   const agentPatterns = {
     vsd: {
       keywords: ['vsd', 'variateur', 'variateurs', 'frequency drive', 'convertisseur de fréquence', 'vfd', 'drive', 'drives'],
-      tools: ['search_vsd', 'get_vsd_details']
+      tools: ['search_vsd', 'get_vsd_details'],
+      equipmentTypes: ['vsd']
     },
     meca: {
       keywords: ['meca', 'mécanique', 'mecanique', 'moteur', 'pompe', 'compresseur', 'ventilateur', 'agitateur', 'convoyeur', 'équipement mécanique'],
-      tools: ['search_meca', 'get_meca_details']
+      tools: ['search_meca', 'get_meca_details'],
+      equipmentTypes: ['meca']
     },
     glo: {
       keywords: ['glo', 'éclairage', 'eclairage', 'luminaire', 'baes', 'blocs autonomes', 'éclairage de sécurité', 'secours'],
-      tools: ['search_glo', 'get_glo_details']
+      tools: ['search_glo', 'get_glo_details'],
+      equipmentTypes: ['glo']
     },
     hv: {
       keywords: ['hv', 'haute tension', 'ht', 'high voltage', 'transformateur', 'cellule ht', 'poste de transformation'],
-      tools: ['search_hv', 'get_hv_details']
+      tools: ['search_hv', 'get_hv_details'],
+      equipmentTypes: ['hv']
     },
     mobile: {
       keywords: ['mobile', 'équipement mobile', 'portable', 'appareil mobile', 'outillage mobile', 'chariot'],
-      tools: ['search_mobile', 'get_mobile_details']
+      tools: ['search_mobile', 'get_mobile_details'],
+      equipmentTypes: ['mobile']
     },
     atex: {
       keywords: ['atex', 'zone atex', 'explosion', 'explosif', 'zone ex', 'atmosphère explosive', 'drpce'],
-      tools: ['search_atex', 'get_atex_details']
+      tools: ['search_atex', 'get_atex_details'],
+      equipmentTypes: ['atex']
     },
     switchboard: {
       keywords: ['tableau', 'tableaux', 'armoire', 'switchboard', 'coffret', 'tgbt', 'td', 'tableau électrique', 'switchgear'],
-      tools: ['search_switchboard', 'get_switchboard_details', 'search_equipment']
+      tools: ['search_switchboard', 'get_switchboard_details'],
+      equipmentTypes: ['switchboard']
     },
     doors: {
       keywords: ['porte', 'portes', 'door', 'accès', 'entrée', 'sortie secours'],
-      tools: ['search_doors', 'get_doors_details']
+      tools: ['search_doors', 'get_doors_details'],
+      equipmentTypes: ['doors', 'fire_doors']
     },
     datahub: {
       keywords: ['datahub', 'data hub', 'capteur', 'capteurs', 'sensor', 'monitoring', 'mesure', 'télémétrie'],
-      tools: ['search_datahub', 'get_datahub_details']
+      tools: ['search_datahub', 'get_datahub_details'],
+      equipmentTypes: ['datahub']
     },
     firecontrol: {
       keywords: ['incendie', 'fire', 'détection incendie', 'sprinkler', 'extincteur', 'alarme incendie', 'ssi', 'désenfumage'],
-      tools: ['search_fire_control', 'get_fire_control_details']
+      tools: ['search_fire_control', 'get_fire_control_details'],
+      equipmentTypes: ['firecontrol', 'fire']
     }
   };
 
-  // 1. Vérifier d'abord les tools utilisés (priorité haute)
+  // 1. Vérifier d'abord si search_equipment a été utilisé avec un equipment_type spécifique
+  const searchEquipmentResult = toolResults.find(r =>
+    r.success && (r.toolName === 'search_equipment' || r.tool_call_id?.includes('search_equipment'))
+  );
+
+  if (searchEquipmentResult?.args?.equipment_type) {
+    const eqType = searchEquipmentResult.args.equipment_type.toLowerCase();
+    for (const [agentType, config] of Object.entries(agentPatterns)) {
+      if (config.equipmentTypes?.includes(eqType)) {
+        console.log(`[AGENT] Detected ${agentType} from search_equipment equipment_type: ${eqType}`);
+        return agentType;
+      }
+    }
+  }
+
+  // 2. Vérifier les tools spécifiques utilisés (priorité haute)
   const toolsUsed = toolResults
     .filter(r => r.success)
     .map(r => {
-      // Extraire le nom du tool depuis tool_call_id
+      // Utiliser toolName si disponible, sinon extraire depuis tool_call_id
+      if (r.toolName) return r.toolName;
       const parts = r.tool_call_id?.split('_call_');
       return parts?.[0] || '';
     });

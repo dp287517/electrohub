@@ -2188,16 +2188,23 @@ router.get("/auth-audit/stats", adminOnly, async (req, res) => {
 // APP SETTINGS - Global application settings (AI Icon, etc.)
 // ============================================================
 
-// Ensure app_settings table exists
+// Ensure app_settings table exists with all required columns
 async function ensureAppSettingsTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value JSONB,
+      text_value TEXT,
       binary_data BYTEA,
       mime_type TEXT,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+
+  // Add text_value column if it doesn't exist (for existing tables)
+  await pool.query(`
+    ALTER TABLE app_settings
+    ADD COLUMN IF NOT EXISTS text_value TEXT
   `);
 }
 
