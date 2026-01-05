@@ -5416,11 +5416,12 @@ app.get("/api/procedures/equipment-categories", async (req, res) => {
     const site = req.query.site || req.headers["x-site"];
 
     // Define equipment types with their labels and column mappings
+    // Note: Some tables use site (TEXT), others use site_id (INTEGER)
     const equipmentTypes = [
       { type: 'switchboard', label: 'Armoires électriques', table: 'switchboards', siteCol: 'site', buildingCol: 'building_code', hasCategories: false },
       { type: 'vsd', label: 'Variateurs de vitesse', table: 'vsd_equipments', siteCol: 'site', buildingCol: 'building', hasCategories: false },
-      { type: 'meca', label: 'Équipements mécaniques', table: 'meca_equipments', siteCol: 'site', buildingCol: 'building', hasCategories: false },
-      { type: 'atex', label: 'Équipements ATEX', table: 'atex_equipments', siteCol: 'site', buildingCol: 'building', hasCategories: false },
+      { type: 'meca', label: 'Équipements mécaniques', table: 'meca_equipments', siteCol: null, buildingCol: 'building', hasCategories: false },
+      { type: 'atex', label: 'Équipements ATEX', table: 'atex_equipments', siteCol: null, buildingCol: 'building', hasCategories: false },
       { type: 'hv', label: 'Haute Tension', table: 'hv_equipments', siteCol: 'site', buildingCol: 'building', hasCategories: false },
       { type: 'glo', label: 'UPS/Batteries/Éclairage', table: 'glo_equipments', siteCol: 'site', buildingCol: 'building', hasCategories: false },
       { type: 'mobile', label: 'Équipements mobiles', table: 'me_equipments', siteCol: 'site', buildingCol: 'location', hasCategories: false },
@@ -5436,15 +5437,20 @@ app.get("/api/procedures/equipment-categories", async (req, res) => {
       let buildings = [];
 
       try {
-        // Count total items (try with site filter, fallback to no filter)
+        // Count total items
         let countResult;
-        try {
-          countResult = await pool.query(
-            `SELECT COUNT(*) as count FROM ${eqType.table} WHERE ${eqType.siteCol} = $1`,
-            [site]
-          );
-        } catch {
-          // Column might not exist, try without site filter
+        if (eqType.siteCol) {
+          try {
+            countResult = await pool.query(
+              `SELECT COUNT(*) as count FROM ${eqType.table} WHERE ${eqType.siteCol} = $1`,
+              [site]
+            );
+          } catch {
+            // Column might not exist, try without site filter
+            countResult = await pool.query(`SELECT COUNT(*) as count FROM ${eqType.table}`);
+          }
+        } else {
+          // No site column, count all
           countResult = await pool.query(`SELECT COUNT(*) as count FROM ${eqType.table}`);
         }
         count = parseInt(countResult.rows[0]?.count || 0);
@@ -5452,12 +5458,18 @@ app.get("/api/procedures/equipment-categories", async (req, res) => {
         // Get distinct buildings
         try {
           let buildingsResult;
-          try {
-            buildingsResult = await pool.query(
-              `SELECT DISTINCT ${eqType.buildingCol} as building FROM ${eqType.table} WHERE ${eqType.siteCol} = $1 AND ${eqType.buildingCol} IS NOT NULL AND ${eqType.buildingCol} != '' ORDER BY ${eqType.buildingCol}`,
-              [site]
-            );
-          } catch {
+          if (eqType.siteCol) {
+            try {
+              buildingsResult = await pool.query(
+                `SELECT DISTINCT ${eqType.buildingCol} as building FROM ${eqType.table} WHERE ${eqType.siteCol} = $1 AND ${eqType.buildingCol} IS NOT NULL AND ${eqType.buildingCol} != '' ORDER BY ${eqType.buildingCol}`,
+                [site]
+              );
+            } catch {
+              buildingsResult = await pool.query(
+                `SELECT DISTINCT ${eqType.buildingCol} as building FROM ${eqType.table} WHERE ${eqType.buildingCol} IS NOT NULL AND ${eqType.buildingCol} != '' ORDER BY ${eqType.buildingCol}`
+              );
+            }
+          } else {
             buildingsResult = await pool.query(
               `SELECT DISTINCT ${eqType.buildingCol} as building FROM ${eqType.table} WHERE ${eqType.buildingCol} IS NOT NULL AND ${eqType.buildingCol} != '' ORDER BY ${eqType.buildingCol}`
             );
@@ -5515,8 +5527,8 @@ app.get("/api/procedures/category-count", async (req, res) => {
     const typeConfig = {
       'switchboard': { table: 'switchboards', siteCol: 'site', buildingCol: 'building_code' },
       'vsd': { table: 'vsd_equipments', siteCol: 'site', buildingCol: 'building' },
-      'meca': { table: 'meca_equipments', siteCol: 'site', buildingCol: 'building' },
-      'atex': { table: 'atex_equipments', siteCol: 'site', buildingCol: 'building' },
+      'meca': { table: 'meca_equipments', siteCol: null, buildingCol: 'building' },
+      'atex': { table: 'atex_equipments', siteCol: null, buildingCol: 'building' },
       'hv': { table: 'hv_equipments', siteCol: 'site', buildingCol: 'building' },
       'glo': { table: 'glo_equipments', siteCol: 'site', buildingCol: 'building' },
       'mobile': { table: 'me_equipments', siteCol: 'site', buildingCol: 'location' },
@@ -5529,8 +5541,15 @@ app.get("/api/procedures/category-count", async (req, res) => {
       return res.status(400).json({ error: 'Type d\'équipement invalide' });
     }
 
-    let query = `SELECT COUNT(*) as count FROM ${config.table} WHERE ${config.siteCol} = $1`;
-    const params = [site];
+    let query;
+    const params = [];
+
+    if (config.siteCol) {
+      query = `SELECT COUNT(*) as count FROM ${config.table} WHERE ${config.siteCol} = $1`;
+      params.push(site);
+    } else {
+      query = `SELECT COUNT(*) as count FROM ${config.table} WHERE 1=1`;
+    }
 
     if (category_id && equipment_type === 'datahub') {
       query += ` AND category_id = $${params.length + 1}`;
