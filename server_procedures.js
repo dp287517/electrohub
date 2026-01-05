@@ -3605,18 +3605,22 @@ app.get("/api/procedures/drafts", async (req, res) => {
 app.get("/api/procedures/drafts/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    console.log(`[PROCEDURES] 📋 Get draft request: id=${id}`);
+
     const { rows } = await pool.query(
       `SELECT * FROM procedure_drafts WHERE id = $1`,
       [id]
     );
 
     if (rows.length === 0) {
+      console.log(`[PROCEDURES] ❌ Draft ${id} not found`);
       return res.status(404).json({ ok: false, error: "Draft not found" });
     }
 
+    console.log(`[PROCEDURES] ✅ Draft ${id} found: "${rows[0].title}"`);
     res.json({ ok: true, draft: rows[0] });
   } catch (err) {
-    console.error("Error getting draft:", err);
+    console.error("[PROCEDURES] ❌ Error getting draft:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -3667,10 +3671,19 @@ app.post("/api/procedures/drafts", async (req, res) => {
 app.delete("/api/procedures/drafts/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query(`DELETE FROM procedure_drafts WHERE id = $1`, [id]);
-    res.json({ ok: true });
+    console.log(`[PROCEDURES] 🗑️ Delete draft request: id=${id}`);
+
+    const result = await pool.query(`DELETE FROM procedure_drafts WHERE id = $1 RETURNING id, title`, [id]);
+
+    if (result.rowCount > 0) {
+      console.log(`[PROCEDURES] ✅ Draft ${id} deleted: "${result.rows[0]?.title}"`);
+    } else {
+      console.log(`[PROCEDURES] ⚠️ Draft ${id} not found (already deleted?)`);
+    }
+
+    res.json({ ok: true, deleted: result.rowCount > 0 });
   } catch (err) {
-    console.error("Error deleting draft:", err);
+    console.error("[PROCEDURES] ❌ Error deleting draft:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -3762,11 +3775,41 @@ app.post("/api/procedures/pending-photos", uploadPendingPhoto.single("photo"), a
     const site = req.headers["x-site"];
     const { session_id, draft_id, caption } = req.body;
 
+    console.log(`[PROCEDURES] 📷 Upload pending photo request:`, {
+      session_id,
+      draft_id,
+      userEmail,
+      hasFile: !!req.file,
+      fileName: req.file?.originalname,
+      fileSize: req.file?.size
+    });
+
     if (!req.file) {
+      console.log('[PROCEDURES] ❌ No photo provided in request');
       return res.status(400).json({ ok: false, error: "No photo provided" });
     }
 
     const { buffer, mimetype, originalname } = req.file;
+
+    // CRITICAL: Validate draft_id exists before inserting to avoid foreign key error
+    let validatedDraftId = null;
+    if (draft_id) {
+      console.log(`[PROCEDURES] 🔍 Validating draft_id: ${draft_id}`);
+      try {
+        const draftCheck = await pool.query(
+          `SELECT id FROM procedure_drafts WHERE id = $1`,
+          [draft_id]
+        );
+        if (draftCheck.rows.length > 0) {
+          validatedDraftId = draft_id;
+          console.log(`[PROCEDURES] ✅ Draft ${draft_id} validated`);
+        } else {
+          console.log(`[PROCEDURES] ⚠️ Draft ${draft_id} does not exist, will insert with draft_id=NULL`);
+        }
+      } catch (e) {
+        console.log(`[PROCEDURES] ⚠️ Draft validation failed: ${e.message}, will insert with draft_id=NULL`);
+      }
+    }
 
     // Generate thumbnail
     let thumbnail = null;
@@ -3775,8 +3818,9 @@ app.post("/api/procedures/pending-photos", uploadPendingPhoto.single("photo"), a
         .resize(200, 200, { fit: 'cover' })
         .jpeg({ quality: 70 })
         .toBuffer();
+      console.log(`[PROCEDURES] ✅ Thumbnail generated: ${thumbnail.length} bytes`);
     } catch (e) {
-      console.warn('[PROCEDURES] Thumbnail generation failed:', e.message);
+      console.warn('[PROCEDURES] ⚠️ Thumbnail generation failed:', e.message);
     }
 
     const { rows } = await pool.query(`
@@ -3784,13 +3828,23 @@ app.post("/api/procedures/pending-photos", uploadPendingPhoto.single("photo"), a
         (session_id, draft_id, user_email, site, file_name, file_mime, file_data, thumbnail, caption)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id, session_id, draft_id, file_name, file_mime, caption, created_at
-    `, [session_id || null, draft_id || null, userEmail, site, originalname, mimetype, buffer, thumbnail, caption || null]);
+    `, [session_id || null, validatedDraftId, userEmail, site, originalname, mimetype, buffer, thumbnail, caption || null]);
 
-    console.log(`[PROCEDURES] Saved pending photo ${rows[0].id} for session ${session_id || 'none'}`);
+    console.log(`[PROCEDURES] ✅ Saved pending photo ${rows[0].id} for session ${session_id || 'none'}, draft ${validatedDraftId || 'none'}`);
 
     res.json({ ok: true, photo: rows[0] });
   } catch (err) {
-    console.error("Error saving pending photo:", err);
+    console.error("[PROCEDURES] ❌ Error saving pending photo:", err);
+
+    // Provide clear error message for foreign key violations
+    if (err.code === '23503') {
+      return res.status(400).json({
+        ok: false,
+        error: "Le brouillon référencé n'existe plus. La session a expiré.",
+        code: 'DRAFT_NOT_FOUND'
+      });
+    }
+
     res.status(500).json({ ok: false, error: err.message });
   }
 });
