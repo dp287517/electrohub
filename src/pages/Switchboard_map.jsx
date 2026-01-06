@@ -874,8 +874,9 @@ const SwitchboardLeafletViewer = forwardRef(
         let hasDirection = false;
         let swapDirection = false; // If true, swap source/target to draw from upstream to downstream
 
-        // Check link_label for direction (upstream/downstream)
-        const linkLabel = link.link_label || link.relationship;
+        // Check relationship for direction (upstream/downstream)
+        // Backend now correctly flips relationship based on whether we're source or target
+        const linkLabel = link.relationship;
 
         if (linkLabel === 'upstream') {
           // Target is upstream = feeds this equipment

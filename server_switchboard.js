@@ -8974,10 +8974,21 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
       const equipmentInfo = await getEquipmentInfo(linkedType, linkedId, site);
       console.log('[EQUIPMENT_LINKS] Equipment info:', equipmentInfo);
 
+      // Flip relationship when we're the target (not source) to maintain consistent perspective
+      let relationship = link.link_label || 'connected';
+      if (!isSource) {
+        if (relationship === 'upstream') relationship = 'downstream';
+        else if (relationship === 'downstream') relationship = 'upstream';
+        else if (relationship === 'feeds') relationship = 'fed_by';
+        else if (relationship === 'fed_by') relationship = 'feeds';
+      }
+
       links.push({
         id: link.id,
         type: 'manual',
-        relationship: link.link_label || 'connected',
+        relationship: relationship,
+        originalLabel: link.link_label || 'connected',
+        isSource: isSource,
         description: link.description,
         linkedEquipment: {
           type: linkedType,
