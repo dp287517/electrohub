@@ -8946,27 +8946,33 @@ app.get('/api/switchboard/report', async (req, res) => {
 app.get('/api/equipment/links/:type/:id', async (req, res) => {
   try {
     const site = siteOf(req);
+    const { type, id } = req.params;
+    console.log('[EQUIPMENT_LINKS] Get links - site:', site, 'type:', type, 'id:', id);
+
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    const { type, id } = req.params;
     const links = [];
 
     // 1. Get manual links (both directions)
+    console.log('[EQUIPMENT_LINKS] Fetching manual links for', type, id);
     const manualLinks = await quickQuery(`
       SELECT * FROM equipment_links
       WHERE site = $1 AND (
         (source_type = $2 AND source_id = $3) OR
         (target_type = $2 AND target_id = $3)
       )
-    `, [site, type, id]);
+    `, [site, type, String(id)]);
+    console.log('[EQUIPMENT_LINKS] Found', manualLinks.rows.length, 'manual links');
 
     for (const link of manualLinks.rows) {
-      const isSource = link.source_type === type && link.source_id === id;
+      const isSource = link.source_type === type && link.source_id === String(id);
       const linkedType = isSource ? link.target_type : link.source_type;
       const linkedId = isSource ? link.target_id : link.source_id;
+      console.log('[EQUIPMENT_LINKS] Processing manual link:', link.id, '->', linkedType, linkedId);
 
       // Get equipment details and position
       const equipmentInfo = await getEquipmentInfo(linkedType, linkedId, site);
+      console.log('[EQUIPMENT_LINKS] Equipment info:', equipmentInfo);
 
       links.push({
         id: link.id,
@@ -8976,6 +8982,8 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
         linkedEquipment: {
           type: linkedType,
           id: linkedId,
+          equipment_type: linkedType,
+          equipment_id: linkedId,
           ...equipmentInfo
         }
       });
@@ -8983,6 +8991,8 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
 
     // 2. For switchboards: add hierarchical links (devices with downstream_switchboard_id)
     if (type === 'switchboard') {
+      console.log('[EQUIPMENT_LINKS] Fetching hierarchical links for switchboard', id);
+
       // Devices that feed INTO this switchboard (upstream)
       const upstreamDevices = await quickQuery(`
         SELECT d.*, s.code as source_switchboard_code, s.name as source_switchboard_name
@@ -8990,20 +9000,24 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
         JOIN switchboards s ON d.switchboard_id = s.id
         WHERE d.downstream_switchboard_id = $1
       `, [id]);
+      console.log('[EQUIPMENT_LINKS] Found', upstreamDevices.rows.length, 'upstream devices (feeding INTO this switchboard)');
 
       for (const device of upstreamDevices.rows) {
-        const devicePosition = await getEquipmentPosition('device', device.id, site);
+        console.log('[EQUIPMENT_LINKS] Upstream device:', device.name || device.position_number, 'from switchboard', device.source_switchboard_code);
+        const sbPosition = await getEquipmentPosition('switchboard', device.switchboard_id, site);
         links.push({
           type: 'hierarchical',
           relationship: 'fed_by',
           linkedEquipment: {
             type: 'switchboard',
+            equipment_type: 'switchboard',
             id: device.switchboard_id,
+            equipment_id: device.switchboard_id,
             name: device.source_switchboard_name,
             code: device.source_switchboard_code,
             device_name: device.name || `Disj. ${device.position_number}`,
             device_id: device.id,
-            ...devicePosition
+            ...sbPosition
           }
         });
       }
@@ -9015,15 +9029,19 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
         JOIN switchboards ds ON d.downstream_switchboard_id = ds.id
         WHERE d.switchboard_id = $1 AND d.downstream_switchboard_id IS NOT NULL
       `, [id]);
+      console.log('[EQUIPMENT_LINKS] Found', downstreamSwitchboards.rows.length, 'downstream switchboards (that this one feeds)');
 
       for (const device of downstreamSwitchboards.rows) {
+        console.log('[EQUIPMENT_LINKS] Downstream switchboard:', device.downstream_code, 'via device', device.name || device.position_number);
         const sbPosition = await getEquipmentPosition('switchboard', device.downstream_id, site);
         links.push({
           type: 'hierarchical',
           relationship: 'feeds',
           linkedEquipment: {
             type: 'switchboard',
+            equipment_type: 'switchboard',
             id: device.downstream_id,
+            equipment_id: device.downstream_id,
             name: device.downstream_name,
             code: device.downstream_code,
             via_device: device.name || `Disj. ${device.position_number}`,
@@ -9034,6 +9052,7 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
       }
     }
 
+    console.log('[EQUIPMENT_LINKS] Returning', links.length, 'total links');
     res.json({ links });
   } catch (e) {
     console.error('[EQUIPMENT_LINKS] Get links error:', e.message);
@@ -9120,35 +9139,40 @@ async function getEquipmentPosition(type, id, site) {
 app.post('/api/equipment/links', async (req, res) => {
   try {
     const site = siteOf(req);
+    console.log('[EQUIPMENT_LINKS] Create link request - site:', site, 'body:', req.body);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
     const { source_type, source_id, target_type, target_id, link_label, description } = req.body;
     const created_by = req.headers['x-user-email'] || 'unknown';
 
     if (!source_type || !source_id || !target_type || !target_id) {
+      console.error('[EQUIPMENT_LINKS] Create failed - missing fields:', { source_type, source_id, target_type, target_id });
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     // Don't allow linking to self
     if (source_type === target_type && source_id === target_id) {
+      console.error('[EQUIPMENT_LINKS] Create failed - self-link attempt');
       return res.status(400).json({ error: 'Cannot link equipment to itself' });
     }
 
+    console.log('[EQUIPMENT_LINKS] Creating link:', source_type, source_id, '->', target_type, target_id);
     const result = await quickQuery(`
       INSERT INTO equipment_links (site, source_type, source_id, target_type, target_id, link_label, description, created_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (site, source_type, source_id, target_type, target_id) DO NOTHING
       RETURNING *
-    `, [site, source_type, source_id, target_type, target_id, link_label || 'connected', description, created_by]);
+    `, [site, source_type, String(source_id), target_type, String(target_id), link_label || 'connected', description, created_by]);
 
     if (result.rows.length === 0) {
+      console.log('[EQUIPMENT_LINKS] Link already exists');
       return res.status(409).json({ error: 'Link already exists' });
     }
 
-    console.log(`[EQUIPMENT_LINKS] Created link: ${source_type}#${source_id} → ${target_type}#${target_id}`);
+    console.log(`[EQUIPMENT_LINKS] Created link #${result.rows[0].id}: ${source_type}#${source_id} → ${target_type}#${target_id}`);
     res.status(201).json(result.rows[0]);
   } catch (e) {
-    console.error('[EQUIPMENT_LINKS] Create link error:', e.message);
+    console.error('[EQUIPMENT_LINKS] Create link error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
 });
@@ -9181,42 +9205,59 @@ app.delete('/api/equipment/links/:id', async (req, res) => {
 app.get('/api/equipment/search', async (req, res) => {
   try {
     const site = siteOf(req);
+    console.log('[EQUIPMENT_LINKS] Search request - site:', site, 'query:', req.query);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
     const { q, exclude_type, exclude_id } = req.query;
     const searchTerm = `%${(q || '').toLowerCase()}%`;
     const results = [];
 
-    // Search in each equipment table
+    console.log('[EQUIPMENT_LINKS] Searching for:', q, '-> term:', searchTerm);
+
+    // Search in each equipment table - specify which columns each table has
     const searches = [
-      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', idCol: 'id' },
-      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
-      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
-      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id' },
-      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id' },
-      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
-      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', idCol: 'id' }
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: false, hasBuildingCode: true },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: false }
     ];
 
     for (const s of searches) {
       try {
+        // Build SELECT columns based on what exists
+        const selectCols = [`${s.idCol} as id`, `${s.nameCol} as name`, `${s.codeCol} as code`];
+        if (s.hasBuilding) selectCols.push('building');
+        if (s.hasBuildingCode) selectCols.push('building_code');
+
+        // Build WHERE conditions for building search
+        const buildingConditions = [];
+        if (s.hasBuilding) buildingConditions.push(`LOWER(COALESCE(building, '')) LIKE $2`);
+        if (s.hasBuildingCode) buildingConditions.push(`LOWER(COALESCE(building_code, '')) LIKE $2`);
+        const buildingWhere = buildingConditions.length > 0 ? buildingConditions.join(' OR ') : 'FALSE';
+
         const query = `
-          SELECT ${s.idCol} as id, ${s.nameCol} as name, ${s.codeCol} as code,
-                 building, building_code, '${s.type}' as equipment_type
+          SELECT ${selectCols.join(', ')}, '${s.type}' as equipment_type
           FROM ${s.table}
           WHERE site = $1 AND (
             LOWER(COALESCE(${s.nameCol}, '')) LIKE $2 OR
             LOWER(COALESCE(${s.codeCol}, '')) LIKE $2 OR
-            LOWER(COALESCE(building, '')) LIKE $2 OR
-            LOWER(COALESCE(building_code, '')) LIKE $2
+            ${buildingWhere}
           )
           LIMIT 10
         `;
+        console.log('[EQUIPMENT_LINKS] Searching', s.type, '- query params:', [site, searchTerm]);
         const result = await quickQuery(query, [site, searchTerm]);
+        console.log('[EQUIPMENT_LINKS]', s.type, 'found', result.rows.length, 'results');
 
         for (const row of result.rows) {
           // Exclude the source equipment from results
-          if (exclude_type === row.equipment_type && String(exclude_id) === String(row.id)) continue;
+          if (exclude_type === row.equipment_type && String(exclude_id) === String(row.id)) {
+            console.log('[EQUIPMENT_LINKS] Excluding self:', row.equipment_type, row.id);
+            continue;
+          }
 
           results.push({
             type: row.equipment_type,
@@ -9228,7 +9269,8 @@ app.get('/api/equipment/search', async (req, res) => {
           });
         }
       } catch (e) {
-        // Table might not exist, skip silently
+        // Log the error - table might not exist or have different schema
+        console.error('[EQUIPMENT_LINKS] Search error for', s.type, ':', e.message);
       }
     }
 
@@ -9241,9 +9283,10 @@ app.get('/api/equipment/search', async (req, res) => {
       return 0;
     });
 
+    console.log('[EQUIPMENT_LINKS] Total results:', results.length);
     res.json({ results: results.slice(0, 20) });
   } catch (e) {
-    console.error('[EQUIPMENT_LINKS] Search error:', e.message);
+    console.error('[EQUIPMENT_LINKS] Search error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
 });
