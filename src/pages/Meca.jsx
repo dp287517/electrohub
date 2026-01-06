@@ -513,10 +513,7 @@ const DetailPanel = ({
         </div>
 
         <div className="flex items-start gap-4">
-          <div
-            onClick={() => photoInputRef.current?.click()}
-            className="w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center cursor-pointer hover:bg-white/30 transition-colors overflow-hidden"
-          >
+          <div className="relative w-20 h-20 rounded-xl bg-white/20 flex items-center justify-center overflow-hidden group">
             <input
               ref={photoInputRef}
               type="file"
@@ -525,18 +522,32 @@ const DetailPanel = ({
               onChange={(e) => e.target.files?.[0] && onPhotoUpload(equipment.id, e.target.files[0])}
             />
             {equipment.photo_url ? (
-              <img
-                src={api.meca.photoUrl(equipment.id, { bust: true })}
-                alt=""
-                className="w-full h-full object-cover cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onImageClick) onImageClick(api.meca.photoUrl(equipment.id, { bust: true }), equipment.name || 'Equipement');
-                }}
-                title="Cliquez pour agrandir"
-              />
+              <>
+                <img
+                  src={api.meca.photoUrl(equipment.id, { bust: true })}
+                  alt=""
+                  className="w-full h-full object-cover cursor-pointer"
+                  onClick={() => {
+                    if (onImageClick) onImageClick(api.meca.photoUrl(equipment.id, { bust: true }), equipment.name || 'Equipement');
+                  }}
+                  title="Cliquez pour agrandir"
+                />
+                {/* Overlay pour changer la photo */}
+                <div
+                  onClick={(e) => { e.stopPropagation(); photoInputRef.current?.click(); }}
+                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+                  title="Changer la photo"
+                >
+                  <Camera size={20} className="text-white" />
+                </div>
+              </>
             ) : (
-              <Camera size={24} />
+              <div
+                onClick={() => photoInputRef.current?.click()}
+                className="w-full h-full flex items-center justify-center cursor-pointer hover:bg-white/10 transition-colors"
+              >
+                <Camera size={24} />
+              </div>
             )}
           </div>
           <div className="flex-1 min-w-0">
