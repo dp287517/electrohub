@@ -940,17 +940,8 @@ const DetailPanel = ({
       {/* Header */}
       <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 md:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
-          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors md:hidden">
-            <X size={20} />
-          </button>
-          <div className="flex items-center gap-2">
-            <button onClick={() => onShare(equipment)} className="p-2 hover:bg-white/20 rounded-lg transition-colors" title="Partager">
-              <Share2 size={18} />
-            </button>
-            <button onClick={() => onEdit(equipment)} className="p-2 hover:bg-white/20 rounded-lg transition-colors" title="Modifier">
-              <Edit3 size={18} />
-            </button>
-          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg md:hidden"><X size={20} /></button>
+          <button onClick={() => onEdit(equipment)} className="p-2 hover:bg-white/20 rounded-lg"><Edit3 size={18} /></button>
         </div>
 
         <div className="flex items-start gap-4">
