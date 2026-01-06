@@ -799,6 +799,30 @@ Cette fonction cherche l'équipement dans toutes les tables et retourne son cont
         required: ["equipment_name"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_agent_by_name",
+      description: `Trouve un agent IA par son nom personnalisé.
+
+UTILISE CETTE FONCTION QUAND:
+- L'utilisateur demande "passe-moi Daniel", "je veux parler à Baptiste"
+- L'utilisateur mentionne un nom qui pourrait être un agent IA
+- Tu ne reconnais pas le nom comme un équipement
+
+Cette fonction retourne l'agent correspondant au nom donné.`,
+      parameters: {
+        type: "object",
+        properties: {
+          agent_name: {
+            type: "string",
+            description: "Nom de l'agent à chercher (ex: 'Daniel', 'Baptiste', 'Shakira')"
+          }
+        },
+        required: ["agent_name"]
+      }
+    }
   }
 ];
 
@@ -2291,6 +2315,140 @@ function createToolHandlers(pool, site) {
         console.error('[TOOL] get_troubleshooting_equipment_context error:', error.message);
         return { success: false, error: error.message };
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // RECHERCHE AGENT PAR NOM
+    // -----------------------------------------------------------------------
+    find_agent_by_name: async (params) => {
+      const { agent_name } = params;
+
+      try {
+        // Default agent names
+        const defaultNames = {
+          main: 'Electro',
+          vsd: 'Shakira',
+          meca: 'Titan',
+          glo: 'Lumina',
+          hv: 'Voltaire',
+          mobile: 'Nomad',
+          atex: 'Phoenix',
+          switchboard: 'Matrix',
+          doors: 'Portal',
+          datahub: 'Nexus',
+          firecontrol: 'Blaze'
+        };
+
+        // Agent descriptions
+        const agentDescriptions = {
+          main: 'Assistant principal ElectroHub',
+          vsd: 'Spécialiste variateurs de fréquence',
+          meca: 'Expert équipements mécaniques (moteurs, pompes, compresseurs)',
+          glo: 'Spécialiste éclairage de sécurité (BAES, blocs autonomes)',
+          hv: 'Expert haute tension (transformateurs, cellules HT)',
+          mobile: 'Spécialiste équipements mobiles',
+          atex: 'Expert zones ATEX et atmosphères explosives',
+          switchboard: 'Spécialiste tableaux électriques (TGBT, TD)',
+          doors: 'Expert portes et accès',
+          datahub: 'Spécialiste capteurs et monitoring',
+          firecontrol: 'Expert sécurité incendie'
+        };
+
+        // Agent routes
+        const agentRoutes = {
+          main: '/app/chat',
+          vsd: '/app/vsd',
+          meca: '/app/equipment-meca',
+          glo: '/app/glo',
+          hv: '/app/high-voltage',
+          mobile: '/app/mobile-equipment',
+          atex: '/app/atex',
+          switchboard: '/app/switchboards',
+          doors: '/app/doors',
+          datahub: '/app/datahub',
+          firecontrol: '/app/fire-control'
+        };
+
+        // Load custom names from database
+        let customNames = {};
+        try {
+          const result = await pool.query(
+            `SELECT key, text_value FROM app_settings WHERE key LIKE 'ai_agent_name_%'`
+          );
+          result.rows.forEach(row => {
+            const agentType = row.key.replace('ai_agent_name_', '');
+            if (row.text_value) {
+              customNames[agentType] = row.text_value;
+            }
+          });
+        } catch (e) {
+          console.log('[TOOL] find_agent_by_name: Could not load custom names, using defaults');
+        }
+
+        // Merge with defaults
+        const allNames = { ...defaultNames, ...customNames };
+
+        // Normalize search name
+        const searchName = agent_name.toLowerCase().trim();
+
+        // Find matching agent
+        let foundAgent = null;
+        for (const [agentType, name] of Object.entries(allNames)) {
+          if (name.toLowerCase() === searchName) {
+            foundAgent = {
+              type: agentType,
+              name: name,
+              description: agentDescriptions[agentType] || 'Agent spécialisé',
+              route: agentRoutes[agentType] || '/app/chat'
+            };
+            break;
+          }
+        }
+
+        // Also check partial matches
+        if (!foundAgent) {
+          for (const [agentType, name] of Object.entries(allNames)) {
+            if (name.toLowerCase().includes(searchName) || searchName.includes(name.toLowerCase())) {
+              foundAgent = {
+                type: agentType,
+                name: name,
+                description: agentDescriptions[agentType] || 'Agent spécialisé',
+                route: agentRoutes[agentType] || '/app/chat'
+              };
+              break;
+            }
+          }
+        }
+
+        if (foundAgent) {
+          return {
+            success: true,
+            found: true,
+            agent: foundAgent,
+            message: `Agent "${foundAgent.name}" trouvé ! C'est le ${foundAgent.description}. Utilise transfer_to_agent avec type="${foundAgent.type}" pour ouvrir le chat avec cet agent.`,
+            available_agents: Object.entries(allNames).map(([type, name]) => ({
+              type,
+              name,
+              description: agentDescriptions[type]
+            }))
+          };
+        } else {
+          return {
+            success: true,
+            found: false,
+            message: `Aucun agent nommé "${agent_name}" trouvé.`,
+            available_agents: Object.entries(allNames).map(([type, name]) => ({
+              type,
+              name,
+              description: agentDescriptions[type]
+            })),
+            suggestion: `Les agents disponibles sont: ${Object.values(allNames).join(', ')}`
+          };
+        }
+      } catch (error) {
+        console.error('[TOOL] find_agent_by_name error:', error.message);
+        return { success: false, error: error.message };
+      }
     }
   };
 }
@@ -2389,6 +2547,16 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "parler à l'agent de l'équipement", "agent spécialisé" | get_troubleshooting_equipment_context puis transfer_to_agent |
 | "qu'est-ce que tu as appris", "ta mémoire", "tes observations" | get_agent_memory |
 | "ce qui s'est passé hier", "résumé de la veille" | get_yesterday_summary |
+| "passe-moi Daniel", "je veux parler à [NOM]", "où est Baptiste" | find_agent_by_name puis transfer_to_agent |
+
+## 🤝 PARLER À UN AUTRE AGENT
+Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipement):
+1. Utilise **find_agent_by_name** avec le nom mentionné
+2. Si l'agent est trouvé, utilise **transfer_to_agent** avec le type retourné
+3. Si l'agent n'est pas trouvé, liste les agents disponibles
+
+**IMPORTANT**: Les noms des agents sont personnalisables. "Daniel", "Baptiste", etc. peuvent être des agents IA !
+Si le nom ne correspond pas à un équipement connu, essaie d'abord find_agent_by_name.
 
 ## 🔗 TRANSFERT VERS AGENTS SPÉCIALISÉS
 Quand l'utilisateur veut parler à l'agent d'un équipement mentionné dans un dépannage:

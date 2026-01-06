@@ -119,9 +119,9 @@ function createChatV2Router(pool) {
       // Créer les handlers de tools avec le contexte
       const toolHandlers = createToolHandlers(pool, site);
 
-      // Préparer les messages pour OpenAI
+      // Préparer les messages pour OpenAI avec les noms personnalisés
       const messages = [
-        { role: 'system', content: buildSystemPrompt(site, clientContext) },
+        { role: 'system', content: buildSystemPrompt(site, clientContext, customNames) },
         ...formatConversationHistory(conversationHistory),
         { role: 'user', content: message }
       ];
@@ -313,23 +313,41 @@ function createChatV2Router(pool) {
 /**
  * Construit le prompt système avec le contexte minimal
  */
-function buildSystemPrompt(site, clientContext) {
+function buildSystemPrompt(site, clientContext, customAgentNames = {}) {
   let prompt = SIMPLIFIED_SYSTEM_PROMPT;
 
-  // Ajouter les informations sur l'équipe d'agents IA
+  // Utiliser les noms personnalisés ou les défauts
+  const agentNames = {
+    main: customAgentNames.main || 'Electro',
+    vsd: customAgentNames.vsd || 'Shakira',
+    meca: customAgentNames.meca || 'Titan',
+    glo: customAgentNames.glo || 'Lumina',
+    hv: customAgentNames.hv || 'Voltaire',
+    mobile: customAgentNames.mobile || 'Nomad',
+    atex: customAgentNames.atex || 'Phoenix',
+    switchboard: customAgentNames.switchboard || 'Matrix',
+    doors: customAgentNames.doors || 'Portal',
+    datahub: customAgentNames.datahub || 'Nexus',
+    firecontrol: customAgentNames.firecontrol || 'Blaze'
+  };
+
+  // Ajouter les informations sur l'équipe d'agents IA avec noms personnalisés
   prompt += `\n\n## ÉQUIPE D'AGENTS IA ELECTROHUB
 Tu fais partie d'une équipe d'agents IA spécialisés. Voici tes collègues:
-- ⚡ **Electro** (main): Assistant principal, répond aux questions générales
-- 🎛️ **Shakira** (vsd): Spécialiste variateurs de fréquence
-- ⚙️ **Titan** (meca): Expert équipements mécaniques (moteurs, pompes, compresseurs)
-- 💡 **Lumina** (glo): Spécialiste éclairage de sécurité (BAES, blocs autonomes)
-- ⚡ **Voltaire** (hv): Expert haute tension (transformateurs, cellules HT)
-- 📱 **Nomad** (mobile): Spécialiste équipements mobiles
-- 🔥 **Phoenix** (atex): Expert zones ATEX et atmosphères explosives
-- 🔌 **Matrix** (switchboard): Spécialiste tableaux électriques (TGBT, TD)
-- 🚪 **Portal** (doors): Expert portes et accès
-- 📊 **Nexus** (datahub): Spécialiste capteurs et monitoring
-- 🧯 **Blaze** (firecontrol): Expert sécurité incendie
+- ⚡ **${agentNames.main}** (main): Assistant principal, répond aux questions générales
+- 🎛️ **${agentNames.vsd}** (vsd): Spécialiste variateurs de fréquence
+- ⚙️ **${agentNames.meca}** (meca): Expert équipements mécaniques (moteurs, pompes, compresseurs)
+- 💡 **${agentNames.glo}** (glo): Spécialiste éclairage de sécurité (BAES, blocs autonomes)
+- ⚡ **${agentNames.hv}** (hv): Expert haute tension (transformateurs, cellules HT)
+- 📱 **${agentNames.mobile}** (mobile): Spécialiste équipements mobiles
+- 🔥 **${agentNames.atex}** (atex): Expert zones ATEX et atmosphères explosives
+- 🔌 **${agentNames.switchboard}** (switchboard): Spécialiste tableaux électriques (TGBT, TD)
+- 🚪 **${agentNames.doors}** (doors): Expert portes et accès
+- 📊 **${agentNames.datahub}** (datahub): Spécialiste capteurs et monitoring
+- 🧯 **${agentNames.firecontrol}** (firecontrol): Expert sécurité incendie
+
+**IMPORTANT**: Les utilisateurs peuvent te demander de parler à un agent par son nom.
+Si l'utilisateur dit "passe-moi ${agentNames.doors}" ou "je veux parler à ${agentNames.vsd}", utilise la fonction **transfer_to_agent** avec le type correspondant.
 
 Quand une question concerne un domaine spécifique, le système te passera automatiquement au spécialiste approprié.
 
