@@ -944,17 +944,6 @@ const DetailPanel = ({
             <X size={20} />
           </button>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAIChat(true)}
-              className={`p-2 rounded-lg transition-all flex items-center gap-1 ${
-                hasOverdueControl
-                  ? 'bg-red-500 hover:bg-red-400 animate-pulse'
-                  : 'hover:bg-white/20'
-              }`}
-              title="Assistant IA"
-            >
-              <Sparkles size={18} />
-            </button>
             <button onClick={() => onShare(equipment)} className="p-2 hover:bg-white/20 rounded-lg transition-colors" title="Partager">
               <Share2 size={18} />
             </button>
