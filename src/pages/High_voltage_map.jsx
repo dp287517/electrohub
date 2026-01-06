@@ -29,6 +29,8 @@ import {
   CheckCircle,
   AlertCircle,
   Target,
+  Link2,
+  Loader2,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -304,13 +306,61 @@ const HvCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere,
 };
 
 // ─────────────────────────────────────────────────────────────────────
-// Detail Panel
+// Detail Panel with Equipment Links
 // ─────────────────────────────────────────────────────────────────────
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
   if (!position) return null;
+
+  // Search for equipment to link
+  const handleSearch = async (query) => {
+    setSearchQuery(query);
+    if (query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await api.equipmentLinks.search(query, 'hv', position.equipment_id);
+      setSearchResults(res?.results || []);
+    } catch (e) {
+      console.error('Search error:', e);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Add a link
+  const handleAddLinkClick = async (target) => {
+    try {
+      await onAddLink?.({
+        source_type: 'hv',
+        source_id: String(position.equipment_id),
+        target_type: target.type,
+        target_id: String(target.id),
+        link_label: 'connected'
+      });
+      setShowAddLink(false);
+      setSearchQuery('');
+      setSearchResults([]);
+    } catch (e) {
+      console.error('Add link error:', e);
+    }
+  };
+
+  // Check if link is on same plan
+  const isOnSamePlan = (link) => {
+    const eq = link.linkedEquipment;
+    return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
+  };
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
-      <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 text-white">
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+      <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-white/20 rounded-lg">
@@ -327,7 +377,7 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
         <div className="grid grid-cols-3 gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
             <span className="text-gray-500 text-xs block">Bâtiment</span>
@@ -341,6 +391,113 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
             <span className="text-gray-500 text-xs block">Régime</span>
             <span className="font-semibold text-gray-900 text-[10px]">{equipment?.regime_neutral || "-"}</span>
           </div>
+        </div>
+
+        {/* Equipment Links Section */}
+        <div className="border-t pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Link2 size={14} />
+              Équipements liés
+            </span>
+            <button
+              onClick={() => setShowAddLink(!showAddLink)}
+              className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-blue-600"
+              title="Ajouter un lien"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+
+          {/* Add Link UI */}
+          {showAddLink && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="Rechercher un équipement..."
+                className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                autoFocus
+              />
+              {searching && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                  <Loader2 size={14} className="animate-spin" />
+                  Recherche...
+                </div>
+              )}
+              {searchResults.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <button
+                      key={`${result.type}-${result.id}`}
+                      onClick={() => handleAddLinkClick(result)}
+                      className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-blue-100 rounded border flex items-center justify-between"
+                    >
+                      <span className="font-medium">{result.code || result.name}</span>
+                      <span className="text-xs text-gray-500">{result.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Links List */}
+          {linksLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+              <Loader2 size={14} className="animate-spin" />
+              Chargement des liens...
+            </div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">Aucun équipement lié</p>
+          ) : (
+            <div className="space-y-1">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment;
+                const samePlan = isOnSamePlan(link);
+
+                return (
+                  <div
+                    key={link.id || idx}
+                    className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                      samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'
+                    }`}
+                  >
+                    <button
+                      onClick={() => onLinkClick?.(link)}
+                      className="flex items-center gap-2 flex-1 text-left hover:underline"
+                    >
+                      <div className="w-2 h-2 rounded-full bg-amber-500" />
+                      <div>
+                        <span className="font-medium">{eq?.code || eq?.name}</span>
+                        {link.relationship && link.relationship !== 'connected' && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            ({link.relationship === 'feeds' ? 'alimente' : link.relationship === 'fed_by' ? 'alimenté par' : link.relationship})
+                          </span>
+                        )}
+                        {!samePlan && eq?.plan && (
+                          <span className="text-xs text-orange-600 ml-1">(autre plan)</span>
+                        )}
+                        {link.type === 'hierarchical' && (
+                          <span className="text-xs text-blue-600 ml-1">(auto)</span>
+                        )}
+                      </div>
+                    </button>
+                    {link.type === 'manual' && link.id && (
+                      <button
+                        onClick={() => onDeleteLink?.(link.id)}
+                        className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600"
+                        title="Supprimer le lien"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="text-xs text-gray-400 flex items-center gap-2">
@@ -962,6 +1119,10 @@ export default function HighVoltageMap() {
   // Control statuses
   const [controlStatuses, setControlStatuses] = useState({});
 
+  // Equipment links
+  const [links, setLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+
   // UI
   const [selectedPosition, setSelectedPosition] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
@@ -1036,6 +1197,78 @@ export default function HighVoltageMap() {
       setControlStatuses(statuses);
     } catch (err) {
       console.error("Erreur chargement statuts contrôle:", err);
+    }
+  };
+
+  // Load equipment links
+  const loadEquipmentLinks = async (equipmentId) => {
+    if (!equipmentId) {
+      setLinks([]);
+      return;
+    }
+    setLinksLoading(true);
+    try {
+      const res = await api.equipmentLinks.getLinks('hv', equipmentId);
+      setLinks(res?.links || []);
+    } catch (err) {
+      console.error("Error loading equipment links:", err);
+      setLinks([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  // Add a new link
+  const handleAddLink = async (linkData) => {
+    try {
+      await api.equipmentLinks.createLink(linkData);
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.equipment_id);
+      }
+    } catch (err) {
+      console.error("Error creating link:", err);
+    }
+  };
+
+  // Delete a link
+  const handleDeleteLink = async (linkId) => {
+    try {
+      await api.equipmentLinks.deleteLink(linkId);
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.equipment_id);
+      }
+    } catch (err) {
+      console.error("Error deleting link:", err);
+    }
+  };
+
+  // Handle click on a linked equipment
+  const handleLinkClick = (link) => {
+    const eq = link.linkedEquipment;
+    if (!eq) return;
+
+    const currentPlanKey = stableSelectedPlan?.logical_name;
+
+    // If on same plan, find and select the marker
+    if (eq.hasPosition && eq.plan === currentPlanKey && (eq.pageIndex || 0) === pageIndex) {
+      const targetPos = initialPoints.find(
+        p => p.equipment_type === eq.type && String(p.equipment_id) === String(eq.id)
+      );
+      if (targetPos) {
+        setSelectedPosition(targetPos);
+        loadEquipmentLinks(eq.id);
+        viewerRef.current?.highlightMarker?.(eq.id);
+      }
+    } else if (eq.hasPosition && eq.plan) {
+      // Navigate to the other plan
+      const targetPlan = plans.find(p => p.logical_name === eq.plan);
+      if (targetPlan) {
+        setSelectedPlan(targetPlan);
+        if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex);
+      }
+    } else {
+      // No position - navigate to equipment detail page
+      navigate(`/app/hv?equipment=${eq.id}`);
     }
   };
 
@@ -1517,6 +1750,7 @@ export default function HighVoltageMap() {
                   const eq = equipments.find(e => e.id === meta.equipment_id);
                   setSelectedPosition(meta);
                   setSelectedEquipment(eq || null);
+                  loadEquipmentLinks(meta.equipment_id);
                 }}
                 onCreatePoint={(xFrac, yFrac) => {
                   if (createMode) {
@@ -1575,9 +1809,16 @@ export default function HighVoltageMap() {
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}
-              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); }}
+              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); setLinks([]); }}
               onNavigate={(id) => navigate(`/app/hv?equipment=${id}`)}
               onDelete={askDeletePosition}
+              links={links}
+              linksLoading={linksLoading}
+              onAddLink={handleAddLink}
+              onDeleteLink={handleDeleteLink}
+              onLinkClick={handleLinkClick}
+              currentPlan={stableSelectedPlan?.logical_name}
+              currentPageIndex={pageIndex}
             />
           )}
 

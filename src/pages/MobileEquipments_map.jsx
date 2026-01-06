@@ -43,6 +43,8 @@ import {
   Zap,
   Upload,
   Plus,
+  Link2,
+  Loader2,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -254,29 +256,54 @@ const EquipmentCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedEls
   );
 };
 
-/* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => {
+/* ----------------------------- Detail Panel with Equipment Links ----------------------------- */
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
   if (!position) return null;
+
+  const handleSearch = async (query) => {
+    setSearchQuery(query);
+    if (query.length < 2) { setSearchResults([]); return; }
+    setSearching(true);
+    try {
+      const res = await api.equipmentLinks.search(query, 'mobile', position.equipment_id);
+      setSearchResults(res?.results || []);
+    } catch (e) { console.error('Search error:', e); }
+    finally { setSearching(false); }
+  };
+
+  const handleAddLinkClick = async (target) => {
+    try {
+      await onAddLink?.({ source_type: 'mobile', source_id: String(position.equipment_id), target_type: target.type, target_id: String(target.id), link_label: 'connected' });
+      setShowAddLink(false); setSearchQuery(''); setSearchResults([]);
+    } catch (e) { console.error('Add link error:', e); }
+  };
+
+  const isOnSamePlan = (link) => {
+    const eq = link.linkedEquipment;
+    return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
+  };
+
   return (
-    <AnimatedCard className="absolute bottom-2 left-2 right-2 md:bottom-4 md:left-auto md:right-4 md:w-80 bg-white rounded-xl md:rounded-2xl shadow-2xl border overflow-hidden z-30">
-      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-3 md:p-4 text-white">
+    <AnimatedCard className="absolute bottom-2 left-2 right-2 md:bottom-4 md:left-auto md:right-4 md:w-96 bg-white rounded-xl md:rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 p-3 md:p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <div className="p-1.5 md:p-2 bg-white/20 rounded-lg flex-shrink-0">
-              <Zap size={18} />
-            </div>
+            <div className="p-1.5 md:p-2 bg-white/20 rounded-lg flex-shrink-0"><Zap size={18} /></div>
             <div className="min-w-0 flex-1">
               <h3 className="font-bold text-sm md:text-base truncate">{position.name || equipment?.name || "Équipement"}</h3>
               <p className="text-cyan-100 text-xs md:text-sm truncate">{equipment?.category || "-"}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0">
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors flex-shrink-0"><X size={18} /></button>
         </div>
       </div>
 
-      <div className="p-3 md:p-4 space-y-2 md:space-y-3">
+      <div className="p-3 md:p-4 space-y-2 md:space-y-3 overflow-y-auto flex-1">
         <div className="grid grid-cols-3 gap-1.5 md:gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-1.5 md:p-2 text-center">
             <span className="text-gray-500 text-[10px] md:text-xs block">Bâtiment</span>
@@ -292,23 +319,54 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete }) => 
           </div>
         </div>
 
-        <div className="flex gap-2 pt-1 md:pt-2">
-          <button
-            onClick={() => onNavigate(position.equipment_id)}
-            className="flex-1 py-2 md:py-2.5 px-3 md:px-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl font-medium hover:from-cyan-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2 text-sm"
-          >
-            <ExternalLink size={16} />
-            <span className="hidden sm:inline">Ouvrir la fiche</span>
-            <span className="sm:hidden">Fiche</span>
-          </button>
+        {/* Equipment Links Section */}
+        <div className="border-t pt-2 mt-2">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1"><Link2 size={14} />Équipements liés</span>
+            <button onClick={() => setShowAddLink(!showAddLink)} className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-cyan-600" title="Ajouter un lien"><Plus size={16} /></button>
+          </div>
+          {showAddLink && (
+            <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 mb-2">
+              <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher..." className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-cyan-500 bg-white" autoFocus />
+              {searching && <div className="flex items-center gap-2 text-sm text-gray-500 mt-2"><Loader2 size={14} className="animate-spin" />...</div>}
+              {searchResults.length > 0 && (
+                <div className="mt-2 max-h-28 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <button key={`${result.type}-${result.id}`} onClick={() => handleAddLinkClick(result)} className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-cyan-100 rounded border flex items-center justify-between">
+                      <span className="font-medium truncate">{result.code || result.name}</span><span className="text-xs text-gray-500">{result.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {linksLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-2"><Loader2 size={14} className="animate-spin" />...</div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">Aucun lien</p>
+          ) : (
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment; const samePlan = isOnSamePlan(link);
+                return (
+                  <div key={link.id || idx} className={`flex items-center justify-between p-1.5 rounded-lg text-sm ${samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                    <button onClick={() => onLinkClick?.(link)} className="flex items-center gap-2 flex-1 text-left hover:underline truncate">
+                      <div className="w-2 h-2 rounded-full bg-cyan-500 flex-shrink-0" />
+                      <span className="font-medium truncate">{eq?.code || eq?.name}</span>
+                    </button>
+                    {link.type === 'manual' && link.id && <button onClick={() => onDeleteLink?.(link.id)} className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12} /></button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-          <button
-            onClick={() => onDelete?.(position)}
-            className="py-2 md:py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
-            title="Détacher du plan"
-          >
-            <Trash2 size={16} />
+        <div className="flex gap-2 pt-1 md:pt-2">
+          <button onClick={() => onNavigate(position.equipment_id)} className="flex-1 py-2 md:py-2.5 px-3 md:px-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl font-medium hover:from-cyan-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2 text-sm">
+            <ExternalLink size={16} /><span className="hidden sm:inline">Ouvrir la fiche</span><span className="sm:hidden">Fiche</span>
           </button>
+          <button onClick={() => onDelete?.(position)} className="py-2 md:py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center" title="Détacher du plan"><Trash2 size={16} /></button>
         </div>
       </div>
     </AnimatedCard>
@@ -679,6 +737,10 @@ export default function MobileEquipmentsMap() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [controlStatuses, setControlStatuses] = useState({});
 
+  // Equipment links
+  const [links, setLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+
   const viewerRef = useRef(null);
   const creatingRef = useRef(false);
   const targetEquipmentIdRef = useRef(null);
@@ -773,6 +835,44 @@ export default function MobileEquipmentsMap() {
       console.error("Erreur chargement statuts contrôle Mobile:", err);
     }
   }, []);
+
+  // Load equipment links
+  const loadEquipmentLinks = async (equipmentId) => {
+    if (!equipmentId) { setLinks([]); return; }
+    setLinksLoading(true);
+    try {
+      const res = await api.equipmentLinks.getLinks('mobile', equipmentId);
+      setLinks(res?.links || []);
+    } catch (err) { console.error("Error loading equipment links:", err); setLinks([]); }
+    finally { setLinksLoading(false); }
+  };
+
+  const handleAddLink = async (linkData) => {
+    try {
+      await api.equipmentLinks.createLink(linkData);
+      if (selectedPosition) loadEquipmentLinks(selectedPosition.equipment_id);
+    } catch (err) { console.error("Error creating link:", err); }
+  };
+
+  const handleDeleteLink = async (linkId) => {
+    try {
+      await api.equipmentLinks.deleteLink(linkId);
+      if (selectedPosition) loadEquipmentLinks(selectedPosition.equipment_id);
+    } catch (err) { console.error("Error deleting link:", err); }
+  };
+
+  const handleLinkClick = (link) => {
+    const eq = link.linkedEquipment;
+    if (!eq) return;
+    const currentPlanKey = selectedPlan?.logical_name;
+    if (eq.hasPosition && eq.plan === currentPlanKey && (eq.pageIndex || 0) === pageIndex) {
+      const targetPos = initialPoints.find(p => String(p.equipment_id) === String(eq.id));
+      if (targetPos) { setSelectedPosition(targetPos); loadEquipmentLinks(eq.id); viewerRef.current?.highlightMarker?.(eq.id); }
+    } else if (eq.hasPosition && eq.plan) {
+      const targetPlan = plans.find(p => p.logical_name === eq.plan);
+      if (targetPlan) { setSelectedPlan(targetPlan); if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex); }
+    } else { navigate(`/app/mobile?equipment=${eq.id}`); }
+  };
 
   // Load plans and equipments (once on mount)
   useEffect(() => {
@@ -910,6 +1010,7 @@ export default function MobileEquipmentsMap() {
     const eq = equipments.find(e => e.id === pos.equipment_id);
     setSelectedEquipment(eq || null);
     setPlacementMode(null);
+    loadEquipmentLinks(pos.equipment_id);
   }, [equipments]);
 
   const handleStartPlacement = useCallback((eq) => {
@@ -1365,9 +1466,16 @@ export default function MobileEquipmentsMap() {
             <DetailPanel
               position={selectedPosition}
               equipment={selectedEquipment}
-              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); }}
+              onClose={() => { setSelectedPosition(null); setSelectedEquipment(null); setLinks([]); }}
               onNavigate={handleNavigateToEquipment}
               onDelete={(pos) => setConfirmDelete(pos)}
+              links={links}
+              linksLoading={linksLoading}
+              onAddLink={handleAddLink}
+              onDeleteLink={handleDeleteLink}
+              onLinkClick={handleLinkClick}
+              currentPlan={selectedPlan?.logical_name}
+              currentPageIndex={pageIndex}
             />
           )}
         </div>
