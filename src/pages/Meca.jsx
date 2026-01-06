@@ -532,14 +532,14 @@ const DetailPanel = ({
                   }}
                   title="Cliquez pour agrandir"
                 />
-                {/* Overlay pour changer la photo - pointer-events-none quand invisible */}
-                <div
+                {/* Bouton changer photo - toujours visible sur mobile, hover sur desktop */}
+                <button
                   onClick={(e) => { e.stopPropagation(); photoInputRef.current?.click(); }}
-                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition-opacity flex items-center justify-center cursor-pointer"
+                  className="absolute bottom-1 right-1 p-1.5 rounded-full bg-black/60 text-white opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                   title="Changer la photo"
                 >
-                  <Camera size={20} className="text-white" />
-                </div>
+                  <Camera size={14} />
+                </button>
               </>
             ) : (
               <div
