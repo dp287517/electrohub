@@ -664,6 +664,8 @@ const SwitchboardLeafletViewer = forwardRef(
       initialPoints = [],
       selectedId = null,
       controlStatuses = {}, // { switchboard_id: { status: 'ok'|'pending'|'overdue' } }
+      links = [], // Equipment links for polyline drawing
+      currentPlan = null, // Current plan for link filtering
       onReady,
       onMovePoint,
       onClickPoint,
@@ -678,6 +680,7 @@ const SwitchboardLeafletViewer = forwardRef(
     const mapRef = useRef(null);
     const imageLayerRef = useRef(null);
     const markersLayerRef = useRef(null);
+    const connectionsLayerRef = useRef(null); // Layer for equipment link polylines
     const markersMapRef = useRef(new Map()); // switchboard_id -> marker
 
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -738,6 +741,81 @@ const SwitchboardLeafletViewer = forwardRef(
         drawMarkers(pointsRef.current, imgSize.w, imgSize.h);
       }
     }, [selectedId]);
+
+    // Draw connection lines between linked equipment
+    const drawConnections = useCallback(() => {
+      const map = mapRef.current;
+      const g = connectionsLayerRef.current;
+      if (!map || !g) return;
+
+      // Clear existing connections
+      g.clearLayers();
+
+      // If no selected equipment or no links, nothing to draw
+      if (!selectedIdRef.current || !links.length) return;
+
+      // Get selected marker position
+      const selectedMarker = markersMapRef.current.get(String(selectedIdRef.current));
+      if (!selectedMarker) return;
+
+      const sourceLatLng = selectedMarker.getLatLng();
+
+      // Draw lines to linked equipment on the same plan
+      links.forEach((link) => {
+        const eq = link.linkedEquipment;
+        if (!eq) return;
+
+        // Check if on same plan and page
+        const eqPlan = eq.plan_key || eq.plan;
+        const eqPage = eq.page_index ?? eq.pageIndex ?? 0;
+        const currentPlanKey = currentPlan?.logical_name || currentPlan?.id;
+
+        if (!eq.hasPosition || eqPlan !== currentPlanKey || eqPage !== pageIndex) return;
+
+        // Find the target marker - could be switchboard_id or equipment_id
+        const targetId = eq.equipment_id || eq.id;
+        let targetMarker = markersMapRef.current.get(String(targetId));
+
+        // Try alternative key formats
+        if (!targetMarker) {
+          targetMarker = markersMapRef.current.get(targetId);
+        }
+        if (!targetMarker) return;
+
+        const targetLatLng = targetMarker.getLatLng();
+
+        // Determine line style based on relationship
+        let color = '#3b82f6'; // Blue default
+        let dashArray = '8, 6';
+
+        if (link.relationship === 'feeds') {
+          color = '#ef4444'; // Red for feeds
+          dashArray = '12, 4';
+        } else if (link.relationship === 'fed_by') {
+          color = '#10b981'; // Green for fed by
+          dashArray = '12, 4';
+        } else if (link.type === 'hierarchical') {
+          color = '#f59e0b'; // Amber for auto hierarchical
+          dashArray = '4, 4';
+        }
+
+        // Create dashed polyline
+        const polyline = L.polyline([sourceLatLng, targetLatLng], {
+          color,
+          weight: 3,
+          opacity: 0.8,
+          dashArray,
+          className: 'equipment-link-line'
+        });
+
+        polyline.addTo(g);
+      });
+    }, [links, currentPlan, pageIndex]);
+
+    // Redraw connections when links or selection changes
+    useEffect(() => {
+      drawConnections();
+    }, [links, selectedId, drawConnections]);
 
     function makeSwitchboardIcon(isPrincipal = false, isSelected = false, switchboardId = null) {
       const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
@@ -1049,6 +1127,9 @@ const SwitchboardLeafletViewer = forwardRef(
 
           // Créer le layer group pour les markers
           markersLayerRef.current = L.layerGroup().addTo(m);
+
+          // Créer le layer group pour les connexions (polylines) - au-dessus des markers
+          connectionsLayerRef.current = L.layerGroup().addTo(m);
 
           // Handler de clic sur la carte - utilise la ref pour onCreatePoint
           m.on("click", (e) => {
@@ -2347,6 +2428,8 @@ export default function SwitchboardMap() {
                   initialPoints={initialPoints}
                   selectedId={selectedSwitchboardId}
                   controlStatuses={controlStatuses}
+                  links={links}
+                  currentPlan={stableSelectedPlan}
                   placementActive={!!placementMode || createMode}
                   onReady={() => {
                     setPdfReady(true);
