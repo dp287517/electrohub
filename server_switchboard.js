@@ -1267,6 +1267,36 @@ async function ensureSchema() {
        OR complete_count > device_count
        OR device_count != COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id), 0)
        OR complete_count != COALESCE((SELECT COUNT(*) FROM devices d WHERE d.switchboard_id = s.id AND d.is_complete = true), 0);
+
+    -- =======================================================
+    -- TABLE: Equipment Links (liens manuels entre équipements)
+    -- Permet de lier n'importe quel équipement à un autre
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS equipment_links (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      site TEXT NOT NULL,
+
+      -- Source equipment (polymorphic)
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+
+      -- Target equipment (polymorphic)
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+
+      -- Metadata
+      link_label TEXT DEFAULT 'connected',
+      description TEXT,
+
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+
+      -- Prevent duplicate links
+      UNIQUE(site, source_type, source_id, target_type, target_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_equipment_links_source ON equipment_links(site, source_type, source_id);
+    CREATE INDEX IF NOT EXISTS idx_equipment_links_target ON equipment_links(site, target_type, target_id);
   `);
   
   console.log('[SWITCHBOARD SCHEMA] Initialized with O(1) auto-count triggers v2');
@@ -8904,6 +8934,314 @@ app.get('/api/switchboard/report', async (req, res) => {
 
   } catch (e) {
     console.error('[SWITCHBOARD] Report error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
+// EQUIPMENT LINKS API - Liens entre équipements
+// ============================================================
+
+// Get all links for an equipment (manual links + hierarchical for switchboards)
+app.get('/api/equipment/links/:type/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { type, id } = req.params;
+    const links = [];
+
+    // 1. Get manual links (both directions)
+    const manualLinks = await quickQuery(`
+      SELECT * FROM equipment_links
+      WHERE site = $1 AND (
+        (source_type = $2 AND source_id = $3) OR
+        (target_type = $2 AND target_id = $3)
+      )
+    `, [site, type, id]);
+
+    for (const link of manualLinks.rows) {
+      const isSource = link.source_type === type && link.source_id === id;
+      const linkedType = isSource ? link.target_type : link.source_type;
+      const linkedId = isSource ? link.target_id : link.source_id;
+
+      // Get equipment details and position
+      const equipmentInfo = await getEquipmentInfo(linkedType, linkedId, site);
+
+      links.push({
+        id: link.id,
+        type: 'manual',
+        relationship: link.link_label || 'connected',
+        description: link.description,
+        linkedEquipment: {
+          type: linkedType,
+          id: linkedId,
+          ...equipmentInfo
+        }
+      });
+    }
+
+    // 2. For switchboards: add hierarchical links (devices with downstream_switchboard_id)
+    if (type === 'switchboard') {
+      // Devices that feed INTO this switchboard (upstream)
+      const upstreamDevices = await quickQuery(`
+        SELECT d.*, s.code as source_switchboard_code, s.name as source_switchboard_name
+        FROM devices d
+        JOIN switchboards s ON d.switchboard_id = s.id
+        WHERE d.downstream_switchboard_id = $1
+      `, [id]);
+
+      for (const device of upstreamDevices.rows) {
+        const devicePosition = await getEquipmentPosition('device', device.id, site);
+        links.push({
+          type: 'hierarchical',
+          relationship: 'fed_by',
+          linkedEquipment: {
+            type: 'switchboard',
+            id: device.switchboard_id,
+            name: device.source_switchboard_name,
+            code: device.source_switchboard_code,
+            device_name: device.name || `Disj. ${device.position_number}`,
+            device_id: device.id,
+            ...devicePosition
+          }
+        });
+      }
+
+      // Switchboards that this one feeds (downstream)
+      const downstreamSwitchboards = await quickQuery(`
+        SELECT d.*, ds.id as downstream_id, ds.code as downstream_code, ds.name as downstream_name
+        FROM devices d
+        JOIN switchboards ds ON d.downstream_switchboard_id = ds.id
+        WHERE d.switchboard_id = $1 AND d.downstream_switchboard_id IS NOT NULL
+      `, [id]);
+
+      for (const device of downstreamSwitchboards.rows) {
+        const sbPosition = await getEquipmentPosition('switchboard', device.downstream_id, site);
+        links.push({
+          type: 'hierarchical',
+          relationship: 'feeds',
+          linkedEquipment: {
+            type: 'switchboard',
+            id: device.downstream_id,
+            name: device.downstream_name,
+            code: device.downstream_code,
+            via_device: device.name || `Disj. ${device.position_number}`,
+            device_id: device.id,
+            ...sbPosition
+          }
+        });
+      }
+    }
+
+    res.json({ links });
+  } catch (e) {
+    console.error('[EQUIPMENT_LINKS] Get links error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Helper: Get equipment info by type and id
+async function getEquipmentInfo(type, id, site) {
+  const tableMap = {
+    switchboard: { table: 'switchboards', nameCol: 'name', codeCol: 'code' },
+    vsd: { table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag' },
+    meca: { table: 'meca_equipments', nameCol: 'name', codeCol: 'tag' },
+    mobile: { table: 'me_equipments', nameCol: 'name', codeCol: 'code' },
+    hv: { table: 'hv_equipments', nameCol: 'name', codeCol: 'code' },
+    glo: { table: 'glo_equipments', nameCol: 'name', codeCol: 'tag' },
+    datahub: { table: 'dh_items', nameCol: 'name', codeCol: 'code' }
+  };
+
+  const config = tableMap[type];
+  if (!config) return { name: `Unknown (${type})` };
+
+  try {
+    const result = await quickQuery(
+      `SELECT ${config.nameCol} as name, ${config.codeCol} as code, building, building_code
+       FROM ${config.table} WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) return { name: `Not found (${type} #${id})` };
+
+    const row = result.rows[0];
+    const position = await getEquipmentPosition(type, id, site);
+
+    return {
+      name: row.name,
+      code: row.code,
+      building: row.building || row.building_code,
+      ...position
+    };
+  } catch (e) {
+    return { name: `Error (${type} #${id})` };
+  }
+}
+
+// Helper: Get equipment position on map
+async function getEquipmentPosition(type, id, site) {
+  const positionTableMap = {
+    switchboard: { table: 'switchboard_positions', idCol: 'switchboard_id' },
+    vsd: { table: 'vsd_positions', idCol: 'equipment_id' },
+    meca: { table: 'meca_positions', idCol: 'equipment_id' },
+    mobile: { table: 'me_equipment_positions', idCol: 'equipment_id' },
+    hv: { table: 'hv_positions', idCol: 'equipment_id' },
+    glo: { table: 'glo_positions', idCol: 'equipment_id' },
+    datahub: { table: 'dh_positions', idCol: 'item_id' }
+  };
+
+  const config = positionTableMap[type];
+  if (!config) return { hasPosition: false };
+
+  try {
+    const result = await quickQuery(
+      `SELECT plan_key, page_index, x_frac, y_frac
+       FROM ${config.table} WHERE ${config.idCol} = $1 LIMIT 1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) return { hasPosition: false };
+
+    const pos = result.rows[0];
+    return {
+      hasPosition: true,
+      plan: pos.plan_key,
+      pageIndex: pos.page_index || 0,
+      x_frac: pos.x_frac,
+      y_frac: pos.y_frac
+    };
+  } catch (e) {
+    return { hasPosition: false };
+  }
+}
+
+// Create a new equipment link
+app.post('/api/equipment/links', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { source_type, source_id, target_type, target_id, link_label, description } = req.body;
+    const created_by = req.headers['x-user-email'] || 'unknown';
+
+    if (!source_type || !source_id || !target_type || !target_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Don't allow linking to self
+    if (source_type === target_type && source_id === target_id) {
+      return res.status(400).json({ error: 'Cannot link equipment to itself' });
+    }
+
+    const result = await quickQuery(`
+      INSERT INTO equipment_links (site, source_type, source_id, target_type, target_id, link_label, description, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (site, source_type, source_id, target_type, target_id) DO NOTHING
+      RETURNING *
+    `, [site, source_type, source_id, target_type, target_id, link_label || 'connected', description, created_by]);
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({ error: 'Link already exists' });
+    }
+
+    console.log(`[EQUIPMENT_LINKS] Created link: ${source_type}#${source_id} → ${target_type}#${target_id}`);
+    res.status(201).json(result.rows[0]);
+  } catch (e) {
+    console.error('[EQUIPMENT_LINKS] Create link error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete an equipment link
+app.delete('/api/equipment/links/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+
+    const result = await quickQuery(`
+      DELETE FROM equipment_links WHERE id = $1 AND site = $2 RETURNING *
+    `, [id, site]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Link not found' });
+    }
+
+    console.log(`[EQUIPMENT_LINKS] Deleted link: ${id}`);
+    res.json({ ok: true, deleted: result.rows[0] });
+  } catch (e) {
+    console.error('[EQUIPMENT_LINKS] Delete link error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Search equipment for linking (returns all types)
+app.get('/api/equipment/search', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { q, exclude_type, exclude_id } = req.query;
+    const searchTerm = `%${(q || '').toLowerCase()}%`;
+    const results = [];
+
+    // Search in each equipment table
+    const searches = [
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', idCol: 'id' },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id' },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id' },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id' },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', idCol: 'id' }
+    ];
+
+    for (const s of searches) {
+      try {
+        const query = `
+          SELECT ${s.idCol} as id, ${s.nameCol} as name, ${s.codeCol} as code,
+                 building, building_code, '${s.type}' as equipment_type
+          FROM ${s.table}
+          WHERE site = $1 AND (
+            LOWER(COALESCE(${s.nameCol}, '')) LIKE $2 OR
+            LOWER(COALESCE(${s.codeCol}, '')) LIKE $2
+          )
+          LIMIT 10
+        `;
+        const result = await quickQuery(query, [site, searchTerm]);
+
+        for (const row of result.rows) {
+          // Exclude the source equipment from results
+          if (exclude_type === row.equipment_type && String(exclude_id) === String(row.id)) continue;
+
+          results.push({
+            type: row.equipment_type,
+            id: row.id,
+            name: row.name,
+            code: row.code,
+            building: row.building || row.building_code,
+            label: `${row.code || row.name} (${row.equipment_type})`
+          });
+        }
+      } catch (e) {
+        // Table might not exist, skip silently
+      }
+    }
+
+    // Sort by relevance (exact matches first)
+    results.sort((a, b) => {
+      const aExact = a.code?.toLowerCase() === q?.toLowerCase() || a.name?.toLowerCase() === q?.toLowerCase();
+      const bExact = b.code?.toLowerCase() === q?.toLowerCase() || b.name?.toLowerCase() === q?.toLowerCase();
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+      return 0;
+    });
+
+    res.json({ results: results.slice(0, 20) });
+  } catch (e) {
+    console.error('[EQUIPMENT_LINKS] Search error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
