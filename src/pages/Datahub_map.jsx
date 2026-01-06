@@ -14,7 +14,8 @@ import {
   Power, Battery, Plug, Gauge, Wrench, Factory, Server, Cpu, Wifi, Shield, Flag,
   Home, Building, Box, Clock, Calendar, Bell, Navigation, Compass, Pin, Bookmark,
   Award, User, Users, Folder, File, Info, Lock, Check, Flame, Thermometer,
-  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package
+  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2,
+  ExternalLink
 } from "lucide-react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -401,31 +402,55 @@ const CategoryFilterChips = ({ categories, selectedCategories, onToggle, onClear
   );
 };
 
-// Detail Panel for selected item - positioned to NOT cover the marker
-const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile }) => {
+// Detail Panel for selected item with Equipment Links
+const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
   if (!item) return null;
   const IconComp = ICON_MAP[category?.icon] || Circle;
 
+  const handleSearch = async (query) => {
+    setSearchQuery(query);
+    if (query.length < 2) { setSearchResults([]); return; }
+    setSearching(true);
+    try {
+      const res = await api.equipmentLinks.search(query, 'datahub', item.id);
+      setSearchResults(res?.results || []);
+    } catch (e) { console.error('Search error:', e); }
+    finally { setSearching(false); }
+  };
+
+  const handleAddLinkClick = async (target) => {
+    try {
+      await onAddLink?.({ source_type: 'datahub', source_id: String(item.id), target_type: target.type, target_id: String(target.id), link_label: 'connected' });
+      setShowAddLink(false); setSearchQuery(''); setSearchResults([]);
+    } catch (e) { console.error('Add link error:', e); }
+  };
+
+  const isOnSamePlan = (link) => {
+    const eq = link.linkedEquipment;
+    return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
+  };
+
   return (
-    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-72 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto`}>
-      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 text-white">
+    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`}>
+      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
-              <IconComp size={20} />
-            </div>
+            <div className="p-2 bg-white/20 rounded-xl flex-shrink-0"><IconComp size={20} /></div>
             <div className="min-w-0">
               <h3 className="font-bold truncate">{item.name}</h3>
               <p className="text-indigo-100 text-sm truncate">{category?.name || 'Sans categorie'}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg flex-shrink-0">
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg flex-shrink-0"><X size={18} /></button>
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
             <span className="text-gray-500 text-xs block">Batiment</span>
@@ -441,20 +466,55 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
           <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-2">{item.description}</p>
         )}
 
+        {/* Equipment Links Section */}
+        <div className="border-t pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1"><Link2 size={14} />Équipements liés</span>
+            <button onClick={() => setShowAddLink(!showAddLink)} className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-indigo-600" title="Ajouter un lien"><Plus size={16} /></button>
+          </div>
+          {showAddLink && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-2">
+              <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher..." className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-indigo-500 bg-white" autoFocus />
+              {searching && <div className="flex items-center gap-2 text-sm text-gray-500 mt-2"><Loader2 size={14} className="animate-spin" />...</div>}
+              {searchResults.length > 0 && (
+                <div className="mt-2 max-h-28 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <button key={`${result.type}-${result.id}`} onClick={() => handleAddLinkClick(result)} className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-indigo-100 rounded border flex items-center justify-between">
+                      <span className="font-medium truncate">{result.code || result.name}</span><span className="text-xs text-gray-500">{result.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {linksLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-2"><Loader2 size={14} className="animate-spin" />...</div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">Aucun lien</p>
+          ) : (
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment; const samePlan = isOnSamePlan(link);
+                return (
+                  <div key={link.id || idx} className={`flex items-center justify-between p-1.5 rounded-lg text-sm ${samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                    <button onClick={() => onLinkClick?.(link)} className="flex items-center gap-2 flex-1 text-left hover:underline truncate">
+                      <div className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" />
+                      <span className="font-medium truncate">{eq?.code || eq?.name}</span>
+                    </button>
+                    {link.type === 'manual' && link.id && <button onClick={() => onDeleteLink?.(link.id)} className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12} /></button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="flex gap-2">
-          <button
-            onClick={() => onNavigate(item)}
-            className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-100 text-indigo-700 text-sm font-medium flex items-center justify-center gap-2 hover:bg-indigo-200"
-          >
+          <button onClick={() => onNavigate(item)} className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-100 text-indigo-700 text-sm font-medium flex items-center justify-center gap-2 hover:bg-indigo-200">
             <Eye size={16} />Voir details
           </button>
           {position && (
-            <button
-              onClick={() => onDelete(position.id)}
-              className="py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100"
-            >
-              <Trash2 size={16} />
-            </button>
+            <button onClick={() => onDelete(position.id)} className="py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100"><Trash2 size={16} /></button>
           )}
         </div>
       </div>
@@ -493,6 +553,10 @@ export default function DatahubMap() {
 
   // Control statuses for datahub items { item_id: { status: 'overdue'|'upcoming' } }
   const [controlStatuses, setControlStatuses] = useState({});
+
+  // Equipment links
+  const [links, setLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
 
   // External equipment categories (VSD, HV, MECA, GLO, Mobile, Switchboards)
   // Store plan key WITH positions to ensure synchronization (prevents stale data issues)
@@ -563,6 +627,99 @@ export default function DatahubMap() {
       console.error("Error loading datahub control statuses:", err);
     }
   }, []);
+
+  // Load equipment links for selected item
+  const loadEquipmentLinks = useCallback(async (itemId) => {
+    if (!itemId) {
+      setLinks([]);
+      return;
+    }
+    setLinksLoading(true);
+    try {
+      const res = await api.equipmentLinks.getLinks('datahub', itemId);
+      setLinks(res?.links || []);
+    } catch (err) {
+      console.error('Error loading equipment links:', err);
+      setLinks([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  }, []);
+
+  // Handle adding a link
+  const handleAddLink = useCallback(async (linkData) => {
+    try {
+      await api.equipmentLinks.createLink(linkData);
+      if (selectedPosition?.item?.id) {
+        loadEquipmentLinks(selectedPosition.item.id);
+      }
+    } catch (err) {
+      console.error('Error creating link:', err);
+    }
+  }, [selectedPosition, loadEquipmentLinks]);
+
+  // Handle deleting a link
+  const handleDeleteLink = useCallback(async (linkId) => {
+    try {
+      await api.equipmentLinks.deleteLink(linkId);
+      if (selectedPosition?.item?.id) {
+        loadEquipmentLinks(selectedPosition.item.id);
+      }
+    } catch (err) {
+      console.error('Error deleting link:', err);
+    }
+  }, [selectedPosition, loadEquipmentLinks]);
+
+  // Handle clicking on a link to navigate to the linked equipment
+  const handleLinkClick = useCallback((link) => {
+    const eq = link.linkedEquipment;
+    if (!eq) return;
+
+    // Check if it's on the same plan
+    if (eq.plan_key && eq.page_index !== undefined) {
+      const samePlan = selectedPlan?.logical_name === eq.plan_key && pageIndex === eq.page_index;
+
+      if (samePlan && eq.x_coord !== undefined && eq.y_coord !== undefined) {
+        // Navigate to the marker on the same plan
+        const marker = markersRef.current.find(m => {
+          if (eq.equipment_type === 'datahub') {
+            return m.meta?.item?.id === eq.equipment_id;
+          }
+          return m.meta?.equipment_id === eq.equipment_id || m.meta?.switchboard_id === eq.equipment_id;
+        });
+        if (marker) {
+          // Highlight the marker temporarily
+          const originalStrokeWidth = marker.graphic.style.strokeWidth;
+          marker.graphic.style.strokeWidth = '4px';
+          setTimeout(() => {
+            marker.graphic.style.strokeWidth = originalStrokeWidth;
+          }, 2000);
+        }
+      } else if (eq.plan_key) {
+        // Navigate to different plan
+        const targetPlan = plans.find(p => p.logical_name === eq.plan_key);
+        if (targetPlan) {
+          setSelectedPlan(targetPlan);
+          setPageIndex(eq.page_index || 0);
+        }
+      }
+    } else {
+      // Navigate to the equipment's detail page
+      const typeRoutes = {
+        'hv': '/high-voltage',
+        'switchboard': '/switchboards',
+        'vsd': '/vsds',
+        'meca': '/meca-equipment',
+        'glo': '/glo-equipment',
+        'mobile': '/mobile-equipments',
+        'datahub': '/datahub'
+      };
+      const route = typeRoutes[eq.equipment_type];
+      if (route) {
+        window.open(`${route}/${eq.equipment_id}`, '_blank');
+      }
+    }
+  }, [selectedPlan, pageIndex, plans]);
 
   // Responsive
   useEffect(() => {
@@ -943,6 +1100,8 @@ export default function DatahubMap() {
         setSelectedPosition(pos);
         setPlacementMode(null);
         setCreateMode(false);
+        // Load equipment links
+        loadEquipmentLinks(item.id);
         // Animate to marker position
         map.setView([lat, lng], map.getZoom(), { animate: true });
       });
@@ -1709,6 +1868,13 @@ export default function DatahubMap() {
                   onDelete={handleDeletePosition}
                   onNavigate={(item) => navigate(`/app/datahub?item=${item.id}`)}
                   isMobile={isMobile}
+                  links={links}
+                  linksLoading={linksLoading}
+                  onAddLink={handleAddLink}
+                  onDeleteLink={handleDeleteLink}
+                  onLinkClick={handleLinkClick}
+                  currentPlan={selectedPlan}
+                  currentPageIndex={pageIndex}
                 />
               )}
             </>

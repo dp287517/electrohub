@@ -47,6 +47,8 @@ import {
   Clock,
   Upload,
   Plus,
+  Link2,
+  Loader2,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -383,12 +385,60 @@ const SwitchboardCard = ({
   );
 };
 
-/* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
+/* ----------------------------- Detail Panel with Equipment Links ----------------------------- */
+const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
   if (!position) return null;
+
+  // Search for equipment to link
+  const handleSearch = async (query) => {
+    setSearchQuery(query);
+    if (query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await api.equipmentLinks.search(query, 'switchboard', position.switchboard_id);
+      setSearchResults(res?.results || []);
+    } catch (e) {
+      console.error('Search error:', e);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Add a link
+  const handleAddLinkClick = async (target) => {
+    try {
+      await onAddLink?.({
+        source_type: 'switchboard',
+        source_id: String(position.switchboard_id),
+        target_type: target.type,
+        target_id: String(target.id),
+        link_label: 'connected'
+      });
+      setShowAddLink(false);
+      setSearchQuery('');
+      setSearchResults([]);
+    } catch (e) {
+      console.error('Add link error:', e);
+    }
+  };
+
+  // Check if link is on same plan
+  const isOnSamePlan = (link) => {
+    const eq = link.linkedEquipment;
+    return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
+  };
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-80 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
-      <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-4 text-white">
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+      <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-white/20 rounded-lg">
@@ -412,7 +462,7 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
         <div className="grid grid-cols-3 gap-2 text-sm">
           <div className="bg-gray-50 rounded-lg p-2 text-center">
             <span className="text-gray-500 text-xs block">Bâtiment</span>
@@ -442,6 +492,113 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete }) => {
             <Badge variant="info">
               {position.regime_neutral || board?.regime_neutral}
             </Badge>
+          )}
+        </div>
+
+        {/* Equipment Links Section */}
+        <div className="border-t pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Link2 size={14} />
+              Équipements liés
+            </span>
+            <button
+              onClick={() => setShowAddLink(!showAddLink)}
+              className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-blue-600"
+              title="Ajouter un lien"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+
+          {/* Add Link UI */}
+          {showAddLink && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="Rechercher un équipement..."
+                className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                autoFocus
+              />
+              {searching && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                  <Loader2 size={14} className="animate-spin" />
+                  Recherche...
+                </div>
+              )}
+              {searchResults.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <button
+                      key={`${result.type}-${result.id}`}
+                      onClick={() => handleAddLinkClick(result)}
+                      className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-blue-100 rounded border flex items-center justify-between"
+                    >
+                      <span className="font-medium">{result.code || result.name}</span>
+                      <span className="text-xs text-gray-500">{result.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Links List */}
+          {linksLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+              <Loader2 size={14} className="animate-spin" />
+              Chargement des liens...
+            </div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">Aucun équipement lié</p>
+          ) : (
+            <div className="space-y-1">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment;
+                const samePlan = isOnSamePlan(link);
+
+                return (
+                  <div
+                    key={link.id || idx}
+                    className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                      samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'
+                    }`}
+                  >
+                    <button
+                      onClick={() => onLinkClick?.(link)}
+                      className="flex items-center gap-2 flex-1 text-left hover:underline"
+                    >
+                      <div className="w-2 h-2 rounded-full bg-blue-500" />
+                      <div>
+                        <span className="font-medium">{eq?.code || eq?.name}</span>
+                        {link.relationship && link.relationship !== 'connected' && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            ({link.relationship === 'feeds' ? 'alimente' : link.relationship === 'fed_by' ? 'alimenté par' : link.relationship})
+                          </span>
+                        )}
+                        {!samePlan && eq?.plan && (
+                          <span className="text-xs text-orange-600 ml-1">(autre plan)</span>
+                        )}
+                        {link.type === 'hierarchical' && (
+                          <span className="text-xs text-blue-600 ml-1">(auto)</span>
+                        )}
+                      </div>
+                    </button>
+                    {link.type === 'manual' && link.id && (
+                      <button
+                        onClick={() => onDeleteLink?.(link.id)}
+                        className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600"
+                        title="Supprimer le lien"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -1254,6 +1411,10 @@ export default function SwitchboardMap() {
   const [upcomingControls, setUpcomingControls] = useState([]);
   const [showUpcomingPanel, setShowUpcomingPanel] = useState(false);
 
+  // Equipment links
+  const [links, setLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+
   // confirm modal state
   const [confirmState, setConfirmState] = useState({
     open: false,
@@ -1481,6 +1642,78 @@ export default function SwitchboardMap() {
     }
   };
 
+  // Load equipment links
+  const loadEquipmentLinks = async (switchboardId) => {
+    if (!switchboardId) {
+      setLinks([]);
+      return;
+    }
+    setLinksLoading(true);
+    try {
+      const res = await api.equipmentLinks.getLinks('switchboard', switchboardId);
+      setLinks(res?.links || []);
+    } catch (err) {
+      console.error("Error loading equipment links:", err);
+      setLinks([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  // Add a new link
+  const handleAddLink = async (linkData) => {
+    try {
+      await api.equipmentLinks.createLink(linkData);
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.switchboard_id);
+      }
+    } catch (err) {
+      console.error("Error creating link:", err);
+    }
+  };
+
+  // Delete a link
+  const handleDeleteLink = async (linkId) => {
+    try {
+      await api.equipmentLinks.deleteLink(linkId);
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.switchboard_id);
+      }
+    } catch (err) {
+      console.error("Error deleting link:", err);
+    }
+  };
+
+  // Handle click on a linked equipment
+  const handleLinkClick = (link) => {
+    const eq = link.linkedEquipment;
+    if (!eq) return;
+
+    const currentPlanKey = stableSelectedPlan?.logical_name;
+
+    // If on same plan, find and select the marker
+    if (eq.hasPosition && eq.plan === currentPlanKey && (eq.pageIndex || 0) === pageIndex) {
+      const targetPos = initialPoints.find(
+        p => String(p.switchboard_id) === String(eq.id)
+      );
+      if (targetPos) {
+        setSelectedPosition(targetPos);
+        loadEquipmentLinks(eq.id);
+        viewerRef.current?.highlightMarker?.(eq.id);
+      }
+    } else if (eq.hasPosition && eq.plan) {
+      // Navigate to the other plan
+      const targetPlan = plans.find(p => p.logical_name === eq.plan);
+      if (targetPlan) {
+        setSelectedPlan(targetPlan);
+        if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex);
+      }
+    } else {
+      // No position - navigate to equipment detail page
+      navigate(`/app/switchboard/${eq.id}`);
+    }
+  };
+
   const handleSetPositionById = async (switchboardId, xFrac, yFrac) => {
     if (!stableSelectedPlan || !switchboardId) return;
     try {
@@ -1602,6 +1835,7 @@ export default function SwitchboardMap() {
         ) || positionMeta;
 
       setSelectedPosition(pos);
+      loadEquipmentLinks(pos.switchboard_id);
 
       try {
         const board = await api.switchboard.getBoard(pos.switchboard_id);
@@ -2166,9 +2400,17 @@ export default function SwitchboardMap() {
                 onClose={() => {
                   setSelectedPosition(null);
                   setSelectedBoard(null);
+                  setLinks([]);
                 }}
                 onNavigate={handleNavigateToBoard}
                 onDelete={(pos) => askDeletePosition(pos)}
+                links={links}
+                linksLoading={linksLoading}
+                onAddLink={handleAddLink}
+                onDeleteLink={handleDeleteLink}
+                onLinkClick={handleLinkClick}
+                currentPlan={stableSelectedPlan?.logical_name}
+                currentPageIndex={pageIndex}
               />
             )}
 
