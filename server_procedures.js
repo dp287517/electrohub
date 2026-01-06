@@ -1823,6 +1823,39 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, upload
     };
   }
 
+  // EXPLICIT FINISH DETECTION: If user says "terminé", go directly to review (don't rely on AI)
+  if (session.current_step === 'steps' && isFinished && rawSteps.length > 0) {
+    console.log(`[PROC] User said "terminé" with ${rawSteps.length} steps - forcing review phase`);
+
+    // Update session to review phase
+    await pool.query(
+      `UPDATE procedure_ai_sessions
+       SET current_step = 'review', updated_at = now()
+       WHERE id = $1`,
+      [sessionId]
+    );
+
+    // Return lightweight collectedData for response
+    const lightweightCollectedData = {
+      ...session.collected_data,
+      raw_steps: rawSteps.map(step => ({
+        step_number: step.step_number,
+        raw_text: step.raw_text,
+        photo: step.photo,
+        has_photo: step.has_photo
+      }))
+    };
+
+    return {
+      message: `✅ Procédure "${existingTitle}" avec ${rawSteps.length} étape(s). Traitement en cours...`,
+      currentStep: 'review',
+      expectsPhoto: false,
+      procedureReady: false,
+      needsProcessing: true,
+      collectedData: lightweightCollectedData
+    };
+  }
+
   // If in steps phase and has photo, store the raw step immediately
   if (session.current_step === 'steps' && hasPhoto && !isFinished) {
     const stepNumber = rawSteps.length + 1;
