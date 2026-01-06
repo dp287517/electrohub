@@ -40,6 +40,8 @@ import {
   Crosshair,
   Target,
   ArrowLeft,
+  ArrowUp,
+  ArrowDown,
   Zap,
   Upload,
   Plus,
@@ -276,9 +278,10 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
     finally { setSearching(false); }
   };
 
-  const handleAddLinkClick = async (target) => {
+  const handleAddLinkClick = async (target, direction) => {
     try {
-      await onAddLink?.({ source_type: 'mobile', source_id: String(position.equipment_id), target_type: target.type, target_id: String(target.id), link_label: 'connected' });
+      const linkLabel = direction || 'connected';
+      await onAddLink?.({ source_type: 'mobile', source_id: String(position.equipment_id), target_type: target.type, target_id: String(target.id), link_label: linkLabel });
       setShowAddLink(false); setSearchQuery(''); setSearchResults([]);
     } catch (e) { console.error('Add link error:', e); }
   };
@@ -330,11 +333,18 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
               <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher..." className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-cyan-500 bg-white" autoFocus />
               {searching && <div className="flex items-center gap-2 text-sm text-gray-500 mt-2"><Loader2 size={14} className="animate-spin" />...</div>}
               {searchResults.length > 0 && (
-                <div className="mt-2 max-h-28 overflow-y-auto space-y-1">
+                <div className="mt-2 max-h-36 overflow-y-auto space-y-1">
                   {searchResults.map((result) => (
-                    <button key={`${result.type}-${result.id}`} onClick={() => handleAddLinkClick(result)} className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-cyan-100 rounded border flex items-center justify-between">
-                      <span className="font-medium truncate">{result.code || result.name}</span><span className="text-xs text-gray-500">{result.type}</span>
-                    </button>
+                    <div key={`${result.type}-${result.id}`} className="bg-white rounded border p-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-medium text-sm truncate">{result.code || result.name}</span>
+                        <span className="text-xs text-gray-500">{result.type}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => handleAddLinkClick(result, 'upstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300" title="Amont"><ArrowDown size={12} /><span>Amont</span></button>
+                        <button onClick={() => handleAddLinkClick(result, 'downstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300" title="Aval"><ArrowUp size={12} /><span>Aval</span></button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
