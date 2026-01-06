@@ -1422,16 +1422,68 @@ function createToolHandlers(pool, site) {
     search_equipment: async (params) => {
       const { equipment_type, building, floor, name, code, limit = 20 } = params;
 
-      // Mapper le type d'équipement à la table
+      // Mapper le type d'équipement à la table avec les bons noms de colonnes
       const tableMap = {
-        switchboard: { table: 'switchboards', columns: 'id, name, code, building_code, floor, room, site' },
-        vsd: { table: 'vsd_drives', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
-        meca: { table: 'equipment_meca', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
-        atex: { table: 'atex_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
-        mobile: { table: 'mobile_equipment', columns: 'id, name, code, building_code, floor, room, site' },
-        hv: { table: 'hv_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
-        glo: { table: 'glo_equipments', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
-        datahub: { table: 'datahub_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' }
+        switchboard: {
+          table: 'switchboards',
+          columns: 'id, name, code, building_code, floor, room',
+          siteColumn: 'site',
+          buildingCol: 'building_code',
+          codeCol: 'code'
+        },
+        vsd: {
+          table: 'vsd_equipments',
+          columns: 'id, name, building as building_code, floor, location as room',
+          siteColumn: 'site',
+          buildingCol: 'building',
+          codeCol: null // pas de code/tag
+        },
+        meca: {
+          table: 'meca_equipments',
+          columns: 'id, name, building as building_code, floor, location as room',
+          siteColumn: null, // utilise site_id join
+          siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id',
+          siteCondition: "s.name = $1",
+          buildingCol: 'building',
+          codeCol: null
+        },
+        atex: {
+          table: 'atex_equipments',
+          columns: 'id, name, tag as code, building as building_code, floor, location as room',
+          siteColumn: null,
+          siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id',
+          siteCondition: "s.name = $1",
+          buildingCol: 'building',
+          codeCol: 'tag'
+        },
+        mobile: {
+          table: 'me_equipments',
+          columns: 'id, name, code, building as building_code, floor, location as room',
+          siteColumn: null, // pas de filtre site apparent
+          buildingCol: 'building',
+          codeCol: 'code'
+        },
+        hv: {
+          table: 'hv_equipments',
+          columns: 'id, name, code, building_code, floor, room',
+          siteColumn: null, // pas de filtre site apparent
+          buildingCol: 'building_code',
+          codeCol: 'code'
+        },
+        glo: {
+          table: 'glo_equipments',
+          columns: 'id, name, tag as code, building as building_code, floor, location as room',
+          siteColumn: null,
+          buildingCol: 'building',
+          codeCol: 'tag'
+        },
+        datahub: {
+          table: 'dh_items',
+          columns: 'id, name, code, building as building_code, floor, location as room',
+          siteColumn: null,
+          buildingCol: 'building',
+          codeCol: 'code'
+        }
       };
 
       // Si pas de type spécifié et qu'on a un nom, chercher dans TOUS les types
@@ -1440,16 +1492,44 @@ function createToolHandlers(pool, site) {
           const allResults = [];
           for (const [eqType, tableInfo] of Object.entries(tableMap)) {
             try {
-              const query = `
-                SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
-                FROM ${tableInfo.table}
-                WHERE site = $1 AND LOWER(name) LIKE $2
-                LIMIT 5
-              `;
-              const result = await pool.query(query, [site, `%${name.toLowerCase()}%`]);
+              let query;
+              let queryParams;
+
+              if (tableInfo.siteJoin) {
+                // Tables avec join sur sites
+                query = `
+                  SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                  FROM ${tableInfo.table} e
+                  ${tableInfo.siteJoin.replace('{table}', 'e')}
+                  WHERE ${tableInfo.siteCondition} AND LOWER(e.name) LIKE $2
+                  LIMIT 5
+                `;
+                queryParams = [site, `%${name.toLowerCase()}%`];
+              } else if (tableInfo.siteColumn) {
+                // Tables avec colonne site directe
+                query = `
+                  SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                  FROM ${tableInfo.table}
+                  WHERE ${tableInfo.siteColumn} = $1 AND LOWER(name) LIKE $2
+                  LIMIT 5
+                `;
+                queryParams = [site, `%${name.toLowerCase()}%`];
+              } else {
+                // Tables sans filtre site
+                query = `
+                  SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                  FROM ${tableInfo.table}
+                  WHERE LOWER(name) LIKE $1
+                  LIMIT 5
+                `;
+                queryParams = [`%${name.toLowerCase()}%`];
+              }
+
+              const result = await pool.query(query, queryParams);
               allResults.push(...result.rows.map(r => ({ ...r, equipment_type: eqType })));
             } catch (e) {
               // Table might not exist, skip
+              console.log(`[TOOL] search_equipment: Table ${tableInfo.table} error:`, e.message);
             }
           }
 
@@ -1469,40 +1549,72 @@ function createToolHandlers(pool, site) {
       }
 
       const tableInfo = tableMap[equipment_type] || tableMap.switchboard;
+      const actualType = equipment_type || 'switchboard';
 
-      let query = `
-        SELECT ${tableInfo.columns}, '${equipment_type}' as equipment_type
-        FROM ${tableInfo.table}
-        WHERE site = $1
-      `;
-      const queryParams = [site];
-      let paramIndex = 2;
+      // Construire la requête selon le type de table
+      let query;
+      let queryParams = [];
+      let paramIndex = 1;
+
+      if (tableInfo.siteJoin) {
+        // Tables avec join sur sites
+        query = `
+          SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+          FROM ${tableInfo.table} e
+          ${tableInfo.siteJoin.replace('{table}', 'e')}
+          WHERE ${tableInfo.siteCondition}
+        `;
+        queryParams.push(site);
+        paramIndex++;
+      } else if (tableInfo.siteColumn) {
+        // Tables avec colonne site directe
+        query = `
+          SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+          FROM ${tableInfo.table}
+          WHERE ${tableInfo.siteColumn} = $1
+        `;
+        queryParams.push(site);
+        paramIndex++;
+      } else {
+        // Tables sans filtre site
+        query = `
+          SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+          FROM ${tableInfo.table}
+          WHERE 1=1
+        `;
+      }
+
+      // Ajout alias pour les colonnes filtrées
+      const nameAlias = tableInfo.siteJoin ? 'e.name' : 'name';
+      const buildingAlias = tableInfo.siteJoin ? `e.${tableInfo.buildingCol}` : tableInfo.buildingCol;
+      const floorAlias = tableInfo.siteJoin ? 'e.floor' : 'floor';
 
       if (building) {
-        query += ` AND UPPER(building_code) = $${paramIndex}`;
+        query += ` AND UPPER(${buildingAlias}) = $${paramIndex}`;
         queryParams.push(building.toUpperCase());
         paramIndex++;
       }
 
       if (floor) {
-        query += ` AND UPPER(floor) = $${paramIndex}`;
+        query += ` AND UPPER(${floorAlias}) = $${paramIndex}`;
         queryParams.push(floor.toUpperCase());
         paramIndex++;
       }
 
       if (name) {
-        query += ` AND LOWER(name) LIKE $${paramIndex}`;
+        query += ` AND LOWER(${nameAlias}) LIKE $${paramIndex}`;
         queryParams.push(`%${name.toLowerCase()}%`);
         paramIndex++;
       }
 
-      if (code) {
-        query += ` AND LOWER(code) LIKE $${paramIndex}`;
+      if (code && tableInfo.codeCol) {
+        const codeAlias = tableInfo.siteJoin ? `e.${tableInfo.codeCol}` : tableInfo.codeCol;
+        query += ` AND LOWER(${codeAlias}) LIKE $${paramIndex}`;
         queryParams.push(`%${code.toLowerCase()}%`);
         paramIndex++;
       }
 
-      query += ` ORDER BY building_code, floor, name LIMIT ${Math.min(parseInt(limit) || 20, 50)}`;
+      query += ` ORDER BY ${buildingAlias}, ${floorAlias}, ${nameAlias} LIMIT ${Math.min(parseInt(limit) || 20, 50)}`;
 
       try {
         const result = await pool.query(query, queryParams);
@@ -1510,7 +1622,7 @@ function createToolHandlers(pool, site) {
         return {
           success: true,
           count: result.rows.length,
-          equipment_type,
+          equipment_type: actualType,
           filters: { building, floor, name, code },
           equipment: result.rows.map(eq => ({
             id: eq.id,
@@ -1519,11 +1631,11 @@ function createToolHandlers(pool, site) {
             building_code: eq.building_code,
             floor: eq.floor,
             room: eq.room,
-            equipment_type
+            equipment_type: actualType
           })),
           summary: result.rows.length === 0
-            ? `Aucun équipement ${equipment_type} trouvé avec ces critères.`
-            : `${result.rows.length} équipement(s) ${equipment_type} trouvé(s).`
+            ? `Aucun équipement ${actualType} trouvé avec ces critères.`
+            : `${result.rows.length} équipement(s) ${actualType} trouvé(s).`
         };
       } catch (error) {
         console.error('[TOOL] search_equipment error:', error.message);
@@ -1536,11 +1648,13 @@ function createToolHandlers(pool, site) {
 
       const tableMap = {
         switchboard: 'switchboards',
-        vsd: 'vsd_drives',
-        meca: 'equipment_meca',
-        atex: 'atex_equipment',
-        mobile: 'mobile_equipment',
-        hv: 'hv_equipment'
+        vsd: 'vsd_equipments',
+        meca: 'meca_equipments',
+        atex: 'atex_equipments',
+        mobile: 'me_equipments',
+        hv: 'hv_equipments',
+        glo: 'glo_equipments',
+        datahub: 'dh_items'
       };
 
       const table = tableMap[equipment_type] || 'switchboards';
@@ -1721,19 +1835,23 @@ function createToolHandlers(pool, site) {
       let equipmentToShow = [];
 
       if (equipment_ids && equipment_ids.length > 0) {
-        // Récupérer les équipements spécifiés
+        // Récupérer les équipements spécifiés (noms de tables corrects)
         const tableMap = {
-          switchboard: 'switchboards',
-          vsd: 'vsd_drives',
-          meca: 'equipment_meca',
-          mobile: 'mobile_equipment'
+          switchboard: { table: 'switchboards', cols: 'id, name, code, building_code, floor, room' },
+          vsd: { table: 'vsd_equipments', cols: 'id, name, building as building_code, floor, location as room' },
+          meca: { table: 'meca_equipments', cols: 'id, name, building as building_code, floor, location as room' },
+          mobile: { table: 'me_equipments', cols: 'id, name, code, building as building_code, floor, location as room' },
+          hv: { table: 'hv_equipments', cols: 'id, name, code, building_code, floor, room' },
+          glo: { table: 'glo_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
+          atex: { table: 'atex_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
+          datahub: { table: 'dh_items', cols: 'id, name, code, building as building_code, floor, location as room' }
         };
-        const table = tableMap[equipment_type] || 'switchboards';
+        const info = tableMap[equipment_type] || tableMap.switchboard;
 
         try {
           const result = await pool.query(`
-            SELECT id, name, code, building_code, floor, room
-            FROM ${table}
+            SELECT ${info.cols}
+            FROM ${info.table}
             WHERE id = ANY($1)
           `, [equipment_ids]);
           equipmentToShow = result.rows;
@@ -2233,17 +2351,17 @@ function createToolHandlers(pool, site) {
           }
         }
 
-        // Chercher l'équipement dans toutes les tables
+        // Chercher l'équipement dans toutes les tables (noms corrects)
         if (!equipmentData && equipment_name) {
           const tableMap = {
             switchboard: 'switchboards',
-            vsd: 'vsd_drives',
-            meca: 'equipment_meca',
-            atex: 'atex_equipment',
-            mobile: 'mobile_equipment',
-            hv: 'hv_equipment',
+            vsd: 'vsd_equipments',
+            meca: 'meca_equipments',
+            atex: 'atex_equipments',
+            mobile: 'me_equipments',
+            hv: 'hv_equipments',
             glo: 'glo_equipments',
-            datahub: 'datahub_equipment'
+            datahub: 'dh_items'
           };
 
           const typesToSearch = foundType ? [foundType] : Object.keys(tableMap);
