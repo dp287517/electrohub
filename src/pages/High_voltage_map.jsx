@@ -562,7 +562,7 @@ const PlacementModeIndicator = ({ equipment, onCancel }) => (
 // Leaflet Viewer Component
 // ─────────────────────────────────────────────────────────────────────
 const HvLeafletViewer = forwardRef(function HvLeafletViewer(
-  { fileUrl, pageIndex = 0, initialPoints = [], selectedId, controlStatuses = {}, onReady, onClickPoint, onMovePoint, onCreatePoint, onContextMenu, placementActive = false, disabled = false },
+  { fileUrl, pageIndex = 0, initialPoints = [], selectedId, controlStatuses = {}, links = [], currentPlan = null, onReady, onClickPoint, onMovePoint, onCreatePoint, onContextMenu, placementActive = false, disabled = false },
   ref
 ) {
   const wrapRef = useRef(null);
@@ -570,6 +570,7 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
   const imageLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
   const markersMapRef = useRef(new Map());
+  const connectionsLayerRef = useRef(null);
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
   const initialFitDoneRef = useRef(false);
@@ -743,6 +744,70 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     }
   }, []);
 
+  // Draw connection lines between linked equipment
+  const drawConnections = useCallback(() => {
+    const map = mapRef.current;
+    const g = connectionsLayerRef.current;
+    if (!map || !g) return;
+
+    g.clearLayers();
+    if (!selectedIdRef.current || !links.length) return;
+
+    const selectedMarker = markersMapRef.current.get(selectedIdRef.current)
+      || markersMapRef.current.get(String(selectedIdRef.current))
+      || markersMapRef.current.get(Number(selectedIdRef.current));
+    if (!selectedMarker) return;
+
+    const sourceLatLng = selectedMarker.getLatLng();
+    const currentPlanKey = currentPlan?.logical_name || currentPlan?.id;
+
+    links.forEach((link) => {
+      const eq = link.linkedEquipment;
+      if (!eq?.hasPosition) return;
+      const eqPlan = eq.plan_key || eq.plan;
+      const eqPage = eq.page_index ?? eq.pageIndex ?? 0;
+      if (eqPlan !== currentPlanKey || eqPage !== pageIndex) return;
+
+      const targetId = eq.equipment_id || eq.id;
+      let targetMarker = markersMapRef.current.get(targetId)
+        || markersMapRef.current.get(String(targetId))
+        || markersMapRef.current.get(Number(targetId));
+      if (!targetMarker) return;
+
+      const targetLatLng = targetMarker.getLatLng();
+      let color = '#3b82f6', flowDirection = null;
+      const linkLabel = link.link_label || link.relationship;
+
+      if (linkLabel === 'upstream') { color = '#10b981'; flowDirection = 'toSource'; }
+      else if (linkLabel === 'downstream') { color = '#ef4444'; flowDirection = 'toTarget'; }
+      else if (link.relationship === 'feeds') { color = '#ef4444'; flowDirection = 'toTarget'; }
+      else if (link.relationship === 'fed_by') { color = '#10b981'; flowDirection = 'toSource'; }
+      else if (link.type === 'hierarchical') { color = '#f59e0b'; }
+
+      const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
+        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
+
+      const polyline = L.polyline([sourceLatLng, targetLatLng], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass });
+      polyline.addTo(g);
+
+      if (flowDirection) {
+        const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
+        const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
+        const dx = arrowEnd.lng - arrowStart.lng, dy = arrowEnd.lat - arrowStart.lat;
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const arrowIcon = L.divIcon({
+          className: 'arrow-marker',
+          html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white;">▲</div>`,
+          iconSize: [20, 20], iconAnchor: [10, 10]
+        });
+        L.marker(arrowEnd, { icon: arrowIcon, interactive: false }).addTo(g);
+      }
+    });
+  }, [links, currentPlan, pageIndex]);
+
+  // Redraw connections when links or selection changes
+  useEffect(() => { drawConnections(); }, [links, selectedId, drawConnections]);
+
   useEffect(() => {
     console.log("[HV-PDF] useEffect triggered - disabled:", disabled, "fileUrl:", fileUrl, "wrapRef.current:", !!wrapRef.current);
 
@@ -863,6 +928,7 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         m.setMaxBounds(bounds.pad(0.5));
 
         markersLayerRef.current = L.layerGroup().addTo(m);
+        connectionsLayerRef.current = L.layerGroup().addTo(m);
 
         m.on("click", (e) => {
           if (!aliveRef.current) return;
@@ -1742,6 +1808,8 @@ export default function HighVoltageMap() {
                 initialPoints={initialPoints}
                 selectedId={selectedEquipmentId}
                 controlStatuses={controlStatuses}
+                links={links}
+                currentPlan={selectedPlan}
                 onReady={() => setPdfReady(true)}
                 onMovePoint={async (equipmentId, xy) => {
                   if (!stableSelectedPlan) return;
