@@ -525,6 +525,22 @@ export const api = {
   },
 },
 
+  /** --- EQUIPMENT LINKS (connexions entre équipements) --- */
+  equipmentLinks: {
+    // Get all links for an equipment (manual + hierarchical for switchboards)
+    getLinks: (type, id) => get(`/api/equipment/links/${type}/${id}`),
+
+    // Create a new manual link
+    createLink: (data) => post("/api/equipment/links", data),
+
+    // Delete a manual link
+    deleteLink: (id) => del(`/api/equipment/links/${id}`),
+
+    // Search equipment for linking (all types)
+    search: (query, excludeType, excludeId) =>
+      get("/api/equipment/search", { q: query, exclude_type: excludeType, exclude_id: excludeId }),
+  },
+
   /** --- COMP-EXT --- */
   compExt: {
     list: (params) => get("/api/comp-ext/vendors", params),

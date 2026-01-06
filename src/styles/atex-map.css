@@ -2366,3 +2366,41 @@ input[readonly] {
   z-index: 1000;
 }
 
+/* ==========================================================================
+   🔗 EQUIPMENT LINKS - Connection Lines Between Equipment
+   ========================================================================== */
+
+/* Animated dashed line (marching ants effect) */
+@keyframes dash-march {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+/* Equipment link polylines */
+.equipment-link-line {
+  animation: dash-march 0.8s linear infinite;
+  pointer-events: none;
+}
+
+/* Desktop: full animation */
+@media (min-width: 769px) {
+  .equipment-link-line {
+    animation: dash-march 0.8s linear infinite;
+  }
+}
+
+/* Mobile: disable animation for performance */
+@media (max-width: 768px) {
+  .equipment-link-line {
+    animation: none !important;
+  }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .equipment-link-line {
+    animation: none !important;
+  }
+}
+

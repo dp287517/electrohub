@@ -44,6 +44,10 @@ import {
   Clock,
   CheckCircle,
   Calendar,
+  Link2,
+  Plus,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
@@ -260,17 +264,76 @@ const ControlStatusBadge = ({ status }) => {
   );
 };
 
-/* ----------------------------- Detail Panel ----------------------------- */
-const DetailPanel = ({ position, onClose, onNavigate, equipmentTypes = {} }) => {
+/* ----------------------------- Detail Panel with Links ----------------------------- */
+const DetailPanel = ({
+  position,
+  onClose,
+  onNavigate,
+  equipmentTypes = {},
+  links = [],
+  linksLoading = false,
+  onAddLink,
+  onDeleteLink,
+  onLinkClick,
+  currentPlan,
+  currentPageIndex
+}) => {
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
   if (!position) return null;
 
   const typeConfig = equipmentTypes[position.equipment_type] || BASE_EQUIPMENT_TYPES[position.equipment_type] || {};
   const TypeIcon = typeConfig.icon || MapPin;
 
+  // Search for equipment to link
+  const handleSearch = async (query) => {
+    setSearchQuery(query);
+    if (query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await api.equipmentLinks.search(query, position.equipment_type, position.equipment_id);
+      setSearchResults(res?.results || []);
+    } catch (e) {
+      console.error('Search error:', e);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Add a link
+  const handleAddLink = async (target) => {
+    try {
+      await onAddLink?.({
+        source_type: position.equipment_type,
+        source_id: String(position.equipment_id),
+        target_type: target.type,
+        target_id: String(target.id),
+        link_label: 'connected'
+      });
+      setShowAddLink(false);
+      setSearchQuery('');
+      setSearchResults([]);
+    } catch (e) {
+      console.error('Add link error:', e);
+    }
+  };
+
+  // Check if link is on same plan
+  const isOnSamePlan = (link) => {
+    const eq = link.linkedEquipment;
+    return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
+  };
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30">
+    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
       <div
-        className="p-4 text-white"
+        className="p-4 text-white flex-shrink-0"
         style={{ background: `linear-gradient(135deg, ${typeConfig.color || '#6b7280'}, ${typeConfig.color || '#6b7280'}dd)` }}
       >
         <div className="flex items-center justify-between">
@@ -289,7 +352,7 @@ const DetailPanel = ({ position, onClose, onNavigate, equipmentTypes = {} }) => 
         </div>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-500">Statut contrôle</span>
           <ControlStatusBadge status={position.control_status || "none"} />
@@ -308,6 +371,117 @@ const DetailPanel = ({ position, onClose, onNavigate, equipmentTypes = {} }) => 
             <span className="font-medium">{position.building}</span>
           </div>
         )}
+
+        {/* Equipment Links Section */}
+        <div className="border-t pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Link2 size={14} />
+              Équipements liés
+            </span>
+            <button
+              onClick={() => setShowAddLink(!showAddLink)}
+              className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-blue-600"
+              title="Ajouter un lien"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+
+          {/* Add Link UI */}
+          {showAddLink && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="Rechercher un équipement..."
+                className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                autoFocus
+              />
+              {searching && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 mt-2">
+                  <Loader2 size={14} className="animate-spin" />
+                  Recherche...
+                </div>
+              )}
+              {searchResults.length > 0 && (
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <button
+                      key={`${result.type}-${result.id}`}
+                      onClick={() => handleAddLink(result)}
+                      className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-blue-100 rounded border flex items-center justify-between"
+                    >
+                      <span className="font-medium">{result.code || result.name}</span>
+                      <span className="text-xs text-gray-500">{result.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Links List */}
+          {linksLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+              <Loader2 size={14} className="animate-spin" />
+              Chargement des liens...
+            </div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1">Aucun équipement lié</p>
+          ) : (
+            <div className="space-y-1">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment;
+                const samePlan = isOnSamePlan(link);
+                const linkTypeConfig = equipmentTypes[eq.type] || BASE_EQUIPMENT_TYPES[eq.type] || {};
+
+                return (
+                  <div
+                    key={link.id || idx}
+                    className={`flex items-center justify-between p-2 rounded-lg text-sm ${
+                      samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'
+                    }`}
+                  >
+                    <button
+                      onClick={() => onLinkClick?.(link)}
+                      className="flex items-center gap-2 flex-1 text-left hover:underline"
+                    >
+                      <div
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: linkTypeConfig.color || '#6b7280' }}
+                      />
+                      <div>
+                        <span className="font-medium">{eq.code || eq.name}</span>
+                        {link.relationship && link.relationship !== 'connected' && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            ({link.relationship === 'feeds' ? 'alimente' : link.relationship === 'fed_by' ? 'alimenté par' : link.relationship})
+                          </span>
+                        )}
+                        {!samePlan && eq.plan && (
+                          <span className="text-xs text-orange-600 ml-1">(autre plan)</span>
+                        )}
+                        {link.type === 'hierarchical' && (
+                          <span className="text-xs text-blue-600 ml-1">(auto)</span>
+                        )}
+                      </div>
+                    </button>
+                    {link.type === 'manual' && link.id && (
+                      <button
+                        onClick={() => onDeleteLink?.(link.id)}
+                        className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600"
+                        title="Supprimer le lien"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <div className="text-xs text-gray-400 flex items-center gap-2">
           <MapPin size={12} />
@@ -339,11 +513,15 @@ const UnifiedLeafletViewer = forwardRef(({
   onReady,
   onClickPoint,
   disabled = false,
+  links = [],
+  selectedPlan = null,
+  currentPageIndex = 0,
 }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const imageLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const connectionsLayerRef = useRef(null);
   const markersMapRef = useRef(new Map());
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -503,6 +681,73 @@ const UnifiedLeafletViewer = forwardRef(({
     });
   }, [onClickPoint]);
 
+  // Draw connection lines between linked equipment
+  const drawConnections = useCallback(() => {
+    const map = mapRef.current;
+    const g = connectionsLayerRef.current;
+    if (!map || !g) return;
+
+    // Clear existing connections
+    g.clearLayers();
+
+    // If no selected equipment or no links, nothing to draw
+    if (!selectedIdRef.current || !selectedTypeRef.current || !links.length) return;
+
+    // Get selected marker position
+    const selectedKey = `${selectedTypeRef.current}_${selectedIdRef.current}`;
+    const selectedMarker = markersMapRef.current.get(selectedKey);
+    if (!selectedMarker) return;
+
+    const sourceLatLng = selectedMarker.getLatLng();
+
+    // Draw lines to linked equipment on the same plan
+    links.forEach((link) => {
+      const eq = link.linkedEquipment;
+      if (!eq?.hasPosition) return;
+
+      // Check if on same plan and page
+      if (eq.plan !== selectedPlan || (eq.pageIndex || 0) !== currentPageIndex) return;
+
+      // Find the target marker
+      const targetKey = `${eq.type}_${eq.id}`;
+      const targetMarker = markersMapRef.current.get(targetKey);
+      if (!targetMarker) return;
+
+      const targetLatLng = targetMarker.getLatLng();
+
+      // Determine line style based on relationship
+      let color = '#3b82f6'; // Blue default
+      let dashArray = '8, 6';
+
+      if (link.relationship === 'feeds') {
+        color = '#ef4444'; // Red for feeds
+        dashArray = '12, 4';
+      } else if (link.relationship === 'fed_by') {
+        color = '#10b981'; // Green for fed by
+        dashArray = '12, 4';
+      } else if (link.type === 'hierarchical') {
+        color = '#f59e0b'; // Amber for auto hierarchical
+        dashArray = '4, 4';
+      }
+
+      // Create animated dashed polyline
+      const polyline = L.polyline([sourceLatLng, targetLatLng], {
+        color,
+        weight: 3,
+        opacity: 0.8,
+        dashArray,
+        className: 'equipment-link-line'
+      });
+
+      polyline.addTo(g);
+    });
+  }, [links, selectedPlan, currentPageIndex]);
+
+  // Redraw connections when links or selection changes
+  useEffect(() => {
+    drawConnections();
+  }, [links, selectedId, selectedType, drawConnections]);
+
   const highlightMarker = useCallback((equipmentId, equipmentType) => {
     // Try to find marker with the ID as-is first, then try with type conversion
     let key = `${equipmentType}_${equipmentId}`;
@@ -613,6 +858,7 @@ const UnifiedLeafletViewer = forwardRef(({
         initialFitDoneRef.current = true;
 
         markersLayerRef.current = L.layerGroup().addTo(m);
+        connectionsLayerRef.current = L.layerGroup().addTo(m);
 
         m.on("click", () => setPicker(null));
         m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
@@ -754,6 +1000,10 @@ export default function UnifiedEquipmentMap({
   const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
+  // Equipment links
+  const [links, setLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+
   const viewerRef = useRef(null);
 
   // Get file URL for selected plan
@@ -868,6 +1118,83 @@ export default function UnifiedEquipmentMap({
     if (item.datahub_equipment_id) return `datahub_${item.datahub_equipment_id}`;
     return null;
   }
+
+  // Load equipment links
+  const loadEquipmentLinks = async (type, id) => {
+    if (!type || !id) {
+      setLinks([]);
+      return;
+    }
+    setLinksLoading(true);
+    try {
+      const res = await api.equipmentLinks.getLinks(type, id);
+      setLinks(res?.links || []);
+    } catch (err) {
+      console.error("Error loading equipment links:", err);
+      setLinks([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  // Add a new link
+  const handleAddLink = async (linkData) => {
+    try {
+      await api.equipmentLinks.createLink(linkData);
+      // Reload links
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.equipment_type, selectedPosition.equipment_id);
+      }
+    } catch (err) {
+      console.error("Error creating link:", err);
+    }
+  };
+
+  // Delete a link
+  const handleDeleteLink = async (linkId) => {
+    try {
+      await api.equipmentLinks.deleteLink(linkId);
+      // Reload links
+      if (selectedPosition) {
+        loadEquipmentLinks(selectedPosition.equipment_type, selectedPosition.equipment_id);
+      }
+    } catch (err) {
+      console.error("Error deleting link:", err);
+    }
+  };
+
+  // Handle click on a linked equipment
+  const handleLinkClick = (link) => {
+    const eq = link.linkedEquipment;
+    if (!eq) return;
+
+    const currentPlanKey = selectedPlan?.logical_name || selectedPlan?.id;
+
+    // If on same plan, find and select the marker
+    if (eq.hasPosition && eq.plan === currentPlanKey && (eq.pageIndex || 0) === pageIndex) {
+      // Find the position in allPositions
+      const targetPos = allPositions.find(
+        p => p.equipment_type === eq.type && String(p.equipment_id) === String(eq.id)
+      );
+      if (targetPos) {
+        setSelectedPosition({ ...targetPos, control_status: controlStatuses[`${eq.type}_${eq.id}`] || 'none' });
+        loadEquipmentLinks(eq.type, eq.id);
+        // Highlight marker
+        viewerRef.current?.highlightMarker?.(eq.id, eq.type);
+      }
+    } else if (eq.hasPosition && eq.plan) {
+      // Navigate to the other plan
+      const targetPlan = plans.find(p => p.logical_name === eq.plan || p.id === eq.plan);
+      if (targetPlan) {
+        setSelectedPlan(targetPlan);
+        if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex);
+        // Will need to select the equipment after plan loads
+      }
+    } else {
+      // No position - could navigate to equipment detail page
+      handleNavigate({ equipment_type: eq.type, equipment_id: eq.id });
+    }
+  };
 
   // Get control status key for a position (handles datahub category types)
   function getPositionStatusKey(pos) {
@@ -1338,7 +1665,13 @@ export default function UnifiedEquipmentMap({
                 onReady={() => setPdfReady(true)}
                 onClickPoint={(meta) => {
                   setSelectedPosition(meta);
+                  // Load links for this equipment
+                  loadEquipmentLinks(meta.equipment_type, meta.equipment_id);
                 }}
+                // Pass links for polyline drawing
+                links={links}
+                selectedPlan={selectedPlan?.logical_name || selectedPlan?.id}
+                currentPageIndex={pageIndex}
               />
             </>
           )}
@@ -1347,9 +1680,16 @@ export default function UnifiedEquipmentMap({
           {selectedPosition && (
             <DetailPanel
               position={selectedPosition}
-              onClose={() => setSelectedPosition(null)}
+              onClose={() => { setSelectedPosition(null); setLinks([]); }}
               onNavigate={handleNavigate}
               equipmentTypes={equipmentTypes}
+              links={links}
+              linksLoading={linksLoading}
+              onAddLink={handleAddLink}
+              onDeleteLink={handleDeleteLink}
+              onLinkClick={handleLinkClick}
+              currentPlan={selectedPlan?.logical_name || selectedPlan?.id}
+              currentPageIndex={pageIndex}
             />
           )}
         </div>
