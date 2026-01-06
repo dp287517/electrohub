@@ -270,7 +270,7 @@ export default function MiniElectro({
   const hasSuggestions = analysis?.suggestions?.length > 0;
 
   return (
-    <div className={`bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 rounded-xl border border-indigo-200 overflow-hidden ${className}`}>
+    <div className={`w-full max-w-full bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 rounded-xl border border-indigo-200 overflow-hidden ${className}`}>
       {/* Header - toujours visible */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -311,10 +311,10 @@ export default function MiniElectro({
 
       {/* Contenu expandable */}
       {isExpanded && (
-        <div className="px-2 sm:px-4 pb-4 space-y-3 sm:space-y-4">
+        <div className="px-2 sm:px-4 pb-4 space-y-3 sm:space-y-4 w-full max-w-full overflow-hidden">
           {/* Chat Interface - Direct et visible en premier */}
           {showChat && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-full">
               {/* Chat messages */}
               <div
                 ref={chatContainerRef}
