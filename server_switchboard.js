@@ -9062,23 +9062,28 @@ app.get('/api/equipment/links/:type/:id', async (req, res) => {
 
 // Helper: Get equipment info by type and id
 async function getEquipmentInfo(type, id, site) {
+  // ACCURATE schema based on actual CREATE TABLE statements
   const tableMap = {
-    switchboard: { table: 'switchboards', nameCol: 'name', codeCol: 'code' },
-    vsd: { table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag' },
-    meca: { table: 'meca_equipments', nameCol: 'name', codeCol: 'tag' },
-    mobile: { table: 'me_equipments', nameCol: 'name', codeCol: 'code' },
-    hv: { table: 'hv_equipments', nameCol: 'name', codeCol: 'code' },
-    glo: { table: 'glo_equipments', nameCol: 'name', codeCol: 'tag' },
-    datahub: { table: 'dh_items', nameCol: 'name', codeCol: 'code' }
+    switchboard: { table: 'switchboards', nameCol: 'name', codeCol: 'code', hasBuilding: false, hasBuildingCode: true },
+    vsd: { table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasBuilding: true, hasBuildingCode: false },
+    meca: { table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasBuilding: true, hasBuildingCode: false },
+    mobile: { table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasBuilding: true, hasBuildingCode: false },
+    hv: { table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasBuilding: false, hasBuildingCode: true },
+    glo: { table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasBuilding: true, hasBuildingCode: false },
+    datahub: { table: 'dh_items', nameCol: 'name', codeCol: 'code', hasBuilding: true, hasBuildingCode: false }
   };
 
   const config = tableMap[type];
   if (!config) return { name: `Unknown (${type})` };
 
   try {
+    // Build SELECT based on available columns
+    const selectCols = [`${config.nameCol} as name`, `${config.codeCol} as code`];
+    if (config.hasBuilding) selectCols.push('building');
+    if (config.hasBuildingCode) selectCols.push('building_code');
+
     const result = await quickQuery(
-      `SELECT ${config.nameCol} as name, ${config.codeCol} as code, building, building_code
-       FROM ${config.table} WHERE id = $1`,
+      `SELECT ${selectCols.join(', ')} FROM ${config.table} WHERE id = $1`,
       [id]
     );
 
@@ -9090,10 +9095,11 @@ async function getEquipmentInfo(type, id, site) {
     return {
       name: row.name,
       code: row.code,
-      building: row.building || row.building_code,
+      building: row.building || row.building_code || '',
       ...position
     };
   } catch (e) {
+    console.error(`[EQUIPMENT_LINKS] getEquipmentInfo error for ${type} #${id}:`, e.message);
     return { name: `Error (${type} #${id})` };
   }
 }
@@ -9214,15 +9220,22 @@ app.get('/api/equipment/search', async (req, res) => {
 
     console.log('[EQUIPMENT_LINKS] Searching for:', q, '-> term:', searchTerm);
 
-    // Search in each equipment table - specify which columns each table has
+    // Search in each equipment table - ACCURATE schema based on actual CREATE TABLE statements:
+    // - switchboards: site YES, building NO, building_code YES
+    // - vsd_equipments: site YES, building YES, building_code NO
+    // - meca_equipments: site NO, building YES, building_code NO
+    // - me_equipments: site NO, building YES, building_code NO
+    // - hv_equipments: site YES, building NO, building_code YES
+    // - glo_equipments: site NO, building YES, building_code NO
+    // - dh_items: site NO, building YES, building_code NO
     const searches = [
-      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: false, hasBuildingCode: true },
-      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
-      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
-      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
-      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
-      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasBuilding: true, hasBuildingCode: true },
-      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', idCol: 'id', hasBuilding: true, hasBuildingCode: false }
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', idCol: 'id', hasSite: true, hasBuilding: false, hasBuildingCode: true },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasSite: true, hasBuilding: true, hasBuildingCode: false },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', idCol: 'id', hasSite: true, hasBuilding: false, hasBuildingCode: true },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', idCol: 'id', hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', idCol: 'id', hasSite: false, hasBuilding: true, hasBuildingCode: false }
     ];
 
     for (const s of searches) {
@@ -9234,22 +9247,41 @@ app.get('/api/equipment/search', async (req, res) => {
 
         // Build WHERE conditions for building search
         const buildingConditions = [];
-        if (s.hasBuilding) buildingConditions.push(`LOWER(COALESCE(building, '')) LIKE $2`);
-        if (s.hasBuildingCode) buildingConditions.push(`LOWER(COALESCE(building_code, '')) LIKE $2`);
+        if (s.hasBuilding) buildingConditions.push(`LOWER(COALESCE(building, '')) LIKE $${s.hasSite ? '2' : '1'}`);
+        if (s.hasBuildingCode) buildingConditions.push(`LOWER(COALESCE(building_code, '')) LIKE $${s.hasSite ? '2' : '1'}`);
         const buildingWhere = buildingConditions.length > 0 ? buildingConditions.join(' OR ') : 'FALSE';
 
-        const query = `
-          SELECT ${selectCols.join(', ')}, '${s.type}' as equipment_type
-          FROM ${s.table}
-          WHERE site = $1 AND (
-            LOWER(COALESCE(${s.nameCol}, '')) LIKE $2 OR
-            LOWER(COALESCE(${s.codeCol}, '')) LIKE $2 OR
-            ${buildingWhere}
-          )
-          LIMIT 10
-        `;
-        console.log('[EQUIPMENT_LINKS] Searching', s.type, '- query params:', [site, searchTerm]);
-        const result = await quickQuery(query, [site, searchTerm]);
+        // Build query based on whether table has site column
+        let query, params;
+        if (s.hasSite) {
+          query = `
+            SELECT ${selectCols.join(', ')}, '${s.type}' as equipment_type
+            FROM ${s.table}
+            WHERE site = $1 AND (
+              LOWER(COALESCE(${s.nameCol}, '')) LIKE $2 OR
+              LOWER(COALESCE(${s.codeCol}, '')) LIKE $2 OR
+              ${buildingWhere}
+            )
+            LIMIT 10
+          `;
+          params = [site, searchTerm];
+        } else {
+          // Tables without site column - search all records
+          query = `
+            SELECT ${selectCols.join(', ')}, '${s.type}' as equipment_type
+            FROM ${s.table}
+            WHERE (
+              LOWER(COALESCE(${s.nameCol}, '')) LIKE $1 OR
+              LOWER(COALESCE(${s.codeCol}, '')) LIKE $1 OR
+              ${buildingWhere}
+            )
+            LIMIT 10
+          `;
+          params = [searchTerm];
+        }
+
+        console.log('[EQUIPMENT_LINKS] Searching', s.type, '- hasSite:', s.hasSite);
+        const result = await quickQuery(query, params);
         console.log('[EQUIPMENT_LINKS]', s.type, 'found', result.rows.length, 'results');
 
         for (const row of result.rows) {
