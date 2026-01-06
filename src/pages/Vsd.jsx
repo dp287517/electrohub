@@ -1354,7 +1354,9 @@ export default function Vsd() {
               status: 'ok',
               controls: [],
               overdueCount: 0,
-              pendingCount: 0
+              pendingCount: 0,
+              last_control: null,
+              template_name: null
             };
           }
 
@@ -1366,6 +1368,18 @@ export default function Vsd() {
           };
 
           statuses[s.vsd_equipment_id].controls.push(controlInfo);
+
+          // Track the most recent last_control_date across all schedules for this equipment
+          if (s.last_control_date) {
+            const lastDate = new Date(s.last_control_date);
+            const currentLast = statuses[s.vsd_equipment_id].last_control
+              ? new Date(statuses[s.vsd_equipment_id].last_control)
+              : null;
+            if (!currentLast || lastDate > currentLast) {
+              statuses[s.vsd_equipment_id].last_control = s.last_control_date;
+              statuses[s.vsd_equipment_id].template_name = s.template_name;
+            }
+          }
 
           if (isOverdue) {
             statuses[s.vsd_equipment_id].overdueCount++;

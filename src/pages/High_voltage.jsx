@@ -1382,7 +1382,7 @@ export default function HighVoltage() {
           const isOverdue = nextDue && nextDue < now;
 
           if (!statuses[s.hv_equipment_id]) {
-            statuses[s.hv_equipment_id] = { status: 'ok', controls: [], overdueCount: 0, pendingCount: 0 };
+            statuses[s.hv_equipment_id] = { status: 'ok', controls: [], overdueCount: 0, pendingCount: 0, last_control: null, template_name: null };
           }
 
           statuses[s.hv_equipment_id].controls.push({
@@ -1391,6 +1391,18 @@ export default function HighVoltage() {
             status: isOverdue ? 'overdue' : 'pending',
             schedule_id: s.id
           });
+
+          // Track the most recent last_control_date across all schedules for this equipment
+          if (s.last_control_date) {
+            const lastDate = new Date(s.last_control_date);
+            const currentLast = statuses[s.hv_equipment_id].last_control
+              ? new Date(statuses[s.hv_equipment_id].last_control)
+              : null;
+            if (!currentLast || lastDate > currentLast) {
+              statuses[s.hv_equipment_id].last_control = s.last_control_date;
+              statuses[s.hv_equipment_id].template_name = s.template_name;
+            }
+          }
 
           if (isOverdue) {
             statuses[s.hv_equipment_id].overdueCount++;
