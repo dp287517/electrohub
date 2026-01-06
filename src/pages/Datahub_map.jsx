@@ -602,6 +602,7 @@ export default function DatahubMap() {
   const currentPlanKeyRef = useRef(null); // Track current plan being loaded (for stale response detection)
   const drawMarkersRef = useRef(null); // Ref to always get latest drawMarkers (avoids stale closures)
   const controlStatusesRef = useRef({}); // Keep control statuses ref for marker drawing
+  const connectionsLayerRef = useRef(null); // Layer for connection polylines
 
   // Keep refs in sync
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
@@ -984,6 +985,7 @@ export default function DatahubMap() {
     map.fitBounds(bounds);
     mapRef.current = map;
     overlayRef.current = overlay;
+    connectionsLayerRef.current = L.layerGroup().addTo(map);
 
     map.on("click", handleMapClick);
 
@@ -1194,6 +1196,73 @@ export default function DatahubMap() {
 
   // Keep drawMarkersRef in sync with latest drawMarkers (synchronous update during render)
   drawMarkersRef.current = drawMarkers;
+
+  // Draw connection lines between selected item and its linked equipment
+  const drawConnections = useCallback(() => {
+    const map = mapRef.current;
+    const g = connectionsLayerRef.current;
+    if (!map || !g) return;
+
+    g.clearLayers();
+    if (!selectedItemIdRef.current || !links.length) return;
+
+    const selectedMarker = markersMapRef.current.get(selectedItemIdRef.current)
+      || markersMapRef.current.get(String(selectedItemIdRef.current))
+      || markersMapRef.current.get(Number(selectedItemIdRef.current));
+    if (!selectedMarker) return;
+
+    const sourceLatLng = selectedMarker.getLatLng();
+    const currentPlanKey = selectedPlan?.logical_name || selectedPlan?.id;
+
+    links.forEach((link) => {
+      const eq = link.linkedEquipment;
+      if (!eq?.hasPosition) return;
+      const eqPlan = eq.plan_key || eq.plan;
+      const eqPage = eq.page_index ?? eq.pageIndex ?? 0;
+      if (eqPlan !== currentPlanKey || eqPage !== pageIndex) return;
+
+      const targetId = eq.equipment_id || eq.id;
+      let targetMarker = markersMapRef.current.get(targetId)
+        || markersMapRef.current.get(String(targetId))
+        || markersMapRef.current.get(Number(targetId));
+      if (!targetMarker) return;
+
+      const targetLatLng = targetMarker.getLatLng();
+      let color = '#3b82f6', flowDirection = null;
+      const linkLabel = link.link_label || link.relationship;
+
+      if (linkLabel === 'upstream') { color = '#10b981'; flowDirection = 'toSource'; }
+      else if (linkLabel === 'downstream') { color = '#ef4444'; flowDirection = 'toTarget'; }
+      else if (linkLabel === 'feeds') { color = '#10b981'; flowDirection = 'toTarget'; }
+      else if (linkLabel === 'fed_by') { color = '#ef4444'; flowDirection = 'toSource'; }
+      else if (linkLabel === 'powers') { color = '#f59e0b'; flowDirection = 'toTarget'; }
+      else if (linkLabel === 'powered_by') { color = '#f59e0b'; flowDirection = 'toSource'; }
+
+      const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
+        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
+
+      const polyline = L.polyline([sourceLatLng, targetLatLng], {
+        color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass
+      });
+      polyline.addTo(g);
+
+      if (flowDirection) {
+        const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
+        const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
+        const dx = arrowEnd.lng - arrowStart.lng, dy = arrowEnd.lat - arrowStart.lat;
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const arrowIcon = L.divIcon({
+          className: 'arrow-marker',
+          html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white;">▲</div>`,
+          iconSize: [20, 20], iconAnchor: [10, 10]
+        });
+        L.marker(arrowEnd, { icon: arrowIcon, interactive: false }).addTo(g);
+      }
+    });
+  }, [links, selectedPlan, pageIndex]);
+
+  // Redraw connections when links or selection changes
+  useEffect(() => { drawConnections(); }, [links, selectedItem, drawConnections]);
 
   // Highlight marker with flash animation (for navigation)
   const highlightMarker = useCallback((itemId) => {
