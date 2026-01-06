@@ -463,7 +463,8 @@ export default function SwitchboardControls() {
         const matchSearch = (
           s.template_name?.toLowerCase().includes(q) ||
           s.switchboard_code?.toLowerCase().includes(q) ||
-          s.switchboard_name?.toLowerCase().includes(q)
+          s.switchboard_name?.toLowerCase().includes(q) ||
+          s.device_switchboard_code?.toLowerCase().includes(q)
         );
         if (!matchSearch) return false;
       }
@@ -523,6 +524,7 @@ export default function SwitchboardControls() {
           r.template_name?.toLowerCase().includes(q) ||
           r.switchboard_code?.toLowerCase().includes(q) ||
           r.switchboard_name?.toLowerCase().includes(q) ||
+          r.device_switchboard_code?.toLowerCase().includes(q) ||
           r.performed_by?.toLowerCase().includes(q)
         );
         if (!matchSearch) return false;
