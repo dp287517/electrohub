@@ -705,6 +705,17 @@ const DetailPanel = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="mobile"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            }
+          }}
+        />
+
         {/* Control Status Section - Linked to switchboard-controls */}
         <div className="bg-gray-50 rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
@@ -952,17 +963,6 @@ const DetailPanel = ({
             </div>
           </div>
         )}
-
-        {/* Mini Electro - AI Assistant */}
-        <MiniElectro
-          equipment={equipment}
-          equipmentType="mobile"
-          onAction={(action, params) => {
-            if (action === 'docAttached') {
-              showToast?.('Documentation associée avec succès!', 'success');
-            }
-          }}
-        />
 
         {/* Historique des modifications */}
         {equipment.id && (

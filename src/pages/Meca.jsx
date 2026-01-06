@@ -605,6 +605,19 @@ const DetailPanel = ({
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
+        {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="meca"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            } else if (action === 'scheduleControl') {
+              navigate(`/app/switchboard-controls?tab=schedules&equipment_type=meca&meca_equipment_id=${equipment.id}`);
+            }
+          }}
+        />
+
         {/* Equipment Structure */}
         <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-4">
           <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -899,19 +912,6 @@ const DetailPanel = ({
             </div>
           </div>
         )}
-
-        {/* Mini Electro - AI Assistant */}
-        <MiniElectro
-          equipment={equipment}
-          equipmentType="meca"
-          onAction={(action, params) => {
-            if (action === 'docAttached') {
-              showToast?.('Documentation associée avec succès!', 'success');
-            } else if (action === 'scheduleControl') {
-              navigate(`/app/switchboard-controls?tab=schedules&equipment_type=meca&meca_equipment_id=${equipment.id}`);
-            }
-          }}
-        />
       </div>
 
       {/* Actions */}

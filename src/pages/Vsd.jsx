@@ -589,6 +589,19 @@ const DetailPanel = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="vsd"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            } else if (action === 'scheduleControl') {
+              navigate(`/app/switchboard-controls?tab=schedules&equipment_type=vsd&vsd_equipment_id=${equipment.id}`);
+            }
+          }}
+        />
+
         {/* Quick Stats */}
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-gray-50 rounded-xl p-3 text-center">
@@ -808,19 +821,6 @@ const DetailPanel = ({
             </div>
           </div>
         )}
-
-        {/* Mini Electro - AI Assistant */}
-        <MiniElectro
-          equipment={equipment}
-          equipmentType="vsd"
-          onAction={(action, params) => {
-            if (action === 'docAttached') {
-              showToast?.('Documentation associée avec succès!', 'success');
-            } else if (action === 'scheduleControl') {
-              navigate(`/app/switchboard-controls?tab=schedules&equipment_type=vsd&vsd_equipment_id=${equipment.id}`);
-            }
-          }}
-        />
       </div>
 
       {/* Actions */}

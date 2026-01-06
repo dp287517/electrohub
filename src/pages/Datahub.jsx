@@ -442,6 +442,17 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+        <MiniElectro
+          equipment={item}
+          equipmentType="datahub"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              onRefresh?.();
+            }
+          }}
+        />
+
         <div className="bg-gray-50 rounded-xl p-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3"><Database size={16} className="text-indigo-500" />Informations</h3>
           <div className="grid grid-cols-2 gap-3 text-sm">
@@ -509,17 +520,6 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
             </div>
           )}
         </div>
-
-        {/* Mini Electro - AI Assistant */}
-        <MiniElectro
-          equipment={item}
-          equipmentType="datahub"
-          onAction={(action, params) => {
-            if (action === 'docAttached') {
-              onRefresh?.();
-            }
-          }}
-        />
       </div>
 
       <div className="border-t p-4 space-y-2">
