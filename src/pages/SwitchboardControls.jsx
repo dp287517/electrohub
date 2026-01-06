@@ -141,11 +141,16 @@ const getEquipmentDisplay = (item) => {
   }
   if (item.device_id) {
     const { Icon, color } = EQUIPMENT_ICONS.device;
+    const switchboardId = item.device_switchboard_id || item.switchboard_id;
+    const switchboardCode = item.device_switchboard_code || '';
+    const displayName = switchboardCode
+      ? `${switchboardCode} - Disj. ${item.device_position || item.device_id}`
+      : `Disj. ${item.device_position || item.device_id}`;
     return {
-      name: `Disj. ${item.device_position || item.device_id}`,
+      name: displayName,
       type: 'device',
       icon: <Icon size={16} className={color} />,
-      link: item.switchboard_id ? `/app/switchboards?board=${item.switchboard_id}` : null,
+      link: switchboardId ? `/app/switchboards?board=${switchboardId}` : null,
       category: ''
     };
   }

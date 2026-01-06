@@ -6406,6 +6406,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
              ct.name as template_name, ct.target_type, ct.frequency_months,
              sb.name as switchboard_name, sb.code as switchboard_code,
              d.name as device_name, d.position_number as device_position, d.switchboard_id as device_switchboard_id,
+             dsb.code as device_switchboard_code,
              vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
@@ -6417,6 +6418,7 @@ app.get('/api/switchboard/controls/schedules', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN switchboards dsb ON d.switchboard_id = dsb.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
@@ -7099,7 +7101,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const upcoming = await quickQuery(`
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
-             d.position_number, d.name as device_name,
+             d.position_number, d.name as device_name, d.switchboard_id as device_switchboard_id,
+             dsb.code as device_switchboard_code,
              vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
@@ -7108,6 +7111,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN switchboards dsb ON d.switchboard_id = dsb.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
@@ -7122,7 +7126,8 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const overdueList = await quickQuery(`
       SELECT cs.*, ct.name as template_name,
              sb.code as switchboard_code, sb.name as switchboard_name,
-             d.position_number, d.name as device_name,
+             d.position_number, d.name as device_name, d.switchboard_id as device_switchboard_id,
+             dsb.code as device_switchboard_code,
              vsd.name as vsd_name, vsd.tag as vsd_code, vsd.building as vsd_building,
              meca.name as meca_name, meca.tag as meca_code, meca.building as meca_building,
              me.name as mobile_equipment_name, me.code as mobile_equipment_code, me.building as mobile_equipment_building,
@@ -7131,6 +7136,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LEFT JOIN control_templates ct ON cs.template_id = ct.id
       LEFT JOIN switchboards sb ON cs.switchboard_id = sb.id
       LEFT JOIN devices d ON cs.device_id = d.id
+      LEFT JOIN switchboards dsb ON d.switchboard_id = dsb.id
       LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
       LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
       LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
