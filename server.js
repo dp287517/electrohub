@@ -3637,6 +3637,8 @@ app.use("/api/atex",         mkProxy(atexTarget, { withRestream: true, timeoutMs
 app.use("/api/loopcalc",     mkProxy(loopcalcTarget));
 // ✅ SWITCHBOARD: Ajout withRestream pour éviter les problèmes de body
 app.use("/api/switchboard",  mkProxy(switchboardTarget, { withRestream: true, timeoutMs: 25000 }));
+// ✅ EQUIPMENT LINKS: Routes /api/equipment/* sont dans server_switchboard.js
+app.use("/api/equipment",    mkProxy(switchboardTarget, { withRestream: true, timeoutMs: 25000 }));
 app.use("/api/selectivity",  mkProxy(selectivityTarget));
 app.use("/api/faultlevel",   mkProxy(flaTarget));
 app.use("/api/arcflash",     mkProxy(arcflashTarget));
