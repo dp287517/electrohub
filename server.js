@@ -13,6 +13,7 @@ import adminRouter from "./server_admin.js";
 import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
 import troubleshootingRouter, { initTroubleshootingTables } from "./server_troubleshooting.js";
 import { createChatV2Router } from "./server_ai_chat_v2.js";
+import { createAgentMemoryRouter, initAgentMemoryTables, generateAllDailySnapshots } from "./server_agent_memory.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -10083,6 +10084,14 @@ const chatV2Router = createChatV2Router(pool);
 app.use("/api/ai-assistant", chatV2Router);
 console.log('[AI-V2] AI Chat V2 router mounted - Function calling enabled');
 
+/* ================================================================
+   🧠 Agent Memory - Persistent memory for all AI agents
+   ================================================================ */
+console.log('[Agent-Memory] Mounting Agent Memory router at /api/agent-memory');
+const agentMemoryRouter = createAgentMemoryRouter(pool, openai);
+app.use("/api/agent-memory", agentMemoryRouter);
+console.log('[Agent-Memory] Agent Memory router mounted - Daily snapshots enabled');
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 const __public = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
@@ -10210,13 +10219,64 @@ async function initEssentialTables() {
     // Initialize troubleshooting tables
     await initTroubleshootingTables(pool);
 
+    // Initialize agent memory tables
+    await initAgentMemoryTables(pool);
+
   } catch (err) {
     console.error('[init] ⚠️ Error creating essential tables:', err.message);
   }
 }
 
+// -------- Scheduled Jobs -----------
+// Daily snapshots for agent memory - runs at 6:00 AM every day
+function scheduleDailySnapshots() {
+  const now = new Date();
+  const next6AM = new Date(now);
+  next6AM.setHours(6, 0, 0, 0);
+
+  // If it's past 6 AM today, schedule for tomorrow
+  if (now >= next6AM) {
+    next6AM.setDate(next6AM.getDate() + 1);
+  }
+
+  const msUntil6AM = next6AM - now;
+
+  console.log(`[Scheduler] Daily snapshots scheduled in ${Math.round(msUntil6AM / 1000 / 60)} minutes (at 6:00 AM)`);
+
+  setTimeout(async () => {
+    try {
+      console.log('[Scheduler] 🌅 Running daily agent snapshots...');
+      const sites = ['electrohub']; // Add more sites as needed
+
+      for (const site of sites) {
+        await generateAllDailySnapshots(pool, site);
+        console.log(`[Scheduler] ✅ Daily snapshots completed for site: ${site}`);
+      }
+    } catch (error) {
+      console.error('[Scheduler] ❌ Daily snapshots error:', error.message);
+    }
+
+    // Schedule next run (24 hours later)
+    setInterval(async () => {
+      try {
+        console.log('[Scheduler] 🌅 Running daily agent snapshots...');
+        const sites = ['electrohub'];
+        for (const site of sites) {
+          await generateAllDailySnapshots(pool, site);
+          console.log(`[Scheduler] ✅ Daily snapshots completed for site: ${site}`);
+        }
+      } catch (error) {
+        console.error('[Scheduler] ❌ Daily snapshots error:', error.message);
+      }
+    }, 24 * 60 * 60 * 1000); // Every 24 hours
+  }, msUntil6AM);
+}
+
 // -------- Start -----------
 const port = process.env.PORT || 3000;
 initEssentialTables().then(() => {
-  app.listen(port, () => console.log(`ElectroHub server listening on :${port}`));
+  app.listen(port, () => {
+    console.log(`ElectroHub server listening on :${port}`);
+    scheduleDailySnapshots();
+  });
 });

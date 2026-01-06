@@ -609,6 +609,119 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
         required: ["query"]
       }
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // MÉMOIRE AGENTS - Accès à l'historique et apprentissages
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_agent_memory",
+      description: `Récupère la mémoire persistante de l'agent: insights, apprentissages, patterns identifiés.
+
+UTILISE CETTE FONCTION QUAND:
+- Tu as besoin de contexte historique pour répondre
+- L'utilisateur demande "qu'est-ce que tu as appris", "tes observations"
+- Tu veux vérifier si un pattern a déjà été identifié
+- Tu prépares un brief du matin
+
+Cette fonction te donne accès à ta mémoire long-terme.`,
+      parameters: {
+        type: "object",
+        properties: {
+          agent_type: {
+            type: "string",
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo"],
+            description: "Type d'agent dont on veut la mémoire (utilise ton propre type)"
+          },
+          memory_type: {
+            type: "string",
+            enum: ["pattern", "insight", "kpi", "recommendation", "alert", "all"],
+            description: "Type de mémoire à récupérer (défaut: all)"
+          },
+          days: {
+            type: "number",
+            description: "Nombre de jours d'historique (défaut: 30)"
+          },
+          limit: {
+            type: "number",
+            description: "Nombre max de résultats (défaut: 20)"
+          }
+        },
+        required: ["agent_type"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_yesterday_summary",
+      description: `Récupère le résumé des activités et dépannages de la veille pour un agent.
+
+UTILISE CETTE FONCTION QUAND:
+- L'utilisateur demande "qu'est-ce qui s'est passé hier"
+- Pour le brief du matin
+- Pour faire un tour de table
+- Electro veut savoir ce que les autres agents ont fait
+
+Retourne les dépannages, incidents et statistiques de la veille.`,
+      parameters: {
+        type: "object",
+        properties: {
+          agent_type: {
+            type: "string",
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo", "all"],
+            description: "Type d'agent (utilise 'all' pour tour de table complet)"
+          }
+        },
+        required: ["agent_type"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "record_agent_insight",
+      description: `Enregistre un nouvel apprentissage ou insight dans la mémoire de l'agent.
+
+UTILISE CETTE FONCTION QUAND:
+- Tu identifies un pattern récurrent
+- Tu fais une observation importante sur un équipement
+- Tu veux te souvenir d'une information pour plus tard
+- Tu calcules un KPI intéressant
+
+Cela te permet de construire ta mémoire long-terme.`,
+      parameters: {
+        type: "object",
+        properties: {
+          agent_type: {
+            type: "string",
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo"],
+            description: "Ton type d'agent"
+          },
+          memory_type: {
+            type: "string",
+            enum: ["pattern", "insight", "kpi", "recommendation", "alert"],
+            description: "Type de mémoire à enregistrer"
+          },
+          content: {
+            type: "string",
+            description: "Contenu de l'insight/apprentissage à mémoriser"
+          },
+          related_equipment: {
+            type: "string",
+            description: "Équipement concerné (optionnel)"
+          },
+          importance: {
+            type: "string",
+            enum: ["low", "medium", "high", "critical"],
+            description: "Niveau d'importance (défaut: medium)"
+          }
+        },
+        required: ["agent_type", "memory_type", "content"]
+      }
+    }
   }
 ];
 
@@ -1758,6 +1871,156 @@ function createToolHandlers(pool, site) {
       } catch (error) {
         console.error('[TOOL] search_documentation error:', error.message);
         return { success: false, error: error.message, results: [] };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // MÉMOIRE AGENTS
+    // -----------------------------------------------------------------------
+    get_agent_memory: async (params) => {
+      const { agent_type, memory_type = 'all', days = 30, limit = 20 } = params;
+
+      try {
+        let query = `
+          SELECT id, agent_type, memory_type, content, related_equipment, importance,
+                 created_at, updated_at
+          FROM agent_memory
+          WHERE site = $1 AND agent_type = $2
+            AND created_at >= NOW() - INTERVAL '${parseInt(days)} days'
+        `;
+        const queryParams = [site, agent_type];
+
+        if (memory_type !== 'all') {
+          query += ` AND memory_type = $${queryParams.length + 1}`;
+          queryParams.push(memory_type);
+        }
+
+        query += ` ORDER BY importance DESC, created_at DESC LIMIT ${parseInt(limit)}`;
+
+        const { rows } = await pool.query(query, queryParams);
+
+        return {
+          success: true,
+          agent_type,
+          memories: rows,
+          count: rows.length,
+          summary: rows.length === 0
+            ? `Aucune mémoire trouvée pour ${agent_type}.`
+            : `${rows.length} élément(s) de mémoire trouvé(s) pour ${agent_type}.`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_agent_memory error:', error.message);
+        return { success: false, error: error.message, memories: [] };
+      }
+    },
+
+    get_yesterday_summary: async (params) => {
+      const { agent_type } = params;
+
+      try {
+        // Map agent types to equipment types for troubleshooting query
+        const agentToEquipment = {
+          meca: 'meca',
+          hv: 'hv',
+          vsd: 'vsd',
+          atex: 'atex',
+          mobile: 'mobile',
+          doors: 'door',
+          datahub: 'datahub',
+          switchboards: 'switchboard',
+          glo: 'glo'
+        };
+
+        // For 'all' or 'electro', get everything
+        const isAllAgents = agent_type === 'all' || agent_type === 'electro';
+
+        // Get yesterday's date range
+        const yesterdayStart = "NOW() - INTERVAL '1 day'";
+        const yesterdayEnd = "NOW()";
+
+        // Get troubleshooting from yesterday
+        let troubleQuery = `
+          SELECT id, title, description, severity, status, equipment_type, equipment_name,
+                 building_code, technician_name, duration_minutes, started_at, completed_at
+          FROM troubleshooting_records
+          WHERE site = $1
+            AND started_at >= ${yesterdayStart}
+            AND started_at < ${yesterdayEnd}
+        `;
+        const queryParams = [site];
+
+        if (!isAllAgents && agentToEquipment[agent_type]) {
+          troubleQuery += ` AND equipment_type = $2`;
+          queryParams.push(agentToEquipment[agent_type]);
+        }
+
+        troubleQuery += ` ORDER BY severity DESC, started_at DESC`;
+
+        const { rows: troubleshooting } = await pool.query(troubleQuery, queryParams);
+
+        // Get daily snapshot if exists
+        let snapshotQuery = `
+          SELECT *
+          FROM agent_daily_snapshots
+          WHERE site = $1 AND snapshot_date = CURRENT_DATE - INTERVAL '1 day'
+        `;
+        const snapshotParams = [site];
+
+        if (!isAllAgents) {
+          snapshotQuery += ` AND agent_type = $2`;
+          snapshotParams.push(agent_type);
+        }
+
+        const { rows: snapshots } = await pool.query(snapshotQuery, snapshotParams);
+
+        // Calculate summary stats
+        const stats = {
+          total_interventions: troubleshooting.length,
+          critical: troubleshooting.filter(t => t.severity === 'critical').length,
+          major: troubleshooting.filter(t => t.severity === 'major').length,
+          minor: troubleshooting.filter(t => t.severity === 'minor').length,
+          completed: troubleshooting.filter(t => t.status === 'completed').length,
+          avg_duration: troubleshooting.length > 0
+            ? Math.round(troubleshooting.reduce((sum, t) => sum + (t.duration_minutes || 0), 0) / troubleshooting.length)
+            : 0
+        };
+
+        return {
+          success: true,
+          agent_type,
+          date: 'yesterday',
+          troubleshooting: troubleshooting.slice(0, 10), // Top 10 most important
+          snapshots,
+          stats,
+          summary: troubleshooting.length === 0
+            ? `Aucune intervention hier pour ${agent_type}.`
+            : `${troubleshooting.length} intervention(s) hier: ${stats.critical} critique(s), ${stats.major} majeure(s), ${stats.minor} mineure(s).`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_yesterday_summary error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    record_agent_insight: async (params) => {
+      const { agent_type, memory_type, content, related_equipment, importance = 'medium' } = params;
+
+      try {
+        const { rows } = await pool.query(`
+          INSERT INTO agent_memory (site, agent_type, memory_type, content, related_equipment, importance)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          RETURNING id, created_at
+        `, [site, agent_type, memory_type, content, related_equipment || null, importance]);
+
+        return {
+          success: true,
+          id: rows[0].id,
+          message: `Mémoire enregistrée avec succès pour ${agent_type}.`,
+          created_at: rows[0].created_at
+        };
+      } catch (error) {
+        console.error('[TOOL] record_agent_insight error:', error.message);
+        return { success: false, error: error.message };
       }
     }
   };
