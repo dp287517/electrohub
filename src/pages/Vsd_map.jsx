@@ -703,7 +703,7 @@ const VsdLeafletViewer = forwardRef(({
       const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
         : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
 
-      const polyline = L.polyline([sourceLatLng, targetLatLng], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass });
+      const polyline = L.polyline([sourceLatLng, targetLatLng], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane' });
       polyline.addTo(g);
 
       if (flowDirection) {
@@ -832,6 +832,10 @@ const VsdLeafletViewer = forwardRef(({
         m.setMaxBounds(bounds.pad(0.5));
 
         markersLayerRef.current = L.layerGroup().addTo(m);
+
+        // Créer un pane personnalisé pour les connexions avec z-index élevé
+        const connectionsPane = m.createPane('connectionsPane');
+        connectionsPane.style.zIndex = 450; // Au-dessus de overlayPane (400) mais sous markerPane (600)
         connectionsLayerRef.current = L.layerGroup().addTo(m);
 
         m.on("click", (e) => {
