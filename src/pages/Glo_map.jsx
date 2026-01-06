@@ -40,6 +40,8 @@ import {
   Crosshair,
   Target,
   ArrowLeft,
+  ArrowUp,
+  ArrowDown,
   Settings,
   Plus,
   Battery,
@@ -302,9 +304,10 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
     finally { setSearching(false); }
   };
 
-  const handleAddLinkClick = async (target) => {
+  const handleAddLinkClick = async (target, direction) => {
     try {
-      await onAddLink?.({ source_type: 'glo', source_id: String(position.equipment_id), target_type: target.type, target_id: String(target.id), link_label: 'connected' });
+      const linkLabel = direction || 'connected';
+      await onAddLink?.({ source_type: 'glo', source_id: String(position.equipment_id), target_type: target.type, target_id: String(target.id), link_label: linkLabel });
       setShowAddLink(false); setSearchQuery(''); setSearchResults([]);
     } catch (e) { console.error('Add link error:', e); }
   };
@@ -356,11 +359,18 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
               <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher un équipement..." className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-emerald-500 bg-white" autoFocus />
               {searching && <div className="flex items-center gap-2 text-sm text-gray-500 mt-2"><Loader2 size={14} className="animate-spin" />Recherche...</div>}
               {searchResults.length > 0 && (
-                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
                   {searchResults.map((result) => (
-                    <button key={`${result.type}-${result.id}`} onClick={() => handleAddLinkClick(result)} className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-emerald-100 rounded border flex items-center justify-between">
-                      <span className="font-medium">{result.code || result.name}</span><span className="text-xs text-gray-500">{result.type}</span>
-                    </button>
+                    <div key={`${result.type}-${result.id}`} className="bg-white rounded border p-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-medium text-sm">{result.code || result.name}</span>
+                        <span className="text-xs text-gray-500">{result.type}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => handleAddLinkClick(result, 'upstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300" title="Amont"><ArrowDown size={12} /><span>Amont</span></button>
+                        <button onClick={() => handleAddLinkClick(result, 'downstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300" title="Aval"><ArrowUp size={12} /><span>Aval</span></button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -435,6 +445,8 @@ const GloLeafletViewer = forwardRef(({
   initialPoints = [],
   selectedId = null,
   controlStatuses = {},
+  links = [],
+  currentPlan = null,
   onReady,
   onMovePoint,
   onClickPoint,
@@ -448,6 +460,7 @@ const GloLeafletViewer = forwardRef(({
   const imageLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
   const markersMapRef = useRef(new Map());
+  const connectionsLayerRef = useRef(null);
   const controlStatusesRef = useRef(controlStatuses);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -646,6 +659,70 @@ const GloLeafletViewer = forwardRef(({
     }
   }, []);
 
+  // Draw connection lines between linked equipment
+  const drawConnections = useCallback(() => {
+    const map = mapRef.current;
+    const g = connectionsLayerRef.current;
+    if (!map || !g) return;
+
+    g.clearLayers();
+    if (!selectedIdRef.current || !links.length) return;
+
+    const selectedMarker = markersMapRef.current.get(selectedIdRef.current)
+      || markersMapRef.current.get(String(selectedIdRef.current))
+      || markersMapRef.current.get(Number(selectedIdRef.current));
+    if (!selectedMarker) return;
+
+    const sourceLatLng = selectedMarker.getLatLng();
+    const currentPlanKey = currentPlan?.logical_name || currentPlan?.id;
+
+    links.forEach((link) => {
+      const eq = link.linkedEquipment;
+      if (!eq?.hasPosition) return;
+      const eqPlan = eq.plan_key || eq.plan;
+      const eqPage = eq.page_index ?? eq.pageIndex ?? 0;
+      if (eqPlan !== currentPlanKey || eqPage !== pageIndex) return;
+
+      const targetId = eq.equipment_id || eq.id;
+      let targetMarker = markersMapRef.current.get(targetId)
+        || markersMapRef.current.get(String(targetId))
+        || markersMapRef.current.get(Number(targetId));
+      if (!targetMarker) return;
+
+      const targetLatLng = targetMarker.getLatLng();
+      let color = '#3b82f6', flowDirection = null;
+      const linkLabel = link.link_label || link.relationship;
+
+      if (linkLabel === 'upstream') { color = '#10b981'; flowDirection = 'toSource'; }
+      else if (linkLabel === 'downstream') { color = '#ef4444'; flowDirection = 'toTarget'; }
+      else if (link.relationship === 'feeds') { color = '#ef4444'; flowDirection = 'toTarget'; }
+      else if (link.relationship === 'fed_by') { color = '#10b981'; flowDirection = 'toSource'; }
+      else if (link.type === 'hierarchical') { color = '#f59e0b'; }
+
+      const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
+        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
+
+      const polyline = L.polyline([sourceLatLng, targetLatLng], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass });
+      polyline.addTo(g);
+
+      if (flowDirection) {
+        const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
+        const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
+        const dx = arrowEnd.lng - arrowStart.lng, dy = arrowEnd.lat - arrowStart.lat;
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const arrowIcon = L.divIcon({
+          className: 'arrow-marker',
+          html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white;">▲</div>`,
+          iconSize: [20, 20], iconAnchor: [10, 10]
+        });
+        L.marker(arrowEnd, { icon: arrowIcon, interactive: false }).addTo(g);
+      }
+    });
+  }, [links, currentPlan, pageIndex]);
+
+  // Redraw connections when links or selection changes
+  useEffect(() => { drawConnections(); }, [links, selectedId, drawConnections]);
+
   useEffect(() => {
     if (disabled) return;
     if (!fileUrl || !wrapRef.current) return;
@@ -753,6 +830,7 @@ const GloLeafletViewer = forwardRef(({
         m.setMaxBounds(bounds.pad(0.5));
 
         markersLayerRef.current = L.layerGroup().addTo(m);
+        connectionsLayerRef.current = L.layerGroup().addTo(m);
 
         m.on("click", (e) => {
           if (!aliveRef.current) return;
@@ -1593,6 +1671,8 @@ export default function GloMap() {
                   initialPoints={initialPoints}
                   selectedId={selectedEquipmentId}
                   controlStatuses={controlStatuses}
+                  links={links}
+                  currentPlan={stableSelectedPlan}
                   placementActive={!!placementMode || createMode}
                   onReady={() => setPdfReady(true)}
                   onClickPoint={handleClickMarker}
