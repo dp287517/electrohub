@@ -690,33 +690,21 @@ const MecaLeafletViewer = forwardRef(({
       if (!targetMarker) return;
 
       const targetLatLng = targetMarker.getLatLng();
-      let color = '#3b82f6', flowDirection = null;
+      let color = '#3b82f6', hasDirection = false, swapDirection = false;
       const linkLabel = link.link_label || link.relationship;
 
-      if (linkLabel === 'upstream') { color = '#10b981'; flowDirection = 'toSource'; }
-      else if (linkLabel === 'downstream') { color = '#ef4444'; flowDirection = 'toTarget'; }
-      else if (link.relationship === 'feeds') { color = '#ef4444'; flowDirection = 'toTarget'; }
-      else if (link.relationship === 'fed_by') { color = '#10b981'; flowDirection = 'toSource'; }
+      if (linkLabel === 'upstream') { color = '#10b981'; hasDirection = true; swapDirection = true; }
+      else if (linkLabel === 'downstream') { color = '#ef4444'; hasDirection = true; }
+      else if (link.relationship === 'feeds') { color = '#ef4444'; hasDirection = true; }
+      else if (link.relationship === 'fed_by') { color = '#10b981'; hasDirection = true; swapDirection = true; }
       else if (link.type === 'hierarchical') { color = '#f59e0b'; }
 
-      const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
-        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
+      const lineStart = swapDirection ? targetLatLng : sourceLatLng;
+      const lineEnd = swapDirection ? sourceLatLng : targetLatLng;
+      const animClass = hasDirection ? 'equipment-link-line flow-to-target' : 'equipment-link-line';
 
-      const polyline = L.polyline([sourceLatLng, targetLatLng], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane' });
+      const polyline = L.polyline([lineStart, lineEnd], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane' });
       polyline.addTo(g);
-
-      if (flowDirection) {
-        const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
-        const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
-        const dx = arrowEnd.lng - arrowStart.lng, dy = arrowEnd.lat - arrowStart.lat;
-        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        const arrowIcon = L.divIcon({
-          className: 'arrow-marker',
-          html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white;">▲</div>`,
-          iconSize: [20, 20], iconAnchor: [10, 10]
-        });
-        L.marker(arrowEnd, { icon: arrowIcon, interactive: false }).addTo(g);
-      }
     });
   }, [links, currentPlan, pageIndex]);
 
