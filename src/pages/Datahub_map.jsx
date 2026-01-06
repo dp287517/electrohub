@@ -985,6 +985,10 @@ export default function DatahubMap() {
     map.fitBounds(bounds);
     mapRef.current = map;
     overlayRef.current = overlay;
+
+    // Créer un pane personnalisé pour les connexions avec z-index élevé
+    const connectionsPane = map.createPane('connectionsPane');
+    connectionsPane.style.zIndex = 450; // Au-dessus de overlayPane (400) mais sous markerPane (600)
     connectionsLayerRef.current = L.layerGroup().addTo(map);
 
     map.on("click", handleMapClick);
@@ -1242,7 +1246,7 @@ export default function DatahubMap() {
         : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source' : 'equipment-link-line';
 
       const polyline = L.polyline([sourceLatLng, targetLatLng], {
-        color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass
+        color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane'
       });
       polyline.addTo(g);
 
