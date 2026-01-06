@@ -43,6 +43,8 @@ import {
   Map as MapIcon,
   List,
   ArrowLeft,
+  ArrowUp,
+  ArrowDown,
   Calendar,
   Clock,
   Upload,
@@ -414,15 +416,18 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [
     }
   };
 
-  // Add a link
-  const handleAddLinkClick = async (target) => {
+  // Add a link with direction (upstream = target feeds this, downstream = this feeds target)
+  const handleAddLinkClick = async (target, direction) => {
     try {
+      // direction: 'upstream' means target is upstream (feeds this equipment)
+      // direction: 'downstream' means target is downstream (this equipment feeds it)
+      const linkLabel = direction || 'connected';
       await onAddLink?.({
         source_type: 'switchboard',
         source_id: String(position.switchboard_id),
         target_type: target.type,
         target_id: String(target.id),
-        link_label: 'connected'
+        link_label: linkLabel
       });
       setShowAddLink(false);
       setSearchQuery('');
@@ -531,16 +536,35 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [
                 </div>
               )}
               {searchResults.length > 0 && (
-                <div className="mt-2 max-h-32 overflow-y-auto space-y-1">
+                <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
                   {searchResults.map((result) => (
-                    <button
+                    <div
                       key={`${result.type}-${result.id}`}
-                      onClick={() => handleAddLinkClick(result)}
-                      className="w-full text-left px-2 py-1.5 text-sm bg-white hover:bg-blue-100 rounded border flex items-center justify-between"
+                      className="bg-white rounded border p-2"
                     >
-                      <span className="font-medium">{result.code || result.name}</span>
-                      <span className="text-xs text-gray-500">{result.type}</span>
-                    </button>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-medium text-sm">{result.code || result.name}</span>
+                        <span className="text-xs text-gray-500">{result.type}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleAddLinkClick(result, 'upstream')}
+                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300 transition-colors"
+                          title="Cet équipement est en amont (alimente celui-ci)"
+                        >
+                          <ArrowDown size={12} />
+                          <span>Amont</span>
+                        </button>
+                        <button
+                          onClick={() => handleAddLinkClick(result, 'downstream')}
+                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300 transition-colors"
+                          title="Cet équipement est en aval (alimenté par celui-ci)"
+                        >
+                          <ArrowUp size={12} />
+                          <span>Aval</span>
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -844,32 +868,76 @@ const SwitchboardLeafletViewer = forwardRef(
         const targetLatLng = targetMarker.getLatLng();
         console.log(`[POLYLINES] Link ${idx}: target position:`, targetLatLng);
 
-        // Determine line style based on relationship
+        // Determine line style based on relationship/link_label
         let color = '#3b82f6'; // Blue default
         let dashArray = '8, 6';
+        let flowDirection = null; // null = no flow, 'toTarget' = arrow to target, 'toSource' = arrow to source
 
-        if (link.relationship === 'feeds') {
+        // Check link_label for direction (upstream/downstream)
+        const linkLabel = link.link_label || link.relationship;
+
+        if (linkLabel === 'upstream') {
+          // Target is upstream = feeds this equipment = flow FROM target TO source
+          color = '#10b981'; // Green
+          dashArray = '10, 5';
+          flowDirection = 'toSource';
+        } else if (linkLabel === 'downstream') {
+          // Target is downstream = this feeds target = flow FROM source TO target
+          color = '#ef4444'; // Red
+          dashArray = '10, 5';
+          flowDirection = 'toTarget';
+        } else if (link.relationship === 'feeds') {
           color = '#ef4444'; // Red for feeds
           dashArray = '12, 4';
+          flowDirection = 'toTarget';
         } else if (link.relationship === 'fed_by') {
           color = '#10b981'; // Green for fed by
           dashArray = '12, 4';
+          flowDirection = 'toSource';
         } else if (link.type === 'hierarchical') {
           color = '#f59e0b'; // Amber for auto hierarchical
           dashArray = '4, 4';
         }
 
-        // Create dashed polyline
-        console.log(`[POLYLINES] Link ${idx}: DRAWING polyline from`, sourceLatLng, 'to', targetLatLng, 'color:', color);
+        // Create dashed polyline with animation class
+        console.log(`[POLYLINES] Link ${idx}: DRAWING polyline from`, sourceLatLng, 'to', targetLatLng, 'color:', color, 'flowDirection:', flowDirection);
+
+        const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
+                        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source'
+                        : 'equipment-link-line';
+
         const polyline = L.polyline([sourceLatLng, targetLatLng], {
           color,
           weight: 3,
           opacity: 0.8,
           dashArray,
-          className: 'equipment-link-line'
+          className: animClass
         });
 
         polyline.addTo(g);
+
+        // Add arrow marker at the end if there's a direction
+        if (flowDirection) {
+          const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
+          const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
+
+          // Calculate angle for arrow
+          const dx = arrowEnd.lng - arrowStart.lng;
+          const dy = arrowEnd.lat - arrowStart.lat;
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+
+          // Create arrow marker
+          const arrowIcon = L.divIcon({
+            className: 'arrow-marker',
+            html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white, 0 0 3px white;">▲</div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+          });
+
+          const arrowMarker = L.marker(arrowEnd, { icon: arrowIcon, interactive: false });
+          arrowMarker.addTo(g);
+        }
+
         linesDrawn++;
       });
 
