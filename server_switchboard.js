@@ -9206,7 +9206,9 @@ app.get('/api/equipment/search', async (req, res) => {
           FROM ${s.table}
           WHERE site = $1 AND (
             LOWER(COALESCE(${s.nameCol}, '')) LIKE $2 OR
-            LOWER(COALESCE(${s.codeCol}, '')) LIKE $2
+            LOWER(COALESCE(${s.codeCol}, '')) LIKE $2 OR
+            LOWER(COALESCE(building, '')) LIKE $2 OR
+            LOWER(COALESCE(building_code, '')) LIKE $2
           )
           LIMIT 10
         `;
