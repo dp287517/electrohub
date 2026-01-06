@@ -1768,10 +1768,12 @@ async function aiGuidedChat(sessionId, userMessage, uploadedPhoto = null, upload
   // FAST MODE: During step creation, store raw data and use minimal AI
   // Check if this is a step with photo - store it directly
   const hasPhoto = uploadedPhoto || userMessage.includes('[Photo:');
-  const isFinished = /^(termin|fini|c'est tout|stop|fin)/i.test(userMessage.trim());
+  // Strip photo placeholder to get clean user text for keyword detection
+  const cleanUserMessage = userMessage.replace(/\[Photo:[^\]]+\]\n?/g, '').trim();
+  const isFinished = /^(termin|fini|c'est tout|stop|fin)/i.test(cleanUserMessage);
 
   // Check if user wants to see summary/status of existing steps
-  const wantsSummary = /^(continu|résumé|resume|voir|status|état|où j'en suis|ou j'en suis|recap|récap)/i.test(userMessage.trim());
+  const wantsSummary = /^(continu|résumé|resume|voir|status|état|où j'en suis|ou j'en suis|recap|récap)/i.test(cleanUserMessage);
 
   // If user asks for summary/continue, show current status
   if (wantsSummary && existingTitle && !hasPhoto) {
