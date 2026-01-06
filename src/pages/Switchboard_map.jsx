@@ -714,6 +714,14 @@ const SwitchboardLeafletViewer = forwardRef(
     const ICON_PX_SELECTED = 30;
     const PICK_RADIUS = Math.max(18, Math.floor(ICON_PX / 2) + 6);
 
+    // Debug: Log when links prop changes
+    useEffect(() => {
+      console.log('[VIEWER] Received links prop:', links);
+      console.log('[VIEWER] links.length:', links.length);
+      console.log('[VIEWER] currentPlan:', currentPlan);
+      console.log('[VIEWER] selectedId:', selectedId);
+    }, [links, currentPlan, selectedId]);
+
     // Keep refs in sync
     useEffect(() => {
       placementActiveRef.current = placementActive;
@@ -744,45 +752,97 @@ const SwitchboardLeafletViewer = forwardRef(
 
     // Draw connection lines between linked equipment
     const drawConnections = useCallback(() => {
+      console.log('[POLYLINES] drawConnections called');
+      console.log('[POLYLINES] links:', links);
+      console.log('[POLYLINES] links.length:', links.length);
+      console.log('[POLYLINES] currentPlan:', currentPlan);
+      console.log('[POLYLINES] pageIndex:', pageIndex);
+
       const map = mapRef.current;
       const g = connectionsLayerRef.current;
-      if (!map || !g) return;
+      console.log('[POLYLINES] map exists:', !!map);
+      console.log('[POLYLINES] connectionsLayer exists:', !!g);
+
+      if (!map || !g) {
+        console.log('[POLYLINES] ABORT: no map or connections layer');
+        return;
+      }
 
       // Clear existing connections
       g.clearLayers();
 
       // If no selected equipment or no links, nothing to draw
-      if (!selectedIdRef.current || !links.length) return;
+      console.log('[POLYLINES] selectedIdRef.current:', selectedIdRef.current);
+      if (!selectedIdRef.current || !links.length) {
+        console.log('[POLYLINES] ABORT: no selectedId or no links');
+        return;
+      }
+
+      // Debug: list all markers in the map
+      console.log('[POLYLINES] markersMapRef keys:', Array.from(markersMapRef.current.keys()));
 
       // Get selected marker position
       const selectedMarker = markersMapRef.current.get(String(selectedIdRef.current));
-      if (!selectedMarker) return;
+      console.log('[POLYLINES] selectedMarker found:', !!selectedMarker, 'for key:', String(selectedIdRef.current));
+
+      if (!selectedMarker) {
+        console.log('[POLYLINES] ABORT: selected marker not found');
+        return;
+      }
 
       const sourceLatLng = selectedMarker.getLatLng();
+      console.log('[POLYLINES] source position:', sourceLatLng);
 
       // Draw lines to linked equipment on the same plan
-      links.forEach((link) => {
+      let linesDrawn = 0;
+      links.forEach((link, idx) => {
+        console.log(`[POLYLINES] Processing link ${idx}:`, link);
         const eq = link.linkedEquipment;
-        if (!eq) return;
+        if (!eq) {
+          console.log(`[POLYLINES] Link ${idx}: no linkedEquipment`);
+          return;
+        }
 
         // Check if on same plan and page
         const eqPlan = eq.plan_key || eq.plan;
         const eqPage = eq.page_index ?? eq.pageIndex ?? 0;
         const currentPlanKey = currentPlan?.logical_name || currentPlan?.id;
 
-        if (!eq.hasPosition || eqPlan !== currentPlanKey || eqPage !== pageIndex) return;
+        console.log(`[POLYLINES] Link ${idx}: eq.hasPosition=${eq.hasPosition}, eqPlan=${eqPlan}, currentPlanKey=${currentPlanKey}, eqPage=${eqPage}, pageIndex=${pageIndex}`);
+
+        if (!eq.hasPosition) {
+          console.log(`[POLYLINES] Link ${idx}: SKIP - no position`);
+          return;
+        }
+        if (eqPlan !== currentPlanKey) {
+          console.log(`[POLYLINES] Link ${idx}: SKIP - different plan`);
+          return;
+        }
+        if (eqPage !== pageIndex) {
+          console.log(`[POLYLINES] Link ${idx}: SKIP - different page`);
+          return;
+        }
 
         // Find the target marker - could be switchboard_id or equipment_id
         const targetId = eq.equipment_id || eq.id;
-        let targetMarker = markersMapRef.current.get(String(targetId));
+        console.log(`[POLYLINES] Link ${idx}: looking for marker with targetId=${targetId}`);
 
-        // Try alternative key formats
+        let targetMarker = markersMapRef.current.get(String(targetId));
         if (!targetMarker) {
           targetMarker = markersMapRef.current.get(targetId);
         }
-        if (!targetMarker) return;
+        if (!targetMarker) {
+          targetMarker = markersMapRef.current.get(Number(targetId));
+        }
+
+        console.log(`[POLYLINES] Link ${idx}: targetMarker found:`, !!targetMarker);
+        if (!targetMarker) {
+          console.log(`[POLYLINES] Link ${idx}: SKIP - target marker not found`);
+          return;
+        }
 
         const targetLatLng = targetMarker.getLatLng();
+        console.log(`[POLYLINES] Link ${idx}: target position:`, targetLatLng);
 
         // Determine line style based on relationship
         let color = '#3b82f6'; // Blue default
@@ -800,6 +860,7 @@ const SwitchboardLeafletViewer = forwardRef(
         }
 
         // Create dashed polyline
+        console.log(`[POLYLINES] Link ${idx}: DRAWING polyline from`, sourceLatLng, 'to', targetLatLng, 'color:', color);
         const polyline = L.polyline([sourceLatLng, targetLatLng], {
           color,
           weight: 3,
@@ -809,11 +870,15 @@ const SwitchboardLeafletViewer = forwardRef(
         });
 
         polyline.addTo(g);
+        linesDrawn++;
       });
+
+      console.log(`[POLYLINES] Total lines drawn: ${linesDrawn}`);
     }, [links, currentPlan, pageIndex]);
 
     // Redraw connections when links or selection changes
     useEffect(() => {
+      console.log('[POLYLINES] useEffect triggered - calling drawConnections');
       drawConnections();
     }, [links, selectedId, drawConnections]);
 
@@ -935,7 +1000,10 @@ const SwitchboardLeafletViewer = forwardRef(
           });
 
           mk.addTo(g);
-          markersMapRef.current.set(p.switchboard_id, mk);
+          // Store marker with string key for consistent lookup
+          const markerKey = String(p.switchboard_id);
+          markersMapRef.current.set(markerKey, mk);
+          console.log('[MARKERS] Registered marker with key:', markerKey, 'type:', typeof markerKey);
 
           // Setup long press after marker is added
           setTimeout(() => {

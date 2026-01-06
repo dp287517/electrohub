@@ -9106,37 +9106,50 @@ async function getEquipmentInfo(type, id, site) {
 
 // Helper: Get equipment position on map
 async function getEquipmentPosition(type, id, site) {
+  // NOTE: switchboard_positions uses 'logical_name', other tables use 'plan_key'
   const positionTableMap = {
-    switchboard: { table: 'switchboard_positions', idCol: 'switchboard_id' },
-    vsd: { table: 'vsd_positions', idCol: 'equipment_id' },
-    meca: { table: 'meca_positions', idCol: 'equipment_id' },
-    mobile: { table: 'me_equipment_positions', idCol: 'equipment_id' },
-    hv: { table: 'hv_positions', idCol: 'equipment_id' },
-    glo: { table: 'glo_positions', idCol: 'equipment_id' },
-    datahub: { table: 'dh_positions', idCol: 'item_id' }
+    switchboard: { table: 'switchboard_positions', idCol: 'switchboard_id', planCol: 'logical_name' },
+    vsd: { table: 'vsd_positions', idCol: 'equipment_id', planCol: 'plan_key' },
+    meca: { table: 'meca_positions', idCol: 'equipment_id', planCol: 'plan_key' },
+    mobile: { table: 'me_equipment_positions', idCol: 'equipment_id', planCol: 'plan_key' },
+    hv: { table: 'hv_positions', idCol: 'equipment_id', planCol: 'plan_key' },
+    glo: { table: 'glo_positions', idCol: 'equipment_id', planCol: 'plan_key' },
+    datahub: { table: 'dh_positions', idCol: 'item_id', planCol: 'plan_key' }
   };
 
   const config = positionTableMap[type];
-  if (!config) return { hasPosition: false };
+  if (!config) {
+    console.log(`[EQUIPMENT_LINKS] getEquipmentPosition: unknown type ${type}`);
+    return { hasPosition: false };
+  }
 
   try {
-    const result = await quickQuery(
-      `SELECT plan_key, page_index, x_frac, y_frac
-       FROM ${config.table} WHERE ${config.idCol} = $1 LIMIT 1`,
-      [id]
-    );
+    const query = `SELECT ${config.planCol} as plan_key, page_index, x_frac, y_frac
+       FROM ${config.table} WHERE ${config.idCol} = $1 LIMIT 1`;
+    console.log(`[EQUIPMENT_LINKS] getEquipmentPosition query for ${type}:`, query, [id]);
 
-    if (result.rows.length === 0) return { hasPosition: false };
+    const result = await quickQuery(query, [id]);
+    console.log(`[EQUIPMENT_LINKS] getEquipmentPosition result:`, result.rows);
+
+    if (result.rows.length === 0) {
+      console.log(`[EQUIPMENT_LINKS] getEquipmentPosition: no position found for ${type} #${id}`);
+      return { hasPosition: false };
+    }
 
     const pos = result.rows[0];
-    return {
+    const positionData = {
       hasPosition: true,
-      plan: pos.plan_key,
-      pageIndex: pos.page_index || 0,
+      plan_key: pos.plan_key,
+      plan: pos.plan_key, // Alias for compatibility
+      page_index: pos.page_index || 0,
+      pageIndex: pos.page_index || 0, // Alias for compatibility
       x_frac: pos.x_frac,
       y_frac: pos.y_frac
     };
+    console.log(`[EQUIPMENT_LINKS] getEquipmentPosition returning:`, positionData);
+    return positionData;
   } catch (e) {
+    console.error(`[EQUIPMENT_LINKS] getEquipmentPosition error for ${type} #${id}:`, e.message);
     return { hasPosition: false };
   }
 }
