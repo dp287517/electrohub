@@ -130,27 +130,27 @@ const STATUS_COLORS = {
     bg: "radial-gradient(circle at 30% 30%, #ef4444, #dc2626)",
     border: "#dc2626",
     pulse: true
-  }, // Red - en retard
+  }, // Red - en retard (past due)
   upcoming: {
     bg: "radial-gradient(circle at 30% 30%, #f59e0b, #d97706)",
     border: "#d97706",
     pulse: false
-  }, // Amber - à venir (30 days)
+  }, // Amber - legacy, not used in new system
   pending: {
     bg: "radial-gradient(circle at 30% 30%, #3b82f6, #2563eb)",
     border: "#2563eb",
     pulse: false
-  }, // Blue - planifié
+  }, // Blue - à venir (control due within 60 days)
   done: {
     bg: "radial-gradient(circle at 30% 30%, #10b981, #059669)",
     border: "#059669",
     pulse: false
-  }, // Green - fait
+  }, // Green - contrôlé (next control > 60 days away)
   none: {
     bg: "radial-gradient(circle at 30% 30%, #6b7280, #4b5563)",
     border: "#4b5563",
     pulse: false
-  }, // Gray - pas de contrôle
+  }, // Gray - pas de contrôle planifié
   selected: {
     bg: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)",
     border: "white",
@@ -247,8 +247,8 @@ const ControlStatusBadge = ({ status }) => {
   const config = {
     overdue: { label: "En retard", variant: "danger", icon: AlertTriangle },
     upcoming: { label: "À venir", variant: "warning", icon: Clock },
-    pending: { label: "Planifié", variant: "info", icon: Calendar },
-    done: { label: "Fait", variant: "success", icon: CheckCircle },
+    pending: { label: "À venir (60j)", variant: "info", icon: Clock },
+    done: { label: "Contrôlé", variant: "success", icon: CheckCircle },
     none: { label: "Non planifié", variant: "default", icon: null },
   };
   const { label, variant, icon: Icon } = config[status] || config.none;
@@ -678,12 +678,12 @@ const UnifiedLeafletViewer = forwardRef(({
           En retard
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: STATUS_COLORS.upcoming.bg }} />
-          À venir
+          <span className="w-3 h-3 rounded-full" style={{ background: STATUS_COLORS.pending.bg }} />
+          À venir (60j)
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: STATUS_COLORS.done.bg }} />
-          Fait
+          Contrôlé
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full" style={{ background: STATUS_COLORS.none.bg }} />
@@ -822,7 +822,7 @@ export default function UnifiedEquipmentMap({
       const schedules = schedulesRes?.schedules || [];
       const statuses = {};
       const now = new Date();
-      const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const sixtyDaysFromNow = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000);
 
       schedules.forEach(item => {
         const key = getEquipmentKey(item);
@@ -832,19 +832,22 @@ export default function UnifiedEquipmentMap({
         if (!nextDue) return;
 
         // Determine status based on due date
+        // Green (done): next control > 60 days away
+        // Blue (pending): next control <= 60 days away
+        // Red (overdue): past due
         let status;
         if (nextDue < now) {
           status = "overdue";
-        } else if (nextDue <= thirtyDaysFromNow) {
-          status = "upcoming";
+        } else if (nextDue <= sixtyDaysFromNow) {
+          status = "pending"; // Blue - control coming up within 60 days
         } else {
-          status = "pending";
+          status = "done"; // Green - recently controlled, next due > 60 days
         }
 
-        // Keep the most urgent status (overdue > upcoming > pending)
+        // Keep the most urgent status (overdue > pending > done)
         if (!statuses[key] ||
             (status === "overdue") ||
-            (status === "upcoming" && statuses[key] !== "overdue")) {
+            (status === "pending" && statuses[key] === "done")) {
           statuses[key] = status;
         }
       });
