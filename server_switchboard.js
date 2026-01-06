@@ -9106,15 +9106,15 @@ async function getEquipmentInfo(type, id, site) {
 
 // Helper: Get equipment position on map
 async function getEquipmentPosition(type, id, site) {
-  // NOTE: switchboard_positions uses 'logical_name', other tables use 'plan_key'
+  // NOTE: All tables use 'logical_name' except me_equipment_positions which uses 'plan_logical_name'
   const positionTableMap = {
     switchboard: { table: 'switchboard_positions', idCol: 'switchboard_id', planCol: 'logical_name' },
-    vsd: { table: 'vsd_positions', idCol: 'equipment_id', planCol: 'plan_key' },
-    meca: { table: 'meca_positions', idCol: 'equipment_id', planCol: 'plan_key' },
-    mobile: { table: 'me_equipment_positions', idCol: 'equipment_id', planCol: 'plan_key' },
-    hv: { table: 'hv_positions', idCol: 'equipment_id', planCol: 'plan_key' },
-    glo: { table: 'glo_positions', idCol: 'equipment_id', planCol: 'plan_key' },
-    datahub: { table: 'dh_positions', idCol: 'item_id', planCol: 'plan_key' }
+    vsd: { table: 'vsd_positions', idCol: 'equipment_id', planCol: 'logical_name' },
+    meca: { table: 'meca_positions', idCol: 'equipment_id', planCol: 'logical_name' },
+    mobile: { table: 'me_equipment_positions', idCol: 'equipment_id', planCol: 'plan_logical_name' },
+    hv: { table: 'hv_positions', idCol: 'equipment_id', planCol: 'logical_name' },
+    glo: { table: 'glo_positions', idCol: 'equipment_id', planCol: 'logical_name' },
+    datahub: { table: 'dh_positions', idCol: 'item_id', planCol: 'logical_name' }
   };
 
   const config = positionTableMap[type];

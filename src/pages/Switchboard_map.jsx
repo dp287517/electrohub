@@ -911,7 +911,8 @@ const SwitchboardLeafletViewer = forwardRef(
           weight: 3,
           opacity: 0.8,
           dashArray,
-          className: animClass
+          className: animClass,
+          pane: 'connectionsPane'
         });
 
         polyline.addTo(g);
@@ -1263,6 +1264,10 @@ const SwitchboardLeafletViewer = forwardRef(
 
           // Créer le layer group pour les markers
           markersLayerRef.current = L.layerGroup().addTo(m);
+
+          // Créer un pane personnalisé pour les connexions avec z-index élevé
+          const connectionsPane = m.createPane('connectionsPane');
+          connectionsPane.style.zIndex = 450; // Au-dessus de overlayPane (400) mais sous markerPane (600)
 
           // Créer le layer group pour les connexions (polylines) - au-dessus des markers
           connectionsLayerRef.current = L.layerGroup().addTo(m);
