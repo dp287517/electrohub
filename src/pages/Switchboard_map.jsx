@@ -403,10 +403,12 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [
     }
     setSearching(true);
     try {
+      console.log('[SWITCHBOARD_DETAIL] Searching for:', query, 'excluding switchboard:', position.switchboard_id);
       const res = await api.equipmentLinks.search(query, 'switchboard', position.switchboard_id);
+      console.log('[SWITCHBOARD_DETAIL] Search results:', res);
       setSearchResults(res?.results || []);
     } catch (e) {
-      console.error('Search error:', e);
+      console.error('[SWITCHBOARD_DETAIL] Search error:', e);
     } finally {
       setSearching(false);
     }
@@ -1644,16 +1646,20 @@ export default function SwitchboardMap() {
 
   // Load equipment links
   const loadEquipmentLinks = async (switchboardId) => {
+    console.log('[SWITCHBOARD_MAP] loadEquipmentLinks called with id:', switchboardId);
     if (!switchboardId) {
+      console.log('[SWITCHBOARD_MAP] No switchboardId, clearing links');
       setLinks([]);
       return;
     }
     setLinksLoading(true);
     try {
+      console.log('[SWITCHBOARD_MAP] Fetching links for switchboard:', switchboardId);
       const res = await api.equipmentLinks.getLinks('switchboard', switchboardId);
+      console.log('[SWITCHBOARD_MAP] Links response:', res);
       setLinks(res?.links || []);
     } catch (err) {
-      console.error("Error loading equipment links:", err);
+      console.error("[SWITCHBOARD_MAP] Error loading equipment links:", err);
       setLinks([]);
     } finally {
       setLinksLoading(false);
