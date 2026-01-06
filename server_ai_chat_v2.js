@@ -11,9 +11,12 @@
  * 2. OpenAI analyse le message et décide d'utiliser des tools si nécessaire
  * 3. Les tools sont exécutés et les résultats renvoyés à OpenAI
  * 4. OpenAI génère la réponse finale avec les données réelles
+ *
+ * Fallback: Si OpenAI échoue (quota épuisé), bascule automatiquement sur Gemini
  */
 
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import express from 'express';
 import {
   TOOLS_DEFINITIONS,
@@ -27,8 +30,25 @@ import {
 // ============================================================================
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 const MAX_TOOL_ITERATIONS = 3; // Limite de boucles tool calling
 const MAX_CONVERSATION_HISTORY = 10; // Messages à garder
+
+/**
+ * Vérifie si l'erreur est liée au quota/rate limit
+ */
+function isQuotaError(error) {
+  const msg = error?.message || '';
+  return (
+    error?.status === 429 ||
+    error?.code === 'insufficient_quota' ||
+    msg.includes('429') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('Rate limit')
+  );
+}
 
 // ============================================================================
 // CHAT V2 HANDLER
@@ -92,6 +112,69 @@ function createChatV2Router(pool) {
     apiKey: process.env.OPENAI_API_KEY
   });
 
+  // Initialiser Gemini (fallback)
+  const gemini = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
+
+  /**
+   * Convertit les messages OpenAI vers le format Gemini
+   */
+  function convertToGeminiMessages(messages) {
+    let systemPrompt = '';
+    const contents = [];
+
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        systemPrompt += (systemPrompt ? '\n\n' : '') + msg.content;
+        continue;
+      }
+      if (msg.role === 'tool') continue; // Gemini ne supporte pas les messages tool
+
+      const role = msg.role === 'assistant' ? 'model' : 'user';
+      contents.push({ role, parts: [{ text: msg.content || '' }] });
+    }
+
+    return { systemPrompt, contents };
+  }
+
+  /**
+   * Appelle Gemini comme fallback (sans function calling)
+   */
+  async function callGeminiFallback(messages, options = {}) {
+    if (!gemini) throw new Error('GEMINI_API_KEY not configured');
+
+    const model = gemini.getGenerativeModel({
+      model: GEMINI_MODEL,
+      generationConfig: {
+        temperature: options.temperature ?? 0.7,
+        maxOutputTokens: options.max_tokens ?? 2000,
+      },
+    });
+
+    const { systemPrompt, contents } = convertToGeminiMessages(messages);
+
+    // Ajouter le system prompt au premier message user
+    if (systemPrompt && contents.length > 0) {
+      const firstUserIdx = contents.findIndex(c => c.role === 'user');
+      if (firstUserIdx >= 0 && contents[firstUserIdx].parts[0]?.text) {
+        contents[firstUserIdx].parts[0].text =
+          `[Instructions système]\n${systemPrompt}\n\n[Message utilisateur]\n${contents[firstUserIdx].parts[0].text}`;
+      }
+    }
+
+    const result = await model.generateContent({ contents });
+    const text = result.response.text();
+
+    return {
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: text,
+          tool_calls: null // Gemini fallback ne supporte pas les tools
+        }
+      }]
+    };
+  }
+
   /**
    * POST /api/ai-assistant/chat-v2
    * Nouveau endpoint de chat avec function calling
@@ -126,23 +209,39 @@ function createChatV2Router(pool) {
         { role: 'user', content: message }
       ];
 
-      // Appel initial à OpenAI avec les tools
-      let response = await openai.chat.completions.create({
-        model: OPENAI_MODEL,
-        messages,
-        tools: TOOLS_DEFINITIONS,
-        tool_choice: 'auto',
-        temperature: 0.7,
-        max_tokens: 2000
-      });
+      let response;
+      let usingGeminiFallback = false;
+
+      // Appel initial à OpenAI avec les tools (avec fallback Gemini)
+      try {
+        response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages,
+          tools: TOOLS_DEFINITIONS,
+          tool_choice: 'auto',
+          temperature: 0.7,
+          max_tokens: 2000
+        });
+      } catch (openaiError) {
+        console.error(`[CHAT-V2] ❌ OpenAI error: ${openaiError.message}`);
+
+        // Fallback vers Gemini si c'est une erreur de quota
+        if (gemini && isQuotaError(openaiError)) {
+          console.log('[CHAT-V2] 🔄 Fallback to Gemini...');
+          usingGeminiFallback = true;
+          response = await callGeminiFallback(messages, { temperature: 0.7, max_tokens: 2000 });
+        } else {
+          throw openaiError;
+        }
+      }
 
       let assistantMessage = response.choices[0].message;
       let toolResults = [];
       let frontendInstructions = {};
       let iterations = 0;
 
-      // Boucle de function calling
-      while (assistantMessage.tool_calls && iterations < MAX_TOOL_ITERATIONS) {
+      // Boucle de function calling (uniquement si on n'est pas en fallback Gemini)
+      while (assistantMessage.tool_calls && iterations < MAX_TOOL_ITERATIONS && !usingGeminiFallback) {
         iterations++;
         console.log(`[CHAT-V2] 🔧 Tool calls iteration ${iterations}:`,
           assistantMessage.tool_calls.map(tc => tc.function.name).join(', '));
@@ -173,14 +272,27 @@ function createChatV2Router(pool) {
         messages.push(assistantMessage);
         messages.push(...toolMessages);
 
-        response = await openai.chat.completions.create({
-          model: OPENAI_MODEL,
-          messages,
-          tools: TOOLS_DEFINITIONS,
-          tool_choice: 'auto',
-          temperature: 0.7,
-          max_tokens: 2000
-        });
+        try {
+          response = await openai.chat.completions.create({
+            model: OPENAI_MODEL,
+            messages,
+            tools: TOOLS_DEFINITIONS,
+            tool_choice: 'auto',
+            temperature: 0.7,
+            max_tokens: 2000
+          });
+        } catch (openaiError) {
+          console.error(`[CHAT-V2] ❌ OpenAI error in tool loop: ${openaiError.message}`);
+
+          // Fallback vers Gemini si c'est une erreur de quota
+          if (gemini && isQuotaError(openaiError)) {
+            console.log('[CHAT-V2] 🔄 Fallback to Gemini in tool loop...');
+            usingGeminiFallback = true;
+            response = await callGeminiFallback(messages, { temperature: 0.7, max_tokens: 2000 });
+          } else {
+            throw openaiError;
+          }
+        }
 
         assistantMessage = response.choices[0].message;
       }
