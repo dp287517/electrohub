@@ -43,8 +43,8 @@ export default function MiniElectro({
     const fetchAgentNames = async () => {
       try {
         const response = await get('/api/admin/settings/ai-agents/names');
-        if (response && typeof response === 'object') {
-          setCustomAgentNames(response);
+        if (response?.names && typeof response.names === 'object') {
+          setCustomAgentNames(response.names);
         }
       } catch (error) {
         console.debug('Using default agent names');
