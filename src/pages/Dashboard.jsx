@@ -352,7 +352,7 @@ export default function Dashboard() {
         setStats({
           overdue: controls.stats?.overdue || controls.overdue_count || 0,
           pending: controls.stats?.pending || controls.pending_count || 0,
-          completed: controls.stats?.completed_this_week || 0,
+          completed: controls.stats?.completed_30d || controls.stats?.completed_this_week || 0,
           total: controls.stats?.total || 0,
           overdueByEquipment: controls.stats?.overdueByEquipment || {},
           pendingByEquipment: controls.stats?.pendingByEquipment || {}
@@ -541,7 +541,7 @@ export default function Dashboard() {
           <StatCard
             icon={CheckCircle}
             value={stats.completed}
-            label="Complétés"
+            label="Complétés (30j)"
             trend="up"
             trendValue="+12%"
             color="from-emerald-400 via-green-500 to-teal-600"
