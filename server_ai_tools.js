@@ -322,20 +322,23 @@ UTILISE CETTE FONCTION QUAND:
     type: "function",
     function: {
       name: "search_equipment",
-      description: `Recherche des équipements (tableaux électriques, variateurs, etc.).
+      description: `Recherche des équipements (tableaux électriques, variateurs, portes, etc.).
 
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "où est le tableau...", "trouve l'équipement..."
 - "équipements du bâtiment X", "tableaux de l'étage Y"
 - "liste des variateurs", "équipements ATEX"
-- Toute question sur la localisation ou l'état d'équipements`,
+- Quand un dépannage mentionne un équipement et tu veux le retrouver
+- Toute question sur la localisation ou l'état d'équipements
+
+ASTUCE: Si tu ne connais pas le type, ne le spécifie pas et utilise juste le nom - la recherche ira chercher dans TOUS les types.`,
       parameters: {
         type: "object",
         properties: {
           equipment_type: {
             type: "string",
-            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "door"],
-            description: "Type d'équipement à chercher"
+            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub"],
+            description: "Type d'équipement à chercher (OPTIONNEL - si non spécifié, cherche dans tous les types)"
           },
           building: {
             type: "string",
@@ -722,6 +725,80 @@ Cela te permet de construire ta mémoire long-terme.`,
         required: ["agent_type", "memory_type", "content"]
       }
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // TRANSFERT VERS AGENT SPÉCIALISÉ
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "transfer_to_agent",
+      description: `Transfère l'utilisateur vers l'agent IA spécialisé d'un équipement.
+
+UTILISE CETTE FONCTION QUAND:
+- L'utilisateur dit "je veux parler à l'agent de cet équipement"
+- L'utilisateur veut plus de détails d'un agent spécialisé
+- Tu as identifié un équipement et l'utilisateur veut interagir avec son agent
+- Suite à un dépannage, l'utilisateur veut en savoir plus via l'agent
+
+Cette fonction retourne les informations pour ouvrir le chat avec l'agent spécialisé.`,
+      parameters: {
+        type: "object",
+        properties: {
+          equipment_id: {
+            type: "string",
+            description: "ID de l'équipement"
+          },
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub", "doors"],
+            description: "Type d'équipement"
+          },
+          equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement pour affichage"
+          },
+          context: {
+            type: "string",
+            description: "Contexte à transmettre à l'agent (ex: 'suite au dépannage du 05/01')"
+          }
+        },
+        required: ["equipment_type", "equipment_name"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_troubleshooting_equipment_context",
+      description: `Récupère le contexte complet d'un équipement mentionné dans un dépannage.
+
+UTILISE CETTE FONCTION QUAND:
+- Un dépannage mentionne un équipement et tu veux en savoir plus
+- L'utilisateur veut parler à l'agent d'un équipement du dépannage
+- Tu dois retrouver les infos complètes d'un équipement depuis un dépannage
+
+Cette fonction cherche l'équipement dans toutes les tables et retourne son contexte complet.`,
+      parameters: {
+        type: "object",
+        properties: {
+          troubleshooting_id: {
+            type: "string",
+            description: "ID du dépannage (si connu)"
+          },
+          equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement mentionné dans le dépannage"
+          },
+          equipment_type: {
+            type: "string",
+            description: "Type d'équipement si connu (ex: 'door', 'vsd', etc.)"
+          }
+        },
+        required: ["equipment_name"]
+      }
+    }
   }
 ];
 
@@ -790,6 +867,8 @@ function createToolHandlers(pool, site) {
             solution: r.solution?.substring(0, 200),
             technician: r.technician_name,
             equipment: r.equipment_name,
+            equipment_id: r.equipment_id,
+            equipment_type: r.equipment_type,
             building: r.building_code,
             floor: r.floor,
             date: r.started_at,
@@ -1317,7 +1396,7 @@ function createToolHandlers(pool, site) {
     // ÉQUIPEMENTS
     // -----------------------------------------------------------------------
     search_equipment: async (params) => {
-      const { equipment_type = 'switchboard', building, floor, name, code, limit = 20 } = params;
+      const { equipment_type, building, floor, name, code, limit = 20 } = params;
 
       // Mapper le type d'équipement à la table
       const tableMap = {
@@ -1326,8 +1405,44 @@ function createToolHandlers(pool, site) {
         meca: { table: 'equipment_meca', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
         atex: { table: 'atex_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
         mobile: { table: 'mobile_equipment', columns: 'id, name, code, building_code, floor, room, site' },
-        hv: { table: 'hv_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' }
+        hv: { table: 'hv_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
+        glo: { table: 'glo_equipments', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' },
+        datahub: { table: 'datahub_equipment', columns: 'id, name, tag as code, building as building_code, floor, location as room, site' }
       };
+
+      // Si pas de type spécifié et qu'on a un nom, chercher dans TOUS les types
+      if (!equipment_type && name) {
+        try {
+          const allResults = [];
+          for (const [eqType, tableInfo] of Object.entries(tableMap)) {
+            try {
+              const query = `
+                SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                FROM ${tableInfo.table}
+                WHERE site = $1 AND LOWER(name) LIKE $2
+                LIMIT 5
+              `;
+              const result = await pool.query(query, [site, `%${name.toLowerCase()}%`]);
+              allResults.push(...result.rows.map(r => ({ ...r, equipment_type: eqType })));
+            } catch (e) {
+              // Table might not exist, skip
+            }
+          }
+
+          if (allResults.length > 0) {
+            return {
+              success: true,
+              count: allResults.length,
+              equipment_type: 'all',
+              filters: { name },
+              equipment: allResults.slice(0, limit),
+              summary: `${allResults.length} équipement(s) trouvé(s) correspondant à "${name}".`
+            };
+          }
+        } catch (error) {
+          console.error('[TOOL] search_equipment (all types) error:', error.message);
+        }
+      }
 
       const tableInfo = tableMap[equipment_type] || tableMap.switchboard;
 
@@ -2022,6 +2137,160 @@ function createToolHandlers(pool, site) {
         console.error('[TOOL] record_agent_insight error:', error.message);
         return { success: false, error: error.message };
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // TRANSFERT AGENT & CONTEXTE ÉQUIPEMENT
+    // -----------------------------------------------------------------------
+    transfer_to_agent: async (params) => {
+      const { equipment_id, equipment_type, equipment_name, context } = params;
+
+      // Map equipment type to agent type and route
+      const agentMap = {
+        switchboard: { agent: 'switchboards', route: '/app/switchboards' },
+        vsd: { agent: 'vsd', route: '/app/vsd' },
+        meca: { agent: 'meca', route: '/app/equipment-meca' },
+        atex: { agent: 'atex', route: '/app/atex' },
+        hv: { agent: 'hv', route: '/app/high-voltage' },
+        mobile: { agent: 'mobile', route: '/app/mobile-equipment' },
+        glo: { agent: 'glo', route: '/app/glo' },
+        datahub: { agent: 'datahub', route: '/app/datahub' },
+        doors: { agent: 'doors', route: '/app/doors' },
+        door: { agent: 'doors', route: '/app/doors' }
+      };
+
+      const agentInfo = agentMap[equipment_type] || agentMap.switchboard;
+
+      return {
+        success: true,
+        action: 'transfer_to_agent',
+        agent_type: agentInfo.agent,
+        route: agentInfo.route,
+        equipment: {
+          id: equipment_id,
+          type: equipment_type,
+          name: equipment_name
+        },
+        context: context || null,
+        message: `Je te transfère vers l'agent ${agentInfo.agent.toUpperCase()} pour l'équipement "${equipment_name}". ${context || ''}`,
+        ui_action: {
+          type: 'navigate_to_equipment',
+          route: `${agentInfo.route}${equipment_id ? `?id=${equipment_id}` : ''}`,
+          open_chat: true
+        }
+      };
+    },
+
+    get_troubleshooting_equipment_context: async (params) => {
+      const { troubleshooting_id, equipment_name, equipment_type } = params;
+
+      try {
+        let equipmentData = null;
+        let foundType = equipment_type;
+
+        // Si on a un ID de dépannage, récupérer les infos de l'équipement
+        if (troubleshooting_id) {
+          const troubleResult = await pool.query(`
+            SELECT equipment_id, equipment_type, equipment_name, building_code, description
+            FROM troubleshooting_records
+            WHERE id = $1 AND site = $2
+          `, [troubleshooting_id, site]);
+
+          if (troubleResult.rows.length > 0) {
+            const tr = troubleResult.rows[0];
+            foundType = tr.equipment_type;
+            equipmentData = {
+              id: tr.equipment_id,
+              type: tr.equipment_type,
+              name: tr.equipment_name,
+              building: tr.building_code,
+              from_troubleshooting: true
+            };
+          }
+        }
+
+        // Chercher l'équipement dans toutes les tables
+        if (!equipmentData && equipment_name) {
+          const tableMap = {
+            switchboard: 'switchboards',
+            vsd: 'vsd_drives',
+            meca: 'equipment_meca',
+            atex: 'atex_equipment',
+            mobile: 'mobile_equipment',
+            hv: 'hv_equipment',
+            glo: 'glo_equipments',
+            datahub: 'datahub_equipment'
+          };
+
+          const typesToSearch = foundType ? [foundType] : Object.keys(tableMap);
+
+          for (const eqType of typesToSearch) {
+            const tableName = tableMap[eqType];
+            if (!tableName) continue;
+
+            try {
+              const nameCol = 'name';
+              const result = await pool.query(`
+                SELECT id, name, site
+                FROM ${tableName}
+                WHERE site = $1 AND LOWER(name) LIKE $2
+                LIMIT 1
+              `, [site, `%${equipment_name.toLowerCase()}%`]);
+
+              if (result.rows.length > 0) {
+                equipmentData = {
+                  id: result.rows[0].id,
+                  type: eqType,
+                  name: result.rows[0].name,
+                  from_search: true
+                };
+                foundType = eqType;
+                break;
+              }
+            } catch (e) {
+              // Table might not exist, continue
+            }
+          }
+        }
+
+        if (!equipmentData) {
+          return {
+            success: false,
+            message: `Équipement "${equipment_name}" non trouvé dans la base de données.`,
+            suggestion: "L'équipement pourrait être enregistré sous un autre nom ou ne pas encore être dans le système."
+          };
+        }
+
+        // Map to agent info
+        const agentMap = {
+          switchboard: { agent: 'switchboards', route: '/app/switchboards' },
+          vsd: { agent: 'vsd', route: '/app/vsd' },
+          meca: { agent: 'meca', route: '/app/equipment-meca' },
+          atex: { agent: 'atex', route: '/app/atex' },
+          hv: { agent: 'hv', route: '/app/high-voltage' },
+          mobile: { agent: 'mobile', route: '/app/mobile-equipment' },
+          glo: { agent: 'glo', route: '/app/glo' },
+          datahub: { agent: 'datahub', route: '/app/datahub' },
+          doors: { agent: 'doors', route: '/app/doors' },
+          door: { agent: 'doors', route: '/app/doors' }
+        };
+
+        const agentInfo = agentMap[foundType] || agentMap.switchboard;
+
+        return {
+          success: true,
+          equipment: equipmentData,
+          agent: {
+            type: agentInfo.agent,
+            route: agentInfo.route
+          },
+          can_transfer: true,
+          message: `Équipement "${equipmentData.name}" trouvé (type: ${foundType}). Tu peux utiliser transfer_to_agent pour ouvrir le chat avec l'agent ${agentInfo.agent.toUpperCase()}.`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_troubleshooting_equipment_context error:', error.message);
+        return { success: false, error: error.message };
+      }
     }
   };
 }
@@ -2117,6 +2386,18 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "montre sur la carte", "localise", "plan" | show_map |
 | "statistiques", "vue d'ensemble", "résumé", "combien de..." | get_statistics |
 | "documentation", "fiche technique", "datasheet", "manuel" | search_documentation |
+| "parler à l'agent de l'équipement", "agent spécialisé" | get_troubleshooting_equipment_context puis transfer_to_agent |
+| "qu'est-ce que tu as appris", "ta mémoire", "tes observations" | get_agent_memory |
+| "ce qui s'est passé hier", "résumé de la veille" | get_yesterday_summary |
+
+## 🔗 TRANSFERT VERS AGENTS SPÉCIALISÉS
+Quand l'utilisateur veut parler à l'agent d'un équipement mentionné dans un dépannage:
+1. Utilise **get_troubleshooting_equipment_context** avec le nom de l'équipement
+2. Si trouvé, utilise **transfer_to_agent** pour transférer vers l'agent spécialisé
+3. Si non trouvé, explique que l'équipement n'est pas dans la base et propose des alternatives
+
+**IMPORTANT**: Les dépannages contiennent equipment_type qui indique le type (door, vsd, meca, etc.)
+Utilise cette info pour chercher dans la bonne table!
 
 ## ⚠️ ACCÈS AUX CONTRÔLES POUR TOUS LES AGENTS
 **IMPORTANT**: Tous les contrôles sont centralisés dans "Switchboard Controls".
