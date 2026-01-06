@@ -532,7 +532,7 @@ export default function Dashboard() {
           <StatCard
             icon={Clock}
             value={stats.pending}
-            label="À planifier"
+            label="À faire"
             color="from-amber-400 via-orange-500 to-red-600"
             glow="hover:shadow-orange-500/30"
             onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
