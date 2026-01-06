@@ -500,7 +500,8 @@ const LeafletViewer = forwardRef(({
 
       const targetLatLng = targetMarker.getLatLng();
       let color = '#3b82f6', hasDirection = false, swapDirection = false;
-      const linkLabel = link.link_label || link.relationship;
+      // Backend now correctly flips relationship based on whether we're source or target
+      const linkLabel = link.relationship;
 
       if (linkLabel === 'upstream') { color = '#10b981'; hasDirection = true; swapDirection = true; }
       else if (linkLabel === 'downstream') { color = '#ef4444'; hasDirection = true; }
