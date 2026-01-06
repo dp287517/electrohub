@@ -871,42 +871,50 @@ const SwitchboardLeafletViewer = forwardRef(
         // Determine line style based on relationship/link_label
         let color = '#3b82f6'; // Blue default
         let dashArray = '8, 6';
-        let flowDirection = null; // null = no flow, 'toTarget' = arrow to target, 'toSource' = arrow to source
+        let hasDirection = false;
+        let swapDirection = false; // If true, swap source/target to draw from upstream to downstream
 
         // Check link_label for direction (upstream/downstream)
         const linkLabel = link.link_label || link.relationship;
 
         if (linkLabel === 'upstream') {
-          // Target is upstream = feeds this equipment = flow FROM target TO source
+          // Target is upstream = feeds this equipment
+          // Line should go FROM target (upstream) TO source (downstream)
           color = '#10b981'; // Green
           dashArray = '10, 5';
-          flowDirection = 'toSource';
+          hasDirection = true;
+          swapDirection = true; // Swap to draw from upstream to downstream
         } else if (linkLabel === 'downstream') {
-          // Target is downstream = this feeds target = flow FROM source TO target
+          // Target is downstream = this feeds target
+          // Line should go FROM source (upstream) TO target (downstream)
           color = '#ef4444'; // Red
           dashArray = '10, 5';
-          flowDirection = 'toTarget';
+          hasDirection = true;
+          swapDirection = false;
         } else if (link.relationship === 'feeds') {
           color = '#ef4444'; // Red for feeds
           dashArray = '12, 4';
-          flowDirection = 'toTarget';
+          hasDirection = true;
+          swapDirection = false;
         } else if (link.relationship === 'fed_by') {
           color = '#10b981'; // Green for fed by
           dashArray = '12, 4';
-          flowDirection = 'toSource';
+          hasDirection = true;
+          swapDirection = true;
         } else if (link.type === 'hierarchical') {
           color = '#f59e0b'; // Amber for auto hierarchical
           dashArray = '4, 4';
         }
 
+        // Determine polyline points - always draw from upstream to downstream
+        const lineStart = swapDirection ? targetLatLng : sourceLatLng;
+        const lineEnd = swapDirection ? sourceLatLng : targetLatLng;
+
         // Create dashed polyline with animation class
-        console.log(`[POLYLINES] Link ${idx}: DRAWING polyline from`, sourceLatLng, 'to', targetLatLng, 'color:', color, 'flowDirection:', flowDirection);
+        // Always use flow-to-target since line is always drawn upstream → downstream
+        const animClass = hasDirection ? 'equipment-link-line flow-to-target' : 'equipment-link-line';
 
-        const animClass = flowDirection === 'toTarget' ? 'equipment-link-line flow-to-target'
-                        : flowDirection === 'toSource' ? 'equipment-link-line flow-to-source'
-                        : 'equipment-link-line';
-
-        const polyline = L.polyline([sourceLatLng, targetLatLng], {
+        const polyline = L.polyline([lineStart, lineEnd], {
           color,
           weight: 3,
           opacity: 0.8,
@@ -916,28 +924,6 @@ const SwitchboardLeafletViewer = forwardRef(
         });
 
         polyline.addTo(g);
-
-        // Add arrow marker at the end if there's a direction
-        if (flowDirection) {
-          const arrowEnd = flowDirection === 'toTarget' ? targetLatLng : sourceLatLng;
-          const arrowStart = flowDirection === 'toTarget' ? sourceLatLng : targetLatLng;
-
-          // Calculate angle for arrow
-          const dx = arrowEnd.lng - arrowStart.lng;
-          const dy = arrowEnd.lat - arrowStart.lat;
-          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-
-          // Create arrow marker
-          const arrowIcon = L.divIcon({
-            className: 'arrow-marker',
-            html: `<div style="transform: rotate(${angle - 90}deg); color: ${color}; font-size: 18px; font-weight: bold; text-shadow: 0 0 3px white, 0 0 3px white;">▲</div>`,
-            iconSize: [20, 20],
-            iconAnchor: [10, 10]
-          });
-
-          const arrowMarker = L.marker(arrowEnd, { icon: arrowIcon, interactive: false });
-          arrowMarker.addTo(g);
-        }
 
         linesDrawn++;
       });
