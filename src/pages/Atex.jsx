@@ -3500,6 +3500,17 @@ function EquipmentDrawer({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 space-y-4 atex-scroll">
 
+          {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+          <MiniElectro
+            equipment={editing}
+            equipmentType="atex"
+            onAction={(action, params) => {
+              if (action === 'docAttached') {
+                onRefresh?.();
+              }
+            }}
+          />
+
           {/* SECTION: Informations */}
           {activeSection === "info" && (
             <div className="space-y-4 animate-fadeIn">
@@ -4044,17 +4055,6 @@ function EquipmentDrawer({
                 title="Historique complet"
                 maxHeight="350px"
                 showFilters={true}
-              />
-
-              {/* Mini Electro - AI Assistant */}
-              <MiniElectro
-                equipment={editing}
-                equipmentType="atex"
-                onAction={(action, params) => {
-                  if (action === 'docAttached') {
-                    onRefresh?.();
-                  }
-                }}
               />
             </div>
           )}

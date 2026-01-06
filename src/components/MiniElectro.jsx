@@ -311,32 +311,32 @@ export default function MiniElectro({
 
       {/* Contenu expandable */}
       {isExpanded && (
-        <div className="px-4 pb-4 space-y-4">
+        <div className="px-2 sm:px-4 pb-4 space-y-3 sm:space-y-4">
           {/* Chat Interface - Direct et visible en premier */}
           {showChat && (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               {/* Chat messages */}
               <div
                 ref={chatContainerRef}
-                className="h-52 overflow-y-auto p-3 space-y-3"
+                className="md:h-52 md:overflow-y-auto p-2 sm:p-3 space-y-2 sm:space-y-3"
               >
                 {chatHistory.length === 0 ? (
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    <div className="flex justify-center mb-3">
+                  <div className="text-center text-gray-500 text-sm py-3 sm:py-4">
+                    <div className="flex justify-center mb-2 sm:mb-3">
                       <VideoAvatar
                         agentType={equipmentType}
-                        size="md"
+                        size="sm"
                         speaking={false}
                       />
                     </div>
-                    <p className="font-medium text-gray-700">Salut ! Je suis {agentName}</p>
+                    <p className="font-medium text-gray-700 text-sm sm:text-base">Salut ! Je suis {agentName}</p>
                     <p className="text-xs text-gray-400 mt-1">Pose-moi une question sur cet équipement</p>
-                    <div className="flex flex-wrap gap-2 justify-center mt-4">
+                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-1.5 sm:gap-2 justify-center mt-3 sm:mt-4">
                       <button
                         onClick={() => setShowTroubleshooting(true)}
-                        className="px-3 py-1.5 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full text-xs font-medium hover:from-orange-600 hover:to-red-600 transition-colors shadow-sm"
+                        className="px-2 sm:px-3 py-1.5 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full text-[11px] sm:text-xs font-medium hover:from-orange-600 hover:to-red-600 transition-colors shadow-sm col-span-2 sm:col-span-1"
                       >
-                        🔧 Nouveau dépannage
+                        🔧 Dépannage
                       </button>
                       <button
                         onClick={() => {
@@ -348,7 +348,7 @@ export default function MiniElectro({
                           setChatMessage(stateQuestion);
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
                         }}
-                        className="px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-full text-xs font-medium transition-colors"
+                        className="px-2 sm:px-3 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-full text-[11px] sm:text-xs font-medium transition-colors"
                       >
                         📊 État
                       </button>
@@ -357,7 +357,7 @@ export default function MiniElectro({
                           setChatMessage('Historique des dépannages');
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
                         }}
-                        className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full text-xs font-medium transition-colors"
+                        className="px-2 sm:px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full text-[11px] sm:text-xs font-medium transition-colors"
                       >
                         📋 Historique
                       </button>
@@ -371,7 +371,7 @@ export default function MiniElectro({
                           setChatMessage(controlQuestion);
                           setTimeout(() => sendChatMessage({ preventDefault: () => {} }), 100);
                         }}
-                        className="px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-full text-xs font-medium transition-colors"
+                        className="px-2 sm:px-3 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-full text-[11px] sm:text-xs font-medium transition-colors"
                       >
                         📅 Contrôles
                       </button>
@@ -436,19 +436,19 @@ export default function MiniElectro({
               </div>
 
               {/* Input */}
-              <form onSubmit={sendChatMessage} className="border-t border-gray-200 p-2 flex gap-2">
+              <form onSubmit={sendChatMessage} className="border-t border-gray-200 p-1.5 sm:p-2 flex gap-1.5 sm:gap-2">
                 <input
                   type="text"
                   value={chatMessage}
                   onChange={(e) => setChatMessage(e.target.value)}
                   placeholder={`Demande à ${agentName}...`}
-                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  className="flex-1 px-2 sm:px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent min-w-0"
                   disabled={isSending}
                 />
                 <button
                   type="submit"
                   disabled={!chatMessage.trim() || isSending}
-                  className="p-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 >
                   <Send className="w-4 h-4" />
                 </button>

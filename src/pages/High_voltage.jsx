@@ -1013,6 +1013,17 @@ const DetailPanel = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
+        {/* Mini Electro - AI Assistant (en premier sur mobile) */}
+        <MiniElectro
+          equipment={equipment}
+          equipmentType="hv"
+          onAction={(action, params) => {
+            if (action === 'docAttached') {
+              showToast?.('Documentation associée avec succès!', 'success');
+            }
+          }}
+        />
+
         {/* Location */}
         <div className="bg-gray-50 rounded-xl p-4">
           <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -1240,17 +1251,6 @@ const DetailPanel = ({
             <p className="text-gray-600 text-sm whitespace-pre-wrap">{equipment.notes}</p>
           </div>
         )}
-
-        {/* Mini Electro - AI Assistant */}
-        <MiniElectro
-          equipment={equipment}
-          equipmentType="hv"
-          onAction={(action, params) => {
-            if (action === 'docAttached') {
-              showToast?.('Documentation associée avec succès!', 'success');
-            }
-          }}
-        />
       </div>
 
       {/* Actions */}

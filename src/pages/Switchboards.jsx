@@ -2861,6 +2861,30 @@ export default function Switchboards() {
               </button>
             )}
 
+            {/* Mini Electro - Assistant IA (en premier sur mobile) */}
+            <AnimatedCard delay={5}>
+              <MiniElectro
+                equipment={{
+                  id: selectedBoard.id,
+                  name: selectedBoard.name,
+                  code: selectedBoard.code,
+                  building_code: selectedBoard.building_code,
+                  floor: selectedBoard.floor,
+                  zone: selectedBoard.zone,
+                  room: selectedBoard.room
+                }}
+                equipmentType="switchboard"
+                onAction={(action, params) => {
+                  if (action === 'scheduleControl') {
+                    navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`);
+                  } else if (action === 'troubleshootingCreated') {
+                    setToast({ message: 'Dépannage enregistré avec succès', type: 'success' });
+                  }
+                }}
+                className="mb-4"
+              />
+            </AnimatedCard>
+
             <AnimatedCard>
               <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
                 <div className="flex flex-col sm:flex-row">
@@ -3041,30 +3065,6 @@ export default function Switchboards() {
                   </div>
                 </div>
               </div>
-            </AnimatedCard>
-
-            {/* Mini Electro - Assistant IA avec dépannage */}
-            <AnimatedCard delay={40}>
-              <MiniElectro
-                equipment={{
-                  id: selectedBoard.id,
-                  name: selectedBoard.name,
-                  code: selectedBoard.code,
-                  building_code: selectedBoard.building_code,
-                  floor: selectedBoard.floor,
-                  zone: selectedBoard.zone,
-                  room: selectedBoard.room
-                }}
-                equipmentType="switchboard"
-                onAction={(action, params) => {
-                  if (action === 'scheduleControl') {
-                    navigate(`/app/switchboard-controls?tab=schedules&switchboard=${selectedBoard.id}`);
-                  } else if (action === 'troubleshootingCreated') {
-                    setToast({ message: 'Dépannage enregistré avec succès', type: 'success' });
-                  }
-                }}
-                className="mb-4"
-              />
             </AnimatedCard>
 
             {/* Control Status Section - Enhanced to show ALL controls (board + devices) */}
