@@ -461,6 +461,7 @@ const VsdLeafletViewer = forwardRef(({
   const markersLayerRef = useRef(null);
   const markersMapRef = useRef(new Map());
   const connectionsLayerRef = useRef(null);
+  const svgRendererRef = useRef(null);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
@@ -705,7 +706,7 @@ const VsdLeafletViewer = forwardRef(({
       const lineEnd = swapDirection ? sourceLatLng : targetLatLng;
       const animClass = hasDirection ? 'equipment-link-line flow-to-target' : 'equipment-link-line';
 
-      const polyline = L.polyline([lineStart, lineEnd], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane' });
+      const polyline = L.polyline([lineStart, lineEnd], { color, weight: 3, opacity: 0.8, dashArray: '10, 5', className: animClass, pane: 'connectionsPane', renderer: svgRendererRef.current });
       polyline.addTo(g);
     });
   }, [links, currentPlan, pageIndex]);
@@ -825,6 +826,8 @@ const VsdLeafletViewer = forwardRef(({
         // Créer un pane personnalisé pour les connexions avec z-index élevé
         const connectionsPane = m.createPane('connectionsPane');
         connectionsPane.style.zIndex = 450; // Au-dessus de overlayPane (400) mais sous markerPane (600)
+        // SVG renderer pour les polylines (CSS animations ne fonctionnent qu'avec SVG, pas Canvas)
+        svgRendererRef.current = L.svg({ pane: 'connectionsPane' });
         connectionsLayerRef.current = L.layerGroup().addTo(m);
 
         m.on("click", (e) => {
