@@ -8,6 +8,35 @@ import {
   Download, Eye, RefreshCw, Zap
 } from 'lucide-react';
 import { post, get, API_BASE } from '../lib/api';
+import { getUserPermissions } from '../lib/permissions';
+
+// Get current user email from localStorage
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {}
+  return null;
+}
+
+// Check if current user can delete a troubleshooting record
+function canDeleteTroubleshooting(record) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+
+  // Admin can delete any record
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+
+  // Creator can delete their own record
+  const creatorEmail = record?.technician_email?.toLowerCase();
+  return creatorEmail && creatorEmail === currentEmail;
+}
 
 // ============================================================
 // ANIMATION STYLES
@@ -1073,18 +1102,20 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, 
               <Download size={12} />
               PDF
             </a>
-            <button
-              onClick={() => handleDelete(record.id, record.title)}
-              disabled={deleting === record.id}
-              className="flex items-center gap-1 px-2 py-1 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {deleting === record.id ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <Trash2 size={12} />
-              )}
-              Supprimer
-            </button>
+            {canDeleteTroubleshooting(record) && (
+              <button
+                onClick={() => handleDelete(record.id, record.title)}
+                disabled={deleting === record.id}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deleting === record.id ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Trash2 size={12} />
+                )}
+                Supprimer
+              </button>
+            )}
           </div>
         </div>
       ))}

@@ -6,6 +6,15 @@ import pg from 'pg';
 
 const router = express.Router();
 
+// Admin emails authorized to delete any troubleshooting
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 // Get database pool from main server
 let pool;
 export function setPool(p) {
@@ -333,10 +342,38 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete troubleshooting record
+// Only the creator (technician_email) or an admin can delete
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const userEmail = req.headers['x-user-email'] || req.user?.email || '';
+
+    // Get the record to check ownership
+    const recordResult = await pool.query(
+      'SELECT technician_email FROM troubleshooting_records WHERE id = $1',
+      [id]
+    );
+
+    if (recordResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Dépannage non trouvé' });
+    }
+
+    const record = recordResult.rows[0];
+    const isCreator = record.technician_email &&
+                      record.technician_email.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
+
+    // Check permissions
+    if (!isCreator && !isUserAdmin) {
+      console.log(`[TROUBLESHOOTING] Delete denied - user: ${userEmail}, creator: ${record.technician_email}`);
+      return res.status(403).json({
+        error: 'Vous n\'êtes pas autorisé à supprimer ce dépannage. Seul le créateur ou un administrateur peut le supprimer.',
+        canDelete: false
+      });
+    }
+
     await pool.query('DELETE FROM troubleshooting_records WHERE id = $1', [id]);
+    console.log(`[TROUBLESHOOTING] Record ${id} deleted by ${userEmail} (admin: ${isUserAdmin}, creator: ${isCreator})`);
     res.json({ success: true });
   } catch (error) {
     console.error('[TROUBLESHOOTING] Delete error:', error);

@@ -86,6 +86,15 @@ function getUser(req) {
   return { name, email };
 }
 
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 // -------------------------------------------------
 // Multer (fichiers & ZIP de plans)
 // -------------------------------------------------
@@ -208,6 +217,18 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_company ON meca_equipments(company_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_eq_site ON meca_equipments(site_id);`);
+
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE meca_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 
   // 🔥 MIGRATION: Peupler company_id/site_id pour les équipements existants (NULL)
   try {
@@ -649,7 +670,8 @@ app.post("/api/meca/equipments", async (req, res) => {
          power_kw, voltage, current_a, speed_rpm, ip_rating,
          drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
          manufacturer, model, serial_number, year,
-         status, criticality, comments
+         status, criticality, comments,
+         created_by_email, created_by_name
        )
        VALUES(
          $1,$2,
@@ -658,7 +680,8 @@ app.post("/api/meca/equipments", async (req, res) => {
          $15,$16,$17,$18,$19,
          $20,$21,$22,$23,$24,$25,
          $26,$27,$28,$29,
-         $30,$31,$32
+         $30,$31,$32,
+         $33,$34
        )
        RETURNING *`,
       [
@@ -694,6 +717,8 @@ app.post("/api/meca/equipments", async (req, res) => {
         status,
         criticality,
         comments,
+        u.email || null,
+        u.name || null,
       ]
     );
 
@@ -859,37 +884,60 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
 });
 
 // DELETE /api/meca/equipments/:id
+// Only the creator or an admin can delete
 app.delete("/api/meca/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const u = getUser(req);
+    const userEmail = u.email || '';
+
+    // Get equipment to check ownership
     const { rows: old } = await pool.query(
-      `SELECT id, name FROM meca_equipments WHERE id=$1`,
+      `SELECT id, name, created_by_email FROM meca_equipments WHERE id=$1`,
       [id]
     );
+
+    if (old.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Équipement non trouvé' });
+    }
+
+    const equipment = old[0];
+    const isCreator = equipment.created_by_email &&
+                      equipment.created_by_email.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
+
+    // Check permissions - allow if creator, admin, or equipment has no creator (legacy)
+    if (!isCreator && !isUserAdmin && equipment.created_by_email) {
+      console.log(`[MECA] Delete denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
+      return res.status(403).json({
+        ok: false,
+        error: 'Vous n\'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer.',
+        canDelete: false
+      });
+    }
+
     await pool.query(`DELETE FROM meca_equipments WHERE id=$1`, [id]);
     await logEvent(
       "meca_equipment_deleted",
-      { id, name: old[0]?.name },
+      { id, name: equipment.name },
       u
     );
 
     // 🔔 Push notification for deleted equipment
-    if (old[0]) {
-      notifyEquipmentDeleted('meca', old[0], u?.email || u?.id).catch(err => console.log('[MECA] Push notify error:', err.message));
+    notifyEquipmentDeleted('meca', equipment, u?.email || u?.id).catch(err => console.log('[MECA] Push notify error:', err.message));
 
-      // 📝 AUDIT: Log suppression équipement MECA
-      try {
-        await audit.log(req, AUDIT_ACTIONS.DELETED, {
-          entityType: 'meca_equipment',
-          entityId: id,
-          details: { name: old[0].name }
-        });
-      } catch (auditErr) {
-        console.warn('[MECA DELETE] Audit log failed (non-blocking):', auditErr.message);
-      }
+    // 📝 AUDIT: Log suppression équipement MECA
+    try {
+      await audit.log(req, AUDIT_ACTIONS.DELETED, {
+        entityType: 'meca_equipment',
+        entityId: id,
+        details: { name: equipment.name, deletedBy: userEmail, wasCreator: isCreator, wasAdmin: isUserAdmin }
+      });
+    } catch (auditErr) {
+      console.warn('[MECA DELETE] Audit log failed (non-blocking):', auditErr.message);
     }
 
+    console.log(`[MECA] Equipment ${id} deleted by ${userEmail} (admin: ${isUserAdmin}, creator: ${isCreator})`);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

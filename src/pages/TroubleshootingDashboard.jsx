@@ -9,6 +9,35 @@ import {
 } from 'lucide-react';
 import { get, API_BASE } from '../lib/api';
 import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
+import { getUserPermissions, ADMIN_EMAILS } from '../lib/permissions';
+
+// Get current user email from localStorage
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {}
+  return null;
+}
+
+// Check if current user can delete a troubleshooting record
+function canDeleteTroubleshooting(record) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+
+  // Admin can delete any record
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+
+  // Creator can delete their own record
+  const creatorEmail = record?.technician_email?.toLowerCase();
+  return creatorEmail && creatorEmail === currentEmail;
+}
 
 // ============================================================
 // ANIMATION STYLES
@@ -400,18 +429,24 @@ function TroubleshootingDetailModal({ record, onClose, onDelete, onRefresh }) {
 
         {/* Footer */}
         <div className="border-t bg-gray-50 p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="flex items-center gap-2 px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-colors disabled:opacity-50"
-          >
-            {deleting ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Trash2 size={16} />
-            )}
-            Supprimer
-          </button>
+          {canDeleteTroubleshooting(record) ? (
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="flex items-center gap-2 px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-colors disabled:opacity-50"
+            >
+              {deleting ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Trash2 size={16} />
+              )}
+              Supprimer
+            </button>
+          ) : (
+            <div className="text-xs text-gray-400 italic">
+              Seul le créateur ou un admin peut supprimer
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
             <a
