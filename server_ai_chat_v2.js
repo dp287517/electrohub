@@ -621,7 +621,10 @@ Tu peux:
 
 **INSTRUCTIONS**: Utilise les fonctions appropriées avec les infos ci-dessus.
 - **search_troubleshooting** avec equipment_name="${eq.name}" pour l'historique des pannes
-- **get_controls** avec building="${eq.building}" pour les contrôles
+${eq.type === 'doors' || eq.type === 'door' || (eq.name && eq.name.toLowerCase().includes('porte'))
+  ? `- **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="last" pour le dernier contrôle de cette porte
+- **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="history" pour l'historique des contrôles`
+  : `- **get_controls** avec building="${eq.building}" pour les contrôles`}
 - **get_non_conformities** pour les NC associées`;
   }
 
