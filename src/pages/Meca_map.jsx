@@ -49,6 +49,9 @@ import {
   Loader2,
 } from "lucide-react";
 
+// Measurement tools for floor plans
+import MeasurementTools from "../components/MeasurementTools";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -925,6 +928,10 @@ const MecaLeafletViewer = forwardRef(({
     adjust,
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
     highlightMarker,
+    // Expose map info for MeasurementTools
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }));
 
   const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -1717,6 +1724,18 @@ export default function MecaMap() {
                   <Plus size={20} />
                 </button>
               </div>
+
+              {/* Measurement Tools */}
+              {pdfReady && selectedPlan && (
+                <MeasurementTools
+                  planId={selectedPlan.id}
+                  pageIndex={pageIndex}
+                  mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+                  imageBounds={viewerRef.current?.getImageBounds?.()}
+                  imageWidth={viewerRef.current?.getImageSize?.()?.w}
+                  imageHeight={viewerRef.current?.getImageSize?.()?.h}
+                />
+              )}
             </>
           )}
 

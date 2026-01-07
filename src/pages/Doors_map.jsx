@@ -43,6 +43,9 @@ import {
   Plus,
 } from "lucide-react";
 
+// Measurement tools for floor plans
+import MeasurementTools from "../components/MeasurementTools";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -766,6 +769,9 @@ const DoorLeafletViewer = forwardRef(({
     adjust,
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
     highlightMarker,
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }));
 
   const onPickDoor = useCallback((it) => {
@@ -1509,6 +1515,18 @@ export default function DoorsMap() {
                   <Plus size={20} />
                 </button>
               </div>
+
+              {/* Measurement Tools */}
+              {pdfReady && selectedPlan && (
+                <MeasurementTools
+                  planId={selectedPlan.id}
+                  pageIndex={pageIndex}
+                  mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+                  imageBounds={viewerRef.current?.getImageBounds?.()}
+                  imageWidth={viewerRef.current?.getImageSize?.()?.w}
+                  imageHeight={viewerRef.current?.getImageSize?.()?.h}
+                />
+              )}
             </>
           )}
 

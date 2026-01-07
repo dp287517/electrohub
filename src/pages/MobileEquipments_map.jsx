@@ -49,6 +49,9 @@ import {
   Loader2,
 } from "lucide-react";
 
+// Measurement tools for floor plans
+import MeasurementTools from "../components/MeasurementTools";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -550,6 +553,9 @@ const LeafletViewer = forwardRef(({
     getMap: () => mapRef.current,
     highlightMarker,
     adjust,
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }), [imgSize, highlightMarker, adjust]);
 
   // Initialize map
@@ -1504,6 +1510,18 @@ export default function MobileEquipmentsMap() {
                   <Plus size={20} />
                 </button>
               </div>
+
+              {/* Measurement Tools */}
+              {pdfReady && selectedPlan && (
+                <MeasurementTools
+                  planId={selectedPlan.id}
+                  pageIndex={pageIndex}
+                  mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+                  imageBounds={viewerRef.current?.getImageBounds?.()}
+                  imageWidth={viewerRef.current?.getImageSize?.()?.w}
+                  imageHeight={viewerRef.current?.getImageSize?.()?.h}
+                />
+              )}
             </>
           ) : (
             <EmptyState

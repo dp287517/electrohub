@@ -14,6 +14,7 @@ import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
 import troubleshootingRouter, { initTroubleshootingTables } from "./server_troubleshooting.js";
 import { createChatV2Router, initChatV2Tables } from "./server_ai_chat_v2.js";
 import { createAgentMemoryRouter, initAgentMemoryTables, generateAllDailySnapshots } from "./server_agent_memory.js";
+import measurementsRouter, { initMeasurementsTables } from "./server_measurements.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -10104,6 +10105,13 @@ const agentMemoryRouter = createAgentMemoryRouter(pool, openai);
 app.use("/api/agent-memory", agentMemoryRouter);
 console.log('[Agent-Memory] Agent Memory router mounted - Daily snapshots enabled');
 
+/* ================================================================
+   📏 Measurements API Routes - Mesures et échelle des plans
+   ================================================================ */
+console.log('[Measurements] Mounting measurements router at /api/measurements');
+app.use("/api/measurements", measurementsRouter);
+console.log('[Measurements] Measurements router mounted');
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 const __public = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
@@ -10236,6 +10244,9 @@ async function initEssentialTables() {
 
     // Initialize chat V2 tables (feedback, metrics)
     await initChatV2Tables(pool);
+
+    // Initialize measurements tables (scale config, user measurements)
+    await initMeasurementsTables();
 
   } catch (err) {
     console.error('[init] ⚠️ Error creating essential tables:', err.message);

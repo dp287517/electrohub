@@ -1,6 +1,6 @@
 // src/pages/CustomModule_map.jsx - Map view for Custom Modules with category filtering
 // Generic map component that adapts to any custom module based on URL slug
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback, useImperativeHandle } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
@@ -17,6 +17,9 @@ import {
   Award, User, Users, Folder, File, Info, Lock, Check, Flame, Thermometer,
   HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2
 } from "lucide-react";
+
+// Measurement tools for floor plans
+import MeasurementTools from "../components/MeasurementTools";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -299,6 +302,7 @@ export default function CustomModuleMap() {
   const positionsRef = useRef([]);
   const imgSizeRef = useRef({ w: 0, h: 0 });
   const currentPlanKeyRef = useRef(null);
+  const viewerRef = useRef(null);
 
   // Storage keys based on module slug
   const STORAGE_KEY_PLAN = `${slug}_map_selected_plan`;
@@ -306,6 +310,15 @@ export default function CustomModuleMap() {
 
   useEffect(() => { createModeRef.current = createMode; }, [createMode]);
   useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+
+  // Setup viewer ref with methods for MeasurementTools
+  useEffect(() => {
+    viewerRef.current = {
+      getMapRef: () => mapRef.current,
+      getImageBounds: () => imgSizeRef.current.w > 0 ? [[0, 0], [imgSizeRef.current.h, imgSizeRef.current.w]] : null,
+      getImageSize: () => imgSizeRef.current,
+    };
+  }, []);
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
 
@@ -817,6 +830,18 @@ export default function CustomModuleMap() {
                 <X size={16} />
               </button>
             </div>
+          )}
+
+          {/* Measurement Tools */}
+          {pdfReady && selectedPlan && (
+            <MeasurementTools
+              planId={selectedPlan.id}
+              pageIndex={pageIndex}
+              mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+              imageBounds={viewerRef.current?.getImageBounds?.()}
+              imageWidth={viewerRef.current?.getImageSize?.()?.w}
+              imageHeight={viewerRef.current?.getImageSize?.()?.h}
+            />
           )}
 
           <div ref={mapContainerRef} className="w-full h-full" />
