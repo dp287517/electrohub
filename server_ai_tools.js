@@ -1240,7 +1240,7 @@ function createToolHandlers(pool, site) {
           mobile: { table: 'me_equipments', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: null, label: 'Équipement mobile', agent: 'Nomad' },
           glo: { table: 'glo_equipments', nameCol: 'name', buildingCol: 'building', codeCol: 'tag', siteColumn: null, label: 'Éclairage de sécurité', agent: 'Lumina' },
           doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null, siteColumn: null, siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", label: 'Porte coupe-feu', agent: 'Portal' },
-          datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: 'site', label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
+          datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: null, label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
         };
 
         const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
@@ -1262,6 +1262,7 @@ function createToolHandlers(pool, site) {
 
           try {
             // Recherche spéciale pour datahub avec catégories
+            // NOTE: dh_items n'a PAS de colonne site - pas de filtre site
             if (config.hasCategory) {
               // Recherche dans nom ET catégorie pour datahub - inclut pattern alternatif (ex: "otrivin3")
               const datahubPatterns = alternatePattern ? [exactPattern, alternatePattern] : [exactPattern];
@@ -1272,19 +1273,18 @@ function createToolHandlers(pool, site) {
                          '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                   FROM dh_items dh
                   LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                  WHERE dh.site = $1
-                    AND (
-                      LOWER(dh.name) LIKE $2
-                      OR LOWER(dhc.name) LIKE $2
-                      OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
-                      OR LOWER(REPLACE(COALESCE(dhc.name, '') || dh.name, ' ', '')) LIKE $2
-                      OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
-                    )
+                  WHERE (
+                    LOWER(dh.name) LIKE $1
+                    OR LOWER(dhc.name) LIKE $1
+                    OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
+                    OR LOWER(REPLACE(COALESCE(dhc.name, '') || dh.name, ' ', '')) LIKE $1
+                    OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
+                  )
                 `;
-                let datahubParams = [site, pattern];
+                let datahubParams = [pattern];
 
                 if (target_building) {
-                  datahubQuery += ` AND UPPER(dh.building) = $3`;
+                  datahubQuery += ` AND UPPER(dh.building) = $2`;
                   datahubParams.push(target_building.toUpperCase());
                 }
 
@@ -1311,15 +1311,14 @@ function createToolHandlers(pool, site) {
                            '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                     FROM dh_items dh
                     LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                    WHERE dh.site = $1
-                      AND (
-                        LOWER(dh.name) LIKE $2
-                        OR LOWER(dhc.name) LIKE $2
-                        OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
-                      )
+                    WHERE (
+                      LOWER(dh.name) LIKE $1
+                      OR LOWER(dhc.name) LIKE $1
+                      OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
+                    )
                     LIMIT 5
                   `;
-                  const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                  const fuzzyResult = await pool.query(fuzzyQuery, [`%${term}%`]);
                   for (const row of fuzzyResult.rows) {
                     if (!similarEquipments.find(s => s.id === row.id && s.equipment_type === eqType)) {
                       similarEquipments.push({
@@ -2242,21 +2241,21 @@ function createToolHandlers(pool, site) {
               let queryParams;
 
               // Recherche spéciale pour datahub avec catégories
+              // NOTE: dh_items n'a PAS de colonne site - pas de filtre site
               if (tableInfo.hasCategory) {
                 query = `
                   SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
                          dhc.name as category_name, '${eqType}' as equipment_type
                   FROM dh_items dh
                   LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                  WHERE dh.site = $1
-                    AND (
-                      LOWER(dh.name) LIKE $2
-                      OR LOWER(dhc.name) LIKE $2
-                      OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
-                    )
+                  WHERE (
+                    LOWER(dh.name) LIKE $1
+                    OR LOWER(dhc.name) LIKE $1
+                    OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
+                  )
                   LIMIT 5
                 `;
-                queryParams = [site, `%${name.toLowerCase()}%`];
+                queryParams = [`%${name.toLowerCase()}%`];
 
                 const result = await pool.query(query, queryParams);
                 // Formater avec catégorie
@@ -2276,11 +2275,10 @@ function createToolHandlers(pool, site) {
                              dhc.name as category_name, '${eqType}' as equipment_type
                       FROM dh_items dh
                       LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                      WHERE dh.site = $1
-                        AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
+                      WHERE (LOWER(dh.name) LIKE $1 OR LOWER(dhc.name) LIKE $1)
                       LIMIT 3
                     `;
-                    const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                    const fuzzyResult = await pool.query(fuzzyQuery, [`%${term}%`]);
                     for (const row of fuzzyResult.rows) {
                       if (!allResults.find(r => r.id === row.id)) {
                         allResults.push({
@@ -2349,7 +2347,7 @@ function createToolHandlers(pool, site) {
           const suggestions = [];
           for (const [eqType, tableInfo] of Object.entries(tableMap)) {
             try {
-              // Recherche floue pour datahub avec catégories
+              // Recherche floue pour datahub avec catégories (pas de filtre site)
               if (tableInfo.hasCategory) {
                 for (const term of searchTerms) {
                   const fuzzyQuery = `
@@ -2357,11 +2355,10 @@ function createToolHandlers(pool, site) {
                            dhc.name as category_name, '${eqType}' as equipment_type
                     FROM dh_items dh
                     LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                    WHERE dh.site = $1
-                      AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
+                    WHERE (LOWER(dh.name) LIKE $1 OR LOWER(dhc.name) LIKE $1)
                     LIMIT 5
                   `;
-                  const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                  const fuzzyResult = await pool.query(fuzzyQuery, [`%${term}%`]);
                   for (const row of fuzzyResult.rows) {
                     if (!suggestions.find(s => s.id === row.id)) {
                       suggestions.push({
@@ -2452,6 +2449,7 @@ function createToolHandlers(pool, site) {
       const actualType = equipment_type || 'switchboard';
 
       // Gestion spéciale pour datahub avec catégories
+      // NOTE: dh_items n'a PAS de colonne site - pas de filtre site
       if (tableInfo.hasCategory) {
         try {
           let datahubQuery = `
@@ -2459,10 +2457,10 @@ function createToolHandlers(pool, site) {
                    dhc.name as category_name, 'datahub' as equipment_type
             FROM dh_items dh
             LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-            WHERE dh.site = $1
+            WHERE 1=1
           `;
-          let datahubParams = [site];
-          let paramIdx = 2;
+          let datahubParams = [];
+          let paramIdx = 1;
 
           if (building) {
             datahubQuery += ` AND UPPER(dh.building) = $${paramIdx}`;
