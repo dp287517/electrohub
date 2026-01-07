@@ -413,7 +413,16 @@ class AIAssistant {
         chart: data.chart || null,
 
         // Error flag
-        error: data.error || false
+        error: data.error || false,
+
+        // ===============================
+        // TROUBLESHOOTING TRANSFER
+        // ===============================
+        transferData: data.transferData || null,
+        transferCandidates: data.transferCandidates || null,
+        showTransferConfirmation: data.showTransferConfirmation || false,
+        showTransferCandidates: data.showTransferCandidates || false,
+        transferComplete: data.transferComplete || false
       };
     } catch (error) {
       console.error('Erreur chat V2:', error);
