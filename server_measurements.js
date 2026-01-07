@@ -110,30 +110,15 @@ router.post("/scale", requireTenant(), async (req, res) => {
 
   try {
     const { planId, pageIndex = 0, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio } = req.body;
-    let { company_id, site_id } = req.tenant || {};
+    // Tenant uses camelCase (companyId, siteId), but DB uses snake_case
+    let { companyId: company_id, siteId: site_id } = req.tenant || {};
 
     if (!planId || !point1 || !point2 || !realDistanceMeters) {
       console.log("[measurements] Missing required fields");
       return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
 
-    // Si tenant non résolu, récupérer company_id/site_id depuis le plan
-    if (!company_id || !site_id) {
-      console.log("[measurements] Tenant not resolved, fetching from plan...");
-      const planRes = await pool.query(
-        `SELECT company_id, site_id FROM vsd_plans WHERE id = $1`,
-        [planId]
-      );
-      if (planRes.rows.length > 0) {
-        company_id = planRes.rows[0].company_id;
-        site_id = planRes.rows[0].site_id;
-        console.log("[measurements] Got tenant from plan:", { company_id, site_id });
-      } else {
-        return res.status(404).json({ ok: false, error: "Plan not found" });
-      }
-    }
-
-    console.log("[measurements] Parsed values:", { planId, pageIndex, scaleRatio, company_id, site_id });
+    console.log("[measurements] Tenant values:", { company_id, site_id });
 
     // Calculer la distance en pixels entre les deux points
     const dx = (point2.x - point1.x) * (imageWidth || 1);
