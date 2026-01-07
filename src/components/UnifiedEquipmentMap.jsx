@@ -213,14 +213,15 @@ function pdfDocOpts(url) {
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
 /* ----------------------------- UI Components ----------------------------- */
-const AnimatedCard = ({ children, delay = 0, className = "" }) => (
+const AnimatedCard = React.forwardRef(({ children, delay = 0, className = "", style = {} }, ref) => (
   <div
+    ref={ref}
     className={`animate-slideUp ${className}`}
-    style={{ animationDelay: `${delay}ms`, animationFillMode: "backwards" }}
+    style={{ animationDelay: `${delay}ms`, animationFillMode: "backwards", ...style }}
   >
     {children}
   </div>
-);
+));
 
 const Badge = ({ children, variant = "default", className = "" }) => {
   const variants = {
