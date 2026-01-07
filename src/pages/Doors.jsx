@@ -10,11 +10,39 @@ import {
   XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Flame
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getUserPermissions } from '../lib/permissions';
 import MiniElectro from '../components/MiniElectro';
 import AuditHistory from '../components/AuditHistory.jsx';
 import dayjs from 'dayjs';
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {
+    console.warn('[Doors] Error getting current user email:', e);
+  }
+  return null;
+}
+
+function canDeleteEquipment(equipment) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  const creatorEmail = equipment?.created_by_email?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  return false;
+}
 
 // ==================== INLINE STYLES ====================
 
@@ -1006,12 +1034,14 @@ const DetailPanel = ({
           <MapPin size={18} />
           Voir sur plan
         </button>
+        {canDeleteEquipment(door) && (
         <button
           onClick={() => onDelete(door)}
           className="py-3 px-4 rounded-xl border border-red-200 text-red-600 font-medium hover:bg-red-50 flex items-center justify-center gap-2"
         >
           <Trash2 size={18} />
         </button>
+        )}
       </div>
     </div>
   );

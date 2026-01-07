@@ -9,12 +9,40 @@ import {
   MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock, Flame
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getUserPermissions } from '../lib/permissions';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
 import PanelScanWizard from '../components/PanelScanWizard.jsx';
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {
+    console.warn('[Switchboards] Error getting current user email:', e);
+  }
+  return null;
+}
+
+function canDeleteEquipment(equipment) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  const creatorEmail = equipment?.created_by_email?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  return false;
+}
 
 // ==================== ANIMATION COMPONENTS ====================
 
@@ -2071,9 +2099,11 @@ export default function Switchboards() {
                 <button onClick={() => startEditDevice(device)} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg">
                   <Edit3 size={16} />
                 </button>
+                {canDeleteEquipment(device) && (
                 <button onClick={() => handleDeleteDevice(device.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
                   <Trash2 size={16} />
                 </button>
+                )}
               </div>
             </div>
 
@@ -3015,9 +3045,11 @@ export default function Switchboards() {
                           <button onClick={() => startEditBoard(selectedBoard)} className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg" title="Modifier">
                             <Edit3 size={18} />
                           </button>
+                          {canDeleteEquipment(selectedBoard) && (
                           <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Supprimer">
                             <Trash2 size={18} />
                           </button>
+                          )}
                         </div>
 
                         {/* Menu burger sur mobile */}
@@ -3053,10 +3085,12 @@ export default function Switchboards() {
                                   <Edit3 size={16} className="text-blue-500" />
                                   Modifier
                                 </button>
+                                {canDeleteEquipment(selectedBoard) && (
                                 <button onClick={() => { setDeleteTarget(selectedBoard); setShowDeleteModal(true); setShowBoardActionsMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3">
                                   <Trash2 size={16} />
                                   Supprimer
                                 </button>
+                                )}
                               </div>
                             </>
                           )}
