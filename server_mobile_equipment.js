@@ -1023,17 +1023,15 @@ app.delete("/api/mobile-equipment/equipments/:id", async (req, res) => {
     const eq = equipInfo[0];
     const createdByEmail = eq.created_by_email;
 
-    // Check permissions: allow if creator, admin, or legacy equipment (no created_by_email)
-    if (createdByEmail) {
-      const isCreator = userEmail && createdByEmail.toLowerCase() === userEmail.toLowerCase();
-      const isUserAdmin = isAdmin(userEmail);
+    // Check permissions: allow if creator or admin only
+    const isCreator = userEmail && createdByEmail && createdByEmail.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
 
-      if (!isCreator && !isUserAdmin) {
-        return res.status(403).json({
-          ok: false,
-          error: "Vous n'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer."
-        });
-      }
+    if (!isCreator && !isUserAdmin) {
+      return res.status(403).json({
+        ok: false,
+        error: "Vous n'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer."
+      });
     }
 
     await pool.query(`DELETE FROM me_equipments WHERE id=$1`, [equipmentId]);

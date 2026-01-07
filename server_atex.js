@@ -1335,12 +1335,11 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Équipement non trouvé" });
     }
 
-    // Check permissions: allow deletion if user is creator, admin, or equipment is legacy (no creator)
+    // Check permissions: allow deletion if user is creator or admin
     const isCreator = equipment.created_by_email && u.email && equipment.created_by_email.toLowerCase() === u.email.toLowerCase();
     const isUserAdmin = isAdmin(u.email);
-    const isLegacy = !equipment.created_by_email; // Legacy equipment (created before ownership tracking)
 
-    if (!isCreator && !isUserAdmin && !isLegacy) {
+    if (!isCreator && !isUserAdmin) {
       return res.status(403).json({
         ok: false,
         error: "Vous n'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer."

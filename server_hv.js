@@ -411,12 +411,10 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
     const u = getUser(req);
 
     // Authorization check: must be creator or admin
-    // Legacy equipments (created_by_email is NULL) can be deleted by anyone
     const isCreator = eq.created_by_email && u.email && eq.created_by_email.toLowerCase() === u.email.toLowerCase();
     const isUserAdmin = isAdmin(u.email);
-    const isLegacy = !eq.created_by_email;
 
-    if (!isCreator && !isUserAdmin && !isLegacy) {
+    if (!isCreator && !isUserAdmin) {
       console.log(`[HV DELETE] ❌ User ${u.email || '(unknown)'} not authorized to delete equipment ${eq.id} (owner: ${eq.created_by_email})`);
       return res.status(403).json({
         error: 'Forbidden',
@@ -424,7 +422,7 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
       });
     }
 
-    console.log(`[HV DELETE] ✅ User ${u.email || '(unknown)'} authorized to delete equipment ${eq.id} (creator: ${isCreator}, admin: ${isUserAdmin}, legacy: ${isLegacy})`);
+    console.log(`[HV DELETE] ✅ User ${u.email || '(unknown)'} authorized to delete equipment ${eq.id} (creator: ${isCreator}, admin: ${isUserAdmin})`);
 
     // Perform deletion
     const r = await pool.query(`DELETE FROM hv_equipments WHERE id=$1 AND site=$2 RETURNING *`, [Number(req.params.id), site]);

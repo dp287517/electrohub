@@ -44,7 +44,6 @@ function canDeleteEquipment(item) {
   if (permissions?.isAdmin) return true;
   const creatorEmail = item?.created_by_email?.toLowerCase();
   if (creatorEmail && creatorEmail === currentEmail) return true;
-  if (!item?.created_by_email) return true;
   return false;
 }
 

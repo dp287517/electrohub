@@ -809,8 +809,8 @@ app.delete("/api/glo/equipments/:id", async (req, res) => {
                       equipment.created_by_email.toLowerCase() === userEmail.toLowerCase();
     const isUserAdmin = isAdmin(userEmail);
 
-    // Check permissions - allow if creator, admin, or equipment has no creator (legacy)
-    if (!isCreator && !isUserAdmin && equipment.created_by_email) {
+    // Check permissions - allow if creator or admin only
+    if (!isCreator && !isUserAdmin) {
       console.log(`[GLO] Delete denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
       return res.status(403).json({
         ok: false,
