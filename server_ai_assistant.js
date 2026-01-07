@@ -463,7 +463,7 @@ Tu peux analyser:
 - Types de pannes fréquentes
 
 ## Équipements disponibles
-Switchboards, VSD, Meca, ATEX, HV, GLO, Datahub, Projects, OIBT, Doors, Mobile Equipment`;
+Switchboards, VSD, Meca, ATEX, HV, GLO, Datahub, Infrastructure, Projects, OIBT, Doors, Mobile Equipment`;
 
 // -----------------------------------------------------------------------------
 // Intent Detection - Procédures (v2.0 - Multi-intent)

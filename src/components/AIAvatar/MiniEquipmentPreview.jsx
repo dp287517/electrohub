@@ -155,6 +155,23 @@ const EQUIPMENT_CONFIGS = {
     },
     idField: 'equipment_id',
   },
+  infrastructure: {
+    name: 'Infrastructure',
+    icon: Cpu,
+    color: 'violet',
+    gradient: 'from-violet-400 to-purple-500',
+    bgLight: 'from-violet-50 to-purple-50',
+    borderColor: 'border-violet-200',
+    markerColor: { normal: '#8b5cf6', gradient: ['#8b5cf6', '#a855f7'] },
+    mapUrl: '/app/infrastructure/map',
+    api: {
+      placedIds: () => api.infrastructure.maps.placedIds(),
+      positions: (logical_name, page_index) => api.infrastructure.maps.positionsAuto(logical_name, page_index),
+      planFileUrl: (logical_name) => api.infrastructure.maps.planFileUrlAuto(logical_name, { bust: false }),
+      getEquipment: (id) => api.infrastructure.get(id),
+    },
+    idField: 'equipment_id',
+  },
 };
 
 // Get user identity for API calls
@@ -222,13 +239,14 @@ const EQUIPMENT_ICON_PATHS = {
   mobile: '<path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>', // Smartphone
   atex: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>', // Shield
   datahub: '<path d="M12 2v20M2 12h20M12 2a10 10 0 0110 10M12 2a10 10 0 00-10 10M12 22a10 10 0 01-10-10M12 22a10 10 0 0010-10"/>', // Globe-like
+  infrastructure: '<path d="M3 21h18M3 10h18M5 6l7-4 7 4M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/>', // Building
 };
 
 // Get equipment type key for icon selection
 // Use the equipment type directly (it's already the correct key)
 function getEquipmentIconKey(equipmentType) {
   // Valid equipment types
-  const validTypes = ['switchboard', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'datahub'];
+  const validTypes = ['switchboard', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'datahub', 'infrastructure'];
   if (validTypes.includes(equipmentType)) {
     return equipmentType;
   }
@@ -242,6 +260,7 @@ function getEquipmentIconKey(equipmentType) {
     'Équipement mobile': 'mobile',
     'Équipement ATEX': 'atex',
     'DataHub': 'datahub',
+    'Infrastructure': 'infrastructure',
   };
   return mapping[equipmentType] || 'switchboard';
 }

@@ -113,6 +113,15 @@ const BASE_EQUIPMENT_TYPES = {
     link: (id) => `/app/glo?glo=${id}`,
     mapLink: (id, plan) => `/app/glo/map?glo=${id}&plan=${plan}`,
   },
+  infrastructure: {
+    label: "Infrastructure",
+    icon: Database,
+    color: "#8b5cf6", // violet
+    gradient: "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)", // violet gradient like Infrastructure_map
+    api: api.infrastructure?.maps,
+    link: (id) => `/app/infrastructure?item=${id}`,
+    mapLink: (id, plan) => `/app/infrastructure/map?item=${id}&plan=${plan}`,
+  },
 };
 
 // Helper to create datahub category type config
@@ -614,10 +623,15 @@ const UnifiedLeafletViewer = forwardRef(({
       glo: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="6" width="18" height="12" rx="2"/><path d="M23 10v4"/><path d="M7 10v4M11 10v4"/></svg>`,
       // Datahub: database icon
       datahub: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
+      // Infrastructure: building icon
+      infrastructure: (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M3 21h18M3 10h18M5 6l7-4 7 4M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>`,
     };
-    // Handle dynamic datahub category types (datahub_cat_<uuid>)
+    // Handle dynamic datahub/infrastructure category types (datahub_cat_<uuid>, infrastructure_cat_<uuid>)
     if (equipmentType?.startsWith("datahub_cat_")) {
       return svgs.datahub;
+    }
+    if (equipmentType?.startsWith("infrastructure_cat_")) {
+      return svgs.infrastructure;
     }
     return svgs[equipmentType] || svgs.switchboard;
   }
@@ -1196,11 +1210,15 @@ export default function UnifiedEquipmentMap({
     }
   };
 
-  // Get control status key for a position (handles datahub category types)
+  // Get control status key for a position (handles datahub/infrastructure category types)
   function getPositionStatusKey(pos) {
     // For datahub category types (datahub_cat_<uuid>), use datahub_<equipment_id>
     if (pos.equipment_type?.startsWith("datahub_cat_")) {
       return `datahub_${pos.equipment_id}`;
+    }
+    // For infrastructure category types (infrastructure_cat_<uuid>), use infrastructure_<equipment_id>
+    if (pos.equipment_type?.startsWith("infrastructure_cat_")) {
+      return `infrastructure_${pos.equipment_id}`;
     }
     return `${pos.equipment_type}_${pos.equipment_id}`;
   }
@@ -1227,13 +1245,14 @@ export default function UnifiedEquipmentMap({
       { type: "hv", api: api.hvMaps },
       { type: "mobile", api: api.mobileEquipment?.maps },
       { type: "datahub", api: api.datahub?.maps },
+      { type: "infrastructure", api: api.infrastructure?.maps },
     ];
 
     // Map type to the correct ID field name from API
-    // Switchboard uses switchboard_id, datahub uses item_id, all other types use equipment_id
+    // Switchboard uses switchboard_id, datahub/infrastructure uses item_id, all other types use equipment_id
     const getEquipmentIdFromPosition = (type, p) => {
       if (type === "switchboard") return p.switchboard_id;
-      if (type === "datahub") return p.item_id || p.id;
+      if (type === "datahub" || type === "infrastructure") return p.item_id || p.id;
       return p.equipment_id || p.id;
     };
 
@@ -1249,10 +1268,13 @@ export default function UnifiedEquipmentMap({
             if (type === "datahub" && p.category_id) {
               equipmentType = `datahub_cat_${p.category_id}`;
             }
-            // Datahub uses inverted Y coordinates (y_frac = 1 - lat/h),
+            if (type === "infrastructure" && p.category_id) {
+              equipmentType = `infrastructure_cat_${p.category_id}`;
+            }
+            // Datahub/Infrastructure uses inverted Y coordinates (y_frac = 1 - lat/h),
             // while other equipment types use direct coordinates (y_frac = lat/h)
-            // Convert datahub to match the standard convention
-            const y_frac = type === "datahub" ? (1 - (p.y_frac || 0)) : p.y_frac;
+            // Convert datahub/infrastructure to match the standard convention
+            const y_frac = (type === "datahub" || type === "infrastructure") ? (1 - (p.y_frac || 0)) : p.y_frac;
             return {
               ...p,
               y_frac,
