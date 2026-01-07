@@ -3049,6 +3049,48 @@ function createToolHandlers(pool, site) {
           if (!info) continue;
 
           try {
+            // Special handling for datahub - search in categories too
+            if (eqType === 'datahub') {
+              // For datahub, search in item name, category name, and combined "Category - Name"
+              // Also handle case where user searches with "Category - Name" format
+              const searchParts = searchTerm.split(' - ');
+              const categorySearch = searchParts.length > 1 ? searchParts[0] : searchTerm;
+              const nameSearch = searchParts.length > 1 ? searchParts[1] : searchTerm;
+
+              const datahubQuery = `
+                SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
+                       dhc.name as category_name, 'datahub' as equipment_type
+                FROM dh_items dh
+                LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                WHERE (
+                  LOWER(dh.name) LIKE $1
+                  OR LOWER(dhc.name) LIKE $1
+                  OR LOWER(COALESCE(dhc.name, '') || ' - ' || dh.name) LIKE $1
+                  ${searchParts.length > 1 ? `OR (LOWER(dhc.name) LIKE $2 AND LOWER(dh.name) LIKE $3)` : ''}
+                  OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
+                )
+                LIMIT 5
+              `;
+              const datahubParams = searchParts.length > 1
+                ? [`%${searchTerm}%`, `%${categorySearch}%`, `%${nameSearch}%`]
+                : [`%${searchTerm}%`];
+
+              const result = await pool.query(datahubQuery, datahubParams);
+              if (result.rows.length > 0) {
+                // Format with category name
+                const formattedRows = result.rows.map(row => ({
+                  ...row,
+                  name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                  original_name: row.name
+                }));
+                equipmentToShow.push(...formattedRows);
+                if (equipmentToShow.length === formattedRows.length) {
+                  detectedType = eqType;
+                }
+              }
+              continue;
+            }
+
             // Build search query - search by name and code
             let query = `SELECT ${info.cols}, '${eqType}' as equipment_type FROM ${info.table} WHERE (`;
             const conditions = [];
@@ -3570,6 +3612,7 @@ function createToolHandlers(pool, site) {
       };
 
       const agentInfo = agentMap[equipment_type] || agentMap.switchboard;
+      const targetRoute = `${agentInfo.route}${equipment_id ? `?id=${equipment_id}&openChat=true` : ''}`;
 
       return {
         success: true,
@@ -3582,10 +3625,14 @@ function createToolHandlers(pool, site) {
           name: equipment_name
         },
         context: context || null,
-        message: `Je te transfère vers l'agent ${agentInfo.agent.toUpperCase()} pour l'équipement "${equipment_name}". ${context || ''}`,
+        message: `Je te transfère vers l'agent ${agentInfo.agent.toUpperCase()} pour l'équipement "${equipment_name || 'cet équipement'}". ${context || ''}`,
+        // Navigation mode for frontend (uses existing navigation handler)
+        navigationMode: true,
+        navigateTo: targetRoute,
+        // Legacy ui_action for compatibility
         ui_action: {
           type: 'navigate_to_equipment',
-          route: `${agentInfo.route}${equipment_id ? `?id=${equipment_id}` : ''}`,
+          route: targetRoute,
           open_chat: true
         }
       };
