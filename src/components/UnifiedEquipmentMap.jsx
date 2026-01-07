@@ -358,63 +358,37 @@ const DetailPanel = ({
 
   // Calculate panel position beside marker (desktop only)
   const getPanelStyle = () => {
-    // Mobile: use default bottom positioning
-    if (isMobile) {
-      return {};
-    }
-
+    if (isMobile) return {};
     const markerPos = position?.markerScreenPos;
-    const mapContainer = mapContainerRef?.current;
+    if (!markerPos) return {};
 
-    if (!markerPos || !mapContainer) {
-      // Fallback to default positioning if no marker position
-      return {};
-    }
+    const mapWidth = markerPos.containerWidth;
+    const mapHeight = markerPos.containerHeight;
+    const mapLeft = markerPos.mapLeft;
+    const mapTop = markerPos.mapTop;
 
-    const mapRect = mapContainer.getBoundingClientRect();
-    const panelWidth = 384; // w-96 = 24rem = 384px
-    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
-    const offset = 20; // Gap between marker and panel
+    const panelWidth = 384;
+    const panelMaxHeight = Math.min(400, mapHeight * 0.8);
+    const offset = 20;
 
-    // Calculate marker position relative to the map container
-    const markerRelativeX = markerPos.x - mapRect.left;
-    const markerRelativeY = markerPos.y - mapRect.top;
-
-    // Determine if panel should go left or right of marker
-    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+    const markerRelativeX = markerPos.x - mapLeft;
+    const spaceOnRight = mapWidth - markerRelativeX - offset;
     const spaceOnLeft = markerRelativeX - offset;
 
     let left;
     if (spaceOnRight >= panelWidth) {
-      // Place on right side of marker
-      left = markerRelativeX + offset;
+      left = markerPos.x + offset;
     } else if (spaceOnLeft >= panelWidth) {
-      // Place on left side of marker
-      left = markerRelativeX - panelWidth - offset;
+      left = markerPos.x - panelWidth - offset;
     } else {
-      // Not enough space on either side, center horizontally
-      left = Math.max(8, (mapRect.width - panelWidth) / 2);
+      left = mapLeft + Math.max(8, (mapWidth - panelWidth) / 2);
     }
 
-    // Vertical positioning: try to center vertically on marker, but stay within bounds
-    let top = markerRelativeY - panelMaxHeight / 2;
+    let top = markerPos.y - panelMaxHeight / 2;
+    if (top < mapTop + 8) top = mapTop + 8;
+    else if (top + panelMaxHeight > mapTop + mapHeight - 8) top = Math.max(mapTop + 8, mapTop + mapHeight - panelMaxHeight - 8);
 
-    // Ensure panel stays within map bounds
-    if (top < 8) {
-      top = 8;
-    } else if (top + panelMaxHeight > mapRect.height - 8) {
-      top = Math.max(8, mapRect.height - panelMaxHeight - 8);
-    }
-
-    return {
-      position: 'absolute',
-      left: `${left}px`,
-      top: `${top}px`,
-      width: `${panelWidth}px`,
-      maxHeight: `${panelMaxHeight}px`,
-      bottom: 'auto',
-      right: 'auto'
-    };
+    return { position: 'fixed', left: `${left}px`, top: `${top}px`, width: `${panelWidth}px`, maxHeight: `${panelMaxHeight}px`, zIndex: 9999 };
   };
 
   const desktopStyle = getPanelStyle();
@@ -423,10 +397,10 @@ const DetailPanel = ({
   return (
     <AnimatedCard
       ref={panelRef}
-      className={`bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 flex flex-col ${
+      className={`bg-white rounded-2xl shadow-2xl border overflow-hidden flex flex-col ${
         hasCustomPosition
-          ? 'absolute'
-          : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh]'
+          ? ''
+          : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh] z-30'
       }`}
       style={hasCustomPosition ? desktopStyle : {}}
     >
