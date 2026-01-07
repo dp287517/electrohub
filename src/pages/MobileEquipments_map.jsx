@@ -804,7 +804,7 @@ export default function MobileEquipmentsMap() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768); // Start closed on mobile, open on desktop
+  const [sidebarOpen, setSidebarOpen] = useState(true); // Start open by default
   const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
   const [controlStatuses, setControlStatuses] = useState({});
 

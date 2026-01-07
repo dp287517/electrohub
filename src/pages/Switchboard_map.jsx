@@ -1608,7 +1608,7 @@ export default function SwitchboardMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [showSidebar, setShowSidebar] = useState(window.innerWidth >= 768);
+  const [showSidebar, setShowSidebar] = useState(true);
 
   // Ref to prevent double creation
   const creatingRef = useRef(false);
