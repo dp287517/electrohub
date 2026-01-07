@@ -265,13 +265,10 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
           <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors flex-shrink-0"><X size={16} /></button>
         </div>
       </div>
-      <div className="p-2 flex gap-2">
-        <button onClick={() => onNavigate(item)} className="flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5 hover:opacity-80" style={{ backgroundColor: moduleColor || '#8b5cf6', color: 'white' }}>
+      <div className="p-2">
+        <button onClick={() => onNavigate(item)} className="w-full py-2 px-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5 hover:opacity-80" style={{ backgroundColor: moduleColor || '#8b5cf6', color: 'white' }}>
           <ExternalLink size={14} />Voir détails
         </button>
-        {position && (
-          <button onClick={() => onDelete(position.position_id)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>
-        )}
       </div>
     </div>
   );
