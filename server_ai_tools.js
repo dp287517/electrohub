@@ -1248,8 +1248,13 @@ function createToolHandlers(pool, site) {
         const similarEquipments = [];
 
         // 3. Préparer les termes de recherche (mots individuels pour recherche floue)
-        const searchTerms = target_equipment_name.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+        // IMPORTANT: Garder les chiffres et mots courts car ils sont souvent importants (ex: "Otrivin 3")
+        const searchTerms = target_equipment_name.toLowerCase().split(/\s+/).filter(t => t.length >= 1);
         const exactPattern = `%${target_equipment_name.toLowerCase()}%`;
+
+        // Si un seul mot, ajouter aussi une recherche sans les espaces pour les numéros collés
+        const compactPattern = target_equipment_name.replace(/\s+/g, '').toLowerCase();
+        const alternatePattern = compactPattern !== target_equipment_name.toLowerCase() ? `%${compactPattern}%` : null;
 
         for (const eqType of typesToSearch) {
           const config = tableMap[eqType];
@@ -1258,41 +1263,48 @@ function createToolHandlers(pool, site) {
           try {
             // Recherche spéciale pour datahub avec catégories
             if (config.hasCategory) {
-              // Recherche dans nom ET catégorie pour datahub
-              let datahubQuery = `
-                SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
-                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
-                FROM dh_items dh
-                LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                WHERE dh.site = $1
-                  AND (
-                    LOWER(dh.name) LIKE $2
-                    OR LOWER(dhc.name) LIKE $2
-                    OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
-                    OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
-                  )
-              `;
-              let datahubParams = [site, exactPattern];
+              // Recherche dans nom ET catégorie pour datahub - inclut pattern alternatif (ex: "otrivin3")
+              const datahubPatterns = alternatePattern ? [exactPattern, alternatePattern] : [exactPattern];
 
-              if (target_building) {
-                datahubQuery += ` AND UPPER(dh.building) = $3`;
-                datahubParams.push(target_building.toUpperCase());
+              for (const pattern of datahubPatterns) {
+                let datahubQuery = `
+                  SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
+                         '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                  FROM dh_items dh
+                  LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                  WHERE dh.site = $1
+                    AND (
+                      LOWER(dh.name) LIKE $2
+                      OR LOWER(dhc.name) LIKE $2
+                      OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
+                      OR LOWER(REPLACE(COALESCE(dhc.name, '') || dh.name, ' ', '')) LIKE $2
+                      OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
+                    )
+                `;
+                let datahubParams = [site, pattern];
+
+                if (target_building) {
+                  datahubQuery += ` AND UPPER(dh.building) = $3`;
+                  datahubParams.push(target_building.toUpperCase());
+                }
+
+                datahubQuery += ` LIMIT 5`;
+                const datahubResult = await pool.query(datahubQuery, datahubParams);
+
+                // Formater le nom avec la catégorie
+                for (const row of datahubResult.rows) {
+                  if (!candidates.find(c => c.id === row.id && c.equipment_type === eqType)) {
+                    candidates.push({
+                      ...row,
+                      name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                      original_name: row.name
+                    });
+                  }
+                }
               }
 
-              datahubQuery += ` LIMIT 5`;
-              const datahubResult = await pool.query(datahubQuery, datahubParams);
-
-              // Formater le nom avec la catégorie
-              for (const row of datahubResult.rows) {
-                candidates.push({
-                  ...row,
-                  name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
-                  original_name: row.name
-                });
-              }
-
-              // Recherche floue avec mots individuels
-              if (datahubResult.rows.length === 0 && searchTerms.length > 0) {
+              // Recherche floue avec TOUS les mots individuels (y compris chiffres)
+              if (candidates.filter(c => c.equipment_type === eqType).length === 0 && searchTerms.length > 0) {
                 for (const term of searchTerms) {
                   const fuzzyQuery = `
                     SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
@@ -1300,12 +1312,16 @@ function createToolHandlers(pool, site) {
                     FROM dh_items dh
                     LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
                     WHERE dh.site = $1
-                      AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
-                    LIMIT 3
+                      AND (
+                        LOWER(dh.name) LIKE $2
+                        OR LOWER(dhc.name) LIKE $2
+                        OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
+                      )
+                    LIMIT 5
                   `;
                   const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
                   for (const row of fuzzyResult.rows) {
-                    if (!similarEquipments.find(s => s.id === row.id)) {
+                    if (!similarEquipments.find(s => s.id === row.id && s.equipment_type === eqType)) {
                       similarEquipments.push({
                         ...row,
                         name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
@@ -4330,6 +4346,18 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "charge de travail", "workload", "planning équipe" | get_team_workload |
 | "brief du jour", "bonjour", "résumé du matin" | get_daily_briefing |
 | "je me suis trompé d'équipement", "mauvais équipement", "transfère ce dépannage" | propose_troubleshooting_transfer |
+
+## 🔄 TRANSFERT DE DÉPANNAGE
+**IMPORTANT**: Quand l'utilisateur veut transférer un dépannage vers un autre équipement:
+1. Si tu es un agent spécialisé (Nexus pour datahub, Shakira pour VSD, etc.), **PRIORISE ton type d'équipement**
+   - Exemple: En tant que Nexus (datahub), pour "transfère vers Otrivin 3", appelle **propose_troubleshooting_transfer** avec target_equipment_type="datahub"
+2. Si l'équipement n'est pas trouvé dans ton type, la recherche s'étendra automatiquement aux autres types
+3. Si l'utilisateur mentionne un type différent (ex: "vers le tableau Otrivin"), respecte son choix
+
+**EXEMPLES**:
+- Agent Nexus: "transfère vers Otrivin 3" → propose_troubleshooting_transfer(target_equipment_name="Otrivin 3", target_equipment_type="datahub")
+- Agent Matrix: "transfère vers TGBT" → propose_troubleshooting_transfer(target_equipment_name="TGBT", target_equipment_type="switchboard")
+- Tout agent: "transfère vers le tableau Otrivin" → propose_troubleshooting_transfer(target_equipment_name="Tableau Otrivin", target_equipment_type="switchboard")
 
 ## 🤝 PARLER À UN AUTRE AGENT
 Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipement):

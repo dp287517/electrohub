@@ -677,15 +677,40 @@ Comment puis-je vous aider avec cet équipement ?`,
                     : 'bg-gray-100 text-gray-900'
                 }`}
               >
-                {/* Message content with basic markdown */}
-                <div className="text-sm whitespace-pre-wrap">
-                  {message.content.split('\n').map((line, i) => (
-                    <p key={i} className={line.startsWith('•') || line.startsWith('-') ? 'ml-2' : ''}>
-                      {line.split('**').map((part, j) =>
-                        j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                      )}
-                    </p>
-                  ))}
+                {/* Message content with proper markdown rendering */}
+                <div className="text-sm space-y-1">
+                  {message.content.split('\n').map((line, i) => {
+                    // Ligne vide
+                    if (!line.trim()) return <div key={i} className="h-2" />;
+
+                    // Déterminer le style de ligne
+                    const isBullet = line.trim().startsWith('•') || line.trim().startsWith('-');
+                    const isNumbered = /^\d+[\.\)]\s/.test(line.trim());
+                    const isTitle = /^[🔧⚠️✅❌📋📊🎯💡🔍📍➡️🚨📈📉🏭⚡🔌💾🛠️🔒🚪📦🌡️👉]+\s*\*\*/.test(line);
+
+                    // Parser le markdown inline avec regex capturante
+                    const parseMarkdown = (text) => {
+                      if (!text) return null;
+                      const parts = text.split(/\*\*([^*]+)\*\*/g);
+                      return parts.map((part, idx) => {
+                        if (!part) return null;
+                        if (idx % 2 === 1) {
+                          return <strong key={idx} className="font-semibold">{part}</strong>;
+                        }
+                        return <span key={idx}>{part}</span>;
+                      }).filter(Boolean);
+                    };
+
+                    return (
+                      <p
+                        key={i}
+                        className={`${isBullet ? 'ml-3 flex items-start gap-2' : ''} ${isNumbered ? 'ml-2' : ''} ${isTitle ? 'font-medium' : ''}`}
+                      >
+                        {isBullet && <span className="text-gray-400 mt-0.5">•</span>}
+                        <span>{parseMarkdown(isBullet ? line.trim().replace(/^[•-]\s*/, '') : line)}</span>
+                      </p>
+                    );
+                  })}
                 </div>
 
                 {/* Suggested actions */}
