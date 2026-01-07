@@ -419,7 +419,7 @@ ASTUCE: Si tu ne connais pas le type, ne le spécifie pas et utilise juste le no
         properties: {
           equipment_type: {
             type: "string",
-            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub"],
+            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub", "infrastructure"],
             description: "Type d'équipement à chercher (OPTIONNEL - si non spécifié, cherche dans tous les types)"
           },
           building: {
@@ -727,7 +727,7 @@ Cette fonction te donne accès à ta mémoire long-terme.`,
         properties: {
           agent_type: {
             type: "string",
-            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo"],
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo", "infrastructure"],
             description: "Type d'agent dont on veut la mémoire (utilise ton propre type)"
           },
           memory_type: {
@@ -766,7 +766,7 @@ Retourne les dépannages, incidents et statistiques de la veille.`,
         properties: {
           agent_type: {
             type: "string",
-            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo", "all"],
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo", "infrastructure", "all"],
             description: "Type d'agent (utilise 'all' pour tour de table complet)"
           }
         },
@@ -792,7 +792,7 @@ Cela te permet de construire ta mémoire long-terme.`,
         properties: {
           agent_type: {
             type: "string",
-            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo"],
+            enum: ["electro", "meca", "hv", "vsd", "atex", "mobile", "doors", "datahub", "switchboards", "glo", "infrastructure"],
             description: "Ton type d'agent"
           },
           memory_type: {
@@ -844,7 +844,7 @@ Cette fonction retourne les informations pour ouvrir le chat avec l'agent spéci
           },
           equipment_type: {
             type: "string",
-            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub", "doors"],
+            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub", "doors", "infrastructure"],
             description: "Type d'équipement"
           },
           equipment_name: {
@@ -2020,6 +2020,13 @@ function createToolHandlers(pool, site) {
           siteColumn: null,
           buildingCol: 'building',
           codeCol: 'code'
+        },
+        infrastructure: {
+          table: 'inf_items',
+          columns: 'id, name, code, building as building_code, floor, location as room',
+          siteColumn: null,
+          buildingCol: 'building',
+          codeCol: 'code'
         }
       };
 
@@ -2191,7 +2198,8 @@ function createToolHandlers(pool, site) {
         mobile: 'me_equipments',
         hv: 'hv_equipments',
         glo: 'glo_equipments',
-        datahub: 'dh_items'
+        datahub: 'dh_items',
+        infrastructure: 'inf_items'
       };
 
       const table = tableMap[equipment_type] || 'switchboards';
@@ -2586,7 +2594,8 @@ function createToolHandlers(pool, site) {
           hv: { table: 'hv_equipments', cols: 'id, name, code, building_code, floor, room' },
           glo: { table: 'glo_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
           atex: { table: 'atex_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
-          datahub: { table: 'dh_items', cols: 'id, name, code, building as building_code, floor, location as room' }
+          datahub: { table: 'dh_items', cols: 'id, name, code, building as building_code, floor, location as room' },
+          infrastructure: { table: 'inf_items', cols: 'id, name, code, building as building_code, floor, location as room' }
         };
         const info = tableMap[equipment_type] || tableMap.switchboard;
 
@@ -2927,7 +2936,8 @@ function createToolHandlers(pool, site) {
           doors: 'door',
           datahub: 'datahub',
           switchboards: 'switchboard',
-          glo: 'glo'
+          glo: 'glo',
+          infrastructure: 'infrastructure'
         };
 
         // For 'all' or 'electro', get everything
@@ -3040,7 +3050,8 @@ function createToolHandlers(pool, site) {
         glo: { agent: 'glo', route: '/app/glo' },
         datahub: { agent: 'datahub', route: '/app/datahub' },
         doors: { agent: 'doors', route: '/app/doors' },
-        door: { agent: 'doors', route: '/app/doors' }
+        door: { agent: 'doors', route: '/app/doors' },
+        infrastructure: { agent: 'infrastructure', route: '/app/infrastructure' }
       };
 
       const agentInfo = agentMap[equipment_type] || agentMap.switchboard;
@@ -3103,7 +3114,8 @@ function createToolHandlers(pool, site) {
             mobile: 'me_equipments',
             hv: 'hv_equipments',
             glo: 'glo_equipments',
-            datahub: 'dh_items'
+            datahub: 'dh_items',
+            infrastructure: 'inf_items'
           };
 
           const typesToSearch = foundType ? [foundType] : Object.keys(tableMap);
@@ -3156,7 +3168,8 @@ function createToolHandlers(pool, site) {
           glo: { agent: 'glo', route: '/app/glo' },
           datahub: { agent: 'datahub', route: '/app/datahub' },
           doors: { agent: 'doors', route: '/app/doors' },
-          door: { agent: 'doors', route: '/app/doors' }
+          door: { agent: 'doors', route: '/app/doors' },
+          infrastructure: { agent: 'infrastructure', route: '/app/infrastructure' }
         };
 
         const agentInfo = agentMap[foundType] || agentMap.switchboard;
@@ -3196,7 +3209,8 @@ function createToolHandlers(pool, site) {
           switchboard: 'Matrix',
           doors: 'Portal',
           datahub: 'Nexus',
-          firecontrol: 'Blaze'
+          firecontrol: 'Blaze',
+          infrastructure: 'Atlas'
         };
 
         // Agent descriptions
@@ -3211,7 +3225,8 @@ function createToolHandlers(pool, site) {
           switchboard: 'Spécialiste tableaux électriques (TGBT, TD)',
           doors: 'Expert portes et accès',
           datahub: 'Spécialiste capteurs et monitoring',
-          firecontrol: 'Expert sécurité incendie'
+          firecontrol: 'Expert sécurité incendie',
+          infrastructure: 'Expert infrastructure et bâtiments'
         };
 
         // Agent routes
@@ -3226,7 +3241,8 @@ function createToolHandlers(pool, site) {
           switchboard: '/app/switchboards',
           doors: '/app/doors',
           datahub: '/app/datahub',
-          firecontrol: '/app/fire-control'
+          firecontrol: '/app/fire-control',
+          infrastructure: '/app/infrastructure'
         };
 
         // Load custom names from database
