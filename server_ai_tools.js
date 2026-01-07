@@ -1435,6 +1435,10 @@ function createToolHandlers(pool, site) {
         if (candidates.length === 0) {
           // Mais on a des équipements similaires
           if (similarEquipments.length > 0) {
+            const similarList = similarEquipments.slice(0, 6).map((c, idx) =>
+              `${idx + 1}. **${c.name}** (${c.type_label} - Bât. ${c.building || 'N/A'}) [ID: ${c.id}]`
+            ).join('\n');
+
             return {
               success: true,
               needs_clarification: true,
@@ -1453,7 +1457,8 @@ function createToolHandlers(pool, site) {
                 type_label: c.type_label,
                 agent: c.agent_name
               })),
-              message: `Je n'ai pas trouvé "${target_equipment_name}" exactement, mais voici des équipements similaires. C'est l'un de ceux-là ?`,
+              message: `Je n'ai pas trouvé "${target_equipment_name}" exactement, mais voici des équipements similaires:\n\n${similarList}\n\n**Dépannage ID**: ${troubleshooting.id}\n\nIndique le numéro de ton choix (1, 2, etc.) pour effectuer le transfert.`,
+              ai_hint: `Quand l'utilisateur choisit un numéro, appelle confirm_troubleshooting_transfer avec troubleshooting_id="${troubleshooting.id}" et l'ID de l'équipement choisi.`,
               frontend_instruction: {
                 showTransferCandidates: true,
                 troubleshootingId: troubleshooting.id,
@@ -1491,6 +1496,11 @@ function createToolHandlers(pool, site) {
 
         // 5. Si plusieurs candidats, demander clarification
         if (candidates.length > 1) {
+          // Construire un message avec les IDs pour que l'AI puisse les réutiliser
+          const candidatesList = candidates.map((c, idx) =>
+            `${idx + 1}. **${c.name}** (${c.type_label} - Bât. ${c.building || 'N/A'}) [ID: ${c.id}]`
+          ).join('\n');
+
           return {
             success: true,
             needs_clarification: true,
@@ -1508,7 +1518,10 @@ function createToolHandlers(pool, site) {
               type_label: c.type_label,
               agent: c.agent_name
             })),
-            message: `J'ai trouvé ${candidates.length} équipements. Lequel est le bon ?`,
+            // Message enrichi avec les IDs pour référence
+            message: `J'ai trouvé ${candidates.length} équipements pour le transfert du dépannage "${troubleshooting.title}":\n\n${candidatesList}\n\n**Dépannage ID**: ${troubleshooting.id}\n\nIndique le numéro de ton choix (1, 2, etc.) et j'effectuerai le transfert.`,
+            // Hint pour l'AI sur comment confirmer
+            ai_hint: `Quand l'utilisateur choisit un numéro, appelle confirm_troubleshooting_transfer avec troubleshooting_id="${troubleshooting.id}" et l'ID de l'équipement choisi.`,
             frontend_instruction: {
               showTransferCandidates: true,
               troubleshootingId: troubleshooting.id,
@@ -4403,6 +4416,24 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 - Agent Nexus: "transfère vers Otrivin 3" → propose_troubleshooting_transfer(target_equipment_name="Otrivin 3", target_equipment_type="datahub")
 - Agent Matrix: "transfère vers TGBT" → propose_troubleshooting_transfer(target_equipment_name="TGBT", target_equipment_type="switchboard")
 - Tout agent: "transfère vers le tableau Otrivin" → propose_troubleshooting_transfer(target_equipment_name="Tableau Otrivin", target_equipment_type="switchboard")
+
+## ⚠️ SÉLECTION DE CANDIDATS (TRÈS IMPORTANT)
+Quand **propose_troubleshooting_transfer** retourne plusieurs candidats numérotés:
+1. Tu as montré une liste numérotée à l'utilisateur (1., 2., 3., etc.)
+2. L'utilisateur répond "1", "2", "le premier", "le deuxième", etc.
+3. **NE RELANCE PAS** une recherche ! Utilise le candidat correspondant de la réponse précédente.
+4. Appelle **confirm_troubleshooting_transfer** avec:
+   - troubleshooting_id: l'ID du dépannage (de la réponse précédente)
+   - target_equipment_id: l'ID du candidat sélectionné
+   - target_equipment_type: le type du candidat sélectionné
+
+**EXEMPLE DE FLUX CORRECT**:
+1. propose_troubleshooting_transfer retourne candidates: [{id: "abc", name: "Otrivin 3"}, {id: "def", name: "Otrivin 3 Flowbox"}]
+2. Tu affiches: "1. Otrivin 3  2. Otrivin 3 Flowbox"
+3. User dit: "1"
+4. Tu appelles: confirm_troubleshooting_transfer(troubleshooting_id="xxx", target_equipment_id="abc", target_equipment_type="datahub")
+
+**NE JAMAIS** relancer propose_troubleshooting_transfer quand l'utilisateur sélectionne un numéro !
 
 ## 🤝 PARLER À UN AUTRE AGENT
 Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipement):
