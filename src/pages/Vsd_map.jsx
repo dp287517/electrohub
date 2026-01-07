@@ -1571,54 +1571,66 @@ export default function VsdMap() {
       {/* Content */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Sidebar */}
-        {showSidebar && !isMobile && (
-          <div className="w-80 bg-white border-r shadow-sm flex flex-col z-10">
-            <div className="p-3 border-b space-y-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <Input
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="Rechercher..."
-                  className="pl-9"
-                />
-              </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
-                </Btn>
-              </div>
-            </div>
+        {showSidebar && (
+          <>
+            {isMobile && <div className="absolute inset-0 bg-black/50 z-20" onClick={() => setShowSidebar(false)} />}
 
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingEquipments ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+            <div className={`${isMobile ? 'absolute inset-y-0 left-0 z-30 w-[85vw] max-w-[340px]' : 'w-80'} bg-white border-r shadow-sm flex flex-col`}>
+              <div className="p-3 border-b space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-gray-900">Variateurs ({filteredEquipments.length})</span>
+                  {isMobile && (
+                    <button onClick={() => setShowSidebar(false)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                      <X size={18} />
+                    </button>
+                  )}
                 </div>
-              ) : filteredEquipments.length === 0 ? (
-                <EmptyState icon={Cpu} title="Aucun variateur" description="Créez des variateurs pour les placer sur le plan" />
-              ) : (
-                filteredEquipments.map(eq => (
-                  <VsdCard
-                    key={eq.id}
-                    equipment={eq}
-                    isPlacedHere={isPlacedHere(eq.id)}
-                    isPlacedSomewhere={placedIds.has(eq.id)}
-                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
-                    isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => handleEquipmentClick(eq)}
-                    onPlace={(equipment) => setPlacementMode(equipment)}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                  <Input
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Rechercher..."
+                    className="pl-9"
                   />
-                ))
-              )}
+                </div>
+                <div className="flex gap-1">
+                  <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
+                    Tous
+                  </Btn>
+                  <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
+                    Non placés
+                  </Btn>
+                  <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
+                    Placés
+                  </Btn>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {loadingEquipments ? (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw size={24} className="animate-spin text-gray-400" />
+                  </div>
+                ) : filteredEquipments.length === 0 ? (
+                  <EmptyState icon={Cpu} title="Aucun variateur" description="Créez des variateurs pour les placer sur le plan" />
+                ) : (
+                  filteredEquipments.map(eq => (
+                    <VsdCard
+                      key={eq.id}
+                      equipment={eq}
+                      isPlacedHere={isPlacedHere(eq.id)}
+                      isPlacedSomewhere={placedIds.has(eq.id)}
+                      isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
+                      isSelected={selectedEquipmentId === eq.id}
+                      onClick={() => handleEquipmentClick(eq)}
+                      onPlace={(equipment) => { setPlacementMode(equipment); if (isMobile) setShowSidebar(false); }}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )}
 
         {/* Map */}
@@ -1756,74 +1768,19 @@ export default function VsdMap() {
         </div>
       </div>
 
-      {/* Mobile sidebar button */}
-      {isMobile && (
+      {/* Mobile FAB */}
+      {isMobile && !showSidebar && selectedPlan && (
         <button
-          onClick={() => setShowSidebar(!showSidebar)}
-          className="fixed bottom-4 right-4 z-30 w-14 h-14 bg-green-600 text-white rounded-full shadow-xl flex items-center justify-center"
+          onClick={() => setShowSidebar(true)}
+          className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
         >
           <Cpu size={24} />
+          {stats.unplaced > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+              {stats.unplaced}
+            </span>
+          )}
         </button>
-      )}
-
-      {/* Mobile sidebar drawer */}
-      {isMobile && showSidebar && (
-        <div className="fixed inset-0 z-40">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowSidebar(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white shadow-2xl flex flex-col">
-            <div className="p-4 border-b bg-gradient-to-r from-green-500 to-emerald-600 text-white flex items-center justify-between">
-              <h2 className="font-bold">Variateurs</h2>
-              <button onClick={() => setShowSidebar(false)} className="p-2 hover:bg-white/20 rounded-lg">
-                <X size={20} />
-              </button>
-            </div>
-            {/* Search and filters */}
-            <div className="p-3 border-b space-y-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <Input
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="Rechercher..."
-                  className="pl-9"
-                />
-              </div>
-              <div className="flex gap-1">
-                <Btn variant={filterMode === "all" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("all")}>
-                  Tous
-                </Btn>
-                <Btn variant={filterMode === "unplaced" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("unplaced")}>
-                  Non placés
-                </Btn>
-                <Btn variant={filterMode === "placed" ? "primary" : "ghost"} className="flex-1 text-xs" onClick={() => setFilterMode("placed")}>
-                  Placés
-                </Btn>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingEquipments ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
-                </div>
-              ) : filteredEquipments.length === 0 ? (
-                <EmptyState icon={Cpu} title="Aucun variateur" description="Créez des variateurs pour les placer sur le plan" />
-              ) : (
-                filteredEquipments.map(eq => (
-                  <VsdCard
-                    key={eq.id}
-                    equipment={eq}
-                    isPlacedHere={isPlacedHere(eq.id)}
-                    isPlacedSomewhere={placedIds.has(eq.id)}
-                    isPlacedElsewhere={placedIds.has(eq.id) && !isPlacedHere(eq.id)}
-                    isSelected={selectedEquipmentId === eq.id}
-                    onClick={() => handleEquipmentClick(eq)}
-                    onPlace={(equipment) => { setPlacementMode(equipment); setShowSidebar(false); }}
-                  />
-                ))
-              )}
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Confirm modal */}
