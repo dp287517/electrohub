@@ -43,6 +43,7 @@ const allApps = {
     { id: 'glo', label: 'UPS & Batteries', shortLabel: 'GLO', to: '/app/glo', icon: '🔋', color: 'from-emerald-400 via-teal-500 to-cyan-600', glow: 'shadow-teal-500/30' },
     { id: 'mobile', label: 'Équipements Mobiles', shortLabel: 'Mobile', to: '/app/mobile-equipments', icon: '🔌', color: 'from-cyan-400 via-blue-500 to-indigo-600', glow: 'shadow-blue-500/30' },
     { id: 'datahub', label: 'DataHub Custom', shortLabel: 'DataHub', to: '/app/datahub', icon: '🗄️', color: 'from-indigo-400 via-purple-500 to-pink-600', glow: 'shadow-purple-500/30' },
+    { id: 'infrastructure', label: 'Infrastructure', shortLabel: 'Infra', to: '/app/infrastructure', icon: '🏗️', color: 'from-violet-400 via-purple-500 to-fuchsia-600', glow: 'shadow-violet-500/30' },
   ],
   analysis: [
     { id: 'obsolescence', label: 'Obsolescence', shortLabel: 'Obsolescence', to: '/app/obsolescence', icon: '♻️', color: 'from-emerald-400 via-green-500 to-teal-600', glow: 'shadow-green-500/30' },

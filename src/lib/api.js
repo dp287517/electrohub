@@ -2590,6 +2590,114 @@ export const api = {
     },
   },
 
+  // ========== INFRASTRUCTURE (Custom categories with map markers) ==========
+  infrastructure: {
+    // Items CRUD
+    list: (params) => get("/api/infrastructure/items", params),
+    get: (id) => get(`/api/infrastructure/items/${encodeURIComponent(id)}`),
+    create: (payload) => post("/api/infrastructure/items", payload),
+    update: (id, payload) => put(`/api/infrastructure/items/${encodeURIComponent(id)}`, payload),
+    remove: (id) => del(`/api/infrastructure/items/${encodeURIComponent(id)}`),
+
+    // Photo
+    uploadPhoto: (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/infrastructure/items/${encodeURIComponent(id)}/photo`, fd);
+    },
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/infrastructure/items/${encodeURIComponent(id)}/photo?site=${currentSite()}`, bust),
+
+    // Files
+    listFiles: (id) => get(`/api/infrastructure/items/${encodeURIComponent(id)}/files`),
+    uploadFile: (id, file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/infrastructure/items/${encodeURIComponent(id)}/files`, fd);
+    },
+    deleteFile: (fileId) => del(`/api/infrastructure/files/${encodeURIComponent(fileId)}`),
+    fileUrl: (fileId) => `${API_BASE}/api/infrastructure/files/${encodeURIComponent(fileId)}/download?site=${currentSite()}`,
+
+    // Categories
+    listCategories: () => get("/api/infrastructure/categories"),
+    createCategory: (payload) => post("/api/infrastructure/categories", payload),
+    updateCategory: (id, payload) => put(`/api/infrastructure/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) => del(`/api/infrastructure/categories/${encodeURIComponent(id)}`),
+
+    // Stats
+    stats: () => get("/api/infrastructure/stats"),
+
+    // Bulk operations
+    bulkRename: ({ field, from, to }) => post("/api/infrastructure/bulk/rename", { field, from, to }),
+
+    // Maps (uses VSD plans)
+    maps: {
+      listPlans: () => get("/api/infrastructure/maps/plans"),
+      planFileUrlAuto: (plan, { bust = true } = {}) => {
+        const site = currentSite();
+        const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+        const url = `${API_BASE}/api/infrastructure/maps/plan/${encodeURIComponent(key)}/file?site=${site}`;
+        return withBust(url, bust);
+      },
+      positionsAuto: (planOrKey, page_index = 0) => {
+        const key = typeof planOrKey === "string" ? planOrKey : planOrKey?.id || planOrKey?.logical_name || "";
+        if (isUuid(key) || isNumericId(key))
+          return get("/api/infrastructure/maps/positions", { id: key, page_index });
+        return get("/api/infrastructure/maps/positions", { logical_name: key, page_index });
+      },
+      setPosition: (itemId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+        put(`/api/infrastructure/maps/positions/${encodeURIComponent(itemId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
+      deletePosition: (positionId) => del(`/api/infrastructure/maps/positions/${encodeURIComponent(positionId)}`),
+      placedIds: async () => {
+        // Try dedicated endpoint first
+        const tryDedicatedEndpoint = async () => {
+          try {
+            const r = await get("/api/infrastructure/maps/placed-ids");
+            if (r && Array.isArray(r.placed_ids)) {
+              if (r.placed_details) return r;
+              return null;
+            }
+            return null;
+          } catch { return null; }
+        };
+
+        // Build placed_details by scanning all plans
+        const buildFromPlans = async () => {
+          const placed_ids = [];
+          const placed_details = {};
+          try {
+            const plansRes = await get("/api/infrastructure/maps/plans").catch(() => null);
+            const plans = plansRes?.plans || plansRes || [];
+            for (const plan of plans) {
+              try {
+                const posRes = await get("/api/infrastructure/maps/positions", { logical_name: plan.logical_name, page_index: 0 });
+                for (const pos of (posRes?.positions || [])) {
+                  if (pos.item_id) {
+                    const itemId = String(pos.item_id);
+                    if (!placed_ids.includes(itemId)) {
+                      placed_ids.push(itemId);
+                      placed_details[itemId] = { plans: [plan.logical_name], page_index: pos.page_index || 0 };
+                    } else if (placed_details[itemId] && !placed_details[itemId].plans.includes(plan.logical_name)) {
+                      placed_details[itemId].plans.push(plan.logical_name);
+                    }
+                  }
+                }
+              } catch {}
+            }
+          } catch {}
+          return { placed_ids, placed_details };
+        };
+
+        const dedicated = await tryDedicatedEndpoint();
+        if (dedicated) return dedicated;
+        return buildFromPlans();
+      },
+      // Get external equipment positions (VSD, HV, MECA, GLO, Mobile, Switchboards) for a plan
+      externalPositions: (logical_name, page_index = 0) =>
+        get("/api/infrastructure/maps/external-positions", { logical_name, page_index }),
+    },
+  },
+
   // ========== HIGH VOLTAGE (HV) ==========
   hv: {
     // Health check

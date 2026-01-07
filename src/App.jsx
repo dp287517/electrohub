@@ -40,12 +40,13 @@ import Glo from './pages/Glo.jsx';
 import GloMap from './pages/Glo_map.jsx';
 import Datahub from './pages/Datahub.jsx';
 import DatahubMap from './pages/Datahub_map.jsx';
+import Infrastructure from './pages/Infrastructure.jsx';
+import InfrastructureMap from './pages/Infrastructure_map.jsx';
 import Procedures from './pages/Procedures.jsx';
 import FireControl from './pages/FireControl.jsx';
 import FireControlMap from './pages/FireControl_map.jsx';
 import TroubleshootingDashboard from './pages/TroubleshootingDashboard.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
-// Infrastructure is now unified under ATEX
 
 // Component to redirect authenticated users to dashboard
 function AuthRedirect({ children }) {
@@ -125,8 +126,8 @@ export default function App() {
           <Route path="/app/fire-control" element={<ProtectedRoute><FireControl /></ProtectedRoute>} />
           <Route path="/app/fire-control/map" element={<ProtectedRoute><FireControlMap /></ProtectedRoute>} />
           <Route path="/app/troubleshooting" element={<ProtectedRoute><TroubleshootingDashboard /></ProtectedRoute>} />
-          {/* Infrastructure is now unified under ATEX - redirect */}
-          <Route path="/app/infrastructure" element={<Navigate to="/app/atex?tab=plans" replace />} />
+          <Route path="/app/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
+          <Route path="/app/infrastructure/map" element={<ProtectedRoute><InfrastructureMap /></ProtectedRoute>} />
 
           {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />
