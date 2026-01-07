@@ -198,6 +198,18 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE me_equipments ADD COLUMN IF NOT EXISTS power_rating TEXT;`);
   await pool.query(`ALTER TABLE me_equipments ADD COLUMN IF NOT EXISTS frequency TEXT;`);
 
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE me_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE me_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
   // Checks
   await pool.query(`
     CREATE TABLE IF NOT EXISTS me_checks (
@@ -321,6 +333,15 @@ const FREQ_TO_MONTHS = {
   "1_an": 12,
   "2_ans": 24,
 };
+
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
 
 function addMonthsISO(d, months) {
   const dt = new Date(d);
@@ -796,10 +817,13 @@ app.post("/api/mobile-equipment/equipments", async (req, res) => {
     } = req.body || {};
     if (!name) return res.status(400).json({ error: "name requis" });
 
+    const userEmail = req.headers["x-user-email"] || null;
+    const userName = req.headers["x-user-name"] || null;
+
     const { rows } = await pool.query(
-      `INSERT INTO me_equipments(name, code, building, floor, location, category_id, serial_number, brand, model, power_rating, frequency)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [name, code, building, floor, location, category_id, serial_number, brand, model, power_rating, frequency]
+      `INSERT INTO me_equipments(name, code, building, floor, location, category_id, serial_number, brand, model, power_rating, frequency, created_by_email, created_by_name)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [name, code, building, floor, location, category_id, serial_number, brand, model, power_rating, frequency, userEmail, userName]
     );
     const equipment = rows[0];
 
@@ -984,17 +1008,37 @@ app.put("/api/mobile-equipment/equipments/:id", async (req, res) => {
 app.delete("/api/mobile-equipment/equipments/:id", async (req, res) => {
   try {
     const equipmentId = req.params.id;
+    const userEmail = req.headers["x-user-email"] || null;
 
-    // Get equipment info before delete (for audit)
+    // Get equipment info before delete (for audit and ownership check)
     const { rows: equipInfo } = await pool.query(
-      `SELECT name, code, building, floor, location FROM me_equipments WHERE id=$1`,
+      `SELECT name, code, building, floor, location, created_by_email FROM me_equipments WHERE id=$1`,
       [equipmentId]
     );
+
+    if (!equipInfo.length) {
+      return res.status(404).json({ ok: false, error: "Équipement introuvable" });
+    }
+
+    const eq = equipInfo[0];
+    const createdByEmail = eq.created_by_email;
+
+    // Check permissions: allow if creator, admin, or legacy equipment (no created_by_email)
+    if (createdByEmail) {
+      const isCreator = userEmail && createdByEmail.toLowerCase() === userEmail.toLowerCase();
+      const isUserAdmin = isAdmin(userEmail);
+
+      if (!isCreator && !isUserAdmin) {
+        return res.status(403).json({
+          ok: false,
+          error: "Vous n'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer."
+        });
+      }
+    }
 
     await pool.query(`DELETE FROM me_equipments WHERE id=$1`, [equipmentId]);
 
     // AUDIT: Log deletion
-    const eq = equipInfo[0];
     await audit.log(req, AUDIT_ACTIONS.DELETED, {
       entityType: 'equipment',
       entityId: equipmentId,

@@ -78,6 +78,16 @@ function getUser(req) {
   const email = req.header("X-User-Email") || null;
   return { name, email };
 }
+
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 // -------------------------------------------------
 const multerFiles = multer({
   storage: multer.diskStorage({
@@ -206,6 +216,19 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_vsd_eq_next ON vsd_equipments(next_check_date);
     CREATE INDEX IF NOT EXISTS idx_vsd_eq_site ON vsd_equipments(site);
   `);
+
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE vsd_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE vsd_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
   // ... (Autres tables non modifiées)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_checks (
@@ -582,8 +605,9 @@ app.post("/api/vsd/equipments", async (req, res) => {
          manufacturer, manufacturer_ref, power_kw, voltage,
          current_nominal, ip_rating, comment,
          installed_at, next_check_date,
-         tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status,
+         created_by_email, created_by_name
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
        RETURNING *`,
       [
         site, name, building, zone, equipment, sub_equipment, type,
@@ -591,7 +615,9 @@ app.post("/api/vsd/equipments", async (req, res) => {
         current_nominal, ip_rating, comment,
         installed_at || null,
         next_check_date || null,
-        tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status
+        tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status,
+        u.email || null,
+        u.name || null
       ]
     );
     const eq = rows[0];
@@ -716,30 +742,53 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
   }
 });
 // DELETE /api/vsd/equipments/:id
+// Only the creator or an admin can delete
 app.delete("/api/vsd/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const u = getUser(req);
-    const { rows: old } = await pool.query(`SELECT id, name FROM vsd_equipments WHERE id=$1`, [id]);
-    await pool.query(`DELETE FROM vsd_equipments WHERE id=$1`, [id]);
-    await logEvent("vsd_equipment_deleted", { id, name: old[0]?.name }, u);
+    const userEmail = u.email || '';
 
-    // 🔔 Push notification for deleted equipment
-    if (old[0]) {
-      notifyEquipmentDeleted('vsd', old[0], u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
+    // Get equipment to check ownership
+    const { rows: old } = await pool.query(`SELECT id, name, created_by_email FROM vsd_equipments WHERE id=$1`, [id]);
 
-      // 📝 AUDIT: Log suppression équipement VSD
-      try {
-        await audit.log(req, AUDIT_ACTIONS.DELETED, {
-          entityType: 'vsd_equipment',
-          entityId: id,
-          details: { name: old[0].name }
-        });
-      } catch (auditErr) {
-        console.warn('[VSD DELETE] Audit log failed (non-blocking):', auditErr.message);
-      }
+    if (old.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Équipement non trouvé' });
     }
 
+    const equipment = old[0];
+    const isCreator = equipment.created_by_email &&
+                      equipment.created_by_email.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
+
+    // Check permissions - allow if creator, admin, or equipment has no creator (legacy)
+    if (!isCreator && !isUserAdmin && equipment.created_by_email) {
+      console.log(`[VSD] Delete denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
+      return res.status(403).json({
+        ok: false,
+        error: 'Vous n\'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer.',
+        canDelete: false
+      });
+    }
+
+    await pool.query(`DELETE FROM vsd_equipments WHERE id=$1`, [id]);
+    await logEvent("vsd_equipment_deleted", { id, name: equipment.name }, u);
+
+    // 🔔 Push notification for deleted equipment
+    notifyEquipmentDeleted('vsd', equipment, u?.email || u?.id).catch(err => console.log('[VSD] Push notify error:', err.message));
+
+    // 📝 AUDIT: Log suppression équipement VSD
+    try {
+      await audit.log(req, AUDIT_ACTIONS.DELETED, {
+        entityType: 'vsd_equipment',
+        entityId: id,
+        details: { name: equipment.name, deletedBy: userEmail, wasCreator: isCreator, wasAdmin: isUserAdmin }
+      });
+    } catch (auditErr) {
+      console.warn('[VSD DELETE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
+    console.log(`[VSD] Equipment ${id} deleted by ${userEmail} (admin: ${isUserAdmin}, creator: ${isCreator})`);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });

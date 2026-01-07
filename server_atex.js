@@ -295,6 +295,15 @@ function getUser(req) {
   const email = req.header("X-User-Email") || null;
   return { name, email };
 }
+
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
 // -------------------------------------------------
 const multerFiles = multer({
   storage: multer.diskStorage({
@@ -375,6 +384,18 @@ async function ensureSchema() {
   // Now create indexes on multi-tenant columns (columns are guaranteed to exist)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_company ON atex_equipments(company_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_eq_site ON atex_equipments(site_id);`);
+
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 
   // 🔥 MIGRATION: Peupler company_id/site_id pour les équipements existants (NULL)
   // Utilise le premier site trouvé comme valeur par défaut
@@ -1173,6 +1194,9 @@ app.post("/api/atex/equipments", async (req, res) => {
     const baseTenant = extractTenantFromRequest(req);
     const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
 
+    // Get user info for ownership tracking
+    const u = getUser(req);
+
     const {
       name = "",
       building = "",
@@ -1195,8 +1219,9 @@ app.post("/api/atex/equipments", async (req, res) => {
       INSERT INTO atex_equipments
         (company_id, site_id, name, building, zone, equipment, sub_equipment, type,
          manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
-         comment, installed_at, next_check_date, zoning_gas, zoning_dust)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULL,NULL)
+         comment, installed_at, next_check_date, zoning_gas, zoning_dust,
+         created_by_email, created_by_name)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NULL,NULL,$16,$17)
       RETURNING *
       `,
       [
@@ -1215,6 +1240,8 @@ app.post("/api/atex/equipments", async (req, res) => {
         comment,
         installDate,
         firstDue,
+        u.email,
+        u.name,
       ]
     );
     const eq = rows[0];
@@ -1297,27 +1324,44 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
 
-    // Get equipment info before deletion for notification
-    const { rows } = await pool.query(`SELECT id, name, building FROM atex_equipments WHERE id=$1`, [id]);
+    // Get user info for permission check
+    const u = getUser(req);
+
+    // Get equipment info before deletion for notification and permission check
+    const { rows } = await pool.query(`SELECT id, name, building, created_by_email FROM atex_equipments WHERE id=$1`, [id]);
     const equipment = rows[0];
+
+    if (!equipment) {
+      return res.status(404).json({ ok: false, error: "Équipement non trouvé" });
+    }
+
+    // Check permissions: allow deletion if user is creator, admin, or equipment is legacy (no creator)
+    const isCreator = equipment.created_by_email && u.email && equipment.created_by_email.toLowerCase() === u.email.toLowerCase();
+    const isUserAdmin = isAdmin(u.email);
+    const isLegacy = !equipment.created_by_email; // Legacy equipment (created before ownership tracking)
+
+    if (!isCreator && !isUserAdmin && !isLegacy) {
+      return res.status(403).json({
+        ok: false,
+        error: "Vous n'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer."
+      });
+    }
 
     await pool.query(`DELETE FROM atex_equipments WHERE id=$1`, [id]);
 
     // 🔔 Send push notification for deleted equipment
-    if (equipment) {
-      const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
-      notifyEquipmentDeleted('atex', equipment, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
+    const userId = req.user?.id || req.user?.email || req.headers['x-user-id'];
+    notifyEquipmentDeleted('atex', equipment, userId).catch(err => console.log('[ATEX] Push notify error:', err.message));
 
-      // 📝 AUDIT: Log suppression équipement ATEX
-      try {
-        await audit.log(req, AUDIT_ACTIONS.DELETED, {
-          entityType: 'atex_equipment',
-          entityId: id,
-          details: { name: equipment.name, building: equipment.building }
-        });
-      } catch (auditErr) {
-        console.warn('[ATEX DELETE] Audit log failed (non-blocking):', auditErr.message);
-      }
+    // 📝 AUDIT: Log suppression équipement ATEX
+    try {
+      await audit.log(req, AUDIT_ACTIONS.DELETED, {
+        entityType: 'atex_equipment',
+        entityId: id,
+        details: { name: equipment.name, building: equipment.building }
+      });
+    } catch (auditErr) {
+      console.warn('[ATEX DELETE] Audit log failed (non-blocking):', auditErr.message);
     }
 
     res.json({ ok: true });
@@ -1333,6 +1377,9 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
   try {
     const sourceId = String(req.params.id);
     const { copy_position = false, target_plan = null } = req.body || {};
+
+    // Get user info for ownership tracking
+    const u = getUser(req);
 
     // 1. Récupérer l'équipement source (sans photo_content pour perf, on le copie séparément)
     const { rows: srcRows } = await pool.query(
@@ -1354,10 +1401,11 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
         name, building, zone, equipment, sub_equipment, type,
         manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
         comment, installed_at, next_check_date, status,
-        zoning_gas, zoning_dust, company_id, site_id, created_at, updated_at
+        zoning_gas, zoning_dust, company_id, site_id, created_at, updated_at,
+        created_by_email, created_by_name
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, 'a_faire', $14, $15, $16, $17, now(), now()
+        $11, $12, $13, 'a_faire', $14, $15, $16, $17, now(), now(), $18, $19
       ) RETURNING id, name, building, zone, equipment, sub_equipment, type,
                   manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
                   zoning_gas, zoning_dust, comment, status, installed_at,
@@ -1380,6 +1428,8 @@ app.post("/api/atex/equipments/:id/duplicate", async (req, res) => {
         source.zoning_dust,
         source.company_id,
         source.site_id,
+        u.email,
+        u.name,
       ]
     );
     const newEquipment = newRows[0];

@@ -84,6 +84,15 @@ function getUser(req) {
   return { name, email };
 }
 
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 // -------------------------------------------------
 // Multer (fichiers & ZIP de plans)
 // -------------------------------------------------
@@ -220,6 +229,18 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_glo_eq_company ON glo_equipments(company_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_glo_eq_site ON glo_equipments(site_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_glo_eq_category ON glo_equipments(category_id);`);
+
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE glo_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE glo_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 
   // Migration: Populate company_id/site_id for existing equipments (NULL)
   try {
@@ -602,7 +623,8 @@ app.post("/api/glo/equipments", async (req, res) => {
          lighting_type, lamp_type, lumen_output, autonomy_hours, test_button, self_test,
          manufacturer, model, serial_number, year,
          status, criticality, last_test_date, next_test_date, comments,
-         category_id, subcategory_id
+         category_id, subcategory_id,
+         created_by_email, created_by_name
        )
        VALUES(
          $1,$2,
@@ -614,7 +636,8 @@ app.post("/api/glo/equipments", async (req, res) => {
          $31,$32,$33,$34,$35,$36,
          $37,$38,$39,$40,
          $41,$42,$43,$44,$45,
-         $46,$47
+         $46,$47,
+         $48,$49
        )
        RETURNING *`,
       [
@@ -628,6 +651,7 @@ app.post("/api/glo/equipments", async (req, res) => {
         manufacturer, model, serial_number, year,
         status, criticality, last_test_date, next_test_date, comments,
         category_id || null, subcategory_id || null,
+        u.email || null, u.name || null,
       ]
     );
 
@@ -763,33 +787,56 @@ app.put("/api/glo/equipments/:id", async (req, res) => {
 });
 
 // DELETE /api/glo/equipments/:id
+// Only the creator or an admin can delete
 app.delete("/api/glo/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const u = getUser(req);
+    const userEmail = u.email || '';
+
+    // Get equipment to check ownership
     const { rows: old } = await pool.query(
-      `SELECT id, name FROM glo_equipments WHERE id=$1`,
+      `SELECT id, name, created_by_email FROM glo_equipments WHERE id=$1`,
       [id]
     );
-    await pool.query(`DELETE FROM glo_equipments WHERE id=$1`, [id]);
-    await logEvent("glo_equipment_deleted", { id, name: old[0]?.name }, u);
 
-    // 🔔 Push notification for deleted equipment
-    if (old[0]) {
-      notifyEquipmentDeleted('glo', old[0], u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
-
-      // 📝 AUDIT: Log suppression équipement GLO
-      try {
-        await audit.log(req, AUDIT_ACTIONS.DELETED, {
-          entityType: 'glo_equipment',
-          entityId: id,
-          details: { name: old[0].name }
-        });
-      } catch (auditErr) {
-        console.warn('[GLO DELETE] Audit log failed (non-blocking):', auditErr.message);
-      }
+    if (old.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Équipement non trouvé' });
     }
 
+    const equipment = old[0];
+    const isCreator = equipment.created_by_email &&
+                      equipment.created_by_email.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
+
+    // Check permissions - allow if creator, admin, or equipment has no creator (legacy)
+    if (!isCreator && !isUserAdmin && equipment.created_by_email) {
+      console.log(`[GLO] Delete denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
+      return res.status(403).json({
+        ok: false,
+        error: 'Vous n\'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer.',
+        canDelete: false
+      });
+    }
+
+    await pool.query(`DELETE FROM glo_equipments WHERE id=$1`, [id]);
+    await logEvent("glo_equipment_deleted", { id, name: equipment.name }, u);
+
+    // 🔔 Push notification for deleted equipment
+    notifyEquipmentDeleted('glo', equipment, u?.email || u?.id).catch(err => console.log('[GLO] Push notify error:', err.message));
+
+    // 📝 AUDIT: Log suppression équipement GLO
+    try {
+      await audit.log(req, AUDIT_ACTIONS.DELETED, {
+        entityType: 'glo_equipment',
+        entityId: id,
+        details: { name: equipment.name, deletedBy: userEmail, wasCreator: isCreator, wasAdmin: isUserAdmin }
+      });
+    } catch (auditErr) {
+      console.warn('[GLO DELETE] Audit log failed (non-blocking):', auditErr.message);
+    }
+
+    console.log(`[GLO] Equipment ${id} deleted by ${userEmail} (admin: ${isUserAdmin}, creator: ${isCreator})`);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
