@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
@@ -7,6 +7,7 @@ import {
   X, Filter, Trash2, ExternalLink
 } from 'lucide-react';
 import { get, del } from '../lib/api';
+import { getAllowedAppIds, EQUIPMENT_TYPE_TO_APP } from '../lib/permissions';
 
 // Color mapping for activity types
 const colorMap = {
@@ -200,8 +201,54 @@ function ActivityModal({ isOpen, onClose, activities, loading, onRefresh, onDele
   );
 }
 
+// Map activity types/URLs to app IDs for filtering
+const ACTIVITY_TO_APP = {
+  'switchboard': 'switchboards',
+  'switchboards': 'switchboards',
+  'vsd': 'vsd',
+  'meca': 'meca',
+  'mobile': 'mobile-equipments',
+  'mobile-equipments': 'mobile-equipments',
+  'hv': 'hv',
+  'glo': 'glo',
+  'datahub': 'datahub',
+  'infrastructure': 'infrastructure',
+  'controls': 'switchboard-controls',
+  'switchboard-controls': 'switchboard-controls',
+  'procedures': 'procedures',
+  'doors': 'doors',
+  'fire-control': 'fire-control',
+  'projects': 'projects',
+  'atex': 'atex',
+  'comp-ext': 'comp-ext',
+};
+
+// Extract app ID from activity URL or type
+function getActivityAppId(activity) {
+  // Check URL first
+  if (activity.url) {
+    const urlMatch = activity.url.match(/\/app\/([a-z-]+)/);
+    if (urlMatch) {
+      return ACTIVITY_TO_APP[urlMatch[1]] || urlMatch[1];
+    }
+  }
+  // Check type field
+  if (activity.type) {
+    const typeParts = activity.type.split('_');
+    for (const part of typeParts) {
+      if (ACTIVITY_TO_APP[part]) return ACTIVITY_TO_APP[part];
+    }
+  }
+  // Check equipment_type field
+  if (activity.equipment_type) {
+    const appId = EQUIPMENT_TYPE_TO_APP[activity.equipment_type];
+    if (appId) return appId;
+  }
+  return null;
+}
+
 // Main NotificationCenter component
-export default function NotificationCenter({ compact = false, maxItems = 10 }) {
+export default function NotificationCenter({ compact = false, maxItems = 10, userEmail }) {
   const [activities, setActivities] = useState({ action_required: [], recent: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -213,30 +260,63 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     return saved ? new Date(saved) : null;
   });
 
+  // Get user's allowed apps for filtering
+  const allowedAppIds = useMemo(() => getAllowedAppIds(userEmail), [userEmail]);
+  const isAdmin = useMemo(() => {
+    // Check if user is admin (has all apps or is in admin list)
+    const allAppIds = ['switchboards', 'vsd', 'meca', 'mobile-equipments', 'hv', 'glo', 'datahub',
+                      'infrastructure', 'switchboard-controls', 'procedures', 'doors', 'projects',
+                      'atex', 'comp-ext', 'fire-control', 'obsolescence', 'selectivity', 'fault-level',
+                      'arc-flash', 'loopcalc'];
+    return allowedAppIds.length >= allAppIds.length;
+  }, [allowedAppIds]);
+
+  // Filter activity based on user's allowed apps
+  const filterActivityByPermission = (activity) => {
+    // Admins see everything
+    if (isAdmin || allowedAppIds.length === 0) return true;
+
+    const activityAppId = getActivityAppId(activity);
+    // If we can't determine the app, show it (safe default)
+    if (!activityAppId) return true;
+
+    return allowedAppIds.includes(activityAppId);
+  };
+
   const fetchActivities = async () => {
     try {
       setLoading(true);
       const data = await get('/api/dashboard/activities', { limit: 50 });
       if (data) {
-        // Filter out activities older than clearedAt
-        const filterByCleared = (items) => {
-          if (!clearedAt) return items;
-          return items.filter(a => new Date(a.timestamp) > clearedAt);
+        // Filter out activities older than clearedAt and by user permissions
+        const filterActivities = (items) => {
+          let filtered = items || [];
+          // Filter by cleared timestamp
+          if (clearedAt) {
+            filtered = filtered.filter(a => new Date(a.timestamp) > clearedAt);
+          }
+          // Filter by user permissions
+          filtered = filtered.filter(filterActivityByPermission);
+          return filtered;
         };
         setActivities({
-          action_required: filterByCleared(data.action_required || []),
-          recent: filterByCleared(data.recent || [])
+          action_required: filterActivities(data.action_required),
+          recent: filterActivities(data.recent)
         });
       } else {
         const fallback = await get('/api/procedures/activities/recent', { limit: 50 });
         if (fallback) {
-          const filterByCleared = (items) => {
-            if (!clearedAt) return items;
-            return items.filter(a => new Date(a.timestamp) > clearedAt);
+          const filterActivities = (items) => {
+            let filtered = items || [];
+            if (clearedAt) {
+              filtered = filtered.filter(a => new Date(a.timestamp) > clearedAt);
+            }
+            filtered = filtered.filter(filterActivityByPermission);
+            return filtered;
           };
           setActivities({
-            action_required: filterByCleared(fallback.action_required || []),
-            recent: filterByCleared(fallback.recent || [])
+            action_required: filterActivities(fallback.action_required),
+            recent: filterActivities(fallback.recent)
           });
         }
       }
@@ -279,7 +359,7 @@ export default function NotificationCenter({ compact = false, maxItems = 10 }) {
     fetchActivities();
     const interval = setInterval(fetchActivities, 120000);
     return () => clearInterval(interval);
-  }, [clearedAt]); // Re-fetch when clearedAt changes
+  }, [clearedAt, allowedAppIds]); // Re-fetch when clearedAt or permissions change
 
   const totalCount = (activities.action_required?.length || 0) + (activities.recent?.length || 0);
   const actionCount = activities.action_required?.length || 0;

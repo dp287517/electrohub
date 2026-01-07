@@ -176,3 +176,88 @@ export function getAllowedApps(email) {
   if (permissions.isAdmin) return ALL_APPS;
   return ALL_APPS.filter(app => permissions.apps?.includes(app.id));
 }
+
+// Mapping between app IDs and equipment types used in controls/maps
+export const APP_TO_EQUIPMENT_TYPE = {
+  'switchboards': ['switchboard', 'device'],
+  'vsd': ['vsd'],
+  'meca': ['meca'],
+  'mobile-equipments': ['mobile', 'mobile_equipment'],
+  'hv': ['hv'],
+  'glo': ['glo'],
+  'datahub': ['datahub'],
+  'infrastructure': ['infrastructure'],
+};
+
+// Mapping equipment types back to app IDs
+export const EQUIPMENT_TYPE_TO_APP = {
+  'switchboard': 'switchboards',
+  'device': 'switchboards',
+  'vsd': 'vsd',
+  'meca': 'meca',
+  'mobile': 'mobile-equipments',
+  'mobile_equipment': 'mobile-equipments',
+  'hv': 'hv',
+  'glo': 'glo',
+  'datahub': 'datahub',
+  'infrastructure': 'infrastructure',
+};
+
+// Apps that are equipment-based (can have controls, show on map)
+export const EQUIPMENT_APPS = [
+  'switchboards', 'vsd', 'meca', 'mobile-equipments', 'hv', 'glo', 'datahub', 'infrastructure'
+];
+
+// Apps that generate activities but are not equipment
+export const NON_EQUIPMENT_APPS = [
+  'switchboard-controls', 'controls', 'procedures', 'doors', 'projects',
+  'comp-ext', 'atex', 'fire-control', 'learn_ex', 'dcf', 'ask-veeva',
+  'obsolescence', 'selectivity', 'fault-level', 'arc-flash', 'loopcalc', 'oibt', 'diagram'
+];
+
+// Get equipment apps that user has access to
+export function getAllowedEquipmentApps(email) {
+  const permissions = getUserPermissions(email);
+  if (!permissions) return [];
+  if (permissions.isAdmin) return EQUIPMENT_APPS;
+  return EQUIPMENT_APPS.filter(appId => permissions.apps?.includes(appId));
+}
+
+// Get equipment types that user can see (for controls, maps, activities)
+export function getAllowedEquipmentTypes(email) {
+  const allowedApps = getAllowedEquipmentApps(email);
+  const types = new Set();
+
+  allowedApps.forEach(appId => {
+    const equipTypes = APP_TO_EQUIPMENT_TYPE[appId] || [];
+    equipTypes.forEach(t => types.add(t));
+  });
+
+  return Array.from(types);
+}
+
+// Check if user has access to at least one equipment app (for showing cards/brief)
+export function hasEquipmentAccess(email) {
+  const allowedEquipmentApps = getAllowedEquipmentApps(email);
+  return allowedEquipmentApps.length > 0;
+}
+
+// Check if user can see a specific equipment type
+export function canSeeEquipmentType(email, equipmentType) {
+  const permissions = getUserPermissions(email);
+  if (!permissions) return false;
+  if (permissions.isAdmin) return true;
+
+  const appId = EQUIPMENT_TYPE_TO_APP[equipmentType];
+  if (!appId) return false;
+
+  return permissions.apps?.includes(appId) ?? false;
+}
+
+// Get allowed app IDs as array (for filtering activities)
+export function getAllowedAppIds(email) {
+  const permissions = getUserPermissions(email);
+  if (!permissions) return [];
+  if (permissions.isAdmin) return ALL_APPS.map(a => a.id);
+  return permissions.apps || [];
+}

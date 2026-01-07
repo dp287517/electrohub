@@ -50,6 +50,9 @@ import {
   Loader2,
 } from "lucide-react";
 
+// Permissions
+import { getAllowedEquipmentTypes, canSeeEquipmentType } from "../lib/permissions";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -954,6 +957,18 @@ const UnifiedLeafletViewer = forwardRef(({
   );
 });
 
+// Mapping from equipment types to app IDs for permission checking
+const EQUIPMENT_TYPE_TO_APP_ID = {
+  'switchboard': 'switchboards',
+  'vsd': 'vsd',
+  'meca': 'meca',
+  'mobile': 'mobile-equipments',
+  'hv': 'hv',
+  'glo': 'glo',
+  'datahub': 'datahub',
+  'infrastructure': 'infrastructure',
+};
+
 /* ----------------------------- Main Component ----------------------------- */
 export default function UnifiedEquipmentMap({
   title = "Plan Centralisé",
@@ -961,8 +976,24 @@ export default function UnifiedEquipmentMap({
   backLink = "/app/switchboard-controls",
   initialVisibleTypes = ["switchboard", "vsd", "meca", "mobile", "hv", "glo"],
   showTypeFilters = true,
+  userEmail, // User email for permission filtering
 }) {
   const navigate = useNavigate();
+
+  // Get user's allowed equipment types
+  const allowedEquipmentTypes = useMemo(() => {
+    const types = getAllowedEquipmentTypes(userEmail);
+    // If no email provided or user has no restrictions, allow all
+    if (!userEmail || types.length === 0) {
+      return Object.keys(BASE_EQUIPMENT_TYPES);
+    }
+    return types;
+  }, [userEmail]);
+
+  // Filter initial visible types based on user permissions
+  const permittedInitialTypes = useMemo(() => {
+    return initialVisibleTypes.filter(type => allowedEquipmentTypes.includes(type));
+  }, [initialVisibleTypes, allowedEquipmentTypes]);
 
   // Plans
   const [plans, setPlans] = useState([]);
@@ -992,8 +1023,8 @@ export default function UnifiedEquipmentMap({
     return types;
   }, [datahubCategories]);
 
-  // Filters
-  const [visibleTypes, setVisibleTypes] = useState(initialVisibleTypes);
+  // Filters - use permitted types based on user permissions
+  const [visibleTypes, setVisibleTypes] = useState(permittedInitialTypes);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all"); // all, overdue, upcoming
 
@@ -1298,9 +1329,17 @@ export default function UnifiedEquipmentMap({
     setLoadingPositions(false);
   };
 
-  // Filter positions based on search and status
+  // Filter positions based on search, status, and user permissions
   const filteredPositions = useMemo(() => {
-    let filtered = allPositions.filter(p => visibleTypes.includes(p.equipment_type));
+    // First filter by allowed equipment types (user permissions)
+    let filtered = allPositions.filter(p => {
+      // Check if user has permission for this equipment type
+      const baseType = p.equipment_type?.startsWith('datahub_cat_') ? 'datahub' : p.equipment_type;
+      return allowedEquipmentTypes.includes(baseType) || allowedEquipmentTypes.includes(p.equipment_type);
+    });
+
+    // Then filter by currently visible types (user selection)
+    filtered = filtered.filter(p => visibleTypes.includes(p.equipment_type));
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -1321,7 +1360,7 @@ export default function UnifiedEquipmentMap({
     }
 
     return filtered;
-  }, [allPositions, visibleTypes, searchQuery, statusFilter, controlStatuses]);
+  }, [allPositions, visibleTypes, searchQuery, statusFilter, controlStatuses, allowedEquipmentTypes]);
 
   // Stats
   const stats = useMemo(() => {
@@ -1541,8 +1580,10 @@ export default function UnifiedEquipmentMap({
                   Types d'équipements
                 </h3>
                 <div className="space-y-1">
-                  {/* Base equipment types */}
-                  {Object.entries(BASE_EQUIPMENT_TYPES).map(([type, config]) => {
+                  {/* Base equipment types - filtered by user permissions */}
+                  {Object.entries(BASE_EQUIPMENT_TYPES)
+                    .filter(([type]) => allowedEquipmentTypes.includes(type))
+                    .map(([type, config]) => {
                     const Icon = config.icon;
                     const count = stats.byType[type] || 0;
                     const isActive = visibleTypes.includes(type);
@@ -1774,7 +1815,9 @@ export default function UnifiedEquipmentMap({
               {showTypeFilters && (
                 <div className="space-y-1">
                   <h3 className="text-xs font-semibold text-gray-500">Types d'équipements</h3>
-                  {Object.entries(BASE_EQUIPMENT_TYPES).map(([type, config]) => {
+                  {Object.entries(BASE_EQUIPMENT_TYPES)
+                    .filter(([type]) => allowedEquipmentTypes.includes(type))
+                    .map(([type, config]) => {
                     const Icon = config.icon;
                     const count = stats.byType[type] || 0;
                     const isActive = visibleTypes.includes(type);
