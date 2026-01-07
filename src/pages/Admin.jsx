@@ -5,8 +5,10 @@ import {
   Eye, EyeOff, Copy, RefreshCw, Building2, Mail, Lock, AlertTriangle,
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
-  FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX, Bug
+  FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX, Bug,
+  Box, Package, ExternalLink, Palette
 } from 'lucide-react';
+import { api } from '../lib/api.js';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
 
 // API base URL
@@ -1725,6 +1727,399 @@ function VsdPlansTab() {
   );
 }
 
+// ============== CUSTOM MODULES TAB ==============
+// Allows admins to create dynamic pages without code changes
+const ICON_OPTIONS = [
+  { value: 'box', label: 'Box' },
+  { value: 'package', label: 'Package' },
+  { value: 'folder', label: 'Folder' },
+  { value: 'server', label: 'Server' },
+  { value: 'cpu', label: 'CPU' },
+  { value: 'harddrive', label: 'Hard Drive' },
+  { value: 'monitor', label: 'Monitor' },
+  { value: 'wifi', label: 'Wifi' },
+  { value: 'zap', label: 'Zap' },
+  { value: 'power', label: 'Power' },
+  { value: 'battery', label: 'Battery' },
+  { value: 'plug', label: 'Plug' },
+  { value: 'wrench', label: 'Wrench' },
+  { value: 'factory', label: 'Factory' },
+  { value: 'building', label: 'Building' },
+  { value: 'home', label: 'Home' },
+  { value: 'shield', label: 'Shield' },
+  { value: 'flag', label: 'Flag' },
+  { value: 'star', label: 'Star' },
+  { value: 'clock', label: 'Clock' },
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'bell', label: 'Bell' },
+  { value: 'user', label: 'User' },
+  { value: 'users', label: 'Users' },
+  { value: 'flame', label: 'Flame' },
+  { value: 'droplet', label: 'Droplet' },
+  { value: 'sun', label: 'Sun' },
+  { value: 'cloud', label: 'Cloud' },
+];
+
+const COLOR_OPTIONS = [
+  '#8b5cf6', // Violet
+  '#6366f1', // Indigo
+  '#3b82f6', // Blue
+  '#0ea5e9', // Sky
+  '#06b6d4', // Cyan
+  '#14b8a6', // Teal
+  '#10b981', // Emerald
+  '#22c55e', // Green
+  '#84cc16', // Lime
+  '#eab308', // Yellow
+  '#f59e0b', // Amber
+  '#f97316', // Orange
+  '#ef4444', // Red
+  '#ec4899', // Pink
+  '#a855f7', // Purple
+  '#6b7280', // Gray
+];
+
+function CustomModulesTab() {
+  const navigate = useNavigate();
+  const [modules, setModules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingModule, setEditingModule] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    icon: 'box',
+    color: '#8b5cf6',
+    description: '',
+    agent_name: '',
+    agent_emoji: '📦'
+  });
+
+  const loadModules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.customModules.listAllModules();
+      setModules(res.modules || []);
+    } catch (e) {
+      console.error('Error loading modules:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadModules(); }, [loadModules]);
+
+  const handleCreate = async () => {
+    if (!formData.name.trim()) return;
+    setSaving(true);
+    try {
+      await api.customModules.createModule({
+        ...formData,
+        agent_name: formData.agent_name || formData.name
+      });
+      setShowCreateModal(false);
+      setFormData({ name: '', icon: 'box', color: '#8b5cf6', description: '', agent_name: '', agent_emoji: '📦' });
+      await loadModules();
+    } catch (e) {
+      alert('Erreur: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!editingModule || !formData.name.trim()) return;
+    setSaving(true);
+    try {
+      await api.customModules.updateModule(editingModule.slug, formData);
+      setEditingModule(null);
+      await loadModules();
+    } catch (e) {
+      alert('Erreur: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (mod) => {
+    if (!confirm(`Supprimer le module "${mod.name}" et toutes ses données ?`)) return;
+    try {
+      await api.customModules.deleteModule(mod.slug);
+      await loadModules();
+    } catch (e) {
+      alert('Erreur: ' + e.message);
+    }
+  };
+
+  const handleToggleActive = async (mod) => {
+    try {
+      await api.customModules.updateModule(mod.slug, { is_active: !mod.is_active });
+      await loadModules();
+    } catch (e) {
+      alert('Erreur: ' + e.message);
+    }
+  };
+
+  const openEdit = (mod) => {
+    setFormData({
+      name: mod.name,
+      icon: mod.icon,
+      color: mod.color,
+      description: mod.description || '',
+      agent_name: mod.agent_name || '',
+      agent_emoji: mod.agent_emoji || '📦'
+    });
+    setEditingModule(mod);
+  };
+
+  const closeModals = () => {
+    setShowCreateModal(false);
+    setEditingModule(null);
+    setFormData({ name: '', icon: 'box', color: '#8b5cf6', description: '', agent_name: '', agent_emoji: '📦' });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Modules Personnalisés</h2>
+          <p className="text-gray-600">Créez des pages d'équipements sans code</p>
+        </div>
+        <button
+          onClick={() => setShowCreateModal(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700 shadow-lg"
+        >
+          <Plus size={20} /> Nouveau Module
+        </button>
+      </div>
+
+      {/* Loading */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-violet-600" />
+        </div>
+      ) : modules.length === 0 ? (
+        <div className="bg-white rounded-2xl p-12 text-center border">
+          <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-700 mb-2">Aucun module personnalisé</h3>
+          <p className="text-gray-500 mb-6">Créez votre premier module pour gérer des équipements personnalisés.</p>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-6 py-3 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700"
+          >
+            <Plus size={18} className="inline mr-2" /> Créer un module
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {modules.map(mod => (
+            <div key={mod.id} className={`bg-white rounded-2xl border overflow-hidden ${!mod.is_active ? 'opacity-60' : ''}`}>
+              <div className="p-4" style={{ borderTop: `4px solid ${mod.color}` }}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-2xl"
+                      style={{ backgroundColor: mod.color }}
+                    >
+                      {mod.agent_emoji || '📦'}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{mod.name}</h3>
+                      <p className="text-sm text-gray-500">/app/m/{mod.slug}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => navigate(`/app/m/${mod.slug}`)}
+                      className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-violet-600"
+                      title="Ouvrir"
+                    >
+                      <ExternalLink size={16} />
+                    </button>
+                    <button
+                      onClick={() => openEdit(mod)}
+                      className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-blue-600"
+                      title="Modifier"
+                    >
+                      <Edit3 size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(mod)}
+                      className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600"
+                      title="Supprimer"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+                {mod.description && (
+                  <p className="mt-3 text-sm text-gray-600 line-clamp-2">{mod.description}</p>
+                )}
+                <div className="mt-4 flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-4 text-gray-500">
+                    <span>{mod.item_count || 0} éléments</span>
+                    <span>{mod.category_count || 0} catégories</span>
+                  </div>
+                  <button
+                    onClick={() => handleToggleActive(mod)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      mod.is_active
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-gray-100 text-gray-500'
+                    }`}
+                  >
+                    {mod.is_active ? 'Actif' : 'Inactif'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create/Edit Modal */}
+      {(showCreateModal || editingModule) && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold text-gray-900">
+                  {editingModule ? 'Modifier le module' : 'Nouveau module'}
+                </h2>
+                <button onClick={closeModals} className="p-2 hover:bg-gray-100 rounded-lg">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nom du module *</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-violet-500"
+                    placeholder="Ex: Ordinateurs, Imprimantes, Véhicules..."
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-violet-500"
+                    rows={2}
+                    placeholder="Description du module..."
+                  />
+                </div>
+
+                {/* Color */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Couleur</label>
+                  <div className="flex flex-wrap gap-2">
+                    {COLOR_OPTIONS.map(color => (
+                      <button
+                        key={color}
+                        onClick={() => setFormData({ ...formData, color })}
+                        className={`w-8 h-8 rounded-lg ${formData.color === color ? 'ring-2 ring-offset-2 ring-gray-400' : ''}`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Icon */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Icône</label>
+                  <select
+                    value={formData.icon}
+                    onChange={(e) => setFormData({ ...formData, icon: e.target.value })}
+                    className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-violet-500"
+                  >
+                    {ICON_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* AI Agent */}
+                <div className="border-t pt-4 mt-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <Bot size={16} /> Agent IA
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Nom de l'agent</label>
+                      <input
+                        type="text"
+                        value={formData.agent_name}
+                        onChange={(e) => setFormData({ ...formData, agent_name: e.target.value })}
+                        className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-violet-500"
+                        placeholder="Ex: Max, Luna..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Emoji</label>
+                      <input
+                        type="text"
+                        value={formData.agent_emoji}
+                        onChange={(e) => setFormData({ ...formData, agent_emoji: e.target.value })}
+                        className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-violet-500"
+                        placeholder="📦"
+                        maxLength={4}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preview */}
+                <div className="border-t pt-4 mt-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Aperçu</h3>
+                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-2xl"
+                      style={{ backgroundColor: formData.color }}
+                    >
+                      {formData.agent_emoji || '📦'}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-900">{formData.name || 'Nouveau module'}</p>
+                      <p className="text-sm text-gray-500">Agent: {formData.agent_name || formData.name || 'Sans nom'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 pt-4">
+                  <button
+                    onClick={closeModals}
+                    className="flex-1 py-2 border rounded-xl font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={editingModule ? handleUpdate : handleCreate}
+                    disabled={saving || !formData.name.trim()}
+                    className="flex-1 py-2 rounded-xl text-white font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                    style={{ backgroundColor: formData.color }}
+                  >
+                    {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                    {editingModule ? 'Enregistrer' : 'Créer'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============== SETTINGS TAB ==============
 function SettingsTab() {
   const [aiIconInfo, setAiIconInfo] = useState(null);
@@ -2713,6 +3108,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
             <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>Plans</TabButton>
+            <TabButton active={activeTab === 'modules'} onClick={() => setActiveTab('modules')} icon={Package}>Modules</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
             <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={Settings}>Settings</TabButton>
           </div>
@@ -2731,6 +3127,7 @@ export default function Admin() {
             {activeTab === 'sites' && <SitesTab sites={sites} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'vsd-plans' && <VsdPlansTab />}
+            {activeTab === 'modules' && <CustomModulesTab />}
             {activeTab === 'auth-audit' && <AuthAuditTab />}
             {activeTab === 'settings' && <SettingsTab />}
           </>
