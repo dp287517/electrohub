@@ -456,7 +456,7 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
     const mapLeft = markerPos.mapLeft;
     const mapTop = markerPos.mapTop;
 
-    const panelWidth = 320;
+    const panelWidth = 280;
     const panelMaxHeight = Math.min(400, mapHeight * 0.8);
     const offset = 20;
 
@@ -484,102 +484,23 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
   const hasCustomPosition = !isMobileState && Object.keys(desktopStyle).length > 0;
 
   return (
-    <div
-      ref={panelRef}
-      className={`${
-        hasCustomPosition
-          ? 'bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col'
-          : `${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`
-      }`}
-      style={hasCustomPosition ? desktopStyle : {}}
-    >
-      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 text-white flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="p-2 bg-white/20 rounded-xl flex-shrink-0"><IconComp size={20} /></div>
-            <div className="min-w-0">
-              <h3 className="font-bold truncate">{item.name}</h3>
-              <p className="text-indigo-100 text-sm truncate">{category?.name || 'Sans categorie'}</p>
-            </div>
+    <div ref={panelRef} className={`${hasCustomPosition ? 'bg-white rounded-xl shadow-xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col' : `${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-72 z-[60]'} bg-white rounded-xl shadow-xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col`}`} style={hasCustomPosition ? desktopStyle : {}}>
+      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-3 py-2 text-white flex-shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconComp size={16} />
+            <span className="font-medium text-sm truncate">{item.name}</span>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg flex-shrink-0"><X size={18} /></button>
+          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors flex-shrink-0"><X size={16} /></button>
         </div>
       </div>
-
-      <div className="p-4 space-y-3 overflow-y-auto flex-1">
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Batiment</span>
-            <span className="font-semibold text-gray-900 truncate block">{item.building || '-'}</span>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Etage</span>
-            <span className="font-semibold text-gray-900 truncate block">{item.floor || '-'}</span>
-          </div>
-        </div>
-
-        {item.description && (
-          <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-2">{item.description}</p>
+      <div className="p-2 flex gap-2">
+        <button onClick={() => onNavigate(item)} className="flex-1 py-2 px-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
+          <Eye size={14} />Voir détails
+        </button>
+        {position && (
+          <button onClick={() => onDelete(position.id)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>
         )}
-
-        {/* Equipment Links Section */}
-        <div className="border-t pt-3 mt-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700 flex items-center gap-1"><Link2 size={14} />Équipements liés</span>
-            <button onClick={() => setShowAddLink(!showAddLink)} className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-indigo-600" title="Ajouter un lien"><Plus size={16} /></button>
-          </div>
-          {showAddLink && (
-            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-2">
-              <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher..." className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-indigo-500 bg-white" autoFocus />
-              {searching && <div className="flex items-center gap-2 text-sm text-gray-500 mt-2"><Loader2 size={14} className="animate-spin" />...</div>}
-              {searchResults.length > 0 && (
-                <div className="mt-2 max-h-36 overflow-y-auto space-y-1">
-                  {searchResults.map((result) => (
-                    <div key={`${result.type}-${result.id}`} className="bg-white rounded border p-2">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-medium text-sm truncate">{result.code || result.name}</span>
-                        <span className="text-xs text-gray-500">{result.type}</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => handleAddLinkClick(result, 'upstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300" title="Amont"><ArrowDown size={12} /><span>Amont</span></button>
-                        <button onClick={() => handleAddLinkClick(result, 'downstream')} className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300" title="Aval"><ArrowUp size={12} /><span>Aval</span></button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {linksLoading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500 py-2"><Loader2 size={14} className="animate-spin" />...</div>
-          ) : links.length === 0 ? (
-            <p className="text-xs text-gray-400 py-1">Aucun lien</p>
-          ) : (
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {links.map((link, idx) => {
-                const eq = link.linkedEquipment; const samePlan = isOnSamePlan(link);
-                return (
-                  <div key={link.id || idx} className={`flex items-center justify-between p-1.5 rounded-lg text-sm ${samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
-                    <button onClick={() => onLinkClick?.(link)} className="flex items-center gap-2 flex-1 text-left hover:underline truncate">
-                      <div className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" />
-                      <span className="font-medium truncate">{eq?.code || eq?.name}</span>
-                    </button>
-                    {link.type === 'manual' && link.id && <button onClick={() => onDeleteLink?.(link.id)} className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600 flex-shrink-0"><Trash2 size={12} /></button>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="flex gap-2">
-          <button onClick={() => onNavigate(item)} className="flex-1 py-2.5 px-3 rounded-xl bg-indigo-100 text-indigo-700 text-sm font-medium flex items-center justify-center gap-2 hover:bg-indigo-200">
-            <Eye size={16} />Voir details
-          </button>
-          {position && (
-            <button onClick={() => onDelete(position.id)} className="py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100"><Trash2 size={16} /></button>
-          )}
-        </div>
       </div>
     </div>
   );

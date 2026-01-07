@@ -468,7 +468,7 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [
     const mapLeft = markerPos.mapLeft;
     const mapTop = markerPos.mapTop;
 
-    const panelWidth = 384;
+    const panelWidth = 280;
     const panelMaxHeight = Math.min(400, mapHeight * 0.8);
     const offset = 20;
 
@@ -496,221 +496,21 @@ const DetailPanel = ({ position, board, onClose, onNavigate, onDelete, links = [
   const hasCustomPosition = !isMobile && Object.keys(desktopStyle).length > 0;
 
   return (
-    <AnimatedCard
-      ref={panelRef}
-      className={`bg-white rounded-2xl shadow-2xl border overflow-hidden flex flex-col ${
-        hasCustomPosition
-          ? ''
-          : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh] z-30'
-      }`}
-      style={hasCustomPosition ? desktopStyle : {}}
-    >
-      <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-4 text-white flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-white/20 rounded-lg">
-              <Zap size={20} />
-            </div>
-            <div>
-              <h3 className="font-bold font-mono">
-                {position.code || board?.code}
-              </h3>
-              <p className="text-blue-100 text-sm">
-                {position.name || board?.name}
-              </p>
-            </div>
+    <AnimatedCard ref={panelRef} className={`bg-white rounded-xl shadow-xl border overflow-hidden flex flex-col ${hasCustomPosition ? '' : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-72 z-30'}`} style={hasCustomPosition ? desktopStyle : {}}>
+      <div className="bg-gradient-to-r from-blue-500 to-indigo-600 px-3 py-2 text-white flex-shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Zap size={16} />
+            <span className="font-medium text-sm truncate font-mono">{position.code || board?.code || position.name || board?.name || "Tableau"}</span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-          >
-            <X size={18} />
-          </button>
+          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors flex-shrink-0"><X size={16} /></button>
         </div>
       </div>
-
-      <div className="p-4 space-y-3 overflow-y-auto flex-1">
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Bâtiment</span>
-            <span className="font-semibold text-gray-900">
-              {position.building || board?.meta?.building_code || "-"}
-            </span>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Étage</span>
-            <span className="font-semibold text-gray-900">
-              {position.floor || board?.meta?.floor || "-"}
-            </span>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Local</span>
-            <span className="font-semibold text-gray-900">
-              {position.room || board?.meta?.room || "-"}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          {(position.is_principal || board?.is_principal) && (
-            <Badge variant="success">Tableau Principal</Badge>
-          )}
-          {(position.regime_neutral || board?.regime_neutral) && (
-            <Badge variant="info">
-              {position.regime_neutral || board?.regime_neutral}
-            </Badge>
-          )}
-        </div>
-
-        {/* Equipment Links Section */}
-        <div className="border-t pt-3 mt-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
-              <Link2 size={14} />
-              Équipements liés
-            </span>
-            <button
-              onClick={() => setShowAddLink(!showAddLink)}
-              className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-blue-600"
-              title="Ajouter un lien"
-            >
-              <Plus size={16} />
-            </button>
-          </div>
-
-          {/* Add Link UI */}
-          {showAddLink && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-2">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => handleSearch(e.target.value)}
-                placeholder="Rechercher un équipement..."
-                className="w-full px-2 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                autoFocus
-              />
-              {searching && (
-                <div className="flex items-center gap-2 text-sm text-gray-500 mt-2">
-                  <Loader2 size={14} className="animate-spin" />
-                  Recherche...
-                </div>
-              )}
-              {searchResults.length > 0 && (
-                <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
-                  {searchResults.map((result) => (
-                    <div
-                      key={`${result.type}-${result.id}`}
-                      className="bg-white rounded border p-2"
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="font-medium text-sm">{result.code || result.name}</span>
-                        <span className="text-xs text-gray-500">{result.type}</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleAddLinkClick(result, 'upstream')}
-                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300 transition-colors"
-                          title="Cet équipement est en amont (alimente celui-ci)"
-                        >
-                          <ArrowDown size={12} />
-                          <span>Amont</span>
-                        </button>
-                        <button
-                          onClick={() => handleAddLinkClick(result, 'downstream')}
-                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300 transition-colors"
-                          title="Cet équipement est en aval (alimenté par celui-ci)"
-                        >
-                          <ArrowUp size={12} />
-                          <span>Aval</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Links List */}
-          {linksLoading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
-              <Loader2 size={14} className="animate-spin" />
-              Chargement des liens...
-            </div>
-          ) : links.length === 0 ? (
-            <p className="text-xs text-gray-400 py-1">Aucun équipement lié</p>
-          ) : (
-            <div className="space-y-1">
-              {links.map((link, idx) => {
-                const eq = link.linkedEquipment;
-                const samePlan = isOnSamePlan(link);
-
-                return (
-                  <div
-                    key={link.id || idx}
-                    className={`flex items-center justify-between p-2 rounded-lg text-sm ${
-                      samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'
-                    }`}
-                  >
-                    <button
-                      onClick={() => onLinkClick?.(link)}
-                      className="flex items-center gap-2 flex-1 text-left hover:underline"
-                    >
-                      <div className="w-2 h-2 rounded-full bg-blue-500" />
-                      <div>
-                        <span className="font-medium">{eq?.code || eq?.name}</span>
-                        {link.relationship && link.relationship !== 'connected' && (
-                          <span className="text-xs text-gray-500 ml-1">
-                            ({link.relationship === 'feeds' ? 'alimente' : link.relationship === 'fed_by' ? 'alimenté par' : link.relationship})
-                          </span>
-                        )}
-                        {!samePlan && eq?.plan && (
-                          <span className="text-xs text-orange-600 ml-1">(autre plan)</span>
-                        )}
-                        {link.type === 'hierarchical' && (
-                          <span className="text-xs text-blue-600 ml-1">(auto)</span>
-                        )}
-                      </div>
-                    </button>
-                    {link.type === 'manual' && link.id && (
-                      <button
-                        onClick={() => onDeleteLink?.(link.id)}
-                        className="p-1 hover:bg-red-100 rounded text-gray-400 hover:text-red-600"
-                        title="Supprimer le lien"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="text-xs text-gray-400 flex items-center gap-2">
-          <MapPin size={12} />
-          Position: {(position.x_frac * 100).toFixed(1)}%,{" "}
-          {(position.y_frac * 100).toFixed(1)}%
-        </div>
-
-        <div className="flex gap-2 pt-2">
-          <button
-            onClick={() => onNavigate(position.switchboard_id)}
-            className="flex-1 py-2.5 px-4 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 transition-all flex items-center justify-center gap-2"
-          >
-            <ExternalLink size={16} />
-            Ouvrir le tableau
-          </button>
-
-          <button
-            onClick={() => onDelete?.(position)}
-            className="py-2.5 px-3 bg-red-50 text-red-600 rounded-xl font-medium hover:bg-red-100 transition-all flex items-center justify-center"
-            title="Détacher du plan"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
+      <div className="p-2 flex gap-2">
+        <button onClick={() => onNavigate(position.switchboard_id)} className="flex-1 py-2 px-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
+          <ExternalLink size={14} />Voir détails
+        </button>
+        <button onClick={() => onDelete?.(position)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>
       </div>
     </AnimatedCard>
   );

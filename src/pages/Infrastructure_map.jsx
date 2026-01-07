@@ -206,43 +206,23 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
   const IconComp = ICON_MAP[category?.icon] || Circle;
 
   return (
-    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`}>
-      <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-4 text-white flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="p-2 bg-white/20 rounded-xl flex-shrink-0"><IconComp size={20} /></div>
-            <div className="min-w-0">
-              <h3 className="font-bold truncate">{item.name}</h3>
-              <p className="text-violet-100 text-sm truncate">{category?.name || 'Sans categorie'}</p>
-            </div>
+    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-72 z-[60]'} bg-white rounded-xl shadow-xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col`}>
+      <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-3 py-2 text-white flex-shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconComp size={16} />
+            <span className="font-medium text-sm truncate">{item.name}</span>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg flex-shrink-0"><X size={18} /></button>
+          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors flex-shrink-0"><X size={16} /></button>
         </div>
       </div>
-
-      <div className="p-4 space-y-3 overflow-y-auto flex-1">
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Batiment</span>
-            <span className="font-semibold text-gray-900 truncate block">{item.building || '-'}</span>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-2 text-center">
-            <span className="text-gray-500 text-xs block">Etage</span>
-            <span className="font-semibold text-gray-900 truncate block">{item.floor || '-'}</span>
-          </div>
-        </div>
-        {item.description && <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-2">{item.description}</p>}
-
-        <div className="flex gap-2">
-          <button onClick={() => onNavigate(item)} className="flex-1 py-2.5 px-3 rounded-xl bg-violet-100 text-violet-700 text-sm font-medium flex items-center justify-center gap-2 hover:bg-violet-200">
-            <Eye size={16} />Voir details
-          </button>
-          {position && (
-            <button onClick={() => onDelete(position.id)} className="py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100">
-              <Trash2 size={16} />
-            </button>
-          )}
-        </div>
+      <div className="p-2 flex gap-2">
+        <button onClick={() => onNavigate(item)} className="flex-1 py-2 px-3 bg-violet-500 hover:bg-violet-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
+          <Eye size={14} />Voir détails
+        </button>
+        {position && (
+          <button onClick={() => onDelete(position.id)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>
+        )}
       </div>
     </div>
   );
