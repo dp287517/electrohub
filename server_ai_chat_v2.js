@@ -972,6 +972,12 @@ function createChatV2Router(pool) {
         if (result.transfer?.troubleshooting_id) {
           chatResponse.transferComplete = true;
         }
+
+        // Equipment suggestions (from search_equipment when no exact match)
+        if (result.has_suggestions && result.suggestions?.length > 0) {
+          chatResponse.showEquipmentSuggestions = true;
+          chatResponse.equipmentSuggestions = result.suggestions;
+        }
       });
 
       const responseTimeMs = Date.now() - startTime;
