@@ -580,7 +580,8 @@ function detectAgentType(message, toolResults, previousAgent = 'main', currentEq
   }
 
   // 4. Garder l'agent précédent si conversation en cours
-  const returnToMainKeywords = ['electro', 'retour', 'autre chose', 'autre sujet', 'merci', 'au revoir', 'bye', 'salut'];
+  // "merci" et "salut" ne doivent PAS déclencher un retour au main - ce sont juste des politesses
+  const returnToMainKeywords = ['electro', 'retour', 'autre chose', 'autre sujet', 'au revoir', 'bye', 'fini', 'terminé'];
   const wantsToReturn = returnToMainKeywords.some(k => messageLower.includes(k) && messageLower.length < 50);
 
   if (previousAgent && previousAgent !== 'main' && !wantsToReturn) {
@@ -618,6 +619,32 @@ ${Object.entries(AGENTS_INFO).map(([type, info]) =>
 
 **IMPORTANT**: Les utilisateurs peuvent te demander de parler à un agent par son nom.
 Si l'utilisateur dit "passe-moi ${agentNames.doors}" ou "je veux parler à ${agentNames.vsd}", utilise la fonction **transfer_to_agent** avec le type correspondant.
+
+## 🔄 TRANSFERT AUTOMATIQUE - PROTOCOLE OBLIGATOIRE
+**QUAND TU APPELLES transfer_to_agent, TU DOIS IMMÉDIATEMENT PARLER EN TANT QUE LE NOUVEL AGENT !**
+
+Exemple de format de réponse après avoir appelé transfer_to_agent:
+"🔄 Electro te transfère vers [Nom de l'agent]...
+
+---
+
+👋 **[Emoji] [Nom de l'agent] prend le relais !**
+
+Bonjour ! Je suis **[Nom de l'agent]**, l'agent spécialisé pour [domaine].
+
+Pour **[nom de l'équipement]**, voici ce que je peux faire pour toi :
+- 🔧 Voir l'historique des dépannages
+- 📊 Consulter les contrôles
+- 📍 Afficher sur le plan
+- ❓ Répondre à tes questions
+
+**Que veux-tu savoir sur cet équipement ?**"
+
+**RÈGLES DU TRANSFERT:**
+1. NE JAMAIS laisser l'utilisateur sans réponse après un transfert
+2. Le nouvel agent DOIT immédiatement se présenter ET proposer son aide
+3. Inclure le nom de l'équipement dans la réponse du nouvel agent
+4. Le nouvel agent commence TOUJOURS par proposer ce qu'il peut faire
 
 Quand une question concerne un domaine spécifique, le système te passera automatiquement au spécialiste approprié.
 
@@ -1017,6 +1044,23 @@ function createChatV2Router(pool) {
         if (result.has_suggestions && result.suggestions?.length > 0) {
           chatResponse.showEquipmentSuggestions = true;
           chatResponse.equipmentSuggestions = result.suggestions;
+        }
+
+        // Agent transfer - force switch to new agent
+        if (result.action === 'transfer_to_agent' && result.agent_type) {
+          chatResponse.agentTransfer = {
+            fromAgent: chatResponse.agentType,
+            toAgent: result.agent_type,
+            equipment: result.equipment,
+            context: result.context
+          };
+          // Force the agent type to the new agent
+          chatResponse.agentType = result.agent_type;
+          const newAgentInfo = getAgentInfo(result.agent_type, customNames);
+          chatResponse.agentName = newAgentInfo.name;
+          chatResponse.agentEmoji = newAgentInfo.emoji;
+          // Mark transfer as complete so frontend knows to expect new agent
+          chatResponse.agentTransferComplete = true;
         }
       });
 

@@ -425,6 +425,12 @@ class AIAssistant {
         transferComplete: data.transferComplete || false,
 
         // ===============================
+        // AGENT TRANSFER (agent-to-agent handoff)
+        // ===============================
+        agentTransfer: data.agentTransfer || null,
+        agentTransferComplete: data.agentTransferComplete || false,
+
+        // ===============================
         // EQUIPMENT SUGGESTIONS
         // ===============================
         equipmentSuggestions: data.equipmentSuggestions || null,
@@ -535,6 +541,14 @@ class AIAssistant {
         model: data.model,
         chart: data.chart || null,
         pendingAction: data.pendingAction || null,
+        // ===============================
+        // AGENT TYPE (for video avatar)
+        // ===============================
+        agentType: data.agentType || 'main',
+        agentName: data.agentName || null,
+        agentEmoji: data.agentEmoji || null,
+        agentTransfer: data.agentTransfer || null,
+        agentTransferComplete: data.agentTransferComplete || false,
         // ===============================
         // PROCEDURE INTEGRATION (v2.0)
         // ===============================
