@@ -1106,6 +1106,54 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
         }
       }
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // DASHBOARD ÉQUIPEMENTS POUR AGENT SPÉCIALISÉ
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_my_equipment_dashboard",
+      description: `Récupère le tableau de bord complet des équipements du domaine de l'agent.
+Chaque agent IA spécialisé peut utiliser cette fonction pour voir:
+- Tous ses équipements et leur état
+- Les contrôles à venir et en retard
+- Les dépannages récents
+- Les métriques et KPIs de son domaine
+- Les messages des autres agents
+
+UTILISE CETTE FONCTION QUAND:
+- L'utilisateur demande "mes équipements", "mon dashboard"
+- Pour avoir une vue d'ensemble de ton domaine
+- Au début d'une conversation pour connaître l'état de ton parc`,
+      parameters: {
+        type: "object",
+        properties: {
+          agent_type: {
+            type: "string",
+            enum: ["vsd", "meca", "glo", "hv", "mobile", "atex", "switchboard", "doors", "datahub", "firecontrol"],
+            description: "Type d'agent (déterminé automatiquement si non spécifié)"
+          },
+          include_equipment_list: {
+            type: "boolean",
+            description: "Inclure la liste des équipements (défaut: true, limité à 50)"
+          },
+          include_controls: {
+            type: "boolean",
+            description: "Inclure les contrôles à venir et en retard (défaut: true)"
+          },
+          include_troubleshooting: {
+            type: "boolean",
+            description: "Inclure les dépannages récents (défaut: true)"
+          },
+          include_communications: {
+            type: "boolean",
+            description: "Inclure les messages des autres agents (défaut: true)"
+          }
+        }
+      }
+    }
   }
 ];
 
@@ -4296,6 +4344,246 @@ function createToolHandlers(pool, site) {
         };
       } catch (error) {
         console.error('[TOOL] get_daily_briefing error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // DASHBOARD ÉQUIPEMENTS POUR AGENT SPÉCIALISÉ
+    // -----------------------------------------------------------------------
+    get_my_equipment_dashboard: async (params) => {
+      const {
+        agent_type,
+        include_equipment_list = true,
+        include_controls = true,
+        include_troubleshooting = true,
+        include_communications = true
+      } = params;
+
+      if (!agent_type) {
+        return {
+          success: false,
+          error: 'agent_type is required. Use your agent type (vsd, meca, glo, hv, mobile, atex, switchboard, doors, datahub, firecontrol).'
+        };
+      }
+
+      try {
+        const dashboard = {
+          agent_type,
+          site,
+          generated_at: new Date().toISOString(),
+          summary: {},
+          equipment_list: [],
+          controls: { overdue: [], upcoming: [] },
+          troubleshooting: [],
+          communications: { unread: [], recent: [] },
+          snapshot: null
+        };
+
+        // Configuration des tables par type d'agent
+        const tableConfig = {
+          vsd: { table: 'vsd_equipments', nameCol: 'name', siteCol: 'site', controlType: 'vsd' },
+          meca: { table: 'meca_equipments', nameCol: 'name', siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", controlType: 'meca' },
+          glo: { table: 'glo_equipments', nameCol: 'name', siteCol: null, controlType: 'glo' },
+          hv: { table: 'hv_equipments', nameCol: 'name', siteCol: null, controlType: 'hv' },
+          mobile: { table: 'me_equipments', nameCol: 'name', siteCol: null, controlType: 'mobile_equipment' },
+          atex: { table: 'atex_equipments', nameCol: 'name', siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", controlType: 'atex' },
+          switchboard: { table: 'switchboards', nameCol: 'name', siteCol: 'site', controlType: 'switchboard' },
+          doors: { table: 'fd_doors', nameCol: 'name', siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", controlType: 'door' },
+          datahub: { table: 'dh_items', nameCol: 'name', siteCol: null, controlType: null }, // No site column
+          firecontrol: { table: 'fire_equipment', nameCol: 'name', siteCol: 'site', controlType: 'fire' }
+        };
+
+        const config = tableConfig[agent_type];
+        if (!config) {
+          return { success: false, error: `Unknown agent type: ${agent_type}` };
+        }
+
+        // 1. Récupérer les équipements
+        if (include_equipment_list) {
+          try {
+            let equipQuery;
+            let equipParams = [];
+
+            if (config.siteJoin) {
+              // Table avec join sur sites
+              const joinClause = config.siteJoin.replace('{table}', 't');
+              equipQuery = `
+                SELECT t.id, t.${config.nameCol} as name, t.building, t.floor, t.location
+                FROM ${config.table} t
+                ${joinClause}
+                WHERE ${config.siteCondition}
+                ORDER BY t.${config.nameCol}
+                LIMIT 50
+              `;
+              equipParams = [site];
+            } else if (config.siteCol) {
+              // Table avec colonne site directe
+              equipQuery = `
+                SELECT id, ${config.nameCol} as name, building, floor, location
+                FROM ${config.table}
+                WHERE ${config.siteCol} = $1
+                ORDER BY ${config.nameCol}
+                LIMIT 50
+              `;
+              equipParams = [site];
+            } else {
+              // Table sans filtre site (datahub, glo, hv, mobile)
+              equipQuery = `
+                SELECT id, ${config.nameCol} as name, building, floor, location
+                FROM ${config.table}
+                ORDER BY ${config.nameCol}
+                LIMIT 50
+              `;
+            }
+
+            const equipResult = await pool.query(equipQuery, equipParams);
+            dashboard.equipment_list = equipResult.rows;
+            dashboard.summary.total_equipment = equipResult.rows.length;
+          } catch (e) {
+            console.error(`[TOOL] get_my_equipment_dashboard - equipment list error:`, e.message);
+            dashboard.summary.total_equipment = 0;
+          }
+        }
+
+        // 2. Récupérer les contrôles
+        if (include_controls && config.controlType) {
+          try {
+            // Contrôles en retard
+            const overdueResult = await pool.query(`
+              SELECT cs.id, cs.equipment_id, cs.equipment_type, cs.next_due_date, cs.frequency,
+                     EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int as days_overdue
+              FROM control_schedules cs
+              WHERE cs.site = $1
+              AND cs.equipment_type = $2
+              AND cs.next_due_date < CURRENT_DATE
+              AND cs.is_active = true
+              ORDER BY cs.next_due_date ASC
+              LIMIT 20
+            `, [site, config.controlType]);
+            dashboard.controls.overdue = overdueResult.rows;
+
+            // Contrôles à venir (7 jours)
+            const upcomingResult = await pool.query(`
+              SELECT cs.id, cs.equipment_id, cs.equipment_type, cs.next_due_date, cs.frequency
+              FROM control_schedules cs
+              WHERE cs.site = $1
+              AND cs.equipment_type = $2
+              AND cs.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+              AND cs.is_active = true
+              ORDER BY cs.next_due_date ASC
+              LIMIT 20
+            `, [site, config.controlType]);
+            dashboard.controls.upcoming = upcomingResult.rows;
+
+            dashboard.summary.controls_overdue = overdueResult.rows.length;
+            dashboard.summary.controls_upcoming = upcomingResult.rows.length;
+          } catch (e) {
+            console.error(`[TOOL] get_my_equipment_dashboard - controls error:`, e.message);
+            dashboard.summary.controls_overdue = 0;
+            dashboard.summary.controls_upcoming = 0;
+          }
+        }
+
+        // 3. Récupérer les dépannages récents
+        if (include_troubleshooting) {
+          try {
+            const troubleResult = await pool.query(`
+              SELECT tr.id, tr.title, tr.equipment_name, tr.status, tr.severity,
+                     tr.root_cause, tr.solution, tr.started_at, tr.completed_at
+              FROM troubleshooting_records tr
+              WHERE tr.site = $1
+              AND tr.equipment_type = $2
+              AND tr.started_at > NOW() - INTERVAL '30 days'
+              ORDER BY tr.started_at DESC
+              LIMIT 15
+            `, [site, agent_type]);
+            dashboard.troubleshooting = troubleResult.rows;
+
+            const pending = troubleResult.rows.filter(t => t.status === 'pending' || t.status === 'in_progress');
+            const resolved = troubleResult.rows.filter(t => t.status === 'resolved');
+            dashboard.summary.troubleshooting_pending = pending.length;
+            dashboard.summary.troubleshooting_resolved_30d = resolved.length;
+          } catch (e) {
+            console.error(`[TOOL] get_my_equipment_dashboard - troubleshooting error:`, e.message);
+            dashboard.summary.troubleshooting_pending = 0;
+            dashboard.summary.troubleshooting_resolved_30d = 0;
+          }
+        }
+
+        // 4. Récupérer les communications inter-agents
+        if (include_communications) {
+          try {
+            // Messages non lus
+            const unreadResult = await pool.query(`
+              SELECT id, from_agent, message_type, subject, content, context, created_at
+              FROM agent_communications
+              WHERE site = $1 AND to_agent = $2 AND read_at IS NULL
+              ORDER BY created_at DESC
+              LIMIT 10
+            `, [site, agent_type]);
+            dashboard.communications.unread = unreadResult.rows;
+
+            // Messages récents (lus et non lus)
+            const recentResult = await pool.query(`
+              SELECT id, from_agent, to_agent, message_type, subject, created_at, read_at
+              FROM agent_communications
+              WHERE site = $1 AND (to_agent = $2 OR from_agent = $2)
+              ORDER BY created_at DESC
+              LIMIT 10
+            `, [site, agent_type]);
+            dashboard.communications.recent = recentResult.rows;
+
+            dashboard.summary.unread_messages = unreadResult.rows.length;
+          } catch (e) {
+            console.error(`[TOOL] get_my_equipment_dashboard - communications error:`, e.message);
+            dashboard.summary.unread_messages = 0;
+          }
+        }
+
+        // 5. Récupérer le dernier snapshot avec AI insights
+        try {
+          const snapshotResult = await pool.query(`
+            SELECT snapshot_date, health_score, ai_summary, ai_insights, ai_recommendations,
+                   total_equipment, equipment_ok, equipment_warning, equipment_critical
+            FROM agent_daily_snapshots
+            WHERE site = $1 AND agent_type = $2
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+          `, [site, agent_type]);
+
+          if (snapshotResult.rows.length > 0) {
+            dashboard.snapshot = snapshotResult.rows[0];
+            dashboard.summary.health_score = snapshotResult.rows[0].health_score;
+          }
+        } catch (e) {
+          console.error(`[TOOL] get_my_equipment_dashboard - snapshot error:`, e.message);
+        }
+
+        // 6. Générer un résumé textuel
+        const summaryParts = [];
+        if (dashboard.summary.total_equipment !== undefined) {
+          summaryParts.push(`${dashboard.summary.total_equipment} équipement(s)`);
+        }
+        if (dashboard.summary.controls_overdue > 0) {
+          summaryParts.push(`⚠️ ${dashboard.summary.controls_overdue} contrôle(s) en retard`);
+        }
+        if (dashboard.summary.troubleshooting_pending > 0) {
+          summaryParts.push(`🔧 ${dashboard.summary.troubleshooting_pending} dépannage(s) en cours`);
+        }
+        if (dashboard.summary.unread_messages > 0) {
+          summaryParts.push(`📩 ${dashboard.summary.unread_messages} message(s) non lu(s)`);
+        }
+
+        return {
+          success: true,
+          ...dashboard,
+          text_summary: summaryParts.length > 0
+            ? `Dashboard ${agent_type}: ${summaryParts.join(', ')}.`
+            : `Dashboard ${agent_type}: RAS, tout est sous contrôle.`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_my_equipment_dashboard error:', error.message);
         return { success: false, error: error.message };
       }
     }
