@@ -491,7 +491,7 @@ function detectAgentType(message, toolResults, previousAgent = 'main', currentEq
       equipmentTypes: ['doors', 'fire_doors', 'door']
     },
     datahub: {
-      keywords: ['datahub', 'data hub', 'capteur', 'capteurs', 'sensor', 'monitoring', 'mesure', 'télémétrie', 'iot'],
+      keywords: ['datahub', 'data hub', 'capteur', 'capteurs', 'sensor', 'monitoring', 'mesure', 'télémétrie', 'iot', 'flux laminaire', 'microdoseur', 'hotte', 'psa', 'sorbonne'],
       tools: ['search_datahub', 'get_datahub_details'],
       equipmentTypes: ['datahub']
     },
@@ -512,11 +512,47 @@ function detectAgentType(message, toolResults, previousAgent = 'main', currentEq
     r.success && (r.toolName === 'search_equipment' || r.tool_call_id?.includes('search_equipment'))
   );
 
+  // Check equipment type from search args
   if (searchEquipmentResult?.args?.equipment_type) {
     const eqType = searchEquipmentResult.args.equipment_type.toLowerCase();
     for (const [agentType, config] of Object.entries(agentPatterns)) {
       if (config.equipmentTypes?.includes(eqType)) {
-        log('debug', 'AGENT', `Detected from search_equipment: ${agentType}`);
+        log('debug', 'AGENT', `Detected from search_equipment args: ${agentType}`);
+        return agentType;
+      }
+    }
+  }
+
+  // IMPORTANT: Check equipment type from search RESULTS
+  // When search_equipment finds equipment, it returns equipment_type in the results
+  if (searchEquipmentResult?.result) {
+    const result = searchEquipmentResult.result;
+    // Check if equipment was found and has a type
+    const foundEquipmentType = result.equipment_type
+      || result.equipment?.[0]?.equipment_type
+      || result.result?.equipment_type
+      || result.result?.equipment?.[0]?.equipment_type;
+
+    if (foundEquipmentType) {
+      const eqType = foundEquipmentType.toLowerCase();
+      for (const [agentType, config] of Object.entries(agentPatterns)) {
+        if (config.equipmentTypes?.includes(eqType)) {
+          log('debug', 'AGENT', `Detected from search_equipment RESULT: ${agentType} (found ${eqType})`);
+          return agentType;
+        }
+      }
+    }
+  }
+
+  // Also check show_map results for equipment type
+  const showMapResult = toolResults.find(r =>
+    r.success && (r.toolName === 'show_map' || r.tool_call_id?.includes('show_map'))
+  );
+  if (showMapResult?.result?.equipment_type) {
+    const eqType = showMapResult.result.equipment_type.toLowerCase();
+    for (const [agentType, config] of Object.entries(agentPatterns)) {
+      if (config.equipmentTypes?.includes(eqType)) {
+        log('debug', 'AGENT', `Detected from show_map: ${agentType}`);
         return agentType;
       }
     }
