@@ -938,6 +938,28 @@ function createChatV2Router(pool) {
         if (result.rankings) chatResponse.reliabilityRankings = result.rankings;
         if (result.priorities) chatResponse.maintenancePriorities = result.priorities;
         if (result.comparison) chatResponse.buildingComparison = result.comparison;
+
+        // Transfer troubleshooting data
+        if (result.ready_for_transfer && result.troubleshooting && result.target_equipment) {
+          chatResponse.showTransferConfirmation = true;
+          chatResponse.transferData = {
+            troubleshootingId: result.troubleshooting.id,
+            troubleshootingTitle: result.troubleshooting.title,
+            sourceEquipment: result.troubleshooting.current_equipment,
+            sourceBuilding: result.troubleshooting.current_building,
+            targetEquipmentId: result.target_equipment.id,
+            targetEquipmentName: result.target_equipment.name,
+            targetEquipmentType: result.target_equipment.type,
+            targetBuilding: result.target_equipment.building
+          };
+        }
+        if (result.needs_clarification && result.candidates?.length > 0) {
+          chatResponse.showTransferCandidates = true;
+          chatResponse.transferCandidates = result.candidates;
+        }
+        if (result.transfer?.troubleshooting_id) {
+          chatResponse.transferComplete = true;
+        }
       });
 
       const responseTimeMs = Date.now() - startTime;

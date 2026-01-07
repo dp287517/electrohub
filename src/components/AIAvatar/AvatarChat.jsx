@@ -11,7 +11,7 @@ import {
   Volume2, VolumeX, BarChart3, Play, Loader2,
   ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
   ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown,
-  MapPin, FlaskConical
+  MapPin, FlaskConical, ArrowRightLeft, Check
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator, ProcedureViewer } from '../Procedures';
@@ -126,6 +126,9 @@ export default function AvatarChat({
   const [showPredictions, setShowPredictions] = useState(false);
   // User profile
   const [userProfile, setUserProfile] = useState(null);
+  // Transfer state
+  const [pendingTransfer, setPendingTransfer] = useState(null);
+  const [transferLoading, setTransferLoading] = useState(false);
   // V2 Mode (Function Calling) toggle
   const [useV2Mode, setUseV2Mode] = useState(() => {
     return aiAssistant.getUseV2();
@@ -559,6 +562,14 @@ Demande-moi n'importe quoi !`,
         expectsFile: response.expectsFile,
         importedProcedure: response.importedProcedure,
         reportAnalysis: response.reportAnalysis,
+        // ===============================
+        // TROUBLESHOOTING TRANSFER
+        // ===============================
+        transferData: response.transferData,
+        transferCandidates: response.transferCandidates,
+        showTransferConfirmation: response.showTransferConfirmation,
+        showTransferCandidates: response.showTransferCandidates,
+        transferComplete: response.transferComplete,
         timestamp: new Date()
       };
 
@@ -948,6 +959,128 @@ Demande-moi n'importe quoi !`,
                       <Play className="w-4 h-4" />
                       <span>Exécuter: {message.pendingAction.action}</span>
                     </button>
+                  </div>
+                )}
+
+                {/* Transfer Confirmation UI */}
+                {message.showTransferConfirmation && message.transferData && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="p-3 bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg border border-amber-200">
+                      <div className="flex items-center gap-2 mb-3">
+                        <ArrowRightLeft className="w-5 h-5 text-amber-600" />
+                        <p className="text-sm font-medium text-amber-800">Transfert de dépannage</p>
+                      </div>
+
+                      <div className="space-y-2 mb-3 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500">De:</span>
+                          <span className="font-medium">{message.transferData.sourceEquipment}</span>
+                          <span className="text-xs text-gray-400">({message.transferData.sourceBuilding || 'N/A'})</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500">Vers:</span>
+                          <span className="font-medium text-amber-700">{message.transferData.targetEquipmentName}</span>
+                          <span className="text-xs text-gray-400">({message.transferData.targetBuilding || 'N/A'})</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={async () => {
+                          setTransferLoading(true);
+                          try {
+                            const response = await aiAssistant.chat(
+                              `Confirme le transfert du dépannage vers ${message.transferData.targetEquipmentName}`,
+                              {
+                                context: {
+                                  ...context,
+                                  transferAction: {
+                                    action: 'confirm_troubleshooting_transfer',
+                                    params: {
+                                      troubleshooting_id: message.transferData.troubleshootingId,
+                                      target_equipment_id: message.transferData.targetEquipmentId,
+                                      target_equipment_type: message.transferData.targetEquipmentType,
+                                      target_equipment_name: message.transferData.targetEquipmentName,
+                                      target_building: message.transferData.targetBuilding
+                                    }
+                                  }
+                                },
+                                conversationHistory: messages.slice(-10)
+                              }
+                            );
+
+                            const resultMessage = {
+                              id: Date.now(),
+                              role: 'assistant',
+                              content: response.message || '✅ Transfert effectué !',
+                              transferComplete: true,
+                              timestamp: new Date()
+                            };
+                            setMessages(prev => [...prev, resultMessage]);
+                            speak(resultMessage.content);
+                          } catch (e) {
+                            console.error('Transfer error:', e);
+                            const errorMessage = {
+                              id: Date.now(),
+                              role: 'assistant',
+                              content: `❌ Erreur lors du transfert: ${e.message}`,
+                              isError: true,
+                              timestamp: new Date()
+                            };
+                            setMessages(prev => [...prev, errorMessage]);
+                          }
+                          setTransferLoading(false);
+                        }}
+                        disabled={transferLoading}
+                        className="flex items-center justify-center gap-2 w-full px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {transferLoading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Transfert en cours...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4" />
+                            <span>Confirmer le transfert</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Transfer Candidates Selection UI */}
+                {message.showTransferCandidates && message.transferCandidates && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <p className="text-xs font-medium text-gray-500 mb-2">🎯 Sélectionne l'équipement cible :</p>
+                    <div className="space-y-2">
+                      {message.transferCandidates.map((candidate, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleSend(`C'est ${candidate.name} dans le bâtiment ${candidate.building || 'principal'}`)}
+                          className="flex items-center gap-3 w-full px-3 py-2 bg-white rounded-lg text-left text-sm hover:bg-amber-50 hover:border-amber-300 transition-colors border"
+                        >
+                          <div className="p-1.5 bg-amber-100 rounded">
+                            <Wrench className="w-4 h-4 text-amber-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 truncate">{candidate.name}</p>
+                            <p className="text-xs text-gray-500">
+                              {candidate.building || 'N/A'} • {candidate.type}
+                            </p>
+                          </div>
+                          <ArrowRightLeft className="w-4 h-4 text-gray-400" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Transfer Complete Badge */}
+                {message.transferComplete && (
+                  <div className="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                    <CheckCircle className="w-3 h-3" />
+                    Transfert effectué
                   </div>
                 )}
 
