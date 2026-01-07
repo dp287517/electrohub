@@ -410,11 +410,12 @@ UTILISE CETTE FONCTION pour obtenir:
     type: "function",
     function: {
       name: "get_controls",
-      description: `Récupère les contrôles planifiés, en retard ou à venir.
+      description: `Récupère les contrôles planifiés, en retard ou à venir pour tous types d'équipements.
 
-⚠️ IMPORTANT: Tous les contrôles sont centralisés dans "Switchboard Controls".
-Même si tu es un agent spécialisé (mobile, vsd, meca...), tu peux et dois utiliser cette fonction
-pour répondre aux questions sur l'état des contrôles, les retards, les plannings.
+⚠️ IMPORTANT:
+- Les contrôles des tableaux électriques sont dans "Switchboard Controls" (scheduled_controls)
+- Les contrôles des portes coupe-feu sont dans "Fire Door Checks" (fd_checks)
+- Cette fonction gère automatiquement les deux types selon le paramètre equipment_type
 
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "contrôles en retard", "équipements à contrôler"
@@ -423,19 +424,24 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "quel est l'état de cet équipement" (pour les contrôles)
 - "y a-t-il des contrôles en retard ?"
 - "prochain contrôle prévu", "échéances"
-- Toute question sur les contrôles ou la planification`,
+- "dernier contrôle de cette porte", "historique contrôles porte"
+- Toute question sur les contrôles ou la planification
+
+POUR LES PORTES COUPE-FEU:
+- Utilise equipment_type="doors" pour filtrer uniquement les portes
+- Le door_id peut être passé dans equipment_id pour une porte spécifique`,
       parameters: {
         type: "object",
         properties: {
           filter: {
             type: "string",
-            enum: ["overdue", "today", "this_week", "this_month", "next_30_days", "all"],
-            description: "Filtre temporel pour les contrôles"
+            enum: ["overdue", "today", "this_week", "this_month", "next_30_days", "all", "last", "history"],
+            description: "Filtre temporel. 'last' = dernier contrôle effectué, 'history' = historique des contrôles"
           },
           equipment_type: {
             type: "string",
-            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "all"],
-            description: "Type d'équipement contexte (pour info, tous les contrôles viennent de Switchboard Controls)"
+            enum: ["switchboard", "doors", "vsd", "meca", "atex", "hv", "mobile", "all"],
+            description: "Type d'équipement. 'doors' pour les portes coupe-feu, 'switchboard' pour tableaux"
           },
           building: {
             type: "string",
@@ -443,7 +449,11 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
           },
           equipment_id: {
             type: "string",
-            description: "ID spécifique d'un switchboard pour filtrer ses contrôles"
+            description: "ID spécifique d'un équipement (switchboard ou door) pour filtrer ses contrôles"
+          },
+          equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement pour recherche (ex: 'Porte 001', 'TD-A1')"
           },
           limit: {
             type: "number",
@@ -1883,16 +1893,209 @@ function createToolHandlers(pool, site) {
     },
 
     // -----------------------------------------------------------------------
-    // CONTRÔLES (Tous les contrôles sont gérés via Switchboard Controls)
-    // NOTE: Tous les agents doivent pouvoir voir les contrôles planifiés
-    // même s'ils sont sur un équipement non-switchboard (mobile, vsd, etc.)
+    // CONTRÔLES (Switchboard Controls + Fire Door Checks)
+    // NOTE: Gère les contrôles de tableaux (scheduled_controls) ET portes (fd_checks)
     // -----------------------------------------------------------------------
     get_controls: async (params) => {
-      const { filter = 'overdue', equipment_type = 'all', building, equipment_id, limit = 20 } = params;
+      const { filter = 'overdue', equipment_type = 'all', building, equipment_id, equipment_name, limit = 20 } = params;
 
       const now = new Date();
       const today = now.toISOString().split('T')[0];
+      const maxLimit = Math.min(parseInt(limit) || 20, 50);
 
+      // ===== PORTES COUPE-FEU (fd_checks) =====
+      if (equipment_type === 'doors') {
+        try {
+          let doorQuery = '';
+          const doorParams = [site];
+          let paramIdx = 2;
+
+          // Si on cherche le dernier contrôle ou l'historique
+          if (filter === 'last' || filter === 'history') {
+            doorQuery = `
+              SELECT
+                c.id as control_id,
+                c.due_date,
+                c.closed_at,
+                c.status,
+                c.result_counts,
+                c.closed_by_name,
+                c.closed_by_email,
+                d.id as equipment_id,
+                d.name as equipment_name,
+                d.building,
+                d.floor,
+                d.location,
+                'door' as equipment_type,
+                CASE WHEN c.status = 'ok' THEN 'Conforme'
+                     WHEN c.status = 'nc' THEN 'Non conforme'
+                     ELSE 'En cours' END as status_label
+              FROM fd_checks c
+              JOIN fd_doors d ON c.door_id = d.id
+              WHERE d.site = $1 AND c.closed_at IS NOT NULL
+            `;
+
+            // Filtrer par equipment_id si spécifié
+            if (equipment_id) {
+              doorQuery += ` AND d.id = $${paramIdx}`;
+              doorParams.push(equipment_id);
+              paramIdx++;
+            }
+
+            // Filtrer par nom si spécifié
+            if (equipment_name) {
+              doorQuery += ` AND LOWER(d.name) LIKE $${paramIdx}`;
+              doorParams.push(`%${equipment_name.toLowerCase()}%`);
+              paramIdx++;
+            }
+
+            // Filtrer par bâtiment
+            if (building) {
+              doorQuery += ` AND UPPER(d.building) = $${paramIdx}`;
+              doorParams.push(building.toUpperCase());
+              paramIdx++;
+            }
+
+            doorQuery += ` ORDER BY c.closed_at DESC`;
+
+            if (filter === 'last') {
+              // Pour "last", on veut le dernier contrôle par porte
+              doorQuery = `
+                SELECT DISTINCT ON (d.id)
+                  c.id as control_id,
+                  c.due_date,
+                  c.closed_at,
+                  c.status,
+                  c.result_counts,
+                  c.closed_by_name,
+                  c.closed_by_email,
+                  d.id as equipment_id,
+                  d.name as equipment_name,
+                  d.building,
+                  d.floor,
+                  d.location,
+                  'door' as equipment_type,
+                  CASE WHEN c.status = 'ok' THEN 'Conforme'
+                       WHEN c.status = 'nc' THEN 'Non conforme'
+                       ELSE 'En cours' END as status_label
+                FROM fd_checks c
+                JOIN fd_doors d ON c.door_id = d.id
+                WHERE d.site = $1 AND c.closed_at IS NOT NULL
+                ${equipment_id ? `AND d.id = $${paramIdx - (equipment_name ? 2 : 1) - (building ? 1 : 0)}` : ''}
+                ${equipment_name ? `AND LOWER(d.name) LIKE $${paramIdx - (building ? 1 : 0) - 1}` : ''}
+                ${building ? `AND UPPER(d.building) = $${paramIdx - 1}` : ''}
+                ORDER BY d.id, c.closed_at DESC
+              `;
+            }
+
+            doorQuery += ` LIMIT ${maxLimit}`;
+          } else {
+            // Contrôles planifiés (pending)
+            let dateCondition = '';
+            switch (filter) {
+              case 'overdue':
+                dateCondition = `AND c.due_date < '${today}'`;
+                break;
+              case 'today':
+                dateCondition = `AND c.due_date = '${today}'`;
+                break;
+              case 'this_week':
+                const weekEnd = new Date(now);
+                weekEnd.setDate(weekEnd.getDate() + 7);
+                dateCondition = `AND c.due_date BETWEEN '${today}' AND '${weekEnd.toISOString().split('T')[0]}'`;
+                break;
+              case 'this_month':
+              case 'next_30_days':
+                const thirtyDays = new Date(now);
+                thirtyDays.setDate(thirtyDays.getDate() + 30);
+                dateCondition = `AND c.due_date BETWEEN '${today}' AND '${thirtyDays.toISOString().split('T')[0]}'`;
+                break;
+              default:
+                dateCondition = '';
+            }
+
+            doorQuery = `
+              SELECT
+                c.id as control_id,
+                c.due_date,
+                c.started_at,
+                d.id as equipment_id,
+                d.name as equipment_name,
+                d.building,
+                d.floor,
+                d.location,
+                'door' as equipment_type,
+                CASE
+                  WHEN c.due_date < CURRENT_DATE THEN
+                    EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int
+                  ELSE 0
+                END as days_overdue,
+                CASE WHEN c.started_at IS NOT NULL THEN 'En cours' ELSE 'Planifié' END as status_label
+              FROM fd_checks c
+              JOIN fd_doors d ON c.door_id = d.id
+              WHERE d.site = $1 AND c.closed_at IS NULL
+              ${dateCondition}
+            `;
+
+            if (equipment_id) {
+              doorQuery += ` AND d.id = $${paramIdx}`;
+              doorParams.push(equipment_id);
+              paramIdx++;
+            }
+
+            if (equipment_name) {
+              doorQuery += ` AND LOWER(d.name) LIKE $${paramIdx}`;
+              doorParams.push(`%${equipment_name.toLowerCase()}%`);
+              paramIdx++;
+            }
+
+            if (building) {
+              doorQuery += ` AND UPPER(d.building) = $${paramIdx}`;
+              doorParams.push(building.toUpperCase());
+              paramIdx++;
+            }
+
+            doorQuery += ` ORDER BY c.due_date ASC LIMIT ${maxLimit}`;
+          }
+
+          const result = await pool.query(doorQuery, doorParams);
+
+          const overdueCount = result.rows.filter(r => r.days_overdue > 0).length;
+
+          return {
+            success: true,
+            filter,
+            equipment_type: 'doors',
+            count: result.rows.length,
+            overdue_count: overdueCount,
+            building_filter: building || 'all',
+            controls: result.rows.map(c => ({
+              control_id: c.control_id,
+              due_date: c.due_date,
+              closed_at: c.closed_at,
+              status: c.status,
+              status_label: c.status_label,
+              result_counts: c.result_counts,
+              closed_by: c.closed_by_name || c.closed_by_email,
+              equipment_id: c.equipment_id,
+              equipment_name: c.equipment_name,
+              building: c.building,
+              floor: c.floor,
+              location: c.location,
+              equipment_type: 'door',
+              days_overdue: c.days_overdue || 0
+            })),
+            summary: result.rows.length === 0
+              ? `Aucun contrôle ${filter === 'last' ? 'effectué' : filter === 'history' ? 'dans l\'historique' : filter === 'overdue' ? 'en retard' : 'prévu'} pour les portes coupe-feu${equipment_name ? ` "${equipment_name}"` : ''}${building ? ` du bâtiment ${building}` : ''}.`
+              : `${result.rows.length} contrôle(s) ${filter === 'last' ? 'dernier(s)' : filter === 'history' ? 'dans l\'historique' : filter === 'overdue' ? 'en retard' : 'prévu(s)'} pour les portes coupe-feu${overdueCount > 0 ? ` (${overdueCount} en retard)` : ''}.`
+          };
+        } catch (error) {
+          console.error('[TOOL] get_controls (doors) error:', error.message);
+          return { success: false, error: error.message, controls: [] };
+        }
+      }
+
+      // ===== TABLEAUX ÉLECTRIQUES (scheduled_controls) =====
       // Calculer les dates selon le filtre
       let dateCondition = '';
       switch (filter) {
@@ -1916,6 +2119,11 @@ function createToolHandlers(pool, site) {
           const thirtyDays = new Date(now);
           thirtyDays.setDate(thirtyDays.getDate() + 30);
           dateCondition = `AND sc.next_control_date BETWEEN '${today}' AND '${thirtyDays.toISOString().split('T')[0]}'`;
+          break;
+        case 'last':
+        case 'history':
+          // Pour switchboards, pas d'historique dans scheduled_controls (c'est dans control_records)
+          dateCondition = '';
           break;
         default:
           dateCondition = '';
@@ -1949,13 +2157,20 @@ function createToolHandlers(pool, site) {
       }
 
       // Si un equipment_id spécifique est demandé (pour switchboard)
-      if (equipment_id && equipment_type === 'switchboard') {
+      if (equipment_id && (equipment_type === 'switchboard' || equipment_type === 'all')) {
         query += ` AND s.id = $${paramIndex}`;
         queryParams.push(equipment_id);
         paramIndex++;
       }
 
-      query += ` ORDER BY sc.next_control_date ASC LIMIT ${Math.min(parseInt(limit) || 20, 50)}`;
+      // Si un nom d'équipement est spécifié
+      if (equipment_name) {
+        query += ` AND (LOWER(s.name) LIKE $${paramIndex} OR LOWER(s.code) LIKE $${paramIndex})`;
+        queryParams.push(`%${equipment_name.toLowerCase()}%`);
+        paramIndex++;
+      }
+
+      query += ` ORDER BY sc.next_control_date ASC LIMIT ${maxLimit}`;
 
       try {
         const result = await pool.query(query, queryParams);
@@ -1966,7 +2181,7 @@ function createToolHandlers(pool, site) {
 
         // Message adapté selon le contexte
         let contextNote = '';
-        if (equipment_type && equipment_type !== 'switchboard' && equipment_type !== 'all') {
+        if (equipment_type && equipment_type !== 'switchboard' && equipment_type !== 'all' && equipment_type !== 'doors') {
           contextNote = `\n\n📋 **Note**: Tous les contrôles sont gérés depuis "Switchboard Controls". ` +
             `Voici les contrôles planifiés${building ? ` pour le bâtiment ${building}` : ''}.`;
         }
@@ -3232,6 +3447,7 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "ouvre/montre la procédure", "affiche la procédure" | open_procedure_modal |
 | "équipements du bâtiment", "trouve le tableau", "où est..." | search_equipment |
 | "contrôles en retard", "planning contrôles", "prochains contrôles", "état équipement" | get_controls |
+| "dernier contrôle porte", "historique contrôle porte", "contrôle porte coupe-feu" | get_controls (equipment_type="doors") |
 | "NC ouvertes", "non-conformités", "anomalies" | get_non_conformities |
 | "montre sur la carte", "localise", "plan" | show_map |
 | "statistiques", "vue d'ensemble", "résumé", "combien de..." | get_statistics |
