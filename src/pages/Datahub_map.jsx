@@ -22,6 +22,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const STORAGE_KEY_PLAN = "datahub_map_selected_plan";
 const STORAGE_KEY_PAGE = "datahub_map_page_index";
+const STORAGE_KEY_SHOW_FILTERS = "datahub_map_show_filters";
 
 // Marker sizes (same as other map pages)
 const ICON_PX = 22;
@@ -579,6 +580,12 @@ export default function DatahubMap() {
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [showFilters, setShowFilters] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SHOW_FILTERS);
+      return saved !== null ? JSON.parse(saved) : false;
+    } catch { return false; }
+  });
   const [toast, setToast] = useState(null);
   const [pdfReady, setPdfReady] = useState(false);
 
@@ -788,6 +795,11 @@ export default function DatahubMap() {
   }, [loadControlStatuses]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Persist showFilters state
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_SHOW_FILTERS, JSON.stringify(showFilters)); } catch {}
+  }, [showFilters]);
 
   // Handle URL params for navigation from list page
   useEffect(() => {
@@ -1708,34 +1720,49 @@ export default function DatahubMap() {
               </button>
             </div>
           )}
+
+          {/* Toggle filters button */}
+          <button
+            onClick={() => setShowFilters(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+              showFilters
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Filter size={16} />
+            <span className="hidden sm:inline">Filtres</span>
+          </button>
         </div>
 
         {/* External equipment categories toggle - show all equipment types on map */}
-        <div className="px-3 md:px-4 pb-2 md:pb-3 flex items-center gap-1 flex-wrap">
-          <span className="text-xs text-gray-500 mr-1">Equipements:</span>
-          {Object.entries(EXTERNAL_CATEGORIES).map(([catKey, extCat]) => {
-            const isActive = visibleExternalCategories.includes(catKey);
-            const count = externalTotals[catKey] || 0;
-            const IconComp = ICON_MAP[extCat.icon] || Circle;
-            return (
-              <button
-                key={catKey}
-                onClick={() => toggleExternalCategory(catKey)}
-                title={`${extCat.name} (${count})`}
-                className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all ${
-                  isActive
-                    ? 'text-white shadow-sm'
-                    : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                }`}
-                style={isActive ? { backgroundColor: extCat.color } : {}}
-              >
-                <IconComp size={12} />
-                <span className="hidden sm:inline">{extCat.shortName}</span>
-                {count > 0 && <span className="ml-0.5 tabular-nums">({count})</span>}
-              </button>
-            );
-          })}
-        </div>
+        {showFilters && (
+          <div className="px-3 md:px-4 pb-2 md:pb-3 flex items-center gap-1 flex-wrap">
+            <span className="text-xs text-gray-500 mr-1">Equipements:</span>
+            {Object.entries(EXTERNAL_CATEGORIES).map(([catKey, extCat]) => {
+              const isActive = visibleExternalCategories.includes(catKey);
+              const count = externalTotals[catKey] || 0;
+              const IconComp = ICON_MAP[extCat.icon] || Circle;
+              return (
+                <button
+                  key={catKey}
+                  onClick={() => toggleExternalCategory(catKey)}
+                  title={`${extCat.name} (${count})`}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all ${
+                    isActive
+                      ? 'text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                  }`}
+                  style={isActive ? { backgroundColor: extCat.color } : {}}
+                >
+                  <IconComp size={12} />
+                  <span className="hidden sm:inline">{extCat.shortName}</span>
+                  {count > 0 && <span className="ml-0.5 tabular-nums">({count})</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -1747,61 +1774,76 @@ export default function DatahubMap() {
 
             <div className={`${isMobile ? 'absolute inset-y-0 right-0 z-30 w-[85vw] max-w-[340px]' : 'w-80 lg:w-96'} bg-white border-l shadow-lg flex flex-col`}>
               {/* Sidebar header */}
-              <div className="p-3 border-b space-y-3 flex-shrink-0">
+              <div className={`p-3 border-b flex-shrink-0 ${showFilters ? 'space-y-3' : ''}`}>
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-gray-900">Items ({filteredItems.length})</span>
-                  {isMobile && (
-                    <button onClick={() => setShowSidebar(false)} className="p-1.5 hover:bg-gray-100 rounded-lg">
-                      <X size={18} />
-                    </button>
-                  )}
-                </div>
-
-                {/* Search */}
-                <div className="relative">
-                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Rechercher..."
-                    className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-xl text-sm"
-                  />
-                </div>
-
-                {/* Filter tabs */}
-                <div className="flex gap-1">
-                  {[
-                    { key: 'all', label: 'Tous', count: stats.total },
-                    { key: 'unplaced', label: 'Non places', count: stats.unplaced, variant: 'warning' },
-                    { key: 'placed', label: 'Places', count: stats.placed, variant: 'success' },
-                  ].map(f => (
+                  <div className="flex items-center gap-1">
                     <button
-                      key={f.key}
-                      onClick={() => setFilterMode(f.key)}
-                      className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${
-                        filterMode === f.key
-                          ? f.variant === 'warning' ? 'bg-amber-500 text-white'
-                            : f.variant === 'success' ? 'bg-emerald-500 text-white'
-                            : 'bg-indigo-600 text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      onClick={() => setShowFilters(v => !v)}
+                      className={`p-1.5 rounded-lg transition-colors ${
+                        showFilters ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-500'
                       }`}
+                      title={showFilters ? "Masquer les filtres" : "Afficher les filtres"}
                     >
-                      {f.label}
+                      <Filter size={16} />
                     </button>
-                  ))}
+                    {isMobile && (
+                      <button onClick={() => setShowSidebar(false)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                        <X size={18} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {/* Category filters */}
-                {categories.length > 0 && (
-                  <div className="pt-1">
-                    <CategoryFilterChips
-                      categories={categories}
-                      selectedCategories={selectedCategories}
-                      onToggle={toggleCategory}
-                      onClearAll={() => setSelectedCategories([])}
-                    />
-                  </div>
+                {showFilters && (
+                  <>
+                    {/* Search */}
+                    <div className="relative">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder="Rechercher..."
+                        className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-xl text-sm"
+                      />
+                    </div>
+
+                    {/* Filter tabs */}
+                    <div className="flex gap-1">
+                      {[
+                        { key: 'all', label: 'Tous', count: stats.total },
+                        { key: 'unplaced', label: 'Non places', count: stats.unplaced, variant: 'warning' },
+                        { key: 'placed', label: 'Places', count: stats.placed, variant: 'success' },
+                      ].map(f => (
+                        <button
+                          key={f.key}
+                          onClick={() => setFilterMode(f.key)}
+                          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${
+                            filterMode === f.key
+                              ? f.variant === 'warning' ? 'bg-amber-500 text-white'
+                                : f.variant === 'success' ? 'bg-emerald-500 text-white'
+                                : 'bg-indigo-600 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Category filters */}
+                    {categories.length > 0 && (
+                      <div className="pt-1">
+                        <CategoryFilterChips
+                          categories={categories}
+                          selectedCategories={selectedCategories}
+                          onToggle={toggleCategory}
+                          onClearAll={() => setSelectedCategories([])}
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
