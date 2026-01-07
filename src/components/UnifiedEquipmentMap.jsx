@@ -291,12 +291,23 @@ const DetailPanel = ({
   onDeleteLink,
   onLinkClick,
   currentPlan,
-  currentPageIndex
+  currentPageIndex,
+  mapContainerRef
 }) => {
   const [showAddLink, setShowAddLink] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const panelRef = useRef(null);
+
+  // Detect mobile screen
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   if (!position) return null;
 
@@ -345,8 +356,80 @@ const DetailPanel = ({
     return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
   };
 
+  // Calculate panel position beside marker (desktop only)
+  const getPanelStyle = () => {
+    // Mobile: use default bottom positioning
+    if (isMobile) {
+      return {};
+    }
+
+    const markerPos = position?.markerScreenPos;
+    const mapContainer = mapContainerRef?.current;
+
+    if (!markerPos || !mapContainer) {
+      // Fallback to default positioning if no marker position
+      return {};
+    }
+
+    const mapRect = mapContainer.getBoundingClientRect();
+    const panelWidth = 384; // w-96 = 24rem = 384px
+    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
+    const offset = 20; // Gap between marker and panel
+
+    // Calculate marker position relative to the map container
+    const markerRelativeX = markerPos.x - mapRect.left;
+    const markerRelativeY = markerPos.y - mapRect.top;
+
+    // Determine if panel should go left or right of marker
+    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+    const spaceOnLeft = markerRelativeX - offset;
+
+    let left;
+    if (spaceOnRight >= panelWidth) {
+      // Place on right side of marker
+      left = markerRelativeX + offset;
+    } else if (spaceOnLeft >= panelWidth) {
+      // Place on left side of marker
+      left = markerRelativeX - panelWidth - offset;
+    } else {
+      // Not enough space on either side, center horizontally
+      left = Math.max(8, (mapRect.width - panelWidth) / 2);
+    }
+
+    // Vertical positioning: try to center vertically on marker, but stay within bounds
+    let top = markerRelativeY - panelMaxHeight / 2;
+
+    // Ensure panel stays within map bounds
+    if (top < 8) {
+      top = 8;
+    } else if (top + panelMaxHeight > mapRect.height - 8) {
+      top = Math.max(8, mapRect.height - panelMaxHeight - 8);
+    }
+
+    return {
+      position: 'absolute',
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${panelWidth}px`,
+      maxHeight: `${panelMaxHeight}px`,
+      bottom: 'auto',
+      right: 'auto'
+    };
+  };
+
+  const desktopStyle = getPanelStyle();
+  const hasCustomPosition = !isMobile && Object.keys(desktopStyle).length > 0;
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+    <AnimatedCard
+      ref={panelRef}
+      className={`bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 flex flex-col ${
+        hasCustomPosition
+          ? 'absolute'
+          : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh]'
+      }`}
+      style={hasCustomPosition ? desktopStyle : {}}
+    >
       <div
         className="p-4 text-white flex-shrink-0"
         style={{ background: `linear-gradient(135deg, ${typeConfig.color || '#6b7280'}, ${typeConfig.color || '#6b7280'}dd)` }}
@@ -690,9 +773,28 @@ const UnifiedLeafletViewer = forwardRef(({
         setPicker(null);
         // Get fresh control status at click time (not stale from marker creation)
         const freshStatus = controlStatusesRef.current[`${p.equipment_type}_${p.equipment_id}`] || "none";
+
+        // Get marker screen position for positioning the detail panel beside it
+        const map = mapRef.current;
+        let markerScreenPos = null;
+        if (map) {
+          const containerPoint = map.latLngToContainerPoint(mk.getLatLng());
+          const mapContainer = map.getContainer();
+          const mapRect = mapContainer.getBoundingClientRect();
+          markerScreenPos = {
+            x: mapRect.left + containerPoint.x,
+            y: mapRect.top + containerPoint.y,
+            containerWidth: mapRect.width,
+            containerHeight: mapRect.height,
+            mapLeft: mapRect.left,
+            mapTop: mapRect.top
+          };
+        }
+
         onClickPoint?.({
           ...mk.__meta,
-          control_status: freshStatus
+          control_status: freshStatus,
+          markerScreenPos
         });
       });
 
@@ -1057,6 +1159,7 @@ export default function UnifiedEquipmentMap({
   const [linksLoading, setLinksLoading] = useState(false);
 
   const viewerRef = useRef(null);
+  const mapContainerRef = useRef(null);
 
   // Get file URL for selected plan
   const stableFileUrl = useMemo(() => {
@@ -1703,7 +1806,7 @@ export default function UnifiedEquipmentMap({
         )}
 
         {/* Map */}
-        <div className="flex-1 flex flex-col relative">
+        <div ref={mapContainerRef} className="flex-1 flex flex-col relative">
           {!selectedPlan ? (
             <EmptyState
               icon={MapPin}
@@ -1772,6 +1875,7 @@ export default function UnifiedEquipmentMap({
               onLinkClick={handleLinkClick}
               currentPlan={selectedPlan?.logical_name || selectedPlan?.id}
               currentPageIndex={pageIndex}
+              mapContainerRef={mapContainerRef}
             />
           )}
         </div>

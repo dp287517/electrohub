@@ -403,11 +403,20 @@ const CategoryFilterChips = ({ categories, selectedCategories, onToggle, onClear
 };
 
 // Detail Panel for selected item with Equipment Links
-const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0, mapContainerRef }) => {
   const [showAddLink, setShowAddLink] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [isMobileState, setIsMobileState] = useState(false);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobileState(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   if (!item) return null;
   const IconComp = ICON_MAP[category?.icon] || Circle;
@@ -436,8 +445,66 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
     return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
   };
 
+  // Calculate panel position beside marker (desktop only)
+  const getPanelStyle = () => {
+    if (isMobileState) return {};
+
+    const markerPos = position?.markerScreenPos;
+    const mapContainer = mapContainerRef?.current;
+
+    if (!markerPos || !mapContainer) return {};
+
+    const mapRect = mapContainer.getBoundingClientRect();
+    const panelWidth = 320;
+    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
+    const offset = 20;
+
+    const markerRelativeX = markerPos.x - mapRect.left;
+    const markerRelativeY = markerPos.y - mapRect.top;
+
+    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+    const spaceOnLeft = markerRelativeX - offset;
+
+    let left;
+    if (spaceOnRight >= panelWidth) {
+      left = markerRelativeX + offset;
+    } else if (spaceOnLeft >= panelWidth) {
+      left = markerRelativeX - panelWidth - offset;
+    } else {
+      left = Math.max(8, (mapRect.width - panelWidth) / 2);
+    }
+
+    let top = markerRelativeY - panelMaxHeight / 2;
+    if (top < 8) {
+      top = 8;
+    } else if (top + panelMaxHeight > mapRect.height - 8) {
+      top = Math.max(8, mapRect.height - panelMaxHeight - 8);
+    }
+
+    return {
+      position: 'absolute',
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${panelWidth}px`,
+      maxHeight: `${panelMaxHeight}px`,
+      bottom: 'auto',
+      right: 'auto'
+    };
+  };
+
+  const desktopStyle = getPanelStyle();
+  const hasCustomPosition = !isMobileState && Object.keys(desktopStyle).length > 0;
+
   return (
-    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`}>
+    <div
+      ref={panelRef}
+      className={`${
+        hasCustomPosition
+          ? 'absolute z-[60] bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col'
+          : `${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`
+      }`}
+      style={hasCustomPosition ? desktopStyle : {}}
+    >
       <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -1110,8 +1177,23 @@ export default function DatahubMap() {
 
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
+        // Get marker screen position for positioning the detail panel beside it
+        let markerScreenPos = null;
+        if (map) {
+          const containerPoint = map.latLngToContainerPoint(marker.getLatLng());
+          const mapContainer = map.getContainer();
+          const mapRect = mapContainer.getBoundingClientRect();
+          markerScreenPos = {
+            x: mapRect.left + containerPoint.x,
+            y: mapRect.top + containerPoint.y,
+            containerWidth: mapRect.width,
+            containerHeight: mapRect.height,
+            mapLeft: mapRect.left,
+            mapTop: mapRect.top
+          };
+        }
         setSelectedItem(item);
-        setSelectedPosition(pos);
+        setSelectedPosition({ ...pos, markerScreenPos });
         setPlacementMode(null);
         setCreateMode(false);
         // Load equipment links
@@ -1945,6 +2027,7 @@ export default function DatahubMap() {
                   onLinkClick={handleLinkClick}
                   currentPlan={selectedPlan}
                   currentPageIndex={pageIndex}
+                  mapContainerRef={mapContainerRef}
                 />
               )}
             </>
