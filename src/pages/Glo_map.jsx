@@ -1553,6 +1553,13 @@ export default function GloMap() {
   const currentPositions = getLatestPositions();
   const currentPlacedHere = useMemo(() => new Set(currentPositions.map(p => String(p.equipment_id))), [currentPositions]);
 
+  // Calculate stats for mobile FAB badge
+  const stats = useMemo(() => ({
+    total: equipments.length,
+    placed: placedIds.size,
+    unplaced: equipments.length - placedIds.size,
+  }), [equipments.length, placedIds.size]);
+
   return (
     <div className="h-screen flex flex-col bg-gray-100 overflow-hidden">
       <style>{`
