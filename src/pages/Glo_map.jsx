@@ -696,8 +696,8 @@ const GloLeafletViewer = forwardRef(({
 
       if (linkLabel === 'upstream') { color = '#10b981'; hasDirection = true; swapDirection = true; }
       else if (linkLabel === 'downstream') { color = '#ef4444'; hasDirection = true; }
-      else if (link.relationship === 'feeds') { color = '#ef4444'; hasDirection = true; }
-      else if (link.relationship === 'fed_by') { color = '#10b981'; hasDirection = true; swapDirection = true; }
+      else if (linkLabel === 'feeds') { color = '#10b981'; hasDirection = true; }
+      else if (linkLabel === 'fed_by') { color = '#ef4444'; hasDirection = true; swapDirection = true; }
       else if (link.type === 'hierarchical') { color = '#f59e0b'; }
 
       const lineStart = swapDirection ? targetLatLng : sourceLatLng;
@@ -1063,8 +1063,8 @@ export default function GloMap() {
   const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
-  const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showSidebar, setShowSidebar] = useState(window.innerWidth >= 768);
 
   const creatingRef = useRef(false);
   const [contextMenu, setContextMenu] = useState(null);
