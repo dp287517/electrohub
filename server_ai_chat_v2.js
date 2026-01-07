@@ -316,6 +316,13 @@ const AGENTS_INFO = {
     emoji: '🧯',
     expertise: ['détection incendie', 'sprinklers', 'extincteurs', 'désenfumage', 'SSI'],
     welcomeMessage: "Blaze présent ! La sécurité incendie, c'est ma spécialité."
+  },
+  infrastructure: {
+    name: 'Atlas',
+    description: 'Expert infrastructure et bâtiments',
+    emoji: '🏗️',
+    expertise: ['infrastructure', 'bâtiments', 'installations', 'équipements généraux', 'utilités'],
+    welcomeMessage: "Atlas à votre service ! Je gère toute l'infrastructure."
   }
 };
 
@@ -492,6 +499,11 @@ function detectAgentType(message, toolResults, previousAgent = 'main', currentEq
       keywords: ['incendie', 'fire', 'détection incendie', 'sprinkler', 'extincteur', 'alarme incendie', 'ssi', 'désenfumage', 'ria'],
       tools: ['search_fire_control', 'get_fire_control_details'],
       equipmentTypes: ['firecontrol', 'fire']
+    },
+    infrastructure: {
+      keywords: ['infrastructure', 'bâtiment', 'batiment', 'installation', 'utilité', 'équipement général', 'équipements généraux'],
+      tools: ['search_infrastructure', 'get_infrastructure_details'],
+      equipmentTypes: ['infrastructure']
     }
   };
 
