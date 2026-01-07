@@ -177,6 +177,8 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_zone_id UUID;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_alarm_level INT DEFAULT 1;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS fire_interlock_code TEXT;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS created_by_email TEXT;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS created_by_name TEXT;`);
 
   // Checks
   await pool.query(`
@@ -700,6 +702,7 @@ app.get("/api/doors/doors", async (req, res) => {
          ORDER BY door_id, closed_at DESC
       )
       SELECT d.id, d.name, d.building, d.floor, d.location, d.photo_path,
+             d.created_by_email, d.created_by_name,
              (SELECT started_at IS NOT NULL AND closed_at IS NULL FROM fd_checks c WHERE c.door_id=d.id ORDER BY due_date ASC LIMIT 1) AS has_started,
              (SELECT due_date FROM fd_checks c WHERE c.door_id=d.id AND c.closed_at IS NULL ORDER BY due_date ASC LIMIT 1) AS next_due,
              CASE WHEN lc.status = 'nc' THEN 'non_conforme'
@@ -729,6 +732,8 @@ app.get("/api/doors/doors", async (req, res) => {
           next_check_date: r.next_due || null,
           photo_url: r.photo_path ? `/api/doors/doors/${r.id}/photo` : null,
           door_state: r.door_state,
+          created_by_email: r.created_by_email,
+          created_by_name: r.created_by_name,
         };
       })
       .filter((it) => !status || it.status === status);
@@ -744,9 +749,11 @@ app.post("/api/doors/doors", async (req, res) => {
     const { name, building = "", floor = "", location = "", fire_interlock = false, fire_interlock_code = null } = req.body || {};
     if (!name) return res.status(400).json({ error: "name requis" });
 
+    const { email: userEmail, name: userName } = await currentUser(req);
+
     const { rows } = await pool.query(
-      `INSERT INTO fd_doors(name, building, floor, location, fire_interlock, fire_interlock_code) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [name, building, floor, location, fire_interlock, fire_interlock_code]
+      `INSERT INTO fd_doors(name, building, floor, location, fire_interlock, fire_interlock_code, created_by_email, created_by_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [name, building, floor, location, fire_interlock, fire_interlock_code, userEmail, userName]
     );
     const door = rows[0];
 
@@ -819,6 +826,8 @@ app.get("/api/doors/doors/:id", async (req, res) => {
         next_check_date: check?.due_date || null,
         photo_url: door.photo_path ? `/api/doors/doors/${door.id}/photo` : null,
         door_state,
+        created_by_email: door.created_by_email,
+        created_by_name: door.created_by_name,
         current_check: check
           ? {
               id: check.id,

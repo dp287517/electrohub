@@ -510,6 +510,10 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_switchboards_code ON switchboards(code);
     CREATE INDEX IF NOT EXISTS idx_switchboards_site_code ON switchboards(site, code);
 
+    -- Add created_by columns for ownership tracking
+    ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+
     -- =======================================================
     -- TABLE: Devices
     -- =======================================================
@@ -548,6 +552,10 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_downstream ON devices(downstream_switchboard_id);
     CREATE INDEX IF NOT EXISTS idx_devices_manufacturer ON devices(manufacturer);
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
+
+    -- Add created_by columns for ownership tracking
+    ALTER TABLE devices ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    ALTER TABLE devices ADD COLUMN IF NOT EXISTS created_by_name TEXT;
     -- Index composite CRITIQUE pour les counts
     CREATE INDEX IF NOT EXISTS idx_devices_switchboard_complete ON devices(switchboard_id, is_complete);
 
@@ -1506,7 +1514,7 @@ app.get('/api/switchboard/boards', async (req, res) => {
     // REQUÊTE OPTIMISÉE: inclut device_count, complete_count et photos_count directement
     const sql = `
       SELECT s.id, s.site, s.name, s.code, s.building_code, s.floor, s.room, s.regime_neutral, s.is_principal,
-             s.modes, s.quality, s.diagram_data, s.created_at,
+             s.modes, s.quality, s.diagram_data, s.created_at, s.created_by_email, s.created_by_name,
              (s.photo IS NOT NULL) as has_photo,
              COALESCE(s.device_count, 0) as device_count,
              COALESCE(s.complete_count, 0) as complete_count,
@@ -1535,6 +1543,8 @@ app.get('/api/switchboard/boards', async (req, res) => {
       modes: r.modes || {},
       quality: r.quality || {},
       created_at: r.created_at,
+      created_by_email: r.created_by_email,
+      created_by_name: r.created_by_name,
       // COUNTS INCLUS DIRECTEMENT - Plus besoin d'appel séparé!
       device_count: r.device_count,
       complete_count: r.complete_count
@@ -1557,7 +1567,8 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
 
     const r = await quickQuery(
       `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
-              modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
+              modes, quality, diagram_data, created_at, created_by_email, created_by_name,
+              (photo IS NOT NULL) as has_photo,
               COALESCE(device_count, 0) as device_count,
               COALESCE(complete_count, 0) as complete_count,
               COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = switchboards.id), 0) as photos_count
@@ -1592,6 +1603,8 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
       modes: sb.modes || {},
       quality: sb.quality || {},
       created_at: sb.created_at,
+      created_by_email: sb.created_by_email,
+      created_by_name: sb.created_by_name,
       device_count: sb.device_count,
       complete_count: sb.complete_count
     });
@@ -1607,6 +1620,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
+    const u = getUser(req);
     const b = req.body || {};
     const name = String(b.name || '').trim();
     const code = String(b.code || '').trim();
@@ -1615,11 +1629,12 @@ app.post('/api/switchboard/boards', async (req, res) => {
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
     const r = await quickQuery(
-      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, device_count, complete_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0)
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at, device_count, complete_count`,
+      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, device_count, complete_count, created_by_email, created_by_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0, $12, $13)
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at, device_count, complete_count, created_by_email, created_by_name`,
       [site, name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
-       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {}]
+       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
+       u.email || null, u.name || null]
     );
     const sb = r.rows[0];
 
@@ -1641,6 +1656,8 @@ app.post('/api/switchboard/boards', async (req, res) => {
       is_principal: sb.is_principal, has_photo: false,
       modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data,
       created_at: sb.created_at,
+      created_by_email: sb.created_by_email,
+      created_by_name: sb.created_by_name,
       device_count: 0, complete_count: 0
     });
   } catch (e) {
@@ -2172,6 +2189,7 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
               d.position_number, d.is_differential, d.is_complete, d.settings,
               d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
               d.curve_type, d.differential_sensitivity_ma, d.differential_type,
+              d.created_by_email, d.created_by_name,
               sb_down.name as downstream_switchboard_name,
               sb_down.code as downstream_switchboard_code
        FROM devices d
@@ -2203,6 +2221,7 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
               d.device_type, d.manufacturer, d.reference, d.in_amps, d.icu_ka, d.ics_ka, d.poles,
               d.voltage_v, d.trip_unit, d.position_number, d.is_differential, d.is_complete,
               d.settings, d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
+              d.created_by_email, d.created_by_name,
               COALESCE(array_length(d.photos, 1), 0) AS photos_count,
               (d.pv_tests IS NOT NULL) AS has_pv_tests,
               s.name as switchboard_name, s.code as switchboard_code,
@@ -2227,10 +2246,11 @@ app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
-    
+
+    const u = getUser(req);
     const b = req.body || {};
     const switchboard_id = Number(b.switchboard_id);
-    
+
     if (!switchboard_id || isNaN(switchboard_id)) {
       return res.status(400).json({ error: 'Missing or invalid switchboard_id' });
     }
@@ -2247,9 +2267,10 @@ app.post('/api/switchboard/devices', async (req, res) => {
         name, device_type, manufacturer, reference,
         in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit,
         curve_type, differential_sensitivity_ma, differential_type,
-        position_number, is_differential, is_complete, settings, is_main_incoming, diagram_data
+        position_number, is_differential, is_complete, settings, is_main_incoming, diagram_data,
+        created_by_email, created_by_name
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
        RETURNING *`,
       [
         site, switchboard_id,
@@ -2273,7 +2294,9 @@ app.post('/api/switchboard/devices', async (req, res) => {
         is_complete,
         b.settings || {},
         !!b.is_main_incoming,
-        b.diagram_data || {}
+        b.diagram_data || {},
+        u.email || null,
+        u.name || null
       ]
     );
 
