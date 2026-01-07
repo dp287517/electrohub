@@ -12,7 +12,7 @@ import {
   AreaChart, Area, PieChart as RechartsPie, Pie, Cell,
   ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts';
-import { getAllowedApps } from '../lib/permissions';
+import { getAllowedApps, hasEquipmentAccess, getAllowedEquipmentTypes, APP_TO_EQUIPMENT_TYPE } from '../lib/permissions';
 import { api } from '../lib/api';
 import { getDashboardStats as getProceduresDashboard } from '../lib/procedures-api';
 import WeatherBackground from '../components/WeatherBackground';
@@ -393,6 +393,10 @@ export default function Dashboard() {
   const allowedApps = useMemo(() => getAllowedApps(user?.email), [user?.email]);
   const filterApps = apps => apps.filter(a => allowedApps.some(x => x.route === a.to));
 
+  // Check if user has access to any equipment app (for showing cards/brief)
+  const canSeeEquipmentStats = useMemo(() => hasEquipmentAccess(user?.email), [user?.email]);
+  const allowedEquipmentTypes = useMemo(() => getAllowedEquipmentTypes(user?.email), [user?.email]);
+
   // Mapping app IDs to equipment_type for control badges
   const appToEquipmentType = {
     switchboards: ['switchboard', 'device'],
@@ -401,7 +405,8 @@ export default function Dashboard() {
     mobile: ['mobile_equipment'],
     hv: ['hv'],
     glo: ['glo'],
-    datahub: ['datahub']
+    datahub: ['datahub'],
+    infrastructure: ['infrastructure']
   };
 
   // Get overdue count for an app based on its equipment types
@@ -410,6 +415,36 @@ export default function Dashboard() {
     if (!types) return 0;
     return types.reduce((sum, type) => sum + (stats.overdueByEquipment[type] || 0), 0);
   };
+
+  // Calculate filtered stats based on allowed equipment types
+  const filteredStats = useMemo(() => {
+    if (!canSeeEquipmentStats) {
+      return { overdue: 0, pending: 0, completed: 0, total: 0 };
+    }
+
+    // Filter stats by allowed equipment types
+    let overdue = 0;
+    let pending = 0;
+
+    Object.entries(stats.overdueByEquipment || {}).forEach(([type, count]) => {
+      if (allowedEquipmentTypes.includes(type)) {
+        overdue += count;
+      }
+    });
+
+    Object.entries(stats.pendingByEquipment || {}).forEach(([type, count]) => {
+      if (allowedEquipmentTypes.includes(type)) {
+        pending += count;
+      }
+    });
+
+    return {
+      overdue,
+      pending,
+      completed: stats.completed, // This is global, would need backend filtering for precise count
+      total: stats.total
+    };
+  }, [stats, canSeeEquipmentStats, allowedEquipmentTypes]);
 
   const equipment = filterApps(allApps.equipment);
   const analysis = filterApps(allApps.analysis);
@@ -491,27 +526,29 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Story Button - Spectacular */}
-            <button onClick={() => setShowStory(true)}
-              className="group relative overflow-hidden flex items-center gap-4 px-6 py-4 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
-              {/* Animated background */}
-              <div className="absolute inset-0 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+            {/* Story Button - Spectacular - Only show if user has equipment access */}
+            {canSeeEquipmentStats && (
+              <button onClick={() => setShowStory(true)}
+                className="group relative overflow-hidden flex items-center gap-4 px-6 py-4 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
+                {/* Animated background */}
+                <div className="absolute inset-0 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
 
-              {/* Pulsing ring */}
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-glow" />
-                <div className="relative w-12 h-12 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
-                  <Play size={20} className="text-white fill-white ml-0.5" />
+                {/* Pulsing ring */}
+                <div className="relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-glow" />
+                  <div className="relative w-12 h-12 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
+                    <Play size={20} className="text-white fill-white ml-0.5" />
+                  </div>
                 </div>
-              </div>
 
-              <div className="text-left relative">
-                <p className="text-white font-bold text-base sm:text-lg">Brief du matin</p>
-                <p className="text-white/70 text-sm">Voir la story</p>
-              </div>
+                <div className="text-left relative">
+                  <p className="text-white font-bold text-base sm:text-lg">Brief du matin</p>
+                  <p className="text-white/70 text-sm">Voir la story</p>
+                </div>
 
-              <ChevronRight size={24} className="text-white/60 group-hover:translate-x-2 transition-transform" />
-            </button>
+                <ChevronRight size={24} className="text-white/60 group-hover:translate-x-2 transition-transform" />
+              </button>
+            )}
           </div>
         </div>
       </WeatherBackground>
@@ -519,47 +556,49 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 -mt-8 relative z-10 pb-10">
 
-        {/* Stats Grid - Spectacular */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
-          <StatCard
-            icon={AlertTriangle}
-            value={stats.overdue}
-            label="En retard"
-            color="from-red-400 via-rose-500 to-pink-600"
-            glow="hover:shadow-rose-500/30"
-            onClick={() => navigate('/app/switchboard-controls?tab=overdue')}
-            index={0}
-          />
-          <StatCard
-            icon={Clock}
-            value={stats.pending}
-            label="À faire"
-            color="from-amber-400 via-orange-500 to-red-600"
-            glow="hover:shadow-orange-500/30"
-            onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
-            index={1}
-          />
-          <StatCard
-            icon={CheckCircle}
-            value={stats.completed}
-            label="Complétés (30j)"
-            trend="up"
-            trendValue="+12%"
-            color="from-emerald-400 via-green-500 to-teal-600"
-            glow="hover:shadow-emerald-500/30"
-            onClick={() => navigate('/app/switchboard-controls')}
-            index={2}
-          />
-          <StatCard
-            icon={Activity}
-            value={healthScore}
-            label="Score santé"
-            color="from-blue-400 via-indigo-500 to-purple-600"
-            glow="hover:shadow-indigo-500/30"
-            onClick={() => setShowStory(true)}
-            index={3}
-          />
-        </div>
+        {/* Stats Grid - Spectacular - Only show if user has equipment access */}
+        {canSeeEquipmentStats && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
+            <StatCard
+              icon={AlertTriangle}
+              value={filteredStats.overdue}
+              label="En retard"
+              color="from-red-400 via-rose-500 to-pink-600"
+              glow="hover:shadow-rose-500/30"
+              onClick={() => navigate('/app/switchboard-controls?tab=overdue')}
+              index={0}
+            />
+            <StatCard
+              icon={Clock}
+              value={filteredStats.pending}
+              label="À faire"
+              color="from-amber-400 via-orange-500 to-red-600"
+              glow="hover:shadow-orange-500/30"
+              onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
+              index={1}
+            />
+            <StatCard
+              icon={CheckCircle}
+              value={filteredStats.completed}
+              label="Complétés (30j)"
+              trend="up"
+              trendValue="+12%"
+              color="from-emerald-400 via-green-500 to-teal-600"
+              glow="hover:shadow-emerald-500/30"
+              onClick={() => navigate('/app/switchboard-controls')}
+              index={2}
+            />
+            <StatCard
+              icon={Activity}
+              value={healthScore}
+              label="Score santé"
+              color="from-blue-400 via-indigo-500 to-purple-600"
+              glow="hover:shadow-indigo-500/30"
+              onClick={() => setShowStory(true)}
+              index={3}
+            />
+          </div>
+        )}
 
         {/* Notification Center Widget */}
         <div className="mb-8 animate-slideUp" style={{ animationDelay: '350ms' }}>
@@ -570,7 +609,7 @@ export default function Dashboard() {
             <h2 className="text-xl font-black text-gray-900">Activité récente</h2>
           </div>
           <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-            <NotificationCenter compact maxItems={5} />
+            <NotificationCenter compact maxItems={5} userEmail={user?.email} />
           </div>
         </div>
 

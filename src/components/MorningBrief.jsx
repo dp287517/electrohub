@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, Clock, TrendingUp, TrendingDown, ArrowRight,
@@ -21,6 +21,7 @@ import {
   Filler
 } from 'chart.js';
 import { aiAssistant } from '../lib/ai-assistant';
+import { getAllowedEquipmentTypes, hasEquipmentAccess, getAllowedAppIds } from '../lib/permissions';
 
 // Register Chart.js
 ChartJS.register(ArcElement, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend, Filler);
@@ -225,7 +226,7 @@ const StatCard = ({ icon: Icon, value, label, color = 'blue', onClick }) => (
 );
 
 // Main MorningBrief component - Clean Design
-export default function MorningBrief({ userName, onStoryClick }) {
+export default function MorningBrief({ userName, onStoryClick, userEmail }) {
   const navigate = useNavigate();
   const [brief, setBrief] = useState(null);
   const [historical, setHistorical] = useState(null);
@@ -235,6 +236,10 @@ export default function MorningBrief({ userName, onStoryClick }) {
   const [showHistorical, setShowHistorical] = useState(false);
   const [period, setPeriod] = useState(30);
   const [error, setError] = useState(null);
+
+  // Get user's allowed equipment types for filtering
+  const allowedEquipmentTypes = useMemo(() => getAllowedEquipmentTypes(userEmail), [userEmail]);
+  const canSeeEquipment = useMemo(() => hasEquipmentAccess(userEmail), [userEmail]);
 
   // Safe check for Notification API (not available on all mobile browsers)
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
@@ -343,6 +348,67 @@ export default function MorningBrief({ userName, onStoryClick }) {
     }
   };
 
+  // Filter brief data based on user's allowed equipment types
+  const filteredBrief = useMemo(() => {
+    if (!brief || !canSeeEquipment) return brief;
+
+    // Map brief equipment type names to our internal types
+    const typeNameMapping = {
+      'Tableaux': 'switchboard',
+      'Switchboards': 'switchboard',
+      'Variateurs': 'vsd',
+      'VSD': 'vsd',
+      'Méca': 'meca',
+      'Meca': 'meca',
+      'Mobiles': 'mobile',
+      'Mobile': 'mobile',
+      'HT': 'hv',
+      'Haute Tension': 'hv',
+      'GLO': 'glo',
+      'Batteries': 'glo',
+      'DataHub': 'datahub',
+      'Infrastructure': 'infrastructure',
+    };
+
+    // Helper to check if equipment type is allowed
+    const isTypeAllowed = (typeName) => {
+      const mappedType = typeNameMapping[typeName];
+      if (!mappedType) return true; // Unknown types pass through
+      return allowedEquipmentTypes.includes(mappedType);
+    };
+
+    // Filter equipment distribution chart
+    const filteredDistribution = brief.charts?.equipmentDistribution?.filter(
+      item => isTypeAllowed(item.name)
+    ) || [];
+
+    // Filter stats by type
+    const filteredByType = {};
+    if (brief.stats?.byType) {
+      Object.entries(brief.stats.byType).forEach(([type, count]) => {
+        if (allowedEquipmentTypes.includes(type)) {
+          filteredByType[type] = count;
+        }
+      });
+    }
+
+    // Calculate filtered totals
+    const filteredTotalEquipment = Object.values(filteredByType).reduce((sum, count) => sum + count, 0);
+
+    return {
+      ...brief,
+      stats: {
+        ...brief.stats,
+        totalEquipment: filteredTotalEquipment,
+        byType: filteredByType,
+      },
+      charts: {
+        ...brief.charts,
+        equipmentDistribution: filteredDistribution,
+      },
+    };
+  }, [brief, canSeeEquipment, allowedEquipmentTypes]);
+
   if (isLoading) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
@@ -372,14 +438,38 @@ export default function MorningBrief({ userName, onStoryClick }) {
     );
   }
 
+  // If user has no equipment access, show simplified version
+  if (!canSeeEquipment) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
+            <Sparkles size={24} className="text-white" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              {brief.greeting}, {userName || 'Utilisateur'}
+            </h2>
+            <p className="text-slate-500 text-sm">
+              {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </p>
+          </div>
+        </div>
+        <p className="text-slate-600 text-sm">
+          Bienvenue sur ElectroHub. Accédez à vos applications depuis le menu ci-dessous.
+        </p>
+      </div>
+    );
+  }
+
   // Clean chart colors
   const equipmentColors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
   const equipmentChartData = {
-    labels: brief.charts?.equipmentDistribution?.map(d => d.name) || [],
+    labels: filteredBrief.charts?.equipmentDistribution?.map(d => d.name) || [],
     datasets: [{
-      data: brief.charts?.equipmentDistribution?.map(d => d.value) || [],
-      backgroundColor: equipmentColors.slice(0, brief.charts?.equipmentDistribution?.length || 0),
+      data: filteredBrief.charts?.equipmentDistribution?.map(d => d.value) || [],
+      backgroundColor: equipmentColors.slice(0, filteredBrief.charts?.equipmentDistribution?.length || 0),
       borderWidth: 0,
       hoverOffset: 8
     }]
@@ -389,9 +479,9 @@ export default function MorningBrief({ userName, onStoryClick }) {
     labels: ['En retard', 'Cette semaine', 'Conformes'],
     datasets: [{
       data: [
-        brief.stats?.controls?.overdue || 0,
-        brief.stats?.controls?.thisWeek || 0,
-        brief.stats?.controls?.completedThisWeek || 0
+        filteredBrief.stats?.controls?.overdue || 0,
+        filteredBrief.stats?.controls?.thisWeek || 0,
+        filteredBrief.stats?.controls?.completedThisWeek || 0
       ],
       backgroundColor: ['#ef4444', '#f59e0b', '#10b981'],
       borderRadius: 6,
@@ -452,7 +542,7 @@ export default function MorningBrief({ userName, onStoryClick }) {
             </div>
             <div className="min-w-0">
               <h2 className="text-xl sm:text-2xl font-bold text-slate-900 truncate">
-                {brief.greeting}, {userName || 'Technicien'}
+                {filteredBrief.greeting}, {userName || 'Technicien'}
               </h2>
               <p className="text-slate-500 text-sm flex items-center gap-2">
                 <Calendar size={14} />
@@ -501,20 +591,20 @@ export default function MorningBrief({ userName, onStoryClick }) {
             {/* Health Score */}
             <div className="bg-slate-50 rounded-xl p-4 sm:p-6 flex flex-col items-center justify-center">
               <p className="text-sm text-slate-500 mb-3 font-medium">Score de santé</p>
-              <HealthScoreCircle score={brief.healthScore} status={brief.status} />
+              <HealthScoreCircle score={filteredBrief.healthScore} status={filteredBrief.status} />
             </div>
 
             {/* Equipment Distribution */}
             <div className="bg-slate-50 rounded-xl p-4 sm:p-6">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm text-slate-500 font-medium">Équipements</p>
-                <span className="text-xl font-bold text-slate-900">{brief.stats?.totalEquipment || 0}</span>
+                <span className="text-xl font-bold text-slate-900">{filteredBrief.stats?.totalEquipment || 0}</span>
               </div>
               <div className="h-32 sm:h-36">
                 <Doughnut data={equipmentChartData} options={doughnutOptions} />
               </div>
               <div className="flex flex-wrap justify-center gap-2 mt-3">
-                {brief.charts?.equipmentDistribution?.slice(0, 4).map((item, i) => (
+                {filteredBrief.charts?.equipmentDistribution?.slice(0, 4).map((item, i) => (
                   <div key={i} className="flex items-center gap-1.5 text-xs">
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: equipmentColors[i] }} />
                     <span className="text-slate-600">{item.name}</span>
@@ -551,27 +641,27 @@ export default function MorningBrief({ userName, onStoryClick }) {
             <div className="flex flex-wrap gap-2">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium">
                 <Building2 size={14} />
-                {brief.stats?.buildings || 0} bâtiments
+                {filteredBrief.stats?.buildings || 0} bâtiments
               </div>
               <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg text-sm font-medium">
                 <Clock size={14} />
-                {brief.stats?.controls?.thisWeek || 0} contrôles cette semaine
+                {filteredBrief.stats?.controls?.thisWeek || 0} contrôles cette semaine
               </div>
               <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium">
                 <CheckCircle size={14} />
-                {brief.stats?.controls?.completedThisWeek || 0} complétés
+                {filteredBrief.stats?.controls?.completedThisWeek || 0} complétés
               </div>
-              {(brief.stats?.controls?.overdue || 0) > 0 && (
+              {(filteredBrief.stats?.controls?.overdue || 0) > 0 && (
                 <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-sm font-medium">
                   <AlertTriangle size={14} />
-                  {brief.stats.controls.overdue} en retard
+                  {filteredBrief.stats.controls.overdue} en retard
                 </div>
               )}
             </div>
           </div>
 
           {/* AI Insight */}
-          {brief.aiInsight && (
+          {filteredBrief.aiInsight && (
             <div className="px-4 sm:px-6 pb-4 sm:pb-6">
               <div className="bg-gradient-to-r from-blue-50 to-slate-50 border border-blue-100 rounded-xl p-4">
                 <div className="flex items-start gap-3">
@@ -580,7 +670,7 @@ export default function MorningBrief({ userName, onStoryClick }) {
                   </div>
                   <div className="min-w-0">
                     <h4 className="text-blue-800 text-sm font-semibold mb-1">Conseil du jour</h4>
-                    <p className="text-slate-700 text-sm leading-relaxed">{brief.aiInsight}</p>
+                    <p className="text-slate-700 text-sm leading-relaxed">{filteredBrief.aiInsight}</p>
                   </div>
                 </div>
               </div>
@@ -815,7 +905,7 @@ export default function MorningBrief({ userName, onStoryClick }) {
           <div className="px-4 sm:px-6 pb-4 sm:pb-6">
             <h3 className="text-slate-500 text-sm font-medium mb-3">Par type d'équipement</h3>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {Object.entries(brief.stats?.byType || {}).map(([type, count]) => {
+              {Object.entries(filteredBrief.stats?.byType || {}).map(([type, count]) => {
                 const Icon = getEquipmentIcon(type);
                 return (
                   <button
