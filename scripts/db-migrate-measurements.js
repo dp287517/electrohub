@@ -142,6 +142,9 @@ async function migrate() {
         -- Échelle pour cette page spécifique
         scale_meters_per_pixel NUMERIC NOT NULL,
 
+        -- Ratio d'échelle (ex: 100 pour 1:100)
+        scale_ratio INTEGER,
+
         -- Points de référence utilisés pour calibrer
         reference_point1 JSONB NOT NULL,
         reference_point2 JSONB NOT NULL,

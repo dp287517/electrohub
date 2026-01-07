@@ -101,11 +101,11 @@ router.get("/scale/:planId", async (req, res) => {
 /**
  * POST /api/measurements/scale
  * Sauvegarde la configuration d'échelle d'un plan
- * Body: { planId, pageIndex, point1, point2, realDistanceMeters, imageWidth, imageHeight }
+ * Body: { planId, pageIndex, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio }
  */
 router.post("/scale", requireTenant, async (req, res) => {
   try {
-    const { planId, pageIndex = 0, point1, point2, realDistanceMeters, imageWidth, imageHeight } = req.body;
+    const { planId, pageIndex = 0, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio } = req.body;
     const { company_id, site_id } = req.tenant;
 
     if (!planId || !point1 || !point2 || !realDistanceMeters) {
@@ -124,13 +124,13 @@ router.post("/scale", requireTenant, async (req, res) => {
     // Calculer l'échelle: mètres par pixel
     const scaleMetersPerPixel = realDistanceMeters / pixelDistance;
 
-    // Upsert dans plan_scale_config
+    // Upsert dans plan_scale_config (avec scale_ratio si fourni)
     const { rows } = await pool.query(
       `INSERT INTO plan_scale_config (
         plan_id, page_index, scale_meters_per_pixel,
         reference_point1, reference_point2, real_distance_meters,
-        image_width, image_height, company_id, site_id, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        image_width, image_height, company_id, site_id, scale_ratio, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
       ON CONFLICT (plan_id, page_index) DO UPDATE SET
         scale_meters_per_pixel = EXCLUDED.scale_meters_per_pixel,
         reference_point1 = EXCLUDED.reference_point1,
@@ -138,11 +138,12 @@ router.post("/scale", requireTenant, async (req, res) => {
         real_distance_meters = EXCLUDED.real_distance_meters,
         image_width = EXCLUDED.image_width,
         image_height = EXCLUDED.image_height,
+        scale_ratio = EXCLUDED.scale_ratio,
         updated_at = NOW()
       RETURNING *`,
       [planId, pageIndex, scaleMetersPerPixel,
        JSON.stringify(point1), JSON.stringify(point2), realDistanceMeters,
-       imageWidth, imageHeight, company_id, site_id]
+       imageWidth, imageHeight, company_id, site_id, scaleRatio || null]
     );
 
     // Aussi mettre à jour vsd_plans pour compatibilité
@@ -152,14 +153,15 @@ router.post("/scale", requireTenant, async (req, res) => {
         scale_reference = $2,
         scale_validated_at = NOW()
        WHERE id = $3`,
-      [scaleMetersPerPixel, JSON.stringify({ point1, point2, realDistanceMeters }), planId]
+      [scaleMetersPerPixel, JSON.stringify({ point1, point2, realDistanceMeters, scaleRatio }), planId]
     );
 
     res.json({
       ok: true,
       scale: {
         ...rows[0],
-        scale_meters_per_pixel: parseFloat(rows[0].scale_meters_per_pixel)
+        scale_meters_per_pixel: parseFloat(rows[0].scale_meters_per_pixel),
+        scale_ratio: rows[0].scale_ratio
       }
     });
   } catch (err) {
@@ -672,6 +674,16 @@ export async function initMeasurementsTables() {
       CREATE INDEX IF NOT EXISTS idx_map_measurements_tenant
       ON map_measurements(company_id, site_id)
     `);
+
+    // Ajouter la colonne scale_ratio à plan_scale_config si elle n'existe pas
+    const checkScaleRatio = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'plan_scale_config' AND column_name = 'scale_ratio'
+    `);
+    if (checkScaleRatio.rows.length === 0) {
+      await pool.query(`ALTER TABLE plan_scale_config ADD COLUMN scale_ratio INTEGER`);
+      console.log('[measurements] Added column scale_ratio to plan_scale_config');
+    }
 
     // Ajouter les colonnes d'échelle à vsd_plans si elles n'existent pas
     const cols = ['scale_meters_per_pixel NUMERIC', 'scale_reference JSONB', 'scale_validated_at TIMESTAMPTZ', 'content_hash TEXT'];
