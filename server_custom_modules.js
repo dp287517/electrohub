@@ -77,6 +77,15 @@ function getSite(req) {
   return req.headers["x-site"] || req.query.site || "Nyon";
 }
 
+// Admin emails authorized to delete any item
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
 // Generate slug from name
 function generateSlug(name) {
   return name
@@ -623,21 +632,44 @@ app.put("/api/custom-modules/:slug/items/:id", async (req, res) => {
 });
 
 // DELETE /api/custom-modules/:slug/items/:id
+// Only the creator or an admin can delete
 app.delete("/api/custom-modules/:slug/items/:id", async (req, res) => {
   const site = getSite(req);
   const { id } = req.params;
+  const userEmail = req.headers["x-user-email"] || "";
 
   try {
-    const result = await pool.query(
-      "DELETE FROM cm_items WHERE id = $1 AND site = $2 RETURNING id, name",
+    // Get item to check ownership
+    const itemRes = await pool.query(
+      "SELECT id, name, created_by FROM cm_items WHERE id = $1 AND site = $2",
       [id, site]
     );
 
-    if (result.rows.length === 0) {
+    if (itemRes.rows.length === 0) {
       return res.status(404).json({ error: "Item not found" });
     }
 
-    res.json({ success: true, deleted: result.rows[0] });
+    const item = itemRes.rows[0];
+    const isCreator = item.created_by &&
+                      item.created_by.toLowerCase() === userEmail.toLowerCase();
+    const isUserAdmin = isAdmin(userEmail);
+
+    // Check permissions - allow if creator, admin, or item has no creator (legacy)
+    if (!isCreator && !isUserAdmin && item.created_by) {
+      console.log(`[CUSTOM_MODULES] Delete denied - user: ${userEmail}, creator: ${item.created_by}`);
+      return res.status(403).json({
+        error: 'Vous n\'êtes pas autorisé à supprimer cet élément. Seul le créateur ou un administrateur peut le supprimer.',
+        canDelete: false
+      });
+    }
+
+    await pool.query(
+      "DELETE FROM cm_items WHERE id = $1 AND site = $2",
+      [id, site]
+    );
+
+    console.log(`[CUSTOM_MODULES] Item ${id} deleted by ${userEmail} (admin: ${isUserAdmin}, creator: ${isCreator})`);
+    res.json({ success: true, deleted: { id: item.id, name: item.name } });
   } catch (e) {
     console.error("[CUSTOM_MODULES] Error deleting item:", e);
     res.status(500).json({ error: e.message });

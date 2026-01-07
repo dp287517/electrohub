@@ -160,6 +160,18 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock_alarm_level INTEGER DEFAULT 1;`);
   await pool.query(`ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS fire_interlock_code TEXT;`);
 
+  // Add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE dh_items ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+
   // Files attached to items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dh_files (
@@ -236,6 +248,15 @@ function userInfo(req) {
     email: req.headers["x-user-email"] || req.user?.email || "unknown",
     name: req.headers["x-user-name"] || req.user?.name || "Unknown",
   };
+}
+
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
 }
 
 // ====================
@@ -400,11 +421,13 @@ app.post("/api/datahub/items", async (req, res) => {
     const { name, code, category_id, building, floor, location, description, notes, data } = req.body;
     if (!name?.trim()) return res.status(400).json({ ok: false, error: "Name required" });
 
+    const user = userInfo(req);
+
     const { rows } = await pool.query(`
-      INSERT INTO dh_items (name, code, category_id, building, floor, location, description, notes, data)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO dh_items (name, code, category_id, building, floor, location, description, notes, data, created_by_email, created_by_name)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
-    `, [name.trim(), code, category_id || null, building, floor, location, description, notes, data || {}]);
+    `, [name.trim(), code, category_id || null, building, floor, location, description, notes, data || {}, user.email, user.name]);
 
     await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: 'item', entityId: rows[0].id, details: { name } });
     res.json({ ok: true, item: rows[0] });
@@ -450,6 +473,26 @@ app.put("/api/datahub/items/:id", async (req, res) => {
 app.delete("/api/datahub/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const user = userInfo(req);
+
+    // Get item to check ownership
+    const { rows: itemRows } = await pool.query(`SELECT created_by_email FROM dh_items WHERE id = $1`, [id]);
+    if (itemRows.length === 0) return res.status(404).json({ ok: false, error: "Item not found" });
+
+    const item = itemRows[0];
+    const creatorEmail = item.created_by_email;
+
+    // Check permissions: allow if user is creator, admin, or item has no creator (legacy)
+    const userIsCreator = creatorEmail && user.email && creatorEmail.toLowerCase() === user.email.toLowerCase();
+    const userIsAdmin = isAdmin(user.email);
+    const isLegacyItem = !creatorEmail; // Legacy items without creator can be deleted by anyone
+
+    if (!userIsCreator && !userIsAdmin && !isLegacyItem) {
+      return res.status(403).json({
+        ok: false,
+        error: "Forbidden: Only the creator or an admin can delete this item"
+      });
+    }
 
     // Delete associated files from disk
     const { rows: files } = await pool.query(`SELECT filepath FROM dh_files WHERE item_id = $1`, [id]);

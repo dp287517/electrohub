@@ -153,6 +153,22 @@ const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 const sortSafe = (s) => WHITELIST_SORT.includes(String(s)) ? s : 'created_at';
 const dirSafe = (d) => String(d).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
+// Admin emails authorized to delete any equipment
+const ADMIN_EMAILS = ['daniel.x.palha@haleon.com', 'palhadaniel.elec@gmail.com'];
+
+// Check if user is admin
+function isAdmin(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
+}
+
+// Extract user info from request (following audit-trail pattern)
+function getUser(req) {
+  const email = req.user?.email || req.headers['x-user-email'] || null;
+  const name = req.user?.name || req.headers['x-user-name'] || email?.split('@')[0] || null;
+  return { email, name };
+}
+
 // Ensure schema
 async function ensureSchema() {
   await pool.query(`
@@ -237,6 +253,18 @@ async function ensureSchema() {
 
   // Migration: add thumbnail column for pre-generated plan thumbnails
   await pool.query(`ALTER TABLE hv_plans ADD COLUMN IF NOT EXISTS thumbnail BYTEA NULL`);
+
+  // Migration: add created_by columns for ownership tracking
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS created_by_email TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE hv_equipments ADD COLUMN IF NOT EXISTS created_by_name TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+  `);
 }
 ensureSchema().catch(e => console.error('[HV SCHEMA] Init error:', e.message));
 
@@ -298,11 +326,15 @@ app.post('/api/hv/equipments', async (req, res) => {
       console.log('[HV EQUIPMENT CREATE] ❌ Missing name - returning 400');
       return res.status(400).json({ error: 'Name is required' });
     }
+    // Get user info for ownership tracking
+    const u = getUser(req);
+    console.log('[HV EQUIPMENT CREATE]   👤 User:', u.email || '(unknown)');
+
     console.log('[HV EQUIPMENT CREATE]   💾 Inserting into database...');
     const r = await pool.query(`
-      INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [site, name, code, building_code, floor, room, regime_neutral, is_principal, notes || null, modes || {}, quality || {}]);
+      INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality, created_by_email, created_by_name)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [site, name, code, building_code, floor, room, regime_neutral, is_principal, notes || null, modes || {}, quality || {}, u.email, u.name]);
     const eq = r.rows[0];
     console.log('[HV EQUIPMENT CREATE] ✅ Created equipment id:', eq.id, ', name:', eq.name);
 
@@ -367,17 +399,43 @@ app.put('/api/hv/equipments/:id', async (req, res) => {
 app.delete('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    // First, check ownership
+    const checkRes = await pool.query(
+      `SELECT id, name, code, created_by_email FROM hv_equipments WHERE id=$1 AND site=$2`,
+      [Number(req.params.id), site]
+    );
+    if (checkRes.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+
+    const eq = checkRes.rows[0];
+    const u = getUser(req);
+
+    // Authorization check: must be creator or admin
+    // Legacy equipments (created_by_email is NULL) can be deleted by anyone
+    const isCreator = eq.created_by_email && u.email && eq.created_by_email.toLowerCase() === u.email.toLowerCase();
+    const isUserAdmin = isAdmin(u.email);
+    const isLegacy = !eq.created_by_email;
+
+    if (!isCreator && !isUserAdmin && !isLegacy) {
+      console.log(`[HV DELETE] ❌ User ${u.email || '(unknown)'} not authorized to delete equipment ${eq.id} (owner: ${eq.created_by_email})`);
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'You can only delete equipment you created, or be an admin'
+      });
+    }
+
+    console.log(`[HV DELETE] ✅ User ${u.email || '(unknown)'} authorized to delete equipment ${eq.id} (creator: ${isCreator}, admin: ${isUserAdmin}, legacy: ${isLegacy})`);
+
+    // Perform deletion
     const r = await pool.query(`DELETE FROM hv_equipments WHERE id=$1 AND site=$2 RETURNING *`, [Number(req.params.id), site]);
-    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
-    const eq = r.rows[0];
 
     // 📝 AUDIT: Log suppression équipement HV
-    if (eq) {
+    if (r.rows[0]) {
       try {
         await audit.log(req, AUDIT_ACTIONS.DELETED, {
           entityType: 'hv_equipment',
           entityId: eq.id,
-          details: { name: eq.name, code: eq.code, site }
+          details: { name: eq.name, code: eq.code, site, deleted_by: u.email }
         });
       } catch (auditErr) {
         console.warn('[HV DELETE] Audit log failed (non-blocking):', auditErr.message);
