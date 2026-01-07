@@ -14,19 +14,19 @@ let contextCacheTime = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // ============================================================================
-// CONFIGURATION - Chat V2 avec Function Calling
+// CONFIGURATION - Chat V2 avec Function Calling (V2.1 Enhanced)
 // ============================================================================
-// Mettre à true pour activer le nouveau système IA avec function calling
-// Cela permettra à l'IA de décider elle-même quelles données récupérer
+// Chat V2 est maintenant le système par défaut avec les améliorations suivantes:
+// - Retry avec exponential backoff sur les appels LLM
+// - MAX_TOOL_ITERATIONS augmenté (5 itérations pour requêtes complexes)
+// - Validation robuste des inputs
+// - Streaming SSE pour les réponses longues
+// - Métriques et logging avancé
+// - Système de handoff amélioré entre agents
+// - Feedback utilisateur intégré
 //
-// ⚠️ ATTENTION: V2 ne supporte pas encore:
-// - Guidage étape par étape (procedureGuidance)
-// - Sessions de guidage temps réel (procedureAssistSessionId)
-// - Import de documents (expectsFile)
-// - Analyse de rapports (reportAnalysis)
-//
-// Laisser à false jusqu'à ce que ces fonctionnalités soient migrées
-const USE_CHAT_V2 = false; // 🔒 Désactivé par défaut - tester via /chat-v2
+// ✅ ACTIVÉ PAR DÉFAUT depuis V2.1
+const USE_CHAT_V2 = true; // 🚀 Activé - système amélioré avec function calling
 
 class AIAssistant {
   constructor() {
@@ -1726,6 +1726,151 @@ Comment puis-je vous aider plus précisément ?`,
 
       default:
         return null;
+    }
+  }
+
+  // =========================================================================
+  // FEEDBACK UTILISATEUR
+  // =========================================================================
+
+  /**
+   * Soumet un feedback sur une réponse IA
+   * @param {string} messageId - ID unique du message
+   * @param {'positive'|'negative'} feedbackType - Type de feedback
+   * @param {string} userMessage - Message de l'utilisateur
+   * @param {string} aiResponse - Réponse de l'IA
+   * @returns {Promise<Object>} Résultat
+   */
+  async submitFeedback(messageId, feedbackType, userMessage = '', aiResponse = '') {
+    try {
+      const user = useAuth?.getState?.()?.user;
+      const site = window._currentSite || localStorage.getItem('selectedSite') || 'default';
+
+      const response = await fetch(`${this.baseUrl}/feedback`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'X-Site': site
+        },
+        body: JSON.stringify({
+          messageId,
+          feedback: feedbackType,
+          message: userMessage,
+          response: aiResponse,
+          site,
+          user: user ? { email: user.email, name: user.name } : null
+        })
+      });
+
+      const data = await response.json();
+      console.log(`[AI] Feedback ${feedbackType} submitted for ${messageId}`);
+      return data;
+    } catch (error) {
+      console.error('[AI] Error submitting feedback:', error);
+      return { ok: false, error: error.message };
+    }
+  }
+
+  // =========================================================================
+  // STREAMING CHAT (V2.1)
+  // =========================================================================
+
+  /**
+   * Chat avec streaming SSE pour réponses en temps réel
+   * @param {string} message - Message de l'utilisateur
+   * @param {Object} options - Options
+   * @param {Function} onContent - Callback pour chaque chunk de contenu
+   * @param {Function} onStatus - Callback pour les changements de statut
+   * @param {Function} onComplete - Callback quand terminé
+   * @param {Function} onError - Callback sur erreur
+   */
+  async chatStream(message, { onContent, onStatus, onComplete, onError, ...options } = {}) {
+    const site = window._currentSite || localStorage.getItem('selectedSite') || 'default';
+    const user = useAuth?.getState?.()?.user;
+
+    try {
+      const response = await fetch(`${this.baseUrl}/chat-v2/stream`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'X-Site': site
+        },
+        body: JSON.stringify({
+          message,
+          conversationHistory: options.conversationHistory || [],
+          context: {
+            user,
+            previousAgentType: options.previousAgentType,
+            currentEquipment: options.currentEquipment,
+            ...options.context
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            const eventType = line.substring(7);
+            continue;
+          }
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.substring(6));
+
+              // Déterminer le type d'événement basé sur la structure
+              if (data.text !== undefined && onContent) {
+                onContent(data.text);
+              } else if (data.status && onStatus) {
+                onStatus(data.status, data.message);
+              } else if (data.agentType && onComplete) {
+                onComplete(data);
+              } else if (data.message && !data.text && onError) {
+                onError(new Error(data.message));
+              }
+            } catch (e) {
+              // Ignore JSON parse errors for incomplete data
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[AI] Stream error:', error);
+      if (onError) onError(error);
+    }
+  }
+
+  // =========================================================================
+  // HEALTH CHECK
+  // =========================================================================
+
+  /**
+   * Vérifie l'état du système IA
+   * @returns {Promise<Object>} État du système avec métriques
+   */
+  async getHealth() {
+    try {
+      const response = await fetch(`${this.baseUrl}/chat-v2/health`, {
+        headers: this.getHeaders()
+      });
+      return await response.json();
+    } catch (error) {
+      console.error('[AI] Health check error:', error);
+      return { status: 'error', error: error.message };
     }
   }
 }
