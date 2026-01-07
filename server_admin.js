@@ -2467,7 +2467,7 @@ router.delete("/settings/ai-video", adminOnly, async (req, res) => {
 // ============================================================================
 
 // Valid agent types for video avatars
-const VALID_AGENT_TYPES = ['main', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'switchboard', 'doors', 'datahub', 'firecontrol'];
+const VALID_AGENT_TYPES = ['main', 'vsd', 'meca', 'glo', 'hv', 'mobile', 'atex', 'switchboard', 'doors', 'datahub', 'firecontrol', 'infrastructure'];
 
 // Agent display names
 const AGENT_NAMES = {
@@ -2481,7 +2481,8 @@ const AGENT_NAMES = {
   switchboard: 'Matrix (Tableaux Électriques)',
   doors: 'Portal (Portes)',
   datahub: 'Nexus (Datahub)',
-  firecontrol: 'Blaze (Sécurité Incendie)'
+  firecontrol: 'Blaze (Sécurité Incendie)',
+  infrastructure: 'Atlas (Infrastructure)'
 };
 
 // GET /api/admin/settings/ai-agents/list - Get all agent types and their video status

@@ -1,1122 +1,876 @@
-// src/pages/Infrastructure_map.jsx
-// Vue carte pour les plans d'infrastructure électrique
-// Permet de placer les équipements ATEX sur les plans
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import * as pdfjsLib from "pdfjs-dist";
+// src/pages/Infrastructure_map.jsx - Map view for Infrastructure with category filtering
+// Based on Datahub_map.jsx - adapted for Infrastructure module
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, API_BASE } from "../lib/api.js";
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import "../styles/atex-map.css"; // Styles de netteté pour les plans
-import { api } from "../lib/api.js";
+import "../styles/atex-map.css";
 import {
-  isMobileDevice,
-  getPDFConfig,
-  getPlanCacheKey,
-  getCachedPlan,
-  cachePlan,
-  getOptimalImageFormat,
-} from "../config/mobile-optimization.js";
+  Building2, Search, ChevronLeft, ChevronRight, MapPin, X, RefreshCw,
+  Trash2, ArrowLeft, Plus, Circle, Square, Triangle, Star, Heart, Target, Menu,
+  CheckCircle, AlertCircle, Crosshair, Tag, Filter, Layers, Eye, EyeOff, Zap,
+  Power, Battery, Plug, Gauge, Wrench, Factory, Server, Cpu, Wifi, Shield, Flag,
+  Home, Building, Box, Clock, Calendar, Bell, Navigation, Compass, Pin, Bookmark,
+  Award, User, Users, Folder, File, Info, Lock, Check, Flame, Thermometer,
+  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2,
+  ExternalLink
+} from "lucide-react";
 
-// Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-// ============================================================
-// DRAW MODES
-// ============================================================
-const DRAW_NONE = "none";
-const DRAW_RECT = "rect";
-const DRAW_CIRCLE = "circle";
-const DRAW_POLY = "poly";
+const STORAGE_KEY_PLAN = "infrastructure_map_selected_plan";
+const STORAGE_KEY_PAGE = "infrastructure_map_page_index";
 
-// Zone colors (legacy - used for zones without ATEX zoning)
-const ZONE_COLORS = [
-  "#6B7280", // Gray
-  "#EF4444", // Red
-  "#F59E0B", // Amber
-  "#10B981", // Green
-  "#3B82F6", // Blue
-  "#8B5CF6", // Purple
-  "#EC4899", // Pink
-];
-
-// ATEX zone colors (same as Atex-map.jsx)
-const GAS_STROKE = { 0: "#0ea5e9", 1: "#ef4444", 2: "#f59e0b", null: "#6b7280", undefined: "#6b7280" };
-const DUST_FILL = { 20: "#84cc16", 21: "#8b5cf6", 22: "#06b6d4", null: "#e5e7eb", undefined: "#e5e7eb" };
-
-// Get colors for a zone based on ATEX zoning
-function getAtexZoneColors(zone) {
-  const hasAtex = zone.zoning_gas !== null || zone.zoning_dust !== null;
-  if (!hasAtex) {
-    // Use the zone's custom color or default
-    const color = zone.color || "#6B7280";
-    return { stroke: color, fill: color };
-  }
-  return {
-    stroke: GAS_STROKE[zone.zoning_gas] || GAS_STROKE[null],
-    fill: DUST_FILL[zone.zoning_dust] || DUST_FILL[null],
-  };
-}
-
-// ============================================================
-// EQUIPMENT MARKER DESIGN (same as Atex-map.jsx)
-// ============================================================
 const ICON_PX = 22;
-const ICON_PX_SELECTED = 34;
+const ICON_PX_SELECTED = 30;
 
-// Gradients par statut pour un design moderne
-const STATUS_GRADIENT = {
-  a_faire: { from: "#34d399", to: "#059669" },      // Vert emeraude
-  en_cours_30: { from: "#fbbf24", to: "#f59e0b" },  // Ambre/Orange
-  en_retard: { from: "#fb7185", to: "#e11d48" },    // Rose/Rouge
-  fait: { from: "#60a5fa", to: "#2563eb" },         // Bleu
-  selected: { from: "#a78bfa", to: "#7c3aed" },     // Violet pour sélection
+// SVG paths for marker icons
+const SVG_PATHS = {
+  circle: '<circle cx="12" cy="12" r="8"/>',
+  square: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
+  triangle: '<polygon points="12,3 22,21 2,21"/>',
+  star: '<polygon points="12,2 15,9 22,9 17,14 19,21 12,17 5,21 7,14 2,9 9,9"/>',
+  heart: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  mappin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/>',
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/>',
+  factory: '<path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>',
+  default: '<circle cx="12" cy="12" r="8"/>'
 };
 
-// Icône SVG flamme ATEX
-const ATEX_FLAME_SVG = `<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
-  <path d="M12 2C9.5 5 6 9 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4-3.5-8-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.5 1-3 3-5 2 2 3 3.5 3 5 0 1.66-1.34 3-3 3z"/>
-</svg>`;
+// Icon mapping for dynamic icons
+const ICON_MAP = {
+  circle: Circle, square: Square, triangle: Triangle, star: Star, heart: Heart,
+  target: Target, mappin: MapPin, pin: Pin, crosshair: Crosshair, compass: Compass,
+  navigation: Navigation, flag: Flag, database: Server, server: Server,
+  harddrive: HardDrive, cpu: Cpu, wifi: Wifi, monitor: Monitor, zap: Zap,
+  power: Power, battery: Battery, plug: Plug, flame: Flame, thermometer: Thermometer,
+  gauge: Gauge, wrench: Wrench, factory: Factory, cable: Cable,
+  droplet: Droplet, wind: Wind, sun: Sun, cloud: Cloud, check: Check,
+  alertcircle: AlertCircle, info: Info, shield: Shield, lock: Lock, eye: Eye,
+  tag: Tag, bookmark: Bookmark, award: Award, user: User, users: Users,
+  building: Building2, home: Home, box: Box, package: Package, folder: Folder,
+  file: File, clock: Clock, calendar: Calendar, bell: Bell
+};
 
-function makeEquipIcon(status, isSelected = false) {
-  const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
+// External equipment categories (VSD, HV, MECA, etc.) for display
+const EXTERNAL_CATEGORIES = {
+  vsd: { id: 'vsd', name: 'Variateurs (VSD)', shortName: 'VSD', color: '#10b981' },
+  hv: { id: 'hv', name: 'Haute Tension', shortName: 'HT', color: '#f59e0b' },
+  meca: { id: 'meca', name: 'Electromecanique', shortName: 'MECA', color: '#3b82f6' },
+  glo: { id: 'glo', name: 'Equipements Globaux', shortName: 'GLO', color: '#34d399' },
+  mobile: { id: 'mobile', name: 'Equipements Mobiles', shortName: 'Mobiles', color: '#06b6d4' },
+  switchboards: { id: 'switchboards', name: 'Tableaux Electriques', shortName: 'Tableaux', color: '#f59e0b' },
+  datahub: { id: 'datahub', name: 'DataHub', shortName: 'DH', color: '#14b8a6' }
+};
 
-  // Utilise le gradient violet si sélectionné, sinon le gradient du statut
-  const grad = isSelected
-    ? STATUS_GRADIENT.selected
-    : (STATUS_GRADIENT[status] || STATUS_GRADIENT.fait);
+const STORAGE_KEY_EXTERNAL_VISIBLE = "infrastructure_map_external_visible";
 
-  // Classes d'animation
-  let animClass = "";
-  if (isSelected) {
-    animClass = "atex-marker-selected";
-  } else if (status === "en_retard") {
-    animClass = "atex-marker-pulse-red";
-  } else if (status === "en_cours_30") {
-    animClass = "atex-marker-pulse-orange";
-  }
-
-  // Bordure plus visible pour sélection
-  const borderStyle = isSelected
-    ? "border:3px solid #a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,0.4),0 6px 15px rgba(0,0,0,.35);"
-    : "border:2px solid white;box-shadow:0 4px 10px rgba(0,0,0,.25);";
-
-  const html = `
-    <div class="${animClass}" style="
-      width:${s}px;height:${s}px;border-radius:9999px;
-      background: radial-gradient(circle at 30% 30%, ${grad.from}, ${grad.to});
-      ${borderStyle}
-      display:flex;align-items:center;justify-content:center;
-      transition:all 0.2s ease;
-      z-index:${isSelected ? 1000 : 1};
-    ">
-      ${ATEX_FLAME_SVG.replace('viewBox', `width="${s * 0.55}" height="${s * 0.55}" viewBox`)}
-    </div>`;
-
-  return L.divIcon({
-    className: "atex-marker-inline",
-    html,
-    iconSize: [s, s],
-    iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
-    popupAnchor: [0, -Math.round(s / 2)],
-  });
+function userHeaders() {
+  const email = localStorage.getItem("email") || "";
+  const name = localStorage.getItem("name") || "";
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
 }
 
-// ============================================================
-// INFRASTRUCTURE MAP COMPONENT
-// ============================================================
+function pdfDocOpts(url) {
+  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
+}
 
-export default function InfrastructureMap({
-  plan,
-  positions = [],
-  zones = [],
-  atexEquipments = [],
-  onPlaceEquipment,
-  onUpdatePosition,
-  onDeletePosition,
-  onZoneCreate,
-  onZoneUpdate,
-  onZoneDelete,
-  onEquipmentClick,
-  refreshTick = 0,
-}) {
-  const containerRef = useRef(null);
-  const mapRef = useRef(null);
-  const overlayRef = useRef(null);
-  const markersLayerRef = useRef(null);
-  const zonesLayerRef = useRef(null);
+const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
-  // PDF states
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [pdfError, setPdfError] = useState(null);
-  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [imgSrc, setImgSrc] = useState(null);
+// Toast component
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
+  const bg = type === 'success' ? 'bg-emerald-500' : type === 'error' ? 'bg-red-500' : 'bg-violet-500';
+  return (
+    <div className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-[100] ${bg} text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slideUp`}>
+      {type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+      <span className="font-medium">{message}</span>
+    </div>
+  );
+};
 
-  // Interaction states
-  const [placingEquipment, setPlacingEquipment] = useState(false);
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
+// Badge component
+const Badge = ({ children, variant = 'default', className = '' }) => {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    warning: 'bg-amber-100 text-amber-700',
+    purple: 'bg-purple-100 text-purple-700',
+  };
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${variants[variant]} ${className}`}>{children}</span>;
+};
 
-  // Drawing states
-  const [drawing, setDrawing] = useState(DRAW_NONE);
-  const [polyTemp, setPolyTemp] = useState([]);
-  const [drawMenu, setDrawMenu] = useState(false);
-  const [selectedZoneColor, setSelectedZoneColor] = useState(ZONE_COLORS[0]);
+// Create Item Modal
+const CreateItemModal = ({ isOpen, onClose, categories, onCreate, position }) => {
+  const [name, setName] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
 
-  // Zone editor modal
-  const [zoneEditor, setZoneEditor] = useState(null); // { tempLayer, kind, geometry } - for NEW zones
+  useEffect(() => {
+    if (isOpen) {
+      setName('');
+      setCategoryId(categories[0]?.id || '');
+    }
+  }, [isOpen, categories]);
 
-  // Editing existing zone
-  const [editingZone, setEditingZone] = useState(null); // { id, name, zoning_gas, zoning_dust, color } - for EXISTING zones
+  if (!isOpen) return null;
 
-  // Selected position for highlight
-  const [selectedPositionId, setSelectedPositionId] = useState(null);
-
-  // Filter for equipment selector - only show equipment not already placed on this plan
-  const placedEquipmentIds = useMemo(() => {
-    return new Set(positions.map(p => p.equipment_id));
-  }, [positions]);
-
-  const availableEquipments = useMemo(() => {
-    return atexEquipments.filter(eq => !placedEquipmentIds.has(eq.id));
-  }, [atexEquipments, placedEquipmentIds]);
-
-  // ============================================================
-  // Load PDF
-  // ============================================================
-  const loadPdf = useCallback(async () => {
-    if (!plan) return;
-
-    setPdfLoading(true);
-    setPdfError(null);
-
+  const handleCreate = async () => {
+    if (!name.trim()) return;
+    setIsCreating(true);
     try {
-      const config = getPDFConfig();
-      const cacheKey = getPlanCacheKey(`infra_${plan.id || plan.logical_name}`, 0, config);
-
-      // Check cache first
-      const cached = getCachedPlan(cacheKey);
-      if (cached) {
-        setImgSrc(cached.dataUrl);
-        setImgSize({ w: cached.width, h: cached.height });
-        setPdfLoading(false);
-        return;
-      }
-
-      // Fetch PDF
-      const pdfUrl = api.infra.planFileUrl(plan, { bust: false });
-      const loadingTask = pdfjsLib.getDocument({ url: pdfUrl });
-      const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1);
-
-      // Calculate optimal scale
-      const viewport = page.getViewport({ scale: 1 });
-      const baseWidth = viewport.width;
-      const targetWidth = Math.min(config.maxBitmapWidth, Math.max(config.minBitmapWidth, baseWidth * config.qualityBoost));
-      const scale = Math.min(config.maxScale, Math.max(config.minScale, targetWidth / baseWidth));
-
-      const scaledViewport = page.getViewport({ scale });
-      const canvas = document.createElement("canvas");
-      canvas.width = scaledViewport.width;
-      canvas.height = scaledViewport.height;
-
-      const ctx = canvas.getContext("2d", {
-        alpha: false,           // Pas de canal alpha (opaque) - évite fond noir sur Chrome
-        desynchronized: false,  // Synchrone pour cohérence
-        willReadFrequently: false,
-      });
-
-      // IMPORTANT: Fond blanc AVANT le rendu PDF (sinon fond noir sur Chrome)
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.imageSmoothingEnabled = config.enableImageSmoothing;
-      ctx.imageSmoothingQuality = "high";
-
-      await page.render({
-        canvasContext: ctx,
-        viewport: scaledViewport,
-        intent: config.intent,
-      }).promise;
-
-      // Get optimal format (JPEG on mobile, PNG on desktop)
-      const dataUrl = getOptimalImageFormat(canvas);
-
-      // Cache the result
-      cachePlan(cacheKey, dataUrl, canvas.width, canvas.height);
-
-      setImgSrc(dataUrl);
-      setImgSize({ w: canvas.width, h: canvas.height });
-
-      // Cleanup
-      pdf.cleanup?.();
-    } catch (err) {
-      console.error("[InfraMap] PDF load error:", err);
-      setPdfError(err.message || "Erreur de chargement du PDF");
+      await onCreate({ name: name.trim(), category_id: categoryId || null }, position);
+      onClose();
+    } catch (e) {
+      console.error(e);
     } finally {
-      setPdfLoading(false);
+      setIsCreating(false);
     }
-  }, [plan]);
-
-  useEffect(() => {
-    loadPdf();
-  }, [loadPdf, refreshTick]);
-
-  // ============================================================
-  // Initialize Leaflet map
-  // ============================================================
-  useEffect(() => {
-    if (!containerRef.current || !imgSrc || imgSize.w === 0) return;
-
-    // Destroy existing map
-    if (mapRef.current) {
-      mapRef.current.remove();
-      mapRef.current = null;
-    }
-
-    // Create map
-    const bounds = [
-      [0, 0],
-      [imgSize.h, imgSize.w],
-    ];
-
-    const map = L.map(containerRef.current, {
-      crs: L.CRS.Simple,
-      minZoom: -2,
-      maxZoom: 4,
-      zoomControl: true,
-      attributionControl: false,
-    });
-
-    // Create custom panes with z-index ordering (like Atex-map)
-    map.createPane("basePane");
-    map.getPane("basePane").style.zIndex = 200;
-    map.createPane("zonesPane");
-    map.getPane("zonesPane").style.zIndex = 380;
-    map.createPane("markersPane");
-    map.getPane("markersPane").style.zIndex = 400;
-
-    // Add image overlay to base pane
-    const overlay = L.imageOverlay(imgSrc, bounds, { pane: "basePane" });
-    overlay.addTo(map);
-    map.fitBounds(bounds);
-
-    // Create layers for zones and markers with proper panes
-    const zonesLayer = L.layerGroup({ pane: "zonesPane" }).addTo(map);
-    const markersLayer = L.layerGroup({ pane: "markersPane" }).addTo(map);
-
-    mapRef.current = map;
-    overlayRef.current = overlay;
-    markersLayerRef.current = markersLayer;
-    zonesLayerRef.current = zonesLayer;
-
-    // Click handler for placing equipment
-    map.on("click", (e) => {
-      if (placingEquipment && selectedEquipmentId) {
-        const { lat, lng } = e.latlng;
-        const x_frac = lng / imgSize.w;
-        const y_frac = 1 - lat / imgSize.h;
-
-        onPlaceEquipment?.(selectedEquipmentId, x_frac, y_frac, 0);
-
-        setPlacingEquipment(false);
-        setSelectedEquipmentId("");
-      }
-    });
-
-    return () => {
-      map.remove();
-    };
-  }, [imgSrc, imgSize]);
-
-  // ============================================================
-  // Drawing Rectangle & Circle
-  // ============================================================
-  useEffect(() => {
-    const m = mapRef.current;
-    if (!m || drawing === DRAW_NONE || drawing === DRAW_POLY) return;
-    if (imgSize.w === 0) return;
-
-    let startPt = null;
-    let tempLayer = null;
-    const mode = drawing;
-    const color = selectedZoneColor;
-
-    const onDown = (e) => {
-      startPt = e.latlng;
-      if (mode === DRAW_CIRCLE) {
-        tempLayer = L.circle(e.latlng, {
-          radius: 1,
-          color,
-          weight: 2,
-          fillColor: color,
-          fillOpacity: 0.2,
-          pane: "zonesPane",
-        }).addTo(m);
-      }
-      if (mode === DRAW_RECT) {
-        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), {
-          color,
-          weight: 2,
-          fillColor: color,
-          fillOpacity: 0.2,
-          pane: "zonesPane",
-        }).addTo(m);
-      }
-      m.dragging.disable();
-    };
-
-    const onMove = (e) => {
-      if (!startPt || !tempLayer) return;
-      if (mode === DRAW_CIRCLE) {
-        const r = m.distance(startPt, e.latlng);
-        tempLayer.setRadius(Math.max(4, r));
-      } else if (mode === DRAW_RECT) {
-        tempLayer.setBounds(L.latLngBounds(startPt, e.latlng));
-      }
-    };
-
-    const onUp = () => {
-      m.dragging.enable();
-      if (!startPt || !tempLayer) {
-        setDrawing(DRAW_NONE);
-        return;
-      }
-
-      // Calculate geometry in normalized coordinates (0-1)
-      let geometry;
-      if (mode === DRAW_CIRCLE) {
-        const ll = tempLayer.getLatLng();
-        const r = tempLayer.getRadius();
-        geometry = {
-          cx: ll.lng / imgSize.w,
-          cy: 1 - ll.lat / imgSize.h,
-          r: r / Math.min(imgSize.w, imgSize.h),
-        };
-      } else if (mode === DRAW_RECT) {
-        const b = tempLayer.getBounds();
-        geometry = {
-          x1: b.getWest() / imgSize.w,
-          y1: 1 - b.getNorth() / imgSize.h,
-          x2: b.getEast() / imgSize.w,
-          y2: 1 - b.getSouth() / imgSize.h,
-        };
-      }
-
-      // Open zone editor modal
-      setZoneEditor({ tempLayer, kind: mode, geometry, color });
-      setDrawing(DRAW_NONE);
-    };
-
-    m.on("mousedown", onDown);
-    m.on("mousemove", onMove);
-    m.on("mouseup", onUp);
-
-    return () => {
-      m.off("mousedown", onDown);
-      m.off("mousemove", onMove);
-      m.off("mouseup", onUp);
-    };
-  }, [drawing, imgSize, selectedZoneColor]);
-
-  // ============================================================
-  // Drawing Polygon
-  // ============================================================
-  useEffect(() => {
-    const m = mapRef.current;
-    if (!m || drawing !== DRAW_POLY) return;
-    if (imgSize.w === 0) return;
-
-    let tempPoly = null;
-    const color = selectedZoneColor;
-    const style = { color, weight: 2, fillColor: color, fillOpacity: 0.2, dashArray: "5, 5", pane: "zonesPane" };
-
-    const redraw = () => {
-      if (tempPoly) {
-        m.removeLayer(tempPoly);
-        tempPoly = null;
-      }
-      if (polyTemp.length >= 1) {
-        tempPoly = L.polygon(polyTemp, style).addTo(m);
-      }
-    };
-
-    const onClick = (e) => {
-      // Don't add points when placing equipment
-      if (placingEquipment) return;
-      setPolyTemp((old) => [...old, e.latlng]);
-    };
-
-    const onMove = () => redraw();
-
-    const onDblClick = (e) => {
-      L.DomEvent.stopPropagation(e);
-      if (polyTemp.length < 3) return;
-
-      // Calculate geometry
-      const points = polyTemp.map((ll) => [
-        ll.lng / imgSize.w,
-        1 - ll.lat / imgSize.h,
-      ]);
-
-      // Create final polygon for visual
-      const finalPoly = L.polygon(polyTemp, { ...style, dashArray: null, pane: "zonesPane" });
-
-      setZoneEditor({ tempLayer: finalPoly, kind: "poly", geometry: { points }, color });
-      setPolyTemp([]);
-      setDrawing(DRAW_NONE);
-      if (tempPoly) m.removeLayer(tempPoly);
-    };
-
-    m.on("click", onClick);
-    m.on("mousemove", onMove);
-    m.on("dblclick", onDblClick);
-
-    return () => {
-      m.off("click", onClick);
-      m.off("mousemove", onMove);
-      m.off("dblclick", onDblClick);
-      if (tempPoly) m.removeLayer(tempPoly);
-    };
-  }, [drawing, polyTemp, imgSize, selectedZoneColor, placingEquipment]);
-
-  // Handle zone editor save
-  const handleSaveZone = (zoneData) => {
-    if (!zoneEditor || !zoneData?.name) {
-      // Cancel
-      if (zoneEditor?.tempLayer && mapRef.current) {
-        mapRef.current.removeLayer(zoneEditor.tempLayer);
-      }
-      setZoneEditor(null);
-      return;
-    }
-
-    onZoneCreate?.({
-      name: zoneData.name,
-      kind: zoneEditor.kind,
-      geometry: zoneEditor.geometry,
-      color: zoneEditor.color,
-      zoning_gas: zoneData.zoning_gas ?? null,
-      zoning_dust: zoneData.zoning_dust ?? null,
-      page_index: 0,
-    });
-
-    // Remove temp layer
-    if (zoneEditor.tempLayer && mapRef.current) {
-      mapRef.current.removeLayer(zoneEditor.tempLayer);
-    }
-    setZoneEditor(null);
   };
-
-  // Re-render markers when positions change or when placing mode changes
-  useEffect(() => {
-    if (!markersLayerRef.current || !imgSize.w) return;
-
-    markersLayerRef.current.clearLayers();
-
-    positions.forEach((pos) => {
-      if (pos.x_frac === undefined || pos.y_frac === undefined) return;
-
-      const lat = (1 - pos.y_frac) * imgSize.h;
-      const lng = pos.x_frac * imgSize.w;
-
-      const isSelected = pos.id === selectedPositionId;
-
-      // Use the same marker design as Atex-map with status-based gradient
-      const icon = makeEquipIcon(pos.equipment_status, isSelected);
-
-      const marker = L.marker([lat, lng], {
-        icon,
-        draggable: true,
-      });
-
-      // Tooltip with equipment name and status
-      const equipmentName = pos.equipment_name || "Équipement";
-      const statusLabel = {
-        a_faire: "À faire",
-        en_cours_30: "≤ 90 jours",
-        en_retard: "En retard",
-        fait: "Fait",
-      }[pos.equipment_status] || "";
-      marker.bindTooltip(`${equipmentName}${statusLabel ? ` (${statusLabel})` : ""}`, {
-        permanent: false,
-        direction: "top",
-      });
-
-      marker.on("click", () => {
-        setSelectedPositionId(pos.id);
-        // Open equipment drawer if callback provided
-        if (onEquipmentClick && pos.equipment_id) {
-          onEquipmentClick(pos.equipment_id);
-        }
-      });
-
-      marker.on("dragend", (e) => {
-        const { lat: newLat, lng: newLng } = e.target.getLatLng();
-        const x_frac = newLng / imgSize.w;
-        const y_frac = 1 - newLat / imgSize.h;
-        onUpdatePosition?.(pos.id, { x_frac, y_frac });
-      });
-
-      markersLayerRef.current.addLayer(marker);
-    });
-  }, [positions, imgSize, selectedPositionId, onUpdatePosition, onEquipmentClick]);
-
-  // ============================================================
-  // Draw zones
-  // ============================================================
-  useEffect(() => {
-    if (!zonesLayerRef.current || !imgSize.w) return;
-
-    zonesLayerRef.current.clearLayers();
-
-    zones.forEach((zone) => {
-      if (!zone.geometry) return;
-
-      // Use ATEX colors if zoning is defined, otherwise use zone's custom color
-      const { stroke, fill } = getAtexZoneColors(zone);
-      let shape;
-
-      const geom = typeof zone.geometry === 'string' ? JSON.parse(zone.geometry) : zone.geometry;
-
-      if (zone.kind === "rect" && geom.x1 !== undefined) {
-        const { x1, y1, x2, y2 } = geom;
-        const bounds = [
-          [(1 - y2) * imgSize.h, x1 * imgSize.w],
-          [(1 - y1) * imgSize.h, x2 * imgSize.w],
-        ];
-        shape = L.rectangle(bounds, {
-          color: stroke,
-          weight: 2,
-          fillColor: fill,
-          fillOpacity: 0.15,
-          pane: "zonesPane",
-        });
-      } else if (zone.kind === "circle" && geom.cx !== undefined) {
-        const { cx, cy, r } = geom;
-        const lat = (1 - cy) * imgSize.h;
-        const lng = cx * imgSize.w;
-        const radius = r * Math.min(imgSize.w, imgSize.h);
-        shape = L.circle([lat, lng], {
-          radius,
-          color: stroke,
-          weight: 2,
-          fillColor: fill,
-          fillOpacity: 0.15,
-          pane: "zonesPane",
-        });
-      } else if (zone.kind === "poly" && geom.points?.length) {
-        const latLngs = geom.points.map((pt) => {
-          const [x, y] = Array.isArray(pt) ? pt : [pt.x, pt.y];
-          return [(1 - y) * imgSize.h, x * imgSize.w];
-        });
-        shape = L.polygon(latLngs, {
-          color: stroke,
-          weight: 2,
-          fillColor: fill,
-          fillOpacity: 0.15,
-          pane: "zonesPane",
-        });
-      }
-
-      if (shape) {
-        // Tooltip with zone info
-        const gasLabel = zone.zoning_gas !== null && zone.zoning_gas !== undefined ? `Gaz: Zone ${zone.zoning_gas}` : "";
-        const dustLabel = zone.zoning_dust !== null && zone.zoning_dust !== undefined ? `Poussière: Zone ${zone.zoning_dust}` : "";
-        const tooltipText = [zone.name || "Zone", gasLabel, dustLabel].filter(Boolean).join(" | ");
-        shape.bindTooltip(tooltipText, { permanent: false, direction: "center" });
-
-        // Click handler to edit zone
-        shape.on("click", (e) => {
-          L.DomEvent.stopPropagation(e);
-          setEditingZone({
-            id: zone.id,
-            name: zone.name || "",
-            zoning_gas: zone.zoning_gas ?? null,
-            zoning_dust: zone.zoning_dust ?? null,
-            color: zone.color || "#6B7280",
-          });
-        });
-
-        // Cursor style on hover
-        shape.on("mouseover", () => {
-          shape.setStyle({ fillOpacity: 0.4, weight: 3 });
-        });
-        shape.on("mouseout", () => {
-          shape.setStyle({ fillOpacity: 0.2, weight: 2 });
-        });
-
-        zonesLayerRef.current.addLayer(shape);
-      }
-    });
-  }, [zones, imgSize]);
-
-  // Set draw mode helper
-  const setDrawMode = (mode) => {
-    if (mode === DRAW_POLY) {
-      setPolyTemp([]);
-    }
-    setDrawing(mode);
-    setDrawMenu(false);
-  };
-
-  // Cancel drawing
-  const cancelDrawing = () => {
-    setDrawing(DRAW_NONE);
-    setPolyTemp([]);
-    if (zoneEditor?.tempLayer && mapRef.current) {
-      mapRef.current.removeLayer(zoneEditor.tempLayer);
-    }
-    setZoneEditor(null);
-  };
-
-  // ============================================================
-  // Render
-  // ============================================================
-  const isMobile = isMobileDevice();
-  const windowH = typeof window !== "undefined" ? window.innerHeight : 900;
-  const isLargeScreen = windowH > 800;
-  const viewerHeight = isLargeScreen ? windowH - 200 : Math.min(windowH - 180, 700);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 p-3 border-b border-gray-200 bg-gray-50">
-        <span className="text-sm font-medium text-gray-700">
-          {plan?.display_name || plan?.logical_name}
-        </span>
-
-        <div className="flex-1" />
-
-        {/* Normal mode - Draw menu */}
-        {drawing === DRAW_NONE && !placingEquipment && (
-          <div className="relative">
-            <button
-              onClick={() => setDrawMenu((v) => !v)}
-              className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center gap-2"
-              title="Dessiner une zone"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-              Dessiner zone
-            </button>
-
-            {/* Draw menu dropdown */}
-            {drawMenu && (
-              <div className="absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 min-w-[160px]">
-                <button
-                  onClick={() => setDrawMode(DRAW_RECT)}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
-                >
-                  <span className="w-4 h-4 border-2 border-current" />
-                  Rectangle
-                </button>
-                <button
-                  onClick={() => setDrawMode(DRAW_CIRCLE)}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
-                >
-                  <span className="w-4 h-4 border-2 border-current rounded-full" />
-                  Cercle
-                </button>
-                <button
-                  onClick={() => setDrawMode(DRAW_POLY)}
-                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3l14 9-14 9V3z" />
-                  </svg>
-                  Polygone
-                </button>
-                <hr className="my-1" />
-                <div className="px-4 py-2">
-                  <span className="text-xs text-gray-500 block mb-2">Couleur:</span>
-                  <div className="flex gap-1 flex-wrap">
-                    {ZONE_COLORS.map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => setSelectedZoneColor(c)}
-                        className={`w-6 h-6 rounded ${selectedZoneColor === c ? "ring-2 ring-offset-1 ring-gray-400" : ""}`}
-                        style={{ backgroundColor: c }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Drawing mode indicator */}
-        {drawing !== DRAW_NONE && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-green-600 font-medium">
-              {drawing === DRAW_RECT && "Cliquez et glissez pour dessiner un rectangle"}
-              {drawing === DRAW_CIRCLE && "Cliquez et glissez pour dessiner un cercle"}
-              {drawing === DRAW_POLY && `Cliquez pour ajouter des points (${polyTemp.length}) - Double-clic pour terminer`}
-            </span>
-            {drawing === DRAW_POLY && polyTemp.length >= 3 && (
-              <button
-                onClick={() => {
-                  const m = mapRef.current;
-                  if (m) {
-                    const ev = new MouseEvent("dblclick", { bubbles: true });
-                    m.getContainer().dispatchEvent(ev);
-                  }
-                }}
-                className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
-              >
-                Terminer
-              </button>
-            )}
-            <button
-              onClick={cancelDrawing}
-              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
-            >
-              Annuler
-            </button>
-          </div>
-        )}
-
-        {/* Placing mode indicator */}
-        {placingEquipment && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-amber-600 font-medium">
-              Cliquez sur le plan pour placer l'équipement
-            </span>
-            <button
-              onClick={() => {
-                setPlacingEquipment(false);
-                setSelectedEquipmentId("");
-              }}
-              className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-lg"
-            >
-              Annuler
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Map container */}
-      <div style={{ height: viewerHeight }} className="relative">
-        {pdfLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-amber-500 border-t-transparent mx-auto mb-4" />
-              <p className="text-gray-600">Chargement du plan...</p>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-5 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl"><Plus size={24} /></div>
+            <div>
+              <h2 className="text-xl font-bold">Nouvel element</h2>
+              <p className="text-violet-100 text-sm">Sera place sur le plan</p>
             </div>
           </div>
-        )}
-
-        {pdfError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-10">
-            <div className="text-center text-red-500">
-              <svg className="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <p>{pdfError}</p>
-              <button
-                onClick={loadPdf}
-                className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg"
-              >
-                Réessayer
-              </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nom *</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-violet-500" placeholder="Nom de l'element" autoFocus />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Categorie</label>
+            <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+              {categories.length === 0 ? (
+                <div className="col-span-2 text-center py-4 text-gray-500 text-sm">Aucune categorie</div>
+              ) : categories.map(cat => {
+                const IconComp = ICON_MAP[cat.icon] || Circle;
+                return (
+                  <button key={cat.id} onClick={() => setCategoryId(cat.id)}
+                    className={`flex items-center gap-2 p-3 rounded-xl border-2 transition-all ${categoryId === cat.id ? 'border-violet-500 bg-violet-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: cat.color }}>
+                      <IconComp size={14} className="text-white" />
+                    </div>
+                    <span className="text-sm font-medium text-gray-900 truncate">{cat.name}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
-        )}
+        </div>
+        <div className="border-t p-4 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">Annuler</button>
+          <button onClick={handleCreate} disabled={!name.trim() || isCreating}
+            className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+            {isCreating ? <RefreshCw size={18} className="animate-spin" /> : <Plus size={18} />}Creer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
-        <div ref={containerRef} className="w-full h-full" />
+// Category Filter Chips
+const CategoryFilterChips = ({ categories, selectedCategories, onToggle, onClearAll }) => {
+  if (categories.length === 0) return null;
+  const allSelected = selectedCategories.length === 0;
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button onClick={onClearAll}
+        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 ${allSelected ? 'bg-violet-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+        <Layers size={12} />Toutes
+      </button>
+      {categories.map(cat => {
+        const isSelected = selectedCategories.includes(cat.id);
+        const IconComp = ICON_MAP[cat.icon] || Circle;
+        return (
+          <button key={cat.id} onClick={() => onToggle(cat.id)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 ${isSelected ? 'text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            style={isSelected ? { backgroundColor: cat.color } : {}}>
+            <IconComp size={12} />{cat.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+// Detail Panel for selected item
+const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, isMobile, currentPlan }) => {
+  if (!item) return null;
+  const IconComp = ICON_MAP[category?.icon] || Circle;
+
+  return (
+    <div className={`${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`}>
+      <div className="bg-gradient-to-r from-violet-500 to-purple-600 p-4 text-white flex-shrink-0">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="p-2 bg-white/20 rounded-xl flex-shrink-0"><IconComp size={20} /></div>
+            <div className="min-w-0">
+              <h3 className="font-bold truncate">{item.name}</h3>
+              <p className="text-violet-100 text-sm truncate">{category?.name || 'Sans categorie'}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg flex-shrink-0"><X size={18} /></button>
+        </div>
       </div>
 
-      {/* Legend */}
-      <div className="p-3 border-t border-gray-200 bg-gray-50">
-        <div className="flex flex-wrap gap-4 text-sm">
-          <span className="text-gray-500">
-            {positions.length} équipement(s) placé(s) - {zones.length} zone(s)
-          </span>
-          {selectedPositionId && (
-            <button
-              onClick={() => {
-                if (confirm("Retirer cet équipement du plan ?")) {
-                  onDeletePosition?.(selectedPositionId);
-                  setSelectedPositionId(null);
-                }
-              }}
-              className="text-red-600 hover:text-red-700"
-            >
-              Retirer l'équipement sélectionné
+      <div className="p-4 space-y-3 overflow-y-auto flex-1">
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Batiment</span>
+            <span className="font-semibold text-gray-900 truncate block">{item.building || '-'}</span>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2 text-center">
+            <span className="text-gray-500 text-xs block">Etage</span>
+            <span className="font-semibold text-gray-900 truncate block">{item.floor || '-'}</span>
+          </div>
+        </div>
+        {item.description && <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-2">{item.description}</p>}
+
+        <div className="flex gap-2">
+          <button onClick={() => onNavigate(item)} className="flex-1 py-2.5 px-3 rounded-xl bg-violet-100 text-violet-700 text-sm font-medium flex items-center justify-center gap-2 hover:bg-violet-200">
+            <Eye size={16} />Voir details
+          </button>
+          {position && (
+            <button onClick={() => onDelete(position.id)} className="py-2.5 px-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100">
+              <Trash2 size={16} />
             </button>
           )}
         </div>
       </div>
+    </div>
+  );
+};
 
-      {/* Zone editor modal */}
-      {zoneEditor && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Nouvelle zone
-            </h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                const zoningGasVal = formData.get("zoning_gas");
-                const zoningDustVal = formData.get("zoning_dust");
-                handleSaveZone({
-                  name: formData.get("zoneName"),
-                  zoning_gas: zoningGasVal === "" ? null : Number(zoningGasVal),
-                  zoning_dust: zoningDustVal === "" ? null : Number(zoningDustVal),
-                });
-              }}
-            >
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nom de la zone
-                </label>
-                <input
-                  type="text"
-                  name="zoneName"
-                  autoFocus
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                  placeholder="Ex: Zone de stockage, Bureau, Atelier..."
-                />
+export default function InfrastructureMap() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetItemIdRef = useRef(null);
+
+  // Core data
+  const [plans, setPlans] = useState([]);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [numPages, setNumPages] = useState(1);
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [placedIds, setPlacedIds] = useState(new Set());
+  const [placedDetails, setPlacedDetails] = useState({});
+
+  // UI state
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedPosition, setSelectedPosition] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [toast, setToast] = useState(null);
+  const [pdfReady, setPdfReady] = useState(false);
+
+  // External positions (other equipment types)
+  const [externalPositions, setExternalPositions] = useState({ planKey: null, positions: {} });
+  const [visibleExternalCategories, setVisibleExternalCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_EXTERNAL_VISIBLE);
+      return saved ? JSON.parse(saved) : ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards', 'datahub'];
+    } catch { return ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards', 'datahub']; }
+  });
+
+  // Creation mode
+  const [createMode, setCreateMode] = useState(false);
+  const [placementMode, setPlacementMode] = useState(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [pendingPosition, setPendingPosition] = useState(null);
+
+  // Refs
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const overlayRef = useRef(null);
+  const markersRef = useRef([]);
+  const pdfDocRef = useRef(null);
+  const createModeRef = useRef(false);
+  const placementModeRef = useRef(null);
+  const canvasDimRef = useRef({ w: 0, h: 0 });
+  const selectedItemIdRef = useRef(null);
+  const positionsRef = useRef([]);
+  const imgSizeRef = useRef({ w: 0, h: 0 });
+  const currentPlanKeyRef = useRef(null);
+
+  useEffect(() => { createModeRef.current = createMode; }, [createMode]);
+  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+
+  const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
+
+  // Responsive
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) setShowSidebar(false);
+    };
+    window.addEventListener("resize", handleResize);
+    handleResize();
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Load initial data
+  const loadData = useCallback(async () => {
+    try {
+      const [plansRes, itemsRes, catsRes, placedRes] = await Promise.all([
+        api.infrastructure.maps.listPlans(),
+        api.infrastructure.list({}),
+        api.infrastructure.listCategories(),
+        api.infrastructure.maps.placedIds()
+      ]);
+      setPlans(plansRes?.plans || []);
+      setItems(itemsRes?.items || []);
+      setCategories(catsRes?.categories || []);
+      setPlacedIds(new Set((placedRes?.placed_ids || []).map(String)));
+      setPlacedDetails(placedRes?.placed_details || {});
+    } catch (e) {
+      console.error("Load error:", e);
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Handle URL params for navigation
+  useEffect(() => {
+    const urlPlanKey = searchParams.get("plan");
+    const focusItemId = searchParams.get("item");
+
+    if (urlPlanKey && plans.length > 0) {
+      const targetPlan = plans.find(p => p.logical_name === urlPlanKey);
+      if (targetPlan) {
+        if (focusItemId) targetItemIdRef.current = focusItemId;
+        if (!selectedPlan || selectedPlan.logical_name !== targetPlan.logical_name) {
+          setPdfReady(false);
+          setSelectedPlan(targetPlan);
+          setPageIndex(0);
+        } else {
+          setPdfReady(false);
+          setTimeout(() => setPdfReady(true), 100);
+        }
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, plans, selectedPlan, setSearchParams]);
+
+  // Initial plan selection
+  useEffect(() => {
+    if (plans.length > 0 && !selectedPlan) {
+      const urlPlanKey = searchParams.get("plan");
+      if (urlPlanKey) return;
+      const saved = localStorage.getItem(STORAGE_KEY_PLAN);
+      const planToSelect = plans.find(p => p.logical_name === saved || p.id === saved) || plans[0];
+      setSelectedPlan(planToSelect);
+      const savedPage = parseInt(localStorage.getItem(STORAGE_KEY_PAGE) || "0", 10);
+      setPageIndex(savedPage);
+    }
+  }, [plans, selectedPlan, searchParams]);
+
+  // Save selected plan
+  useEffect(() => {
+    if (selectedPlan) {
+      localStorage.setItem(STORAGE_KEY_PLAN, selectedPlan.logical_name || selectedPlan.id);
+      localStorage.setItem(STORAGE_KEY_PAGE, String(pageIndex));
+    }
+  }, [selectedPlan, pageIndex]);
+
+  // Load PDF
+  const loadPdf = useCallback(async () => {
+    if (!selectedPlan || !mapContainerRef.current) return;
+    setIsLoading(true);
+    try {
+      const url = api.infrastructure.maps.planFileUrlAuto(selectedPlan);
+      const doc = await pdfjsLib.getDocument(pdfDocOpts(url)).promise;
+      pdfDocRef.current = doc;
+      setNumPages(doc.numPages);
+      const page = await doc.getPage(clamp(pageIndex + 1, 1, doc.numPages));
+      const scale = window.devicePixelRatio >= 2 ? 2 : 1.5;
+      const vp = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = vp.width;
+      canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      const dataUrl = canvas.toDataURL("image/png");
+      canvasDimRef.current = { w: vp.width, h: vp.height };
+      initMap(dataUrl, vp.width, vp.height);
+    } catch (e) {
+      console.error("PDF load error:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedPlan, pageIndex]);
+
+  // Load positions
+  const loadPositions = useCallback(async () => {
+    if (!selectedPlan) return;
+    try {
+      const res = await api.infrastructure.maps.positionsAuto(selectedPlan.logical_name || selectedPlan.id, pageIndex);
+      setPositions(res?.positions || []);
+    } catch { setPositions([]); }
+  }, [selectedPlan, pageIndex]);
+
+  // Load external positions
+  const loadExternalPositions = useCallback(async () => {
+    if (!selectedPlan) return;
+    const planKey = selectedPlan.logical_name || selectedPlan.id;
+    currentPlanKeyRef.current = `${planKey}:${pageIndex}`;
+    try {
+      const res = await api.infrastructure.maps.externalPositions(planKey, pageIndex);
+      if (currentPlanKeyRef.current === `${planKey}:${pageIndex}`) {
+        setExternalPositions({ planKey: `${planKey}:${pageIndex}`, positions: res?.positions || {} });
+      }
+    } catch (e) {
+      console.log('External positions error:', e.message);
+    }
+  }, [selectedPlan, pageIndex]);
+
+  // Save visible external categories
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_EXTERNAL_VISIBLE, JSON.stringify(visibleExternalCategories));
+  }, [visibleExternalCategories]);
+
+  const toggleExternalCategory = useCallback((catId) => {
+    setVisibleExternalCategories(prev => prev.includes(catId) ? prev.filter(id => id !== catId) : [...prev, catId]);
+  }, []);
+
+  useEffect(() => {
+    if (selectedPlan) {
+      const newPlanKey = `${selectedPlan.logical_name || selectedPlan.id}:${pageIndex}`;
+      currentPlanKeyRef.current = newPlanKey;
+      loadPdf();
+      loadPositions();
+      loadExternalPositions();
+    }
+  }, [selectedPlan, pageIndex, loadPdf, loadPositions, loadExternalPositions]);
+
+  // Initialize map
+  const initMap = (imageUrl, w, h) => {
+    if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+    markersRef.current = [];
+    imgSizeRef.current = { w, h };
+
+    const bounds = [[0, 0], [h, w]];
+    const map = L.map(mapContainerRef.current, {
+      crs: L.CRS.Simple, minZoom: -3, maxZoom: 2, zoomControl: false,
+      attributionControl: false, maxBounds: bounds, maxBoundsViscosity: 1
+    });
+    L.control.zoom({ position: "topright" }).addTo(map);
+    const overlay = L.imageOverlay(imageUrl, bounds).addTo(map);
+    map.fitBounds(bounds);
+    mapRef.current = map;
+    overlayRef.current = overlay;
+
+    map.on("click", handleMapClick);
+    drawMarkers();
+    setPdfReady(true);
+  };
+
+  // Create marker icon
+  const makeMarkerIcon = useCallback((item, cat, isSelected) => {
+    const size = isSelected ? ICON_PX_SELECTED : ICON_PX;
+    const iconId = cat?.icon || 'building';
+    const svgPath = SVG_PATHS[iconId] || SVG_PATHS.default;
+    const color = cat?.color || "#8B5CF6";
+    const bgGradient = isSelected
+      ? "radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed)"
+      : `radial-gradient(circle at 30% 30%, ${color}cc, ${color})`;
+
+    const html = `
+      <div style="width:${size}px;height:${size}px;background:${bgGradient};border:2px solid white;border-radius:50%;
+        box-shadow:0 4px 12px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
+        <svg viewBox="0 0 24 24" width="${size * 0.5}" height="${size * 0.5}" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          ${svgPath}
+        </svg>
+      </div>`;
+
+    return L.divIcon({
+      className: "infrastructure-marker-inline",
+      html,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2]
+    });
+  }, []);
+
+  // Draw markers
+  const drawMarkers = useCallback(() => {
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    if (!map || !overlay) return;
+
+    const { w, h } = imgSizeRef.current;
+    if (w === 0 || h === 0) return;
+
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
+
+    const bounds = overlay.getBounds();
+    const boundsH = bounds.getNorth();
+    const boundsW = bounds.getEast();
+
+    // Draw infrastructure items
+    positionsRef.current.forEach(pos => {
+      const item = items.find(i => i.id === pos.item_id);
+      if (!item) return;
+      if (selectedCategories.length > 0 && !selectedCategories.includes(item.category_id)) return;
+
+      const cat = categories.find(c => c.id === item.category_id);
+      const isSelected = pos.item_id === selectedItemIdRef.current;
+      const icon = makeMarkerIcon(item, cat, isSelected);
+
+      const lat = boundsH * (1 - pos.y_frac);
+      const lng = boundsW * pos.x_frac;
+      const marker = L.marker([lat, lng], { icon, draggable: true, riseOnHover: true }).addTo(map);
+      marker.__meta = { id: pos.id, item_id: pos.item_id };
+
+      marker.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        setSelectedItem(item);
+        setSelectedPosition(pos);
+        setPlacementMode(null);
+        setCreateMode(false);
+        map.setView([lat, lng], map.getZoom(), { animate: true });
+      });
+
+      marker.on("dragend", async () => {
+        const ll = marker.getLatLng();
+        const newX = clamp(ll.lng / boundsW, 0, 1);
+        const newY = clamp(1 - ll.lat / boundsH, 0, 1);
+        try {
+          await api.infrastructure.maps.setPosition(pos.item_id, {
+            logical_name: selectedPlan.logical_name || selectedPlan.id,
+            page_index: pageIndex, x_frac: newX, y_frac: newY
+          });
+          await loadPositions();
+        } catch (e) {
+          console.error("Move error:", e);
+          await loadPositions();
+        }
+      });
+
+      marker.bindTooltip(`<strong>${item.name}</strong><br/>${cat?.name || 'Sans categorie'}`, {
+        direction: "top", offset: [0, -ICON_PX / 2], className: "infrastructure-tooltip"
+      });
+
+      markersRef.current.push(marker);
+    });
+
+    // Draw external equipment markers
+    const currentKey = `${selectedPlan?.logical_name || selectedPlan?.id}:${pageIndex}`;
+    if (externalPositions.planKey === currentKey) {
+      Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
+        if (!visibleExternalCategories.includes(catKey)) return;
+        const positions = externalPositions.positions[catKey] || [];
+
+        positions.forEach(pos => {
+          const size = ICON_PX;
+          const lat = boundsH * pos.y_frac;
+          const lng = boundsW * pos.x_frac;
+
+          const html = `<div style="width:${size}px;height:${size}px;background:${extCat.color};border:2px solid white;border-radius:50%;
+            box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;opacity:0.8;">
+            <span style="color:white;font-size:8px;font-weight:bold;">${extCat.shortName.substring(0, 2)}</span>
+          </div>`;
+
+          const icon = L.divIcon({
+            className: "infrastructure-external-marker",
+            html,
+            iconSize: [size, size],
+            iconAnchor: [size / 2, size / 2]
+          });
+
+          const marker = L.marker([lat, lng], { icon, draggable: false }).addTo(map);
+          marker.bindTooltip(`<strong>${extCat.name}</strong><br/>${pos.name || 'Equipement'}`, {
+            direction: "top", offset: [0, -ICON_PX / 2]
+          });
+          markersRef.current.push(marker);
+        });
+      });
+    }
+  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon, externalPositions, visibleExternalCategories]);
+
+  // Update positions ref and redraw
+  useEffect(() => {
+    positionsRef.current = positions;
+    if (mapRef.current) drawMarkers();
+  }, [positions, drawMarkers]);
+
+  // Handle item selection
+  useEffect(() => {
+    selectedItemIdRef.current = selectedItem?.id || null;
+    if (mapRef.current && positions.length > 0) drawMarkers();
+  }, [selectedItem, positions, drawMarkers]);
+
+  // Handle map click for placement
+  const handleMapClick = useCallback(async (e) => {
+    if (!createModeRef.current && !placementModeRef.current) return;
+    if (!mapRef.current || !overlayRef.current) return;
+
+    const bounds = overlayRef.current.getBounds();
+    const boundsH = bounds.getNorth();
+    const boundsW = bounds.getEast();
+    const x_frac = clamp(e.latlng.lng / boundsW, 0, 1);
+    const y_frac = clamp(1 - e.latlng.lat / boundsH, 0, 1);
+
+    if (createModeRef.current) {
+      setPendingPosition({ x_frac, y_frac });
+      setShowCreateModal(true);
+      setCreateMode(false);
+    } else if (placementModeRef.current) {
+      try {
+        await api.infrastructure.maps.setPosition(placementModeRef.current, {
+          logical_name: selectedPlan.logical_name || selectedPlan.id,
+          page_index: pageIndex, x_frac, y_frac
+        });
+        showToast("Element place sur le plan", "success");
+        setPlacementMode(null);
+        await loadPositions();
+        await loadData();
+      } catch (e) {
+        console.error("Placement error:", e);
+        showToast("Erreur de placement", "error");
+      }
+    }
+  }, [selectedPlan, pageIndex, loadPositions, loadData, showToast]);
+
+  // Create item from modal
+  const handleCreateItem = async (itemData, position) => {
+    try {
+      const res = await api.infrastructure.create(itemData);
+      const newItem = res?.item;
+      if (newItem && position) {
+        await api.infrastructure.maps.setPosition(newItem.id, {
+          logical_name: selectedPlan.logical_name || selectedPlan.id,
+          page_index: pageIndex,
+          x_frac: position.x_frac,
+          y_frac: position.y_frac
+        });
+      }
+      showToast("Element cree et place", "success");
+      await loadPositions();
+      await loadData();
+    } catch (e) {
+      console.error("Create error:", e);
+      showToast("Erreur de creation", "error");
+    }
+  };
+
+  // Delete position
+  const handleDeletePosition = async (positionId) => {
+    if (!window.confirm("Retirer cet element du plan ?")) return;
+    try {
+      await api.infrastructure.maps.deletePosition(positionId);
+      showToast("Element retire du plan", "success");
+      setSelectedItem(null);
+      setSelectedPosition(null);
+      await loadPositions();
+      await loadData();
+    } catch (e) {
+      console.error("Delete error:", e);
+      showToast("Erreur de suppression", "error");
+    }
+  };
+
+  // Filter items for sidebar
+  const filteredItems = useMemo(() => {
+    let filtered = items;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(i => i.name?.toLowerCase().includes(q) || i.code?.toLowerCase().includes(q));
+    }
+    if (selectedCategories.length > 0) {
+      filtered = filtered.filter(i => selectedCategories.includes(i.category_id));
+    }
+    return filtered;
+  }, [items, searchQuery, selectedCategories]);
+
+  const toggleCategory = (catId) => {
+    setSelectedCategories(prev => prev.includes(catId) ? prev.filter(id => id !== catId) : [...prev, catId]);
+  };
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      {/* Header */}
+      <div className="bg-white border-b shadow-sm z-30 flex-shrink-0">
+        <div className="px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate('/app/infrastructure')} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+              <ArrowLeft size={20} />
+            </button>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white">
+              <Building2 size={20} />
+            </div>
+            <div className="hidden sm:block">
+              <h1 className="text-lg font-bold text-gray-900">Infrastructure - Plans</h1>
+              <p className="text-xs text-gray-500">{selectedPlan?.display_name || selectedPlan?.logical_name || 'Selection du plan'}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {!isMobile && (
+              <button onClick={() => setShowSidebar(!showSidebar)}
+                className="p-2 hover:bg-gray-100 rounded-lg text-gray-600" title="Toggle sidebar">
+                <Menu size={20} />
+              </button>
+            )}
+            <button onClick={() => { setCreateMode(true); showToast("Cliquez sur le plan pour creer", "info"); }}
+              className={`px-3 py-2 rounded-xl font-medium flex items-center gap-2 ${createMode ? 'bg-violet-600 text-white' : 'bg-violet-100 text-violet-700 hover:bg-violet-200'}`}>
+              <Plus size={18} /><span className="hidden sm:inline">Creer</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Plan selector */}
+        <div className="px-4 pb-3 flex items-center gap-2 overflow-x-auto">
+          <select value={selectedPlan?.id || ''} onChange={e => {
+            const plan = plans.find(p => p.id === e.target.value);
+            if (plan) { setSelectedPlan(plan); setPageIndex(0); }
+          }} className="px-3 py-2 border border-gray-300 rounded-xl bg-white text-sm font-medium min-w-[200px]">
+            {plans.map(p => <option key={p.id} value={p.id}>{p.display_name || p.logical_name}</option>)}
+          </select>
+          {numPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPageIndex(p => Math.max(0, p - 1))} disabled={pageIndex === 0}
+                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"><ChevronLeft size={18} /></button>
+              <span className="text-sm font-medium px-2">{pageIndex + 1}/{numPages}</span>
+              <button onClick={() => setPageIndex(p => Math.min(numPages - 1, p + 1))} disabled={pageIndex >= numPages - 1}
+                className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50"><ChevronRight size={18} /></button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Sidebar */}
+        {showSidebar && !isMobile && (
+          <div className="w-80 border-r bg-white flex flex-col z-20">
+            <div className="p-4 border-b space-y-3">
+              <div className="relative">
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Rechercher..." className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm" />
               </div>
+              <CategoryFilterChips categories={categories} selectedCategories={selectedCategories}
+                onToggle={toggleCategory} onClearAll={() => setSelectedCategories([])} />
+            </div>
 
-              {/* Zonage ATEX */}
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <div className="text-sm font-medium text-amber-800 mb-3 flex items-center gap-2">
-                  <span>⚠️</span> Zonage ATEX
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Zone Gaz
-                    </label>
-                    <select
-                      name="zoning_gas"
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">Non classée</option>
-                      <option value="0">Zone 0 (Gaz permanent)</option>
-                      <option value="1">Zone 1 (Gaz occasionnel)</option>
-                      <option value="2">Zone 2 (Gaz rare)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Zone Poussière
-                    </label>
-                    <select
-                      name="zoning_dust"
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">Non classée</option>
-                      <option value="20">Zone 20 (Poussière permanente)</option>
-                      <option value="21">Zone 21 (Poussière occasionnelle)</option>
-                      <option value="22">Zone 22 (Poussière rare)</option>
-                    </select>
-                  </div>
-                </div>
-                <p className="text-xs text-amber-700 mt-2">
-                  Définissez le classement ATEX selon la directive 1999/92/CE
-                </p>
-              </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              <div className="space-y-1">
+                {filteredItems.map(item => {
+                  const cat = categories.find(c => c.id === item.category_id);
+                  const IconComp = ICON_MAP[cat?.icon] || Circle;
+                  const isPlaced = placedIds.has(String(item.id));
+                  const isActive = selectedItem?.id === item.id;
 
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Couleur
-                </label>
-                <div className="flex gap-2 flex-wrap">
-                  {ZONE_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
+                  return (
+                    <div key={item.id}
+                      className={`flex items-center gap-2 p-2 rounded-xl cursor-pointer transition-all ${isActive ? 'bg-violet-100 ring-2 ring-violet-400' : 'hover:bg-gray-50'}`}
                       onClick={() => {
-                        setZoneEditor({ ...zoneEditor, color: c });
-                        setSelectedZoneColor(c);
-                      }}
-                      className={`w-8 h-8 rounded ${zoneEditor.color === c ? "ring-2 ring-offset-2 ring-gray-400" : ""}`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                </div>
+                        setSelectedItem(item);
+                        if (isPlaced) {
+                          const pos = positions.find(p => p.item_id === item.id);
+                          if (pos) setSelectedPosition(pos);
+                        }
+                      }}>
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: cat?.color || '#8B5CF6' }}>
+                        <IconComp size={14} className="text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{cat?.name || 'Sans categorie'}</p>
+                      </div>
+                      {!isPlaced ? (
+                        <button onClick={(e) => { e.stopPropagation(); setPlacementMode(item.id); showToast("Cliquez sur le plan", "info"); }}
+                          className="p-1.5 bg-violet-100 text-violet-600 rounded-lg hover:bg-violet-200" title="Placer">
+                          <MapPin size={14} />
+                        </button>
+                      ) : (
+                        <Badge variant="success"><Check size={10} /></Badge>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <div className="flex gap-3 justify-end">
-                <button
-                  type="button"
-                  onClick={() => handleSaveZone(null)}
-                  className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
-                >
-                  Créer la zone
-                </button>
-              </div>
-            </form>
+            </div>
           </div>
+        )}
+
+        {/* Map container */}
+        <div className="flex-1 relative">
+          {isLoading && (
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-40">
+              <RefreshCw size={32} className="animate-spin text-violet-500" />
+            </div>
+          )}
+
+          {(createMode || placementMode) && (
+            <div className="absolute top-4 left-4 z-40 bg-violet-600 text-white px-4 py-2 rounded-xl shadow-lg flex items-center gap-2">
+              <Crosshair size={18} className="animate-pulse" />
+              <span className="font-medium">{createMode ? 'Cliquez pour creer' : 'Cliquez pour placer'}</span>
+              <button onClick={() => { setCreateMode(false); setPlacementMode(null); }} className="p-1 hover:bg-white/20 rounded">
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
+          <div ref={mapContainerRef} className="w-full h-full" />
+
+          {/* Detail Panel */}
+          {selectedItem && selectedPosition && (
+            <DetailPanel
+              item={selectedItem}
+              category={categories.find(c => c.id === selectedItem.category_id)}
+              position={selectedPosition}
+              onClose={() => { setSelectedItem(null); setSelectedPosition(null); }}
+              onDelete={handleDeletePosition}
+              onNavigate={(item) => navigate(`/app/infrastructure?item=${item.id}`)}
+              isMobile={isMobile}
+              currentPlan={selectedPlan}
+            />
+          )}
         </div>
+      </div>
+
+      {/* Create Modal */}
+      <CreateItemModal isOpen={showCreateModal} onClose={() => { setShowCreateModal(false); setPendingPosition(null); }}
+        categories={categories} onCreate={handleCreateItem} position={pendingPosition} />
+
+      {/* Toast */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Mobile sidebar toggle */}
+      {isMobile && (
+        <button onClick={() => setShowSidebar(!showSidebar)}
+          className="fixed bottom-4 left-4 z-50 p-3 bg-violet-600 text-white rounded-full shadow-lg">
+          <Menu size={24} />
+        </button>
       )}
-
-      {/* Edit existing zone modal */}
-      {editingZone && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Modifier la zone
-            </h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                const zoningGasVal = formData.get("zoning_gas");
-                const zoningDustVal = formData.get("zoning_dust");
-                onZoneUpdate?.(editingZone.id, {
-                  name: formData.get("zoneName"),
-                  zoning_gas: zoningGasVal === "" ? null : Number(zoningGasVal),
-                  zoning_dust: zoningDustVal === "" ? null : Number(zoningDustVal),
-                  color: editingZone.color,
-                });
-                setEditingZone(null);
-              }}
-            >
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nom de la zone
-                </label>
-                <input
-                  type="text"
-                  name="zoneName"
-                  autoFocus
-                  required
-                  defaultValue={editingZone.name}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                  placeholder="Ex: Zone de stockage, Bureau, Atelier..."
-                />
-              </div>
-
-              {/* Zonage ATEX */}
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <div className="text-sm font-medium text-amber-800 mb-3 flex items-center gap-2">
-                  <span>⚠️</span> Zonage ATEX
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Zone Gaz
-                    </label>
-                    <select
-                      name="zoning_gas"
-                      defaultValue={editingZone.zoning_gas ?? ""}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">Non classée</option>
-                      <option value="0">Zone 0 (Gaz permanent)</option>
-                      <option value="1">Zone 1 (Gaz occasionnel)</option>
-                      <option value="2">Zone 2 (Gaz rare)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Zone Poussière
-                    </label>
-                    <select
-                      name="zoning_dust"
-                      defaultValue={editingZone.zoning_dust ?? ""}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    >
-                      <option value="">Non classée</option>
-                      <option value="20">Zone 20 (Poussière permanente)</option>
-                      <option value="21">Zone 21 (Poussière occasionnelle)</option>
-                      <option value="22">Zone 22 (Poussière rare)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Couleur
-                </label>
-                <div className="flex gap-2 flex-wrap">
-                  {ZONE_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setEditingZone({ ...editingZone, color: c })}
-                      className={`w-8 h-8 rounded ${editingZone.color === c ? "ring-2 ring-offset-2 ring-gray-400" : ""}`}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-3 justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm("Supprimer cette zone ?")) {
-                      onZoneDelete?.(editingZone.id);
-                      setEditingZone(null);
-                    }
-                  }}
-                  className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium"
-                >
-                  🗑️ Supprimer
-                </button>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setEditingZone(null)}
-                    className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg"
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium"
-                  >
-                    💾 Enregistrer
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* CSS for markers */}
-      <style>{`
-        .infra-marker {
-          background: transparent !important;
-          border: none !important;
-        }
-        .infra-marker-inner {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 14px;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-          transition: transform 0.15s;
-        }
-        .infra-marker-inner:hover {
-          transform: scale(1.15);
-        }
-        .infra-marker-inner.selected {
-          box-shadow: 0 0 0 3px white, 0 0 0 6px #F59E0B;
-        }
-        .infra-marker-inner svg {
-          width: 16px;
-          height: 16px;
-        }
-      `}</style>
     </div>
   );
 }
