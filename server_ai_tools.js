@@ -1179,7 +1179,7 @@ function createToolHandlers(pool, site) {
     },
 
     // -----------------------------------------------------------------------
-    // TRANSFERT DE DÉPANNAGE
+    // TRANSFERT DE DÉPANNAGE (Version intelligente)
     // -----------------------------------------------------------------------
     propose_troubleshooting_transfer: async (params) => {
       const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building } = params;
@@ -1214,35 +1214,41 @@ function createToolHandlers(pool, site) {
 
         const troubleshooting = troubleResult.rows[0];
 
-        // 2. Rechercher l'équipement cible dans toutes les tables
+        // 2. Configuration des tables d'équipements avec descriptions pour l'utilisateur
         const tableMap = {
-          switchboard: { table: 'switchboards', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code' },
-          vsd: { table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          meca: { table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          atex: { table: 'atex_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          hv: { table: 'hv_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          mobile: { table: 'mobile_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          glo: { table: 'glo_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null },
-          datahub: { table: 'datahub_items', nameCol: 'name', buildingCol: 'building', codeCol: null }
+          switchboard: { table: 'switchboards', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code', label: 'Tableau électrique', agent: 'Matrix' },
+          vsd: { table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Variateur (VSD)', agent: 'Shakira' },
+          meca: { table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Équipement mécanique', agent: 'Titan' },
+          atex: { table: 'atex_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Zone ATEX', agent: 'Phoenix' },
+          hv: { table: 'hv_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Haute tension', agent: 'Voltaire' },
+          mobile: { table: 'mobile_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Équipement mobile', agent: 'Nomad' },
+          glo: { table: 'glo_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Éclairage de sécurité', agent: 'Lumina' },
+          doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Porte coupe-feu', agent: 'Portal' },
+          datahub: { table: 'datahub_items', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Capteur/Monitoring', agent: 'Nexus' }
         };
 
         const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
         const candidates = [];
+        const similarEquipments = [];
+
+        // 3. Préparer les termes de recherche (mots individuels pour recherche floue)
+        const searchTerms = target_equipment_name.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+        const exactPattern = `%${target_equipment_name.toLowerCase()}%`;
 
         for (const eqType of typesToSearch) {
           const config = tableMap[eqType];
           if (!config) continue;
 
           try {
+            // Recherche exacte d'abord
             let searchQuery = `
               SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
-                     '${eqType}' as equipment_type
+                     '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
               FROM ${config.table}
               WHERE site = $1
                 AND LOWER(${config.nameCol}) LIKE $2
             `;
-            const searchParams = [site, `%${target_equipment_name.toLowerCase()}%`];
+            let searchParams = [site, exactPattern];
 
             if (target_building) {
               searchQuery += ` AND UPPER(${config.buildingCol}) = $3`;
@@ -1252,7 +1258,7 @@ function createToolHandlers(pool, site) {
             if (config.codeCol) {
               searchQuery = `
                 SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
-                       '${eqType}' as equipment_type
+                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                 FROM ${config.table}
                 WHERE site = $1
                   AND (LOWER(${config.nameCol}) LIKE $2 OR LOWER(${config.codeCol}) LIKE $2)
@@ -1263,26 +1269,90 @@ function createToolHandlers(pool, site) {
             searchQuery += ` LIMIT 5`;
             const searchResult = await pool.query(searchQuery, searchParams);
             candidates.push(...searchResult.rows);
+
+            // Si pas de résultat exact, recherche floue avec les mots individuels
+            if (searchResult.rows.length === 0 && searchTerms.length > 0) {
+              for (const term of searchTerms) {
+                const fuzzyQuery = `
+                  SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
+                         '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                  FROM ${config.table}
+                  WHERE site = $1
+                    AND LOWER(${config.nameCol}) LIKE $2
+                  LIMIT 3
+                `;
+                const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                for (const row of fuzzyResult.rows) {
+                  if (!similarEquipments.find(s => s.id === row.id)) {
+                    similarEquipments.push(row);
+                  }
+                }
+              }
+            }
           } catch (e) {
             // Table might not exist, continue
           }
         }
 
+        // 4. Si aucun candidat exact trouvé
         if (candidates.length === 0) {
+          // Mais on a des équipements similaires
+          if (similarEquipments.length > 0) {
+            return {
+              success: true,
+              needs_clarification: true,
+              partial_match: true,
+              troubleshooting: {
+                id: troubleshooting.id,
+                title: troubleshooting.title,
+                current_equipment: troubleshooting.equipment_name,
+                current_building: troubleshooting.building_code
+              },
+              candidates: similarEquipments.slice(0, 6).map(c => ({
+                id: c.id,
+                name: c.name,
+                building: c.building,
+                type: c.equipment_type,
+                type_label: c.type_label,
+                agent: c.agent_name
+              })),
+              message: `Je n'ai pas trouvé "${target_equipment_name}" exactement, mais voici des équipements similaires. C'est l'un de ceux-là ?`,
+              frontend_instruction: {
+                showTransferCandidates: true,
+                troubleshootingId: troubleshooting.id,
+                candidates: similarEquipments.slice(0, 6).map(c => ({
+                  id: c.id,
+                  name: c.name,
+                  building: c.building,
+                  type: c.equipment_type,
+                  type_label: c.type_label,
+                  label: `${c.name} (${c.type_label} - ${c.building || 'N/A'})`
+                }))
+              }
+            };
+          }
+
+          // Aucun équipement trouvé du tout - demander le type
           return {
             success: false,
-            error: `Aucun équipement trouvé avec le nom "${target_equipment_name}"${target_building ? ` dans le bâtiment ${target_building}` : ''}.`,
+            no_match: true,
             troubleshooting: {
               id: troubleshooting.id,
               title: troubleshooting.title,
               current_equipment: troubleshooting.equipment_name,
               current_building: troubleshooting.building_code
             },
-            suggestion: 'Vérifie le nom de l\'équipement ou précise le bâtiment.'
+            message: `Je n'ai trouvé aucun équipement "${target_equipment_name}". De quel type d'équipement s'agit-il ?`,
+            equipment_types: Object.entries(tableMap).map(([key, config]) => ({
+              type: key,
+              label: config.label,
+              agent: config.agent
+            })),
+            suggestion: `Dis-moi si c'est un tableau électrique, un variateur, une porte coupe-feu, ou autre. Je demanderai à l'agent spécialisé de le chercher.`
           };
         }
 
-        // 3. Si plusieurs candidats, demander clarification
+        // 5. Si plusieurs candidats, demander clarification
         if (candidates.length > 1) {
           return {
             success: true,
@@ -1297,9 +1367,11 @@ function createToolHandlers(pool, site) {
               id: c.id,
               name: c.name,
               building: c.building,
-              type: c.equipment_type
+              type: c.equipment_type,
+              type_label: c.type_label,
+              agent: c.agent_name
             })),
-            message: `J'ai trouvé ${candidates.length} équipements correspondant à "${target_equipment_name}". Lequel est le bon ?`,
+            message: `J'ai trouvé ${candidates.length} équipements. Lequel est le bon ?`,
             frontend_instruction: {
               showTransferCandidates: true,
               troubleshootingId: troubleshooting.id,
@@ -1308,29 +1380,17 @@ function createToolHandlers(pool, site) {
                 name: c.name,
                 building: c.building,
                 type: c.equipment_type,
-                label: `${c.name} (${c.building || 'N/A'})`
+                type_label: c.type_label,
+                label: `${c.name} (${c.type_label} - ${c.building || 'N/A'})`
               }))
             }
           };
         }
 
-        // 4. Un seul candidat - proposer le transfert avec bouton de confirmation
+        // 6. Un seul candidat - proposer le transfert avec bouton de confirmation
         const target = candidates[0];
-
-        // Déterminer si l'équipement cible est géré par un autre agent
-        const agentMap = {
-          switchboard: 'Matrix',
-          vsd: 'Shakira',
-          meca: 'Titan',
-          glo: 'Lumina',
-          hv: 'Voltaire',
-          mobile: 'Nomad',
-          atex: 'Phoenix',
-          doors: 'Portal',
-          datahub: 'Nexus'
-        };
-        const targetAgent = agentMap[target.equipment_type];
-        const sourceAgent = agentMap[troubleshooting.equipment_type];
+        const sourceAgent = tableMap[troubleshooting.equipment_type]?.agent;
+        const targetAgent = target.agent_name;
 
         return {
           success: true,
@@ -1347,14 +1407,15 @@ function createToolHandlers(pool, site) {
             id: target.id,
             name: target.name,
             building: target.building,
-            type: target.equipment_type
+            type: target.equipment_type,
+            type_label: target.type_label
           },
           agent_change: sourceAgent !== targetAgent ? {
             from: sourceAgent,
             to: targetAgent,
-            message: `Cet équipement est géré par l'agent ${targetAgent}. Je peux te transférer après la confirmation.`
+            message: `Cet équipement est géré par ${targetAgent}.`
           } : null,
-          message: `✅ Transfert prêt !\n\n📋 **Dépannage**: ${troubleshooting.title}\n📍 **De**: ${troubleshooting.equipment_name} (${troubleshooting.building_code || 'N/A'})\n➡️ **Vers**: ${target.name} (${target.building || 'N/A'})`,
+          message: `Transfert vers ${target.name} (${target.type_label})`,
           frontend_instruction: {
             showTransferConfirmation: true,
             transferData: {
