@@ -9,6 +9,33 @@ dayjs.locale("fr");
 import "../styles/atex-map.css";
 import { api, API_BASE } from "../lib/api.js";
 import { generatePdfThumbnail } from "../lib/pdf-utils.js";
+import { getUserPermissions } from '../lib/permissions';
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {}
+  return null;
+}
+
+function canDeleteEquipment(equipment) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  const creatorEmail = equipment?.created_by_email?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  if (!equipment?.created_by_email) return true;
+  return false;
+}
 import AtexMap from "./Atex-map.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import { LastModifiedBadge, CreatedByBadge } from "../components/LastModifiedBadge.jsx";
@@ -4075,7 +4102,7 @@ function EquipmentDrawer({
                 📋 Dupliquer
               </button>
             )}
-            {editing.id && (
+            {editing.id && canDeleteEquipment(editing) && (
               <button onClick={onDelete} className="atex-btn atex-btn-danger">
                 🗑️ Supprimer
               </button>

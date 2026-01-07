@@ -12,10 +12,37 @@ import {
   Thermometer, Wind, PlugZap, Radio, Cpu, FolderPlus, Folder, ChevronUp
 } from 'lucide-react';
 import { api, get, post, del } from '../lib/api';
+import { getUserPermissions } from '../lib/permissions';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {}
+  return null;
+}
+
+function canDeleteEquipment(equipment) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  const creatorEmail = equipment?.created_by_email?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  if (!equipment?.created_by_email) return true;
+  return false;
+}
 
 // ==================== CONSTANTS ====================
 
@@ -1195,9 +1222,11 @@ const DetailPanel = ({
                             <button onClick={() => onEditDevice(device)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
                               <Edit3 size={16} />
                             </button>
-                            <button onClick={() => onDeleteDevice(device)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                              <Trash2 size={16} />
-                            </button>
+                            {canDeleteEquipment(equipment) && (
+                              <button onClick={() => onDeleteDevice(device)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1240,10 +1269,12 @@ const DetailPanel = ({
           <MapPin size={18} />
           {isPlaced ? 'Voir sur le plan' : 'Localiser'}
         </button>
-        <button onClick={() => onDelete(equipment)}
-          className="py-3 px-4 rounded-xl bg-red-100 text-red-700 font-medium hover:bg-red-200">
-          <Trash2 size={18} />
-        </button>
+        {canDeleteEquipment(equipment) && (
+          <button onClick={() => onDelete(equipment)}
+            className="py-3 px-4 rounded-xl bg-red-100 text-red-700 font-medium hover:bg-red-200">
+            <Trash2 size={18} />
+          </button>
+        )}
       </div>
 
       {/* AI Chat Modal */}
