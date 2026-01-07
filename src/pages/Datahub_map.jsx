@@ -554,8 +554,8 @@ export default function DatahubMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [selectedCategories, setSelectedCategories] = useState([]);
-  const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showSidebar, setShowSidebar] = useState(window.innerWidth >= 768);
   const [toast, setToast] = useState(null);
   const [pdfReady, setPdfReady] = useState(false);
 

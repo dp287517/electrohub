@@ -893,12 +893,12 @@ const SwitchboardLeafletViewer = forwardRef(
           hasDirection = true;
           swapDirection = false;
         } else if (link.relationship === 'feeds') {
-          color = '#ef4444'; // Red for feeds
+          color = '#10b981'; // Green for feeds
           dashArray = '12, 4';
           hasDirection = true;
           swapDirection = false;
         } else if (link.relationship === 'fed_by') {
-          color = '#10b981'; // Green for fed by
+          color = '#ef4444'; // Red for fed by
           dashArray = '12, 4';
           hasDirection = true;
           swapDirection = true;
@@ -1607,8 +1607,8 @@ export default function SwitchboardMap() {
   const [createMode, setCreateMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
-  const [showSidebar, setShowSidebar] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showSidebar, setShowSidebar] = useState(window.innerWidth >= 768);
 
   // Ref to prevent double creation
   const creatingRef = useRef(false);

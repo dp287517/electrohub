@@ -505,8 +505,8 @@ const LeafletViewer = forwardRef(({
 
       if (linkLabel === 'upstream') { color = '#10b981'; hasDirection = true; swapDirection = true; }
       else if (linkLabel === 'downstream') { color = '#ef4444'; hasDirection = true; }
-      else if (link.relationship === 'feeds') { color = '#ef4444'; hasDirection = true; }
-      else if (link.relationship === 'fed_by') { color = '#10b981'; hasDirection = true; swapDirection = true; }
+      else if (linkLabel === 'feeds') { color = '#10b981'; hasDirection = true; }
+      else if (linkLabel === 'fed_by') { color = '#ef4444'; hasDirection = true; swapDirection = true; }
       else if (link.type === 'hierarchical') { color = '#f59e0b'; }
 
       const lineStart = swapDirection ? targetLatLng : sourceLatLng;
@@ -803,9 +803,9 @@ export default function MobileEquipmentsMap() {
 
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false); // Start closed on mobile
-  const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768); // Start closed on mobile, open on desktop
+  const [filterMode, setFilterMode] = useState("all"); // all | placed | unplaced
   const [controlStatuses, setControlStatuses] = useState({});
 
   // Equipment links
