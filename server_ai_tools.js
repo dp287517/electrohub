@@ -1232,7 +1232,7 @@ function createToolHandlers(pool, site) {
           mobile: { table: 'mobile_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Équipement mobile', agent: 'Nomad' },
           glo: { table: 'glo_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Éclairage de sécurité', agent: 'Lumina' },
           doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Porte coupe-feu', agent: 'Portal' },
-          datahub: { table: 'datahub_items', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Capteur/Monitoring', agent: 'Nexus' }
+          datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
         };
 
         const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
@@ -1248,7 +1248,69 @@ function createToolHandlers(pool, site) {
           if (!config) continue;
 
           try {
-            // Recherche exacte d'abord
+            // Recherche spéciale pour datahub avec catégories
+            if (config.hasCategory) {
+              // Recherche dans nom ET catégorie pour datahub
+              let datahubQuery = `
+                SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
+                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                FROM dh_items dh
+                LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                WHERE dh.site = $1
+                  AND (
+                    LOWER(dh.name) LIKE $2
+                    OR LOWER(dhc.name) LIKE $2
+                    OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
+                    OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $2)
+                  )
+              `;
+              let datahubParams = [site, exactPattern];
+
+              if (target_building) {
+                datahubQuery += ` AND UPPER(dh.building) = $3`;
+                datahubParams.push(target_building.toUpperCase());
+              }
+
+              datahubQuery += ` LIMIT 5`;
+              const datahubResult = await pool.query(datahubQuery, datahubParams);
+
+              // Formater le nom avec la catégorie
+              for (const row of datahubResult.rows) {
+                candidates.push({
+                  ...row,
+                  name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                  original_name: row.name
+                });
+              }
+
+              // Recherche floue avec mots individuels
+              if (datahubResult.rows.length === 0 && searchTerms.length > 0) {
+                for (const term of searchTerms) {
+                  const fuzzyQuery = `
+                    SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM dh_items dh
+                    LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                    WHERE dh.site = $1
+                      AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
+                    LIMIT 3
+                  `;
+                  const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                  for (const row of fuzzyResult.rows) {
+                    if (!similarEquipments.find(s => s.id === row.id)) {
+                      similarEquipments.push({
+                        ...row,
+                        name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                        original_name: row.name
+                      });
+                    }
+                  }
+                }
+              }
+              continue;
+            }
+
+            // Recherche standard pour les autres types
             let searchQuery = `
               SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
                      '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
@@ -2086,9 +2148,10 @@ function createToolHandlers(pool, site) {
         datahub: {
           table: 'dh_items',
           columns: 'id, name, code, building as building_code, floor, location as room',
-          siteColumn: null,
+          siteColumn: 'site',
           buildingCol: 'building',
-          codeCol: 'code'
+          codeCol: 'code',
+          hasCategory: true // Flag pour recherche dans catégories
         },
         infrastructure: {
           table: 'inf_items',
@@ -2103,10 +2166,66 @@ function createToolHandlers(pool, site) {
       if (!equipment_type && name) {
         try {
           const allResults = [];
+          const searchTerms = name.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+
           for (const [eqType, tableInfo] of Object.entries(tableMap)) {
             try {
               let query;
               let queryParams;
+
+              // Recherche spéciale pour datahub avec catégories
+              if (tableInfo.hasCategory) {
+                query = `
+                  SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
+                         dhc.name as category_name, '${eqType}' as equipment_type
+                  FROM dh_items dh
+                  LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                  WHERE dh.site = $1
+                    AND (
+                      LOWER(dh.name) LIKE $2
+                      OR LOWER(dhc.name) LIKE $2
+                      OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $2
+                    )
+                  LIMIT 5
+                `;
+                queryParams = [site, `%${name.toLowerCase()}%`];
+
+                const result = await pool.query(query, queryParams);
+                // Formater avec catégorie
+                for (const row of result.rows) {
+                  allResults.push({
+                    ...row,
+                    name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                    equipment_type: eqType
+                  });
+                }
+
+                // Recherche floue par mots si pas de résultat exact
+                if (result.rows.length === 0 && searchTerms.length > 0) {
+                  for (const term of searchTerms) {
+                    const fuzzyQuery = `
+                      SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
+                             dhc.name as category_name, '${eqType}' as equipment_type
+                      FROM dh_items dh
+                      LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                      WHERE dh.site = $1
+                        AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
+                      LIMIT 3
+                    `;
+                    const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                    for (const row of fuzzyResult.rows) {
+                      if (!allResults.find(r => r.id === row.id)) {
+                        allResults.push({
+                          ...row,
+                          name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                          equipment_type: eqType
+                        });
+                      }
+                    }
+                  }
+                }
+                continue;
+              }
 
               if (tableInfo.siteJoin) {
                 // Tables avec join sur sites
@@ -2163,6 +2282,70 @@ function createToolHandlers(pool, site) {
 
       const tableInfo = tableMap[equipment_type] || tableMap.switchboard;
       const actualType = equipment_type || 'switchboard';
+
+      // Gestion spéciale pour datahub avec catégories
+      if (tableInfo.hasCategory) {
+        try {
+          let datahubQuery = `
+            SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
+                   dhc.name as category_name, 'datahub' as equipment_type
+            FROM dh_items dh
+            LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+            WHERE dh.site = $1
+          `;
+          let datahubParams = [site];
+          let paramIdx = 2;
+
+          if (building) {
+            datahubQuery += ` AND UPPER(dh.building) = $${paramIdx}`;
+            datahubParams.push(building.toUpperCase());
+            paramIdx++;
+          }
+          if (floor) {
+            datahubQuery += ` AND UPPER(dh.floor) = $${paramIdx}`;
+            datahubParams.push(floor.toUpperCase());
+            paramIdx++;
+          }
+          if (name) {
+            datahubQuery += ` AND (LOWER(dh.name) LIKE $${paramIdx} OR LOWER(dhc.name) LIKE $${paramIdx} OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $${paramIdx})`;
+            datahubParams.push(`%${name.toLowerCase()}%`);
+            paramIdx++;
+          }
+          if (code) {
+            datahubQuery += ` AND LOWER(dh.code) LIKE $${paramIdx}`;
+            datahubParams.push(`%${code.toLowerCase()}%`);
+            paramIdx++;
+          }
+
+          datahubQuery += ` ORDER BY dh.building, dh.floor, dh.name LIMIT ${Math.min(parseInt(limit) || 20, 50)}`;
+
+          const result = await pool.query(datahubQuery, datahubParams);
+
+          return {
+            success: true,
+            count: result.rows.length,
+            equipment_type: 'datahub',
+            filters: { building, floor, name, code },
+            equipment: result.rows.map(eq => ({
+              id: eq.id,
+              name: eq.category_name ? `${eq.category_name} - ${eq.name}` : eq.name,
+              original_name: eq.name,
+              category: eq.category_name,
+              code: eq.code,
+              building_code: eq.building_code,
+              floor: eq.floor,
+              room: eq.room,
+              equipment_type: 'datahub'
+            })),
+            summary: result.rows.length === 0
+              ? `Aucun équipement datahub trouvé avec ces critères.`
+              : `${result.rows.length} équipement(s) datahub trouvé(s).`
+          };
+        } catch (error) {
+          console.error('[TOOL] search_equipment (datahub) error:', error.message);
+          return { success: false, error: error.message, equipment: [] };
+        }
+      }
 
       // Construire la requête selon le type de table
       let query;
@@ -2274,13 +2457,31 @@ function createToolHandlers(pool, site) {
       const table = tableMap[equipment_type] || 'switchboards';
 
       try {
-        const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [equipment_id]);
+        let result;
+
+        // Gestion spéciale pour datahub avec catégorie
+        if (equipment_type === 'datahub') {
+          result = await pool.query(`
+            SELECT dh.*, dhc.name as category_name
+            FROM dh_items dh
+            LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+            WHERE dh.id = $1
+          `, [equipment_id]);
+        } else {
+          result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [equipment_id]);
+        }
 
         if (result.rows.length === 0) {
           return { success: false, error: 'Équipement non trouvé' };
         }
 
         const equipment = result.rows[0];
+
+        // Formater le nom avec la catégorie pour datahub
+        if (equipment_type === 'datahub' && equipment.category_name) {
+          equipment.display_name = `${equipment.category_name} - ${equipment.name}`;
+        }
+
         const response = {
           success: true,
           equipment: {
