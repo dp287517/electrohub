@@ -512,7 +512,7 @@ app.get("/api/custom-modules/:slug/items", async (req, res) => {
 
     const result = await pool.query(
       `SELECT i.id, i.category_id, i.name, i.code, i.description, i.building, i.floor,
-              i.location, i.status, i.metadata, i.created_at, i.updated_at,
+              i.location, i.status, i.metadata, i.created_at, i.updated_at, i.created_by,
               i.photo IS NOT NULL as has_photo,
               c.name as category_name, c.icon as category_icon, c.color as category_color
        FROM cm_items i
@@ -536,7 +536,10 @@ app.get("/api/custom-modules/:slug/items/:id", async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT i.*, i.photo IS NOT NULL as has_photo,
+      `SELECT i.id, i.module_id, i.category_id, i.site, i.name, i.code, i.description,
+              i.building, i.floor, i.location, i.status, i.metadata, i.created_at,
+              i.updated_at, i.created_by, i.updated_by, i.photo_mime,
+              i.photo IS NOT NULL as has_photo,
               c.name as category_name, c.icon as category_icon, c.color as category_color
        FROM cm_items i
        LEFT JOIN cm_categories c ON c.id = i.category_id
@@ -894,7 +897,7 @@ app.get("/api/custom-modules/:slug/maps/positions", async (req, res) => {
     const result = await pool.query(
       `SELECT p.id as position_id, p.item_id, p.x_frac, p.y_frac, p.page_index,
               p.logical_name, p.plan_id,
-              i.name, i.code, i.category_id,
+              i.name, i.code, i.category_id, i.created_by,
               c.name as category_name, c.icon as category_icon, c.color as category_color
        FROM cm_positions p
        JOIN cm_items i ON i.id = p.item_id
