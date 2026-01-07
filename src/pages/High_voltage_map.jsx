@@ -310,11 +310,20 @@ const HvCard = ({ equipment, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere,
 // ─────────────────────────────────────────────────────────────────────
 // Detail Panel with Equipment Links
 // ─────────────────────────────────────────────────────────────────────
-const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0 }) => {
+const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links = [], linksLoading = false, onAddLink, onDeleteLink, onLinkClick, currentPlan, currentPageIndex = 0, mapContainerRef }) => {
   const [showAddLink, setShowAddLink] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   if (!position) return null;
 
@@ -361,8 +370,31 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
     return eq?.hasPosition && eq?.plan === currentPlan && (eq?.pageIndex || 0) === currentPageIndex;
   };
 
+  const getPanelStyle = () => {
+    if (isMobile) return {};
+    const markerPos = position?.markerScreenPos;
+    const mapContainer = mapContainerRef?.current;
+    if (!markerPos || !mapContainer) return {};
+    const mapRect = mapContainer.getBoundingClientRect();
+    const panelWidth = 384;
+    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
+    const offset = 20;
+    const markerRelativeX = markerPos.x - mapRect.left;
+    const markerRelativeY = markerPos.y - mapRect.top;
+    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+    const spaceOnLeft = markerRelativeX - offset;
+    let left = spaceOnRight >= panelWidth ? markerRelativeX + offset : spaceOnLeft >= panelWidth ? markerRelativeX - panelWidth - offset : Math.max(8, (mapRect.width - panelWidth) / 2);
+    let top = markerRelativeY - panelMaxHeight / 2;
+    if (top < 8) top = 8;
+    else if (top + panelMaxHeight > mapRect.height - 8) top = Math.max(8, mapRect.height - panelMaxHeight - 8);
+    return { position: 'absolute', left: `${left}px`, top: `${top}px`, width: `${panelWidth}px`, maxHeight: `${panelMaxHeight}px`, bottom: 'auto', right: 'auto' };
+  };
+
+  const desktopStyle = getPanelStyle();
+  const hasCustomPosition = !isMobile && Object.keys(desktopStyle).length > 0;
+
   return (
-    <AnimatedCard className="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 max-h-[80vh] flex flex-col">
+    <AnimatedCard ref={panelRef} className={`bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 flex flex-col ${hasCustomPosition ? 'absolute' : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh]'}`} style={hasCustomPosition ? desktopStyle : {}}>
       <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -675,7 +707,15 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
           return;
         }
         setPicker(null);
-        onClickPoint?.(mk.__meta);
+        const map = mapRef.current;
+        let markerScreenPos = null;
+        if (map) {
+          const containerPoint = map.latLngToContainerPoint(mk.getLatLng());
+          const mapContainer = map.getContainer();
+          const mapRect = mapContainer.getBoundingClientRect();
+          markerScreenPos = { x: mapRect.left + containerPoint.x, y: mapRect.top + containerPoint.y, containerWidth: mapRect.width, containerHeight: mapRect.height, mapLeft: mapRect.left, mapTop: mapRect.top };
+        }
+        onClickPoint?.({ ...mk.__meta, markerScreenPos });
       });
 
       mk.on("dragend", () => {
@@ -1214,6 +1254,7 @@ export default function HighVoltageMap() {
   const [confirmState, setConfirmState] = useState({ open: false, position: null });
 
   const viewerRef = useRef(null);
+  const mapContainerRef = useRef(null);
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   const stableFileUrl = useMemo(() => {
@@ -1785,7 +1826,7 @@ export default function HighVoltageMap() {
         )}
 
         {/* Map */}
-        <div className="flex-1 flex flex-col relative">
+        <div ref={mapContainerRef} className="flex-1 flex flex-col relative">
           {!selectedPlan ? (
             <EmptyState
               icon={MapPin}
@@ -1904,6 +1945,7 @@ export default function HighVoltageMap() {
               onLinkClick={handleLinkClick}
               currentPlan={stableSelectedPlan?.logical_name}
               currentPageIndex={pageIndex}
+              mapContainerRef={mapContainerRef}
             />
           )}
 
