@@ -1230,16 +1230,17 @@ function createToolHandlers(pool, site) {
         const troubleshooting = troubleResult.rows[0];
 
         // 2. Configuration des tables d'équipements avec descriptions pour l'utilisateur
+        // IMPORTANT: siteColumn = colonne site directe, siteJoin = join sur table sites
         const tableMap = {
-          switchboard: { table: 'switchboards', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code', label: 'Tableau électrique', agent: 'Matrix' },
-          vsd: { table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Variateur (VSD)', agent: 'Shakira' },
-          meca: { table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Équipement mécanique', agent: 'Titan' },
-          atex: { table: 'atex_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Zone ATEX', agent: 'Phoenix' },
-          hv: { table: 'hv_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Haute tension', agent: 'Voltaire' },
-          mobile: { table: 'mobile_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Équipement mobile', agent: 'Nomad' },
-          glo: { table: 'glo_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Éclairage de sécurité', agent: 'Lumina' },
-          doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null, label: 'Porte coupe-feu', agent: 'Portal' },
-          datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
+          switchboard: { table: 'switchboards', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code', siteColumn: 'site', label: 'Tableau électrique', agent: 'Matrix' },
+          vsd: { table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, siteColumn: 'site', label: 'Variateur (VSD)', agent: 'Shakira' },
+          meca: { table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null, siteColumn: null, siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", label: 'Équipement mécanique', agent: 'Titan' },
+          atex: { table: 'atex_equipments', nameCol: 'name', buildingCol: 'building', codeCol: 'tag', siteColumn: null, siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", label: 'Zone ATEX', agent: 'Phoenix' },
+          hv: { table: 'hv_equipments', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code', siteColumn: null, label: 'Haute tension', agent: 'Voltaire' },
+          mobile: { table: 'me_equipments', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: null, label: 'Équipement mobile', agent: 'Nomad' },
+          glo: { table: 'glo_equipments', nameCol: 'name', buildingCol: 'building', codeCol: 'tag', siteColumn: null, label: 'Éclairage de sécurité', agent: 'Lumina' },
+          doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null, siteColumn: null, siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id', siteCondition: "s.name = $1", label: 'Porte coupe-feu', agent: 'Portal' },
+          datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: 'site', label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
         };
 
         const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
@@ -1318,47 +1319,91 @@ function createToolHandlers(pool, site) {
             }
 
             // Recherche standard pour les autres types
-            let searchQuery = `
-              SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
-                     '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
-              FROM ${config.table}
-              WHERE site = $1
-                AND LOWER(${config.nameCol}) LIKE $2
-            `;
-            let searchParams = [site, exactPattern];
+            // Construire la requête selon la configuration du site
+            let searchQuery;
+            let searchParams;
+            const nameCondition = config.codeCol
+              ? `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(e.${config.codeCol}) LIKE $PATTERN)`
+              : `LOWER(e.${config.nameCol}) LIKE $PATTERN`;
+            const buildingCondition = target_building ? `AND UPPER(e.${config.buildingCol}) = $BUILDING` : '';
 
-            if (target_building) {
-              searchQuery += ` AND UPPER(${config.buildingCol}) = $3`;
-              searchParams.push(target_building.toUpperCase());
-            }
-
-            if (config.codeCol) {
+            if (config.siteJoin) {
+              // Tables avec join sur sites (meca, atex, doors)
               searchQuery = `
-                SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
+                SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
                        '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
-                FROM ${config.table}
-                WHERE site = $1
-                  AND (LOWER(${config.nameCol}) LIKE $2 OR LOWER(${config.codeCol}) LIKE $2)
-                  ${target_building ? `AND UPPER(${config.buildingCol}) = $3` : ''}
+                FROM ${config.table} e
+                ${config.siteJoin.replace('{table}', 'e')}
+                WHERE ${config.siteCondition} AND ${nameCondition.replace(/\$PATTERN/g, '$2')} ${buildingCondition.replace('$BUILDING', '$3')}
+                LIMIT 5
               `;
+              searchParams = [site, exactPattern];
+              if (target_building) searchParams.push(target_building.toUpperCase());
+            } else if (config.siteColumn) {
+              // Tables avec colonne site directe (switchboard, vsd, datahub)
+              searchQuery = `
+                SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                FROM ${config.table} e
+                WHERE e.${config.siteColumn} = $1 AND ${nameCondition.replace(/\$PATTERN/g, '$2')} ${buildingCondition.replace('$BUILDING', '$3')}
+                LIMIT 5
+              `;
+              searchParams = [site, exactPattern];
+              if (target_building) searchParams.push(target_building.toUpperCase());
+            } else {
+              // Tables sans filtre site (hv, mobile, glo)
+              searchQuery = `
+                SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                FROM ${config.table} e
+                WHERE ${nameCondition.replace(/\$PATTERN/g, '$1')} ${buildingCondition.replace('$BUILDING', '$2')}
+                LIMIT 5
+              `;
+              searchParams = [exactPattern];
+              if (target_building) searchParams.push(target_building.toUpperCase());
             }
 
-            searchQuery += ` LIMIT 5`;
             const searchResult = await pool.query(searchQuery, searchParams);
             candidates.push(...searchResult.rows);
 
             // Si pas de résultat exact, recherche floue avec les mots individuels
             if (searchResult.rows.length === 0 && searchTerms.length > 0) {
               for (const term of searchTerms) {
-                const fuzzyQuery = `
-                  SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
-                         '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
-                  FROM ${config.table}
-                  WHERE site = $1
-                    AND LOWER(${config.nameCol}) LIKE $2
-                  LIMIT 3
-                `;
-                const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                let fuzzyQuery;
+                let fuzzyParams;
+                const termPattern = `%${term}%`;
+
+                if (config.siteJoin) {
+                  fuzzyQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    ${config.siteJoin.replace('{table}', 'e')}
+                    WHERE ${config.siteCondition} AND LOWER(e.${config.nameCol}) LIKE $2
+                    LIMIT 3
+                  `;
+                  fuzzyParams = [site, termPattern];
+                } else if (config.siteColumn) {
+                  fuzzyQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    WHERE e.${config.siteColumn} = $1 AND LOWER(e.${config.nameCol}) LIKE $2
+                    LIMIT 3
+                  `;
+                  fuzzyParams = [site, termPattern];
+                } else {
+                  fuzzyQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    WHERE LOWER(e.${config.nameCol}) LIKE $1
+                    LIMIT 3
+                  `;
+                  fuzzyParams = [termPattern];
+                }
+
+                const fuzzyResult = await pool.query(fuzzyQuery, fuzzyParams);
                 for (const row of fuzzyResult.rows) {
                   if (!similarEquipments.find(s => s.id === row.id)) {
                     similarEquipments.push(row);
