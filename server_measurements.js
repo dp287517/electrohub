@@ -51,6 +51,7 @@ router.get("/scale/:planId", async (req, res) => {
   try {
     const { planId } = req.params;
     const pageIndex = parseInt(req.query.page) || 0;
+    console.log("[measurements] GET /scale - planId:", planId, "pageIndex:", pageIndex);
 
     // Chercher dans plan_scale_config
     const { rows } = await pool.query(
@@ -58,6 +59,7 @@ router.get("/scale/:planId", async (req, res) => {
        WHERE plan_id = $1 AND page_index = $2`,
       [planId, pageIndex]
     );
+    console.log("[measurements] GET /scale - plan_scale_config rows:", rows.length);
 
     if (rows.length === 0) {
       // Fallback: chercher dans vsd_plans
@@ -66,6 +68,8 @@ router.get("/scale/:planId", async (req, res) => {
          FROM vsd_plans WHERE id = $1`,
         [planId]
       );
+      console.log("[measurements] GET /scale - vsd_plans fallback rows:", planRes.rows.length,
+        planRes.rows[0]?.scale_meters_per_pixel ? "has scale" : "no scale");
 
       if (planRes.rows.length > 0 && planRes.rows[0].scale_meters_per_pixel) {
         return res.json({
@@ -81,9 +85,11 @@ router.get("/scale/:planId", async (req, res) => {
         });
       }
 
+      console.log("[measurements] GET /scale - no scale found, returning null");
       return res.json({ ok: true, scale: null });
     }
 
+    console.log("[measurements] GET /scale - returning scale from config:", rows[0].scale_meters_per_pixel);
     res.json({
       ok: true,
       scale: {
