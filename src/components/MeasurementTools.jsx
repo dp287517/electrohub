@@ -153,10 +153,15 @@ const useMeasurements = (planId, pageIndex) => {
 
 const useScale = (planId, pageIndex) => {
   const [scale, setScale] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // Start as true - assume loading until proven otherwise
+  const [hasFetched, setHasFetched] = useState(false);
 
   const fetchScale = useCallback(async () => {
-    if (!planId) return;
+    if (!planId) {
+      setLoading(false);
+      setHasFetched(true);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(
@@ -171,6 +176,7 @@ const useScale = (planId, pageIndex) => {
       console.error("Error fetching scale:", err);
     } finally {
       setLoading(false);
+      setHasFetched(true);
     }
   }, [planId, pageIndex]);
 
@@ -201,7 +207,7 @@ const useScale = (planId, pageIndex) => {
     fetchScale();
   }, [fetchScale]);
 
-  return { scale, loading, saveScale, refresh: fetchScale };
+  return { scale, loading, hasFetched, saveScale, refresh: fetchScale };
 };
 
 // ============================================================
@@ -285,7 +291,7 @@ export default function MeasurementTools({
     refresh: refreshMeasurements,
   } = useMeasurements(planId, pageIndex);
 
-  const { scale, loading: scaleLoading, saveScale } = useScale(planId, pageIndex);
+  const { scale, loading: scaleLoading, hasFetched: scaleFetched, saveScale } = useScale(planId, pageIndex);
 
   // Scale calibration state
   const [scalePoints, setScalePoints] = useState([]);
@@ -619,8 +625,8 @@ export default function MeasurementTools({
   }
 
   // Don't render if no scale configured (buttons should only appear when scale is set)
-  // But wait until loading is complete before deciding
-  if (!scaleLoading && !scale) {
+  // But wait until fetch is complete before deciding
+  if (scaleFetched && !scale) {
     return null;
   }
 
