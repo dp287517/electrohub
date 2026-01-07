@@ -1064,7 +1064,7 @@ export default function GloMap() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState("all");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [showSidebar, setShowSidebar] = useState(window.innerWidth >= 768);
+  const [showSidebar, setShowSidebar] = useState(true);
 
   const creatingRef = useRef(false);
   const [contextMenu, setContextMenu] = useState(null);

@@ -2421,14 +2421,6 @@ input[readonly] {
   height: 20px;
 }
 
-/* Mobile: disable animation for performance */
-@media (max-width: 768px) {
-  .equipment-link-line.flow-to-target,
-  .equipment-link-line.flow-to-source {
-    animation: none !important;
-  }
-}
-
 /* Respect reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
   .equipment-link-line.flow-to-target,
