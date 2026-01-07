@@ -15,7 +15,7 @@ import {
   Power, Battery, Plug, Gauge, Wrench, Factory, Server, Cpu, Wifi, Shield, Flag,
   Home, Building, Box, Clock, Calendar, Bell, Navigation, Compass, Pin, Bookmark,
   Award, User, Users, Folder, File, Info, Lock, Check, Flame, Thermometer,
-  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2
+  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2, ExternalLink
 } from "lucide-react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -218,7 +218,7 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
       </div>
       <div className="p-2 flex gap-2">
         <button onClick={() => onNavigate(item)} className="flex-1 py-2 px-3 bg-violet-500 hover:bg-violet-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
-          <Eye size={14} />Voir détails
+          <ExternalLink size={14} />Voir détails
         </button>
         {position && (
           <button onClick={() => onDelete(position.id)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>

@@ -387,7 +387,7 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
       </div>
       <div className="p-2 flex gap-2">
         <button onClick={() => onNavigate(position.equipment_id)} className="flex-1 py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
-          <Eye size={14} />Voir détails
+          <ExternalLink size={14} />Voir détails
         </button>
         <button onClick={() => onDelete?.(position)} className="py-2 px-2.5 bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 rounded-lg transition-colors" title="Détacher"><Trash2 size={14} /></button>
       </div>
