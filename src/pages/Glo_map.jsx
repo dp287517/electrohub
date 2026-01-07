@@ -1571,62 +1571,74 @@ export default function GloMap() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Sidebar */}
         {showSidebar && (
-          <div className="w-full max-w-[360px] bg-white border-r shadow-sm flex flex-col animate-slideRight">
-            <div className="p-3 border-b space-y-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <Input
-                  placeholder="Rechercher..."
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  className="pl-9"
-                />
-              </div>
-              <div className="flex gap-1">
-                {[
-                  { key: "all", label: "Tous" },
-                  { key: "placed", label: "Places" },
-                  { key: "unplaced", label: "Non places" },
-                ].map(f => (
-                  <button
-                    key={f.key}
-                    onClick={() => setFilterMode(f.key)}
-                    className={`flex-1 py-1.5 px-2 text-xs rounded-lg transition ${
-                      filterMode === f.key ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+          <>
+            {isMobile && <div className="absolute inset-0 bg-black/50 z-20" onClick={() => setShowSidebar(false)} />}
 
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {loadingEquipments ? (
-                <div className="flex items-center justify-center py-8">
-                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+            <div className={`${isMobile ? 'absolute inset-y-0 left-0 z-30 w-[85vw] max-w-[340px]' : 'w-full max-w-[360px]'} bg-white border-r shadow-sm flex flex-col`}>
+              <div className="p-3 border-b space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-gray-900">Équipements ({filteredEquipments.length})</span>
+                  {isMobile && (
+                    <button onClick={() => setShowSidebar(false)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                      <X size={18} />
+                    </button>
+                  )}
                 </div>
-              ) : filteredEquipments.length === 0 ? (
-                <EmptyState icon={Zap} title="Aucun equipement" description="Ajoutez des equipements depuis la page principale" />
-              ) : (
-                filteredEquipments.map(eq => (
-                  <GloCard
-                    key={eq.id}
-                    equipment={eq}
-                    isPlacedHere={currentPlacedHere.has(String(eq.id))}
-                    isPlacedSomewhere={placedIds.has(String(eq.id))}
-                    isPlacedElsewhere={placedIds.has(String(eq.id)) && !currentPlacedHere.has(String(eq.id))}
-                    isSelected={String(selectedEquipmentId) === String(eq.id)}
-                    onClick={() => handleEquipmentClick(eq)}
-                    onPlace={handlePlaceEquipment}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                  <Input
+                    placeholder="Rechercher..."
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    className="pl-9"
                   />
-                ))
-              )}
+                </div>
+                <div className="flex gap-1">
+                  {[
+                    { key: "all", label: "Tous" },
+                    { key: "placed", label: "Places" },
+                    { key: "unplaced", label: "Non places" },
+                  ].map(f => (
+                    <button
+                      key={f.key}
+                      onClick={() => setFilterMode(f.key)}
+                      className={`flex-1 py-1.5 px-2 text-xs rounded-lg transition ${
+                        filterMode === f.key ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {loadingEquipments ? (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw size={24} className="animate-spin text-gray-400" />
+                  </div>
+                ) : filteredEquipments.length === 0 ? (
+                  <EmptyState icon={Zap} title="Aucun equipement" description="Ajoutez des equipements depuis la page principale" />
+                ) : (
+                  filteredEquipments.map(eq => (
+                    <GloCard
+                      key={eq.id}
+                      equipment={eq}
+                      isPlacedHere={currentPlacedHere.has(String(eq.id))}
+                      isPlacedSomewhere={placedIds.has(String(eq.id))}
+                      isPlacedElsewhere={placedIds.has(String(eq.id)) && !currentPlacedHere.has(String(eq.id))}
+                      isSelected={String(selectedEquipmentId) === String(eq.id)}
+                      onClick={() => handleEquipmentClick(eq)}
+                      onPlace={(eq) => { handlePlaceEquipment(eq); if (isMobile) setShowSidebar(false); }}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )}
 
         {/* Map Area */}
@@ -1753,6 +1765,21 @@ export default function GloMap() {
           </div>
         </div>
       </div>
+
+      {/* Mobile FAB */}
+      {isMobile && !showSidebar && selectedPlan && (
+        <button
+          onClick={() => setShowSidebar(true)}
+          className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
+        >
+          <Zap size={24} />
+          {stats.unplaced > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+              {stats.unplaced}
+            </span>
+          )}
+        </button>
+      )}
 
       {/* Confirm Modal */}
       <ConfirmModal
