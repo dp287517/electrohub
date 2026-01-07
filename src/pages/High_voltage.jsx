@@ -1762,7 +1762,7 @@ export default function HighVoltage() {
         {isMobile && !selectedEquipment && (
           <div className="flex-1 bg-white p-3">
             <div className="space-y-1">
-              {isLoading ? (
+              {loading ? (
                 <div className="flex items-center justify-center py-8">
                   <RefreshCw size={24} className="animate-spin text-gray-400" />
                 </div>
