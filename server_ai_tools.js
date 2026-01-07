@@ -404,7 +404,7 @@ UTILISE CETTE FONCTION QUAND:
     type: "function",
     function: {
       name: "search_equipment",
-      description: `Recherche des équipements (tableaux électriques, variateurs, portes, etc.).
+      description: `Recherche des équipements dans TOUTES les catégories (tableaux, variateurs, portes, datahub/capteurs, etc.).
 
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - "où est le tableau...", "trouve l'équipement..."
@@ -413,14 +413,21 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
 - Quand un dépannage mentionne un équipement et tu veux le retrouver
 - Toute question sur la localisation ou l'état d'équipements
 
-ASTUCE: Si tu ne connais pas le type, ne le spécifie pas et utilise juste le nom - la recherche ira chercher dans TOUS les types.`,
+⚠️ **RÈGLE IMPORTANTE**: NE SPÉCIFIE PAS equipment_type sauf si l'utilisateur le demande EXPLICITEMENT.
+- Si l'utilisateur dit juste un nom (ex: "flux laminaire microdoseur"), cherche avec name SANS type
+- La recherche ira automatiquement dans TOUS les types et TOUTES les catégories (dont datahub)
+- Les équipements datahub ont des CATÉGORIES (ex: "Flux laminaire" est une catégorie, "microdoseur" est le nom)
+
+**CATÉGORIES DATAHUB**: Les capteurs/équipements datahub sont organisés en catégories.
+Exemple: Pour "Flux laminaire microdoseur", "Flux laminaire" = catégorie, "microdoseur" = nom.
+La recherche trouve l'équipement même si tu donnes "catégorie + nom".`,
       parameters: {
         type: "object",
         properties: {
           equipment_type: {
             type: "string",
             enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "datahub", "infrastructure"],
-            description: "Type d'équipement à chercher (OPTIONNEL - si non spécifié, cherche dans tous les types)"
+            description: "Type d'équipement - NE PAS SPÉCIFIER sauf demande explicite de l'utilisateur. La recherche par défaut cherche dans TOUS les types."
           },
           building: {
             type: "string",
@@ -432,7 +439,7 @@ ASTUCE: Si tu ne connais pas le type, ne le spécifie pas et utilise juste le no
           },
           name: {
             type: "string",
-            description: "Nom ou partie du nom de l'équipement"
+            description: "Nom ou partie du nom de l'équipement (peut inclure la catégorie pour datahub)"
           },
           code: {
             type: "string",
@@ -2275,6 +2282,106 @@ function createToolHandlers(pool, site) {
               summary: `${allResults.length} équipement(s) trouvé(s) correspondant à "${name}".`
             };
           }
+
+          // === RECHERCHE DE SUGGESTIONS si rien trouvé ===
+          // Recherche floue par mots individuels
+          const suggestions = [];
+          for (const [eqType, tableInfo] of Object.entries(tableMap)) {
+            try {
+              // Recherche floue pour datahub avec catégories
+              if (tableInfo.hasCategory) {
+                for (const term of searchTerms) {
+                  const fuzzyQuery = `
+                    SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor,
+                           dhc.name as category_name, '${eqType}' as equipment_type
+                    FROM dh_items dh
+                    LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                    WHERE dh.site = $1
+                      AND (LOWER(dh.name) LIKE $2 OR LOWER(dhc.name) LIKE $2)
+                    LIMIT 5
+                  `;
+                  const fuzzyResult = await pool.query(fuzzyQuery, [site, `%${term}%`]);
+                  for (const row of fuzzyResult.rows) {
+                    if (!suggestions.find(s => s.id === row.id)) {
+                      suggestions.push({
+                        ...row,
+                        name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                        equipment_type: eqType
+                      });
+                    }
+                  }
+                }
+              } else {
+                // Recherche floue standard pour autres types
+                for (const term of searchTerms) {
+                  let fuzzyQuery;
+                  let fuzzyParams;
+
+                  if (tableInfo.siteColumn) {
+                    fuzzyQuery = `
+                      SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                      FROM ${tableInfo.table}
+                      WHERE ${tableInfo.siteColumn} = $1 AND LOWER(name) LIKE $2
+                      LIMIT 3
+                    `;
+                    fuzzyParams = [site, `%${term}%`];
+                  } else if (tableInfo.siteJoin) {
+                    fuzzyQuery = `
+                      SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                      FROM ${tableInfo.table} e
+                      ${tableInfo.siteJoin.replace('{table}', 'e')}
+                      WHERE ${tableInfo.siteCondition} AND LOWER(e.name) LIKE $2
+                      LIMIT 3
+                    `;
+                    fuzzyParams = [site, `%${term}%`];
+                  } else {
+                    fuzzyQuery = `
+                      SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
+                      FROM ${tableInfo.table}
+                      WHERE LOWER(name) LIKE $1
+                      LIMIT 3
+                    `;
+                    fuzzyParams = [`%${term}%`];
+                  }
+
+                  const fuzzyResult = await pool.query(fuzzyQuery, fuzzyParams);
+                  for (const row of fuzzyResult.rows) {
+                    if (!suggestions.find(s => s.id === row.id)) {
+                      suggestions.push({ ...row, equipment_type: eqType });
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              // Skip errors
+            }
+          }
+
+          // Retourner avec suggestions si on en a trouvé
+          if (suggestions.length > 0) {
+            return {
+              success: true,
+              count: 0,
+              equipment_type: 'all',
+              filters: { name },
+              equipment: [],
+              suggestions: suggestions.slice(0, 10),
+              has_suggestions: true,
+              summary: `Aucun équipement ne correspond exactement à "${name}", mais voici des équipements similaires.`,
+              message: `Je n'ai pas trouvé "${name}" exactement. Voici des suggestions basées sur les mots-clés "${searchTerms.join('", "')}":`,
+              suggestion_list: suggestions.slice(0, 10).map(s => `• ${s.name} (${s.equipment_type}${s.building_code ? ` - Bât. ${s.building_code}` : ''})`).join('\n')
+            };
+          }
+
+          // Vraiment rien trouvé
+          return {
+            success: true,
+            count: 0,
+            equipment_type: 'all',
+            filters: { name },
+            equipment: [],
+            summary: `Aucun équipement trouvé pour "${name}". Essayez avec un autre nom ou vérifiez l'orthographe.`
+          };
         } catch (error) {
           console.error('[TOOL] search_equipment (all types) error:', error.message);
         }
@@ -4213,15 +4320,31 @@ Utilise le paramètre "building" pour filtrer par bâtiment si l'utilisateur est
 - Exemple: "Localise 27-9-G" → show_map(equipment_name="27-9-G")
 - La carte s'affichera automatiquement dans le chat avec la position de l'équipement
 
+## 🔍 RECHERCHE D'ÉQUIPEMENTS INTELLIGENTE
+**IMPORTANT**: Quand tu cherches un équipement par son nom:
+1. N'utilise PAS le paramètre equipment_type sauf si l'utilisateur le demande explicitement
+2. La recherche sans type va chercher dans TOUS les équipements (tableaux, VSD, datahub, etc.)
+3. Les équipements datahub ont des CATÉGORIES (ex: "Flux laminaire" = catégorie, "microdoseur" = nom)
+4. Si la recherche retourne des **suggestions**, PROPOSE-LES à l'utilisateur avec un choix clair
+5. Utilise le champ suggestion_list pour afficher les alternatives proprement
+
+**Exemple de bonne réponse avec suggestions:**
+"Je n'ai pas trouvé exactement cet équipement, mais voici des correspondances possibles:
+• Flux laminaire - Microdoseur A (datahub - Bât. 02)
+• Flux laminaire - Microdoseur B (datahub - Bât. 05)
+
+C'est l'un de ceux-là ?"
+
 ## SYNONYMES IMPORTANTS
 - Panne = dépannage = incident = défaillance = breakdown = dysfonctionnement
 - VSD = variateur = variateur de fréquence = drive
 - Tableau = switchboard = armoire = coffret = TGBT
 - NC = non-conformité = anomalie = écart
+- Flux laminaire, Balance, Capteur = souvent catégories datahub
 
 ## FORMAT DE RÉPONSE
 - Utilise des emojis: 🔧 📋 ⚠️ ✅ 📍 🗺️ 📊 🏭 ⚡
-- **Gras** pour les éléments importants
+- Texte normal sans **gras** sauf pour les titres principaux
 - Listes à puces pour les énumérations
 - Termine par une question ou proposition d'action
 

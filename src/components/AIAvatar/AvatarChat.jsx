@@ -833,22 +833,22 @@ Demande-moi n'importe quoi !`,
                       const isBullet = line.trim().startsWith('•') || line.trim().startsWith('-');
                       const isNumbered = /^\d+[\.\)]\s/.test(line.trim());
 
-                      // Parser le markdown inline
+                      // Parser le markdown inline - version améliorée
                       const parseInlineMarkdown = (text) => {
                         const parts = [];
                         let remaining = text;
                         let keyIndex = 0;
 
                         while (remaining.length > 0) {
-                          // Chercher **bold**
-                          const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
+                          // Chercher **bold** avec regex non-greedy pour capturer le premier match
+                          const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
                           if (boldMatch && boldMatch.index !== undefined) {
                             // Texte avant le bold
                             if (boldMatch.index > 0) {
                               parts.push(<span key={keyIndex++}>{remaining.slice(0, boldMatch.index)}</span>);
                             }
-                            // Le texte bold
-                            parts.push(<strong key={keyIndex++} className="font-semibold">{boldMatch[1]}</strong>);
+                            // Le texte bold (sans les **)
+                            parts.push(<strong key={keyIndex++} className="font-semibold text-gray-900">{boldMatch[1]}</strong>);
                             remaining = remaining.slice(boldMatch.index + boldMatch[0].length);
                           } else {
                             // Pas de markdown, ajouter le reste
@@ -856,7 +856,7 @@ Demande-moi n'importe quoi !`,
                             break;
                           }
                         }
-                        return parts;
+                        return parts.length > 0 ? parts : [<span key="0">{text}</span>];
                       };
 
                       return (
