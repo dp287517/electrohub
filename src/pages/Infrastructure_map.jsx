@@ -519,6 +519,11 @@ export default function InfrastructureMap() {
   useEffect(() => {
     selectedItemIdRef.current = selectedItem?.id || null;
     if (mapRef.current && positions.length > 0) drawMarkers();
+    // Scroll to selected item in sidebar
+    if (selectedItem?.id) {
+      const el = document.querySelector(`[data-infra-item-id="${selectedItem.id}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, [selectedItem, positions, drawMarkers]);
 
   // Handle map click for placement
@@ -685,6 +690,7 @@ export default function InfrastructureMap() {
 
                   return (
                     <div key={item.id}
+                      data-infra-item-id={item.id}
                       className={`flex items-center gap-2 p-2 rounded-xl cursor-pointer transition-all ${isActive ? 'bg-violet-100 ring-2 ring-violet-400' : 'hover:bg-gray-50'}`}
                       onClick={() => {
                         setSelectedItem(item);
