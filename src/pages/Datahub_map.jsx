@@ -448,48 +448,36 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
   // Calculate panel position beside marker (desktop only)
   const getPanelStyle = () => {
     if (isMobileState) return {};
-
     const markerPos = position?.markerScreenPos;
-    const mapContainer = mapContainerRef?.current;
+    if (!markerPos) return {};
 
-    if (!markerPos || !mapContainer) return {};
+    const mapWidth = markerPos.containerWidth;
+    const mapHeight = markerPos.containerHeight;
+    const mapLeft = markerPos.mapLeft;
+    const mapTop = markerPos.mapTop;
 
-    const mapRect = mapContainer.getBoundingClientRect();
     const panelWidth = 320;
-    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
+    const panelMaxHeight = Math.min(400, mapHeight * 0.8);
     const offset = 20;
 
-    const markerRelativeX = markerPos.x - mapRect.left;
-    const markerRelativeY = markerPos.y - mapRect.top;
-
-    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+    const markerRelativeX = markerPos.x - mapLeft;
+    const spaceOnRight = mapWidth - markerRelativeX - offset;
     const spaceOnLeft = markerRelativeX - offset;
 
     let left;
     if (spaceOnRight >= panelWidth) {
-      left = markerRelativeX + offset;
+      left = markerPos.x + offset;
     } else if (spaceOnLeft >= panelWidth) {
-      left = markerRelativeX - panelWidth - offset;
+      left = markerPos.x - panelWidth - offset;
     } else {
-      left = Math.max(8, (mapRect.width - panelWidth) / 2);
+      left = mapLeft + Math.max(8, (mapWidth - panelWidth) / 2);
     }
 
-    let top = markerRelativeY - panelMaxHeight / 2;
-    if (top < 8) {
-      top = 8;
-    } else if (top + panelMaxHeight > mapRect.height - 8) {
-      top = Math.max(8, mapRect.height - panelMaxHeight - 8);
-    }
+    let top = markerPos.y - panelMaxHeight / 2;
+    if (top < mapTop + 8) top = mapTop + 8;
+    else if (top + panelMaxHeight > mapTop + mapHeight - 8) top = Math.max(mapTop + 8, mapTop + mapHeight - panelMaxHeight - 8);
 
-    return {
-      position: 'absolute',
-      left: `${left}px`,
-      top: `${top}px`,
-      width: `${panelWidth}px`,
-      maxHeight: `${panelMaxHeight}px`,
-      bottom: 'auto',
-      right: 'auto'
-    };
+    return { position: 'fixed', left: `${left}px`, top: `${top}px`, width: `${panelWidth}px`, maxHeight: `${panelMaxHeight}px`, zIndex: 9999 };
   };
 
   const desktopStyle = getPanelStyle();
@@ -500,7 +488,7 @@ const DetailPanel = ({ item, category, position, onClose, onDelete, onNavigate, 
       ref={panelRef}
       className={`${
         hasCustomPosition
-          ? 'absolute z-[60] bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col'
+          ? 'bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto flex flex-col'
           : `${isMobile ? 'fixed inset-x-2 bottom-20 z-[60]' : 'absolute top-4 right-4 w-80 z-[60]'} bg-white rounded-2xl shadow-2xl border overflow-hidden animate-slideUp pointer-events-auto max-h-[80vh] flex flex-col`
       }`}
       style={hasCustomPosition ? desktopStyle : {}}

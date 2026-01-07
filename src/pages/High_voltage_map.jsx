@@ -373,28 +373,42 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
   const getPanelStyle = () => {
     if (isMobile) return {};
     const markerPos = position?.markerScreenPos;
-    const mapContainer = mapContainerRef?.current;
-    if (!markerPos || !mapContainer) return {};
-    const mapRect = mapContainer.getBoundingClientRect();
+    if (!markerPos) return {};
+
+    const mapWidth = markerPos.containerWidth;
+    const mapHeight = markerPos.containerHeight;
+    const mapLeft = markerPos.mapLeft;
+    const mapTop = markerPos.mapTop;
+
     const panelWidth = 384;
-    const panelMaxHeight = Math.min(400, mapRect.height * 0.8);
+    const panelMaxHeight = Math.min(400, mapHeight * 0.8);
     const offset = 20;
-    const markerRelativeX = markerPos.x - mapRect.left;
-    const markerRelativeY = markerPos.y - mapRect.top;
-    const spaceOnRight = mapRect.width - markerRelativeX - offset;
+
+    const markerRelativeX = markerPos.x - mapLeft;
+    const spaceOnRight = mapWidth - markerRelativeX - offset;
     const spaceOnLeft = markerRelativeX - offset;
-    let left = spaceOnRight >= panelWidth ? markerRelativeX + offset : spaceOnLeft >= panelWidth ? markerRelativeX - panelWidth - offset : Math.max(8, (mapRect.width - panelWidth) / 2);
-    let top = markerRelativeY - panelMaxHeight / 2;
-    if (top < 8) top = 8;
-    else if (top + panelMaxHeight > mapRect.height - 8) top = Math.max(8, mapRect.height - panelMaxHeight - 8);
-    return { position: 'absolute', left: `${left}px`, top: `${top}px`, width: `${panelWidth}px`, maxHeight: `${panelMaxHeight}px`, bottom: 'auto', right: 'auto' };
+
+    let left;
+    if (spaceOnRight >= panelWidth) {
+      left = markerPos.x + offset;
+    } else if (spaceOnLeft >= panelWidth) {
+      left = markerPos.x - panelWidth - offset;
+    } else {
+      left = mapLeft + Math.max(8, (mapWidth - panelWidth) / 2);
+    }
+
+    let top = markerPos.y - panelMaxHeight / 2;
+    if (top < mapTop + 8) top = mapTop + 8;
+    else if (top + panelMaxHeight > mapTop + mapHeight - 8) top = Math.max(mapTop + 8, mapTop + mapHeight - panelMaxHeight - 8);
+
+    return { position: 'fixed', left: `${left}px`, top: `${top}px`, width: `${panelWidth}px`, maxHeight: `${panelMaxHeight}px`, zIndex: 9999 };
   };
 
   const desktopStyle = getPanelStyle();
   const hasCustomPosition = !isMobile && Object.keys(desktopStyle).length > 0;
 
   return (
-    <AnimatedCard ref={panelRef} className={`bg-white rounded-2xl shadow-2xl border overflow-hidden z-30 flex flex-col ${hasCustomPosition ? 'absolute' : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh]'}`} style={hasCustomPosition ? desktopStyle : {}}>
+    <AnimatedCard ref={panelRef} className={`bg-white rounded-2xl shadow-2xl border overflow-hidden flex flex-col ${hasCustomPosition ? '' : 'absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 max-h-[80vh] z-30'}`} style={hasCustomPosition ? desktopStyle : {}}>
       <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 text-white flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
