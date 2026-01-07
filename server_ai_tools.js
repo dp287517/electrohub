@@ -70,6 +70,88 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
   },
 
   // -------------------------------------------------------------------------
+  // TRANSFERT DE DÉPANNAGE
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "propose_troubleshooting_transfer",
+      description: `Propose de transférer un dépannage vers un autre équipement quand le technicien s'est trompé.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur dit:
+- "je me suis trompé d'équipement", "mauvais équipement"
+- "ce dépannage devrait être sur...", "c'était pas le bon équipement"
+- "transfère ce dépannage vers...", "déplace l'intervention sur..."
+- "erreur, c'était l'équipement X", "corrige l'équipement"
+
+WORKFLOW:
+1. L'utilisateur signale une erreur sur un dépannage récent
+2. Tu recherches l'équipement cible
+3. Tu proposes le transfert avec un bouton de confirmation
+4. L'utilisateur confirme et le transfert est effectué`,
+      parameters: {
+        type: "object",
+        properties: {
+          troubleshooting_id: {
+            type: "string",
+            description: "ID du dépannage à transférer (optionnel - prend le plus récent si non spécifié)"
+          },
+          target_equipment_name: {
+            type: "string",
+            description: "Nom ou partie du nom de l'équipement cible"
+          },
+          target_equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "hv", "mobile", "glo", "doors", "datahub"],
+            description: "Type de l'équipement cible (optionnel)"
+          },
+          target_building: {
+            type: "string",
+            description: "Bâtiment de l'équipement cible (optionnel, pour affiner la recherche)"
+          }
+        },
+        required: ["target_equipment_name"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "confirm_troubleshooting_transfer",
+      description: `Exécute le transfert d'un dépannage vers un autre équipement après confirmation de l'utilisateur.
+
+⚠️ NE PAS UTILISER DIRECTEMENT - Utiliser propose_troubleshooting_transfer d'abord
+Cette fonction est appelée automatiquement quand l'utilisateur clique sur le bouton de confirmation.`,
+      parameters: {
+        type: "object",
+        properties: {
+          troubleshooting_id: {
+            type: "string",
+            description: "ID du dépannage à transférer"
+          },
+          target_equipment_id: {
+            type: "string",
+            description: "ID de l'équipement cible"
+          },
+          target_equipment_type: {
+            type: "string",
+            description: "Type de l'équipement cible"
+          },
+          target_equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement cible"
+          },
+          target_building: {
+            type: "string",
+            description: "Bâtiment de l'équipement cible"
+          }
+        },
+        required: ["troubleshooting_id", "target_equipment_id", "target_equipment_type", "target_equipment_name"]
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
   // ANALYSE DE FIABILITÉ ÉQUIPEMENTS
   // -------------------------------------------------------------------------
   {
@@ -1093,6 +1175,275 @@ function createToolHandlers(pool, site) {
       } catch (error) {
         console.error('[TOOL] search_troubleshooting error:', error.message);
         return { success: false, error: error.message, records: [] };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // TRANSFERT DE DÉPANNAGE
+    // -----------------------------------------------------------------------
+    propose_troubleshooting_transfer: async (params) => {
+      const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building } = params;
+
+      try {
+        // 1. Récupérer le dépannage à transférer (le plus récent si pas d'ID)
+        let troubleQuery = `
+          SELECT id, title, description, equipment_id, equipment_type, equipment_name, building_code, started_at
+          FROM troubleshooting_records
+          WHERE site = $1
+        `;
+        const troubleParams = [site];
+
+        if (troubleshooting_id) {
+          troubleQuery += ` AND id = $2`;
+          troubleParams.push(troubleshooting_id);
+        } else {
+          troubleQuery += ` ORDER BY started_at DESC LIMIT 1`;
+        }
+
+        const troubleResult = await pool.query(troubleQuery, troubleParams);
+
+        if (troubleResult.rows.length === 0) {
+          return {
+            success: false,
+            error: troubleshooting_id
+              ? `Dépannage #${troubleshooting_id} non trouvé.`
+              : `Aucun dépannage récent trouvé.`,
+            message: 'Impossible de trouver le dépannage à transférer.'
+          };
+        }
+
+        const troubleshooting = troubleResult.rows[0];
+
+        // 2. Rechercher l'équipement cible dans toutes les tables
+        const tableMap = {
+          switchboard: { table: 'switchboards', nameCol: 'name', buildingCol: 'building_code', codeCol: 'code' },
+          vsd: { table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          meca: { table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          atex: { table: 'atex_equipments', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          hv: { table: 'hv_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          mobile: { table: 'mobile_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          glo: { table: 'glo_equipment', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          doors: { table: 'fd_doors', nameCol: 'name', buildingCol: 'building', codeCol: null },
+          datahub: { table: 'datahub_items', nameCol: 'name', buildingCol: 'building', codeCol: null }
+        };
+
+        const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
+        const candidates = [];
+
+        for (const eqType of typesToSearch) {
+          const config = tableMap[eqType];
+          if (!config) continue;
+
+          try {
+            let searchQuery = `
+              SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
+                     '${eqType}' as equipment_type
+              FROM ${config.table}
+              WHERE site = $1
+                AND LOWER(${config.nameCol}) LIKE $2
+            `;
+            const searchParams = [site, `%${target_equipment_name.toLowerCase()}%`];
+
+            if (target_building) {
+              searchQuery += ` AND UPPER(${config.buildingCol}) = $3`;
+              searchParams.push(target_building.toUpperCase());
+            }
+
+            if (config.codeCol) {
+              searchQuery = `
+                SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
+                       '${eqType}' as equipment_type
+                FROM ${config.table}
+                WHERE site = $1
+                  AND (LOWER(${config.nameCol}) LIKE $2 OR LOWER(${config.codeCol}) LIKE $2)
+                  ${target_building ? `AND UPPER(${config.buildingCol}) = $3` : ''}
+              `;
+            }
+
+            searchQuery += ` LIMIT 5`;
+            const searchResult = await pool.query(searchQuery, searchParams);
+            candidates.push(...searchResult.rows);
+          } catch (e) {
+            // Table might not exist, continue
+          }
+        }
+
+        if (candidates.length === 0) {
+          return {
+            success: false,
+            error: `Aucun équipement trouvé avec le nom "${target_equipment_name}"${target_building ? ` dans le bâtiment ${target_building}` : ''}.`,
+            troubleshooting: {
+              id: troubleshooting.id,
+              title: troubleshooting.title,
+              current_equipment: troubleshooting.equipment_name,
+              current_building: troubleshooting.building_code
+            },
+            suggestion: 'Vérifie le nom de l\'équipement ou précise le bâtiment.'
+          };
+        }
+
+        // 3. Si plusieurs candidats, demander clarification
+        if (candidates.length > 1) {
+          return {
+            success: true,
+            needs_clarification: true,
+            troubleshooting: {
+              id: troubleshooting.id,
+              title: troubleshooting.title,
+              current_equipment: troubleshooting.equipment_name,
+              current_building: troubleshooting.building_code
+            },
+            candidates: candidates.map(c => ({
+              id: c.id,
+              name: c.name,
+              building: c.building,
+              type: c.equipment_type
+            })),
+            message: `J'ai trouvé ${candidates.length} équipements correspondant à "${target_equipment_name}". Lequel est le bon ?`,
+            frontend_instruction: {
+              showTransferCandidates: true,
+              troubleshootingId: troubleshooting.id,
+              candidates: candidates.map(c => ({
+                id: c.id,
+                name: c.name,
+                building: c.building,
+                type: c.equipment_type,
+                label: `${c.name} (${c.building || 'N/A'})`
+              }))
+            }
+          };
+        }
+
+        // 4. Un seul candidat - proposer le transfert avec bouton de confirmation
+        const target = candidates[0];
+
+        // Déterminer si l'équipement cible est géré par un autre agent
+        const agentMap = {
+          switchboard: 'Matrix',
+          vsd: 'Shakira',
+          meca: 'Titan',
+          glo: 'Lumina',
+          hv: 'Voltaire',
+          mobile: 'Nomad',
+          atex: 'Phoenix',
+          doors: 'Portal',
+          datahub: 'Nexus'
+        };
+        const targetAgent = agentMap[target.equipment_type];
+        const sourceAgent = agentMap[troubleshooting.equipment_type];
+
+        return {
+          success: true,
+          ready_for_transfer: true,
+          troubleshooting: {
+            id: troubleshooting.id,
+            title: troubleshooting.title,
+            description: troubleshooting.description,
+            current_equipment: troubleshooting.equipment_name,
+            current_building: troubleshooting.building_code,
+            current_type: troubleshooting.equipment_type
+          },
+          target_equipment: {
+            id: target.id,
+            name: target.name,
+            building: target.building,
+            type: target.equipment_type
+          },
+          agent_change: sourceAgent !== targetAgent ? {
+            from: sourceAgent,
+            to: targetAgent,
+            message: `Cet équipement est géré par l'agent ${targetAgent}. Je peux te transférer après la confirmation.`
+          } : null,
+          message: `✅ Transfert prêt !\n\n📋 **Dépannage**: ${troubleshooting.title}\n📍 **De**: ${troubleshooting.equipment_name} (${troubleshooting.building_code || 'N/A'})\n➡️ **Vers**: ${target.name} (${target.building || 'N/A'})`,
+          frontend_instruction: {
+            showTransferConfirmation: true,
+            transferData: {
+              troubleshootingId: troubleshooting.id,
+              troubleshootingTitle: troubleshooting.title,
+              sourceEquipment: troubleshooting.equipment_name,
+              sourceBuilding: troubleshooting.building_code,
+              targetEquipmentId: target.id,
+              targetEquipmentName: target.name,
+              targetEquipmentType: target.equipment_type,
+              targetBuilding: target.building
+            }
+          }
+        };
+      } catch (error) {
+        console.error('[TOOL] propose_troubleshooting_transfer error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    confirm_troubleshooting_transfer: async (params) => {
+      const { troubleshooting_id, target_equipment_id, target_equipment_type, target_equipment_name, target_building } = params;
+
+      try {
+        // Vérifier que le dépannage existe
+        const checkResult = await pool.query(
+          `SELECT id, title, equipment_name, building_code FROM troubleshooting_records WHERE id = $1 AND site = $2`,
+          [troubleshooting_id, site]
+        );
+
+        if (checkResult.rows.length === 0) {
+          return {
+            success: false,
+            error: `Dépannage #${troubleshooting_id} non trouvé.`
+          };
+        }
+
+        const original = checkResult.rows[0];
+
+        // Mettre à jour le dépannage
+        const updateResult = await pool.query(`
+          UPDATE troubleshooting_records
+          SET
+            equipment_id = $1,
+            equipment_type = $2,
+            equipment_name = $3,
+            building_code = $4,
+            updated_at = NOW()
+          WHERE id = $5 AND site = $6
+          RETURNING id, title, equipment_name, building_code
+        `, [target_equipment_id, target_equipment_type, target_equipment_name, target_building, troubleshooting_id, site]);
+
+        if (updateResult.rows.length === 0) {
+          return {
+            success: false,
+            error: 'Erreur lors de la mise à jour du dépannage.'
+          };
+        }
+
+        const updated = updateResult.rows[0];
+
+        // Log de l'action (optionnel - pour audit)
+        console.log(`[TRANSFER] Troubleshooting ${troubleshooting_id} transferred from ${original.equipment_name} to ${target_equipment_name}`);
+
+        return {
+          success: true,
+          message: `✅ Transfert effectué avec succès !\n\n📋 **${updated.title}**\n\n- **Ancien équipement**: ${original.equipment_name} (${original.building_code || 'N/A'})\n- **Nouvel équipement**: ${updated.equipment_name} (${updated.building_code || 'N/A'})`,
+          transfer: {
+            troubleshooting_id: updated.id,
+            title: updated.title,
+            from: {
+              equipment: original.equipment_name,
+              building: original.building_code
+            },
+            to: {
+              equipment: updated.equipment_name,
+              building: updated.building_code,
+              type: target_equipment_type
+            }
+          },
+          frontend_instruction: {
+            transferComplete: true,
+            troubleshootingId: troubleshooting_id,
+            refreshTroubleshooting: true
+          }
+        };
+      } catch (error) {
+        console.error('[TOOL] confirm_troubleshooting_transfer error:', error.message);
+        return { success: false, error: error.message };
       }
     },
 
@@ -3461,6 +3812,7 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "historique de cet équipement", "tout sur X" | get_equipment_history |
 | "charge de travail", "workload", "planning équipe" | get_team_workload |
 | "brief du jour", "bonjour", "résumé du matin" | get_daily_briefing |
+| "je me suis trompé d'équipement", "mauvais équipement", "transfère ce dépannage" | propose_troubleshooting_transfer |
 
 ## 🤝 PARLER À UN AUTRE AGENT
 Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipement):
