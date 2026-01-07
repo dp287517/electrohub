@@ -870,7 +870,6 @@ const SwitchboardLeafletViewer = forwardRef(
 
         // Determine line style based on relationship/link_label
         let color = '#3b82f6'; // Blue default
-        let dashArray = '8, 6';
         let hasDirection = false;
         let swapDirection = false; // If true, swap source/target to draw from upstream to downstream
 
@@ -882,29 +881,24 @@ const SwitchboardLeafletViewer = forwardRef(
           // Target is upstream = feeds this equipment
           // Line should go FROM target (upstream) TO source (downstream)
           color = '#10b981'; // Green
-          dashArray = '10, 5';
           hasDirection = true;
           swapDirection = true; // Swap to draw from upstream to downstream
         } else if (linkLabel === 'downstream') {
           // Target is downstream = this feeds target
           // Line should go FROM source (upstream) TO target (downstream)
           color = '#ef4444'; // Red
-          dashArray = '10, 5';
           hasDirection = true;
           swapDirection = false;
         } else if (link.relationship === 'feeds') {
           color = '#10b981'; // Green for feeds
-          dashArray = '12, 4';
           hasDirection = true;
           swapDirection = false;
         } else if (link.relationship === 'fed_by') {
           color = '#ef4444'; // Red for fed by
-          dashArray = '12, 4';
           hasDirection = true;
           swapDirection = true;
         } else if (link.type === 'hierarchical') {
           color = '#f59e0b'; // Amber for auto hierarchical
-          dashArray = '4, 4';
         }
 
         // Determine polyline points - always draw from upstream to downstream
@@ -919,7 +913,7 @@ const SwitchboardLeafletViewer = forwardRef(
           color,
           weight: 3,
           opacity: 0.8,
-          dashArray,
+          dashArray: '10, 5',
           className: animClass,
           pane: 'connectionsPane'
         });
