@@ -381,7 +381,12 @@ app.get("/api/datahub/items", async (req, res) => {
     }
 
     const { rows } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+      SELECT i.*,
+             i.created_by_email,
+             i.created_by_name,
+             c.name as category_name,
+             c.color as category_color,
+             c.icon as category_icon
         FROM dh_items i
         LEFT JOIN dh_categories c ON c.id = i.category_id
         ${where}
@@ -401,7 +406,12 @@ app.get("/api/datahub/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+      SELECT i.*,
+             i.created_by_email,
+             i.created_by_name,
+             c.name as category_name,
+             c.color as category_color,
+             c.icon as category_icon
         FROM dh_items i
         LEFT JOIN dh_categories c ON c.id = i.category_id
        WHERE i.id = $1
@@ -753,6 +763,7 @@ app.get("/api/datahub/maps/positions", async (req, res) => {
     const { rows } = await pool.query(`
       SELECT p.id, p.item_id, p.logical_name, p.page_index, p.x_frac, p.y_frac,
              i.name, i.code, i.building, i.floor, i.location, i.category_id,
+             i.created_by_email, i.created_by_name,
              c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size
         FROM dh_positions p
         JOIN dh_items i ON i.id = p.item_id
@@ -1110,7 +1121,13 @@ app.get("/api/datahub/report", async (req, res) => {
     if (search) { where += ` AND (i.name ILIKE $${idx} OR i.code ILIKE $${idx})`; params.push(`%${search}%`); idx++; }
 
     const { rows: items } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size
+      SELECT i.*,
+             i.created_by_email,
+             i.created_by_name,
+             c.name as category_name,
+             c.color as category_color,
+             c.icon as category_icon,
+             c.marker_size
         FROM dh_items i
         LEFT JOIN dh_categories c ON c.id = i.category_id
         ${where}

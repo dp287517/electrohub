@@ -504,6 +504,7 @@ app.get("/api/vsd/equipments", async (req, res) => {
              e.type, e.manufacturer, e.manufacturer_ref, e.power_kw, e.voltage,
              e.current_nominal, e.ip_rating, e.comment, e.status, e.installed_at,
              e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+             e.created_by_email, e.created_by_name,
              e.tag, e.model, e.serial_number, e.ip_address, e.protocol, e.floor,
              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
              (SELECT result FROM vsd_checks c
@@ -541,6 +542,7 @@ app.get("/api/vsd/equipments/:id", async (req, res) => {
               e.type, e.manufacturer, e.manufacturer_ref, e.power_kw, e.voltage,
               e.current_nominal, e.ip_rating, e.comment, e.status, e.installed_at,
               e.next_check_date, e.photo_path, e.created_at, e.updated_at,
+              e.created_by_email, e.created_by_name,
               e.tag, e.model, e.serial_number, e.ip_address, e.protocol, e.floor,
               (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
               (SELECT result FROM vsd_checks c

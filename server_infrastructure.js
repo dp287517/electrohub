@@ -381,7 +381,8 @@ app.get("/api/infrastructure/items", async (req, res) => {
     }
 
     const { rows } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon,
+             i.created_by_email, i.created_by_name
         FROM inf_items i
         LEFT JOIN inf_categories c ON c.id = i.category_id
         ${where}
@@ -401,7 +402,8 @@ app.get("/api/infrastructure/items/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { rows } = await pool.query(`
-      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon
+      SELECT i.*, c.name as category_name, c.color as category_color, c.icon as category_icon,
+             i.created_by_email, i.created_by_name
         FROM inf_items i
         LEFT JOIN inf_categories c ON c.id = i.category_id
        WHERE i.id = $1
@@ -753,7 +755,8 @@ app.get("/api/infrastructure/maps/positions", async (req, res) => {
     const { rows } = await pool.query(`
       SELECT p.id, p.item_id, p.logical_name, p.page_index, p.x_frac, p.y_frac,
              i.name, i.code, i.building, i.floor, i.location, i.category_id,
-             c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size
+             c.name as category_name, c.color as category_color, c.icon as category_icon, c.marker_size,
+             i.created_by_email, i.created_by_name
         FROM inf_positions p
         JOIN inf_items i ON i.id = p.item_id
         LEFT JOIN inf_categories c ON c.id = i.category_id
