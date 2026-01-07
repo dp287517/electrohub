@@ -6,7 +6,7 @@ import {
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
   FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX, Bug,
-  Box, Package, ExternalLink, Palette
+  Box, Package, ExternalLink, Palette, Ruler
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
@@ -1727,6 +1727,391 @@ function VsdPlansTab() {
   );
 }
 
+// ============== PLAN SCALE TAB ==============
+// Configure the scale of plans for measurements
+function PlanScaleTab() {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [scaleConfigs, setScaleConfigs] = useState({});
+  const [calibrating, setCalibrating] = useState(null);
+  const [calibrationData, setCalibrationData] = useState({ points: [], distance: '' });
+  const canvasRef = useRef(null);
+
+  // Fetch plans
+  const fetchPlans = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/vsd/maps/listPlans', getAuthOptions());
+      const data = await response.json();
+      const plansList = data.plans || [];
+      setPlans(plansList);
+
+      // Fetch scale configs for all plans
+      const configs = {};
+      for (const plan of plansList) {
+        try {
+          const scaleRes = await fetch(`/api/measurements/scale/${plan.id}?page=0`, getAuthOptions());
+          const scaleData = await scaleRes.json();
+          if (scaleData.ok && scaleData.scale) {
+            configs[plan.id] = scaleData.scale;
+          }
+        } catch {}
+      }
+      setScaleConfigs(configs);
+    } catch (err) {
+      console.error('Error fetching plans:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchPlans(); }, []);
+
+  // Handle canvas click for calibration
+  const handleCanvasClick = (e) => {
+    if (!calibrating || calibrationData.points.length >= 2) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+
+    setCalibrationData(prev => ({
+      ...prev,
+      points: [...prev.points, { x, y }]
+    }));
+  };
+
+  // Draw calibration points
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !calibrating) return;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw points
+    calibrationData.points.forEach((pt, i) => {
+      const x = pt.x * canvas.width;
+      const y = pt.y * canvas.height;
+
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(i === 0 ? 'A' : 'B', x, y);
+    });
+
+    // Draw line
+    if (calibrationData.points.length === 2) {
+      ctx.beginPath();
+      ctx.moveTo(calibrationData.points[0].x * canvas.width, calibrationData.points[0].y * canvas.height);
+      ctx.lineTo(calibrationData.points[1].x * canvas.width, calibrationData.points[1].y * canvas.height);
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.stroke();
+    }
+  }, [calibrating, calibrationData.points]);
+
+  // Save scale
+  const saveScale = async () => {
+    if (!calibrating || calibrationData.points.length !== 2 || !calibrationData.distance) return;
+
+    try {
+      const res = await fetch('/api/measurements/scale', {
+        method: 'POST',
+        ...getAuthOptions(),
+        body: JSON.stringify({
+          planId: calibrating.id,
+          pageIndex: 0,
+          point1: calibrationData.points[0],
+          point2: calibrationData.points[1],
+          realDistanceMeters: parseFloat(calibrationData.distance),
+          imageWidth: 1000,
+          imageHeight: 750
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setScaleConfigs(prev => ({ ...prev, [calibrating.id]: data.scale }));
+        setCalibrating(null);
+        setCalibrationData({ points: [], distance: '' });
+      }
+    } catch (err) {
+      console.error('Error saving scale:', err);
+    }
+  };
+
+  // Calculate pixel distance
+  const pixelDistance = calibrationData.points.length === 2
+    ? Math.sqrt(
+        Math.pow((calibrationData.points[1].x - calibrationData.points[0].x) * 1000, 2) +
+        Math.pow((calibrationData.points[1].y - calibrationData.points[0].y) * 750, 2)
+      )
+    : null;
+
+  if (loading) return <LoadingSpinner text="Chargement des plans..." />;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white">
+            <Ruler size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-amber-900">Configuration de l'echelle des plans</h3>
+            <p className="text-sm text-amber-700 mt-1">
+              Definissez l'echelle de chaque plan pour permettre les mesures de distance et de surface.
+              Cliquez sur 2 points de reference sur le plan et entrez la distance reelle entre eux.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Plans List */}
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <FileText size={18} className="text-amber-600" />
+            Plans ({plans.length})
+          </h3>
+          <button onClick={fetchPlans} className="p-2 hover:bg-gray-100 rounded-lg" title="Actualiser">
+            <RefreshCw size={16} className="text-gray-500" />
+          </button>
+        </div>
+
+        {plans.length === 0 ? (
+          <div className="p-12 text-center">
+            <FileText size={48} className="mx-auto text-gray-300 mb-4" />
+            <h4 className="text-lg font-medium text-gray-900">Aucun plan disponible</h4>
+            <p className="text-gray-500 mt-1">Importez des plans dans l'onglet "Plans" d'abord</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {plans.map(plan => {
+              const scaleConfig = scaleConfigs[plan.id];
+              const hasScale = !!scaleConfig;
+
+              return (
+                <div key={plan.id} className="p-4 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-4">
+                    {/* Status indicator */}
+                    <div className={`w-3 h-3 rounded-full ${hasScale ? 'bg-green-500' : 'bg-amber-500'}`} />
+
+                    {/* Plan Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-medium text-gray-900 truncate">
+                          {plan.display_name || plan.logical_name}
+                        </h4>
+                        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
+                          v{plan.version}
+                        </span>
+                        {hasScale ? (
+                          <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full flex items-center gap-1">
+                            <Check size={12} /> Echelle configuree
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full flex items-center gap-1">
+                            <AlertTriangle size={12} /> Echelle requise
+                          </span>
+                        )}
+                      </div>
+                      {hasScale && (
+                        <p className="text-sm text-gray-500 mt-0.5">
+                          1 px = {(parseFloat(scaleConfig.scale_meters_per_pixel) * 100).toFixed(4)} cm
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <button
+                      onClick={() => {
+                        setCalibrating(plan);
+                        setCalibrationData({ points: [], distance: '' });
+                      }}
+                      className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
+                        hasScale
+                          ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                          : 'bg-amber-500 hover:bg-amber-600 text-white'
+                      }`}
+                    >
+                      <Ruler size={16} />
+                      {hasScale ? 'Reconfigurer' : 'Configurer'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Calibration Modal */}
+      {calibrating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCalibrating(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white">
+                  <Ruler size={18} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">
+                    Calibrer: {calibrating.display_name || calibrating.logical_name}
+                  </h3>
+                  <p className="text-sm text-gray-500">
+                    Cliquez sur 2 points de reference et entrez la distance reelle
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setCalibrating(null)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-auto p-4">
+              <div className="grid md:grid-cols-3 gap-4">
+                {/* PDF Preview with Canvas Overlay */}
+                <div className="md:col-span-2 relative">
+                  <div className="relative aspect-[4/3] bg-gray-100 rounded-xl overflow-hidden">
+                    <iframe
+                      src={`/api/vsd/maps/planFile?logical_name=${encodeURIComponent(calibrating.logical_name)}&site=Default#page=1`}
+                      className="absolute inset-0 w-full h-full border-0"
+                    />
+                    <canvas
+                      ref={canvasRef}
+                      width={800}
+                      height={600}
+                      onClick={handleCanvasClick}
+                      className="absolute inset-0 w-full h-full cursor-crosshair"
+                      style={{ backgroundColor: 'transparent' }}
+                    />
+                  </div>
+
+                  {/* Instructions */}
+                  <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm text-amber-800">
+                      {calibrationData.points.length === 0
+                        ? "1. Cliquez sur le premier point de reference (ex: coin d'un mur)"
+                        : calibrationData.points.length === 1
+                        ? "2. Cliquez sur le deuxieme point de reference (ex: autre coin du mur)"
+                        : "3. Entrez la distance reelle entre les 2 points en metres"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Controls */}
+                <div className="space-y-4">
+                  {/* Points info */}
+                  <div className="space-y-2">
+                    <div className={`p-3 rounded-lg ${calibrationData.points.length >= 1 ? 'bg-amber-100' : 'bg-gray-100'}`}>
+                      <div className="text-sm font-medium">Point A</div>
+                      {calibrationData.points[0] ? (
+                        <div className="text-xs text-gray-600">
+                          x: {(calibrationData.points[0].x * 100).toFixed(1)}%, y: {(calibrationData.points[0].y * 100).toFixed(1)}%
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-400">Non defini</div>
+                      )}
+                    </div>
+
+                    <div className={`p-3 rounded-lg ${calibrationData.points.length >= 2 ? 'bg-amber-100' : 'bg-gray-100'}`}>
+                      <div className="text-sm font-medium">Point B</div>
+                      {calibrationData.points[1] ? (
+                        <div className="text-xs text-gray-600">
+                          x: {(calibrationData.points[1].x * 100).toFixed(1)}%, y: {(calibrationData.points[1].y * 100).toFixed(1)}%
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-400">Non defini</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Pixel distance */}
+                  {pixelDistance !== null && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="text-sm text-blue-800">Distance pixels</div>
+                      <div className="text-lg font-semibold text-blue-900">
+                        {pixelDistance.toFixed(0)} px
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Distance input */}
+                  {calibrationData.points.length === 2 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Distance reelle (metres)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={calibrationData.distance}
+                        onChange={(e) => setCalibrationData(prev => ({ ...prev, distance: e.target.value }))}
+                        placeholder="Ex: 10.5"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                      />
+                    </div>
+                  )}
+
+                  {/* Calculated scale */}
+                  {pixelDistance && calibrationData.distance && (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="text-sm text-green-800">Nouvelle echelle</div>
+                      <div className="text-lg font-semibold text-green-900">
+                        1 px = {((parseFloat(calibrationData.distance) / pixelDistance) * 100).toFixed(4)} cm
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex gap-2 pt-4">
+                    <button
+                      onClick={() => setCalibrationData({ points: [], distance: '' })}
+                      disabled={calibrationData.points.length === 0}
+                      className="flex-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw size={16} />
+                      Reset
+                    </button>
+                    <button
+                      onClick={saveScale}
+                      disabled={calibrationData.points.length !== 2 || !calibrationData.distance}
+                      className="flex-1 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Check size={16} />
+                      Enregistrer
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============== CUSTOM MODULES TAB ==============
 // Allows admins to create dynamic pages without code changes
 const ICON_OPTIONS = [
@@ -3108,6 +3493,7 @@ export default function Admin() {
             <TabButton active={activeTab === 'sites'} onClick={() => setActiveTab('sites')} icon={MapPin} count={sites.length}>Sites</TabButton>
             <TabButton active={activeTab === 'departments'} onClick={() => setActiveTab('departments')} icon={Briefcase} count={departments.length}>Departments</TabButton>
             <TabButton active={activeTab === 'vsd-plans'} onClick={() => setActiveTab('vsd-plans')} icon={FileText}>Plans</TabButton>
+            <TabButton active={activeTab === 'plan-scale'} onClick={() => setActiveTab('plan-scale')} icon={Ruler}>Echelle</TabButton>
             <TabButton active={activeTab === 'modules'} onClick={() => setActiveTab('modules')} icon={Package}>Modules</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
             <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={Settings}>Settings</TabButton>
@@ -3127,6 +3513,7 @@ export default function Admin() {
             {activeTab === 'sites' && <SitesTab sites={sites} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'departments' && <DepartmentsTab departments={departments} onRefresh={fetchData} loading={loading} />}
             {activeTab === 'vsd-plans' && <VsdPlansTab />}
+            {activeTab === 'plan-scale' && <PlanScaleTab />}
             {activeTab === 'modules' && <CustomModulesTab />}
             {activeTab === 'auth-audit' && <AuthAuditTab />}
             {activeTab === 'settings' && <SettingsTab />}

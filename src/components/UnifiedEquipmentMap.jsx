@@ -53,6 +53,9 @@ import {
 // Permissions
 import { getAllowedEquipmentTypes, canSeeEquipmentType } from "../lib/permissions";
 
+// Measurement tools
+import MeasurementTools from "./MeasurementTools";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -923,6 +926,10 @@ const UnifiedLeafletViewer = forwardRef(({
     adjust,
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
     highlightMarker,
+    // Expose map info for MeasurementTools
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }));
 
   return (
@@ -1736,6 +1743,18 @@ export default function UnifiedEquipmentMap({
                 selectedPlan={selectedPlan?.logical_name || selectedPlan?.id}
                 currentPageIndex={pageIndex}
               />
+
+              {/* Measurement Tools */}
+              {pdfReady && selectedPlan && (
+                <MeasurementTools
+                  planId={selectedPlan.id}
+                  pageIndex={pageIndex}
+                  mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+                  imageBounds={viewerRef.current?.getImageBounds?.()}
+                  imageWidth={viewerRef.current?.getImageSize?.()?.w}
+                  imageHeight={viewerRef.current?.getImageSize?.()?.h}
+                />
+              )}
             </>
           )}
 
