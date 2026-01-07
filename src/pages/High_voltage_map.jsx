@@ -119,11 +119,11 @@ async function loadPdfWithRetry(url, maxRetries = 3) {
 // ─────────────────────────────────────────────────────────────────────
 // UI Primitives
 // ─────────────────────────────────────────────────────────────────────
-const AnimatedCard = ({ children, delay = 0, className = "" }) => (
-  <div className={`animate-slideUp ${className}`} style={{ animationDelay: `${delay}ms`, animationFillMode: "backwards" }}>
+const AnimatedCard = React.forwardRef(({ children, delay = 0, className = "", style = {} }, ref) => (
+  <div ref={ref} className={`animate-slideUp ${className}`} style={{ animationDelay: `${delay}ms`, animationFillMode: "backwards", ...style }}>
     {children}
   </div>
-);
+));
 
 const Badge = ({ children, variant = "default", className = "" }) => {
   const variants = {
