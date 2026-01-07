@@ -619,6 +619,7 @@ app.get("/api/meca/equipments/:id", async (req, res) => {
 app.post("/api/meca/equipments", async (req, res) => {
   try {
     const u = getUser(req);
+    console.log(`[MECA CREATE] User from headers - email: "${u.email}", name: "${u.name}"`);
     // 🏢 MULTI-TENANT: Extraire les infos tenant
     // 🔥 Enrichir avec site_id depuis X-Site si manquant (pour utilisateurs externes)
     const baseTenant = extractTenantFromRequest(req);
@@ -724,6 +725,7 @@ app.post("/api/meca/equipments", async (req, res) => {
 
     const eq = rows[0];
     eq.photo_url = null;
+    console.log(`[MECA CREATE] Equipment created - id: ${eq.id}, created_by_email: "${eq.created_by_email}"`);
 
     await logEvent("meca_equipment_created", { id: eq.id, name: eq.name }, u);
 
@@ -902,13 +904,15 @@ app.delete("/api/meca/equipments/:id", async (req, res) => {
     }
 
     const equipment = old[0];
+    console.log(`[MECA DELETE] Checking permissions - userEmail: "${userEmail}", equipment.created_by_email: "${equipment.created_by_email}"`);
     const isCreator = equipment.created_by_email &&
                       equipment.created_by_email.toLowerCase() === userEmail.toLowerCase();
     const isUserAdmin = isAdmin(userEmail);
+    console.log(`[MECA DELETE] isCreator: ${isCreator}, isUserAdmin: ${isUserAdmin}`);
 
     // Check permissions - allow if creator or admin only
     if (!isCreator && !isUserAdmin) {
-      console.log(`[MECA] Delete denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
+      console.log(`[MECA DELETE] ❌ Access denied - user: ${userEmail}, creator: ${equipment.created_by_email}`);
       return res.status(403).json({
         ok: false,
         error: 'Vous n\'êtes pas autorisé à supprimer cet équipement. Seul le créateur ou un administrateur peut le supprimer.',
