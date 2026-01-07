@@ -385,7 +385,57 @@ const DetailPanel = ({ position, equipment, onClose, onNavigate, onDelete, links
           <button onClick={onClose} className="p-1 hover:bg-white/20 rounded transition-colors flex-shrink-0"><X size={16} /></button>
         </div>
       </div>
-      <div className="p-2">
+      <div className="p-2 overflow-y-auto flex-1">
+        {/* Equipment Links Section */}
+        <div className="mb-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-medium text-gray-700 flex items-center gap-1"><Link2 size={12} />Équipements liés</span>
+            <button onClick={() => setShowAddLink(!showAddLink)} className="p-0.5 hover:bg-gray-100 rounded text-gray-500 hover:text-green-600" title="Ajouter un lien"><Plus size={14} /></button>
+          </div>
+          {showAddLink && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-1.5 mb-1.5">
+              <input type="text" value={searchQuery} onChange={(e) => handleSearch(e.target.value)} placeholder="Rechercher..." className="w-full px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-green-500 bg-white" autoFocus />
+              {searching && <div className="flex items-center gap-1 text-xs text-gray-500 mt-1"><Loader2 size={12} className="animate-spin" />Recherche...</div>}
+              {searchResults.length > 0 && (
+                <div className="mt-1.5 max-h-32 overflow-y-auto space-y-1">
+                  {searchResults.map((result) => (
+                    <div key={`${result.type}-${result.id}`} className="bg-white rounded border p-1.5">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-xs">{result.code || result.name}</span>
+                        <span className="text-xs text-gray-500">{result.type}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => handleAddLinkClick(result, 'upstream')} className="flex-1 flex items-center justify-center gap-0.5 px-1.5 py-0.5 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded border border-green-300"><ArrowDown size={10} />Amont</button>
+                        <button onClick={() => handleAddLinkClick(result, 'downstream')} className="flex-1 flex items-center justify-center gap-0.5 px-1.5 py-0.5 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded border border-red-300"><ArrowUp size={10} />Aval</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {linksLoading ? (
+            <div className="flex items-center gap-1 text-xs text-gray-500 py-1"><Loader2 size={12} className="animate-spin" />Chargement...</div>
+          ) : links.length === 0 ? (
+            <p className="text-xs text-gray-400 py-0.5">Aucun équipement lié</p>
+          ) : (
+            <div className="space-y-1 max-h-28 overflow-y-auto">
+              {links.map((link, idx) => {
+                const eq = link.linkedEquipment; const samePlan = isOnSamePlan(link);
+                return (
+                  <div key={link.id || idx} className={`flex items-center justify-between p-1.5 rounded text-xs ${samePlan ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                    <button onClick={() => onLinkClick?.(link)} className="flex items-center gap-1.5 flex-1 text-left hover:underline min-w-0">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                      <span className="font-medium truncate">{eq?.code || eq?.name}</span>
+                      {!samePlan && eq?.plan && <span className="text-green-600 flex-shrink-0">(autre plan)</span>}
+                    </button>
+                    {link.type === 'manual' && link.id && <button onClick={() => onDeleteLink?.(link.id)} className="p-0.5 hover:bg-red-100 rounded text-gray-400 hover:text-red-600 flex-shrink-0" title="Supprimer"><Trash2 size={12} /></button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <button onClick={() => onNavigate(position.equipment_id)} className="w-full py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5">
           <ExternalLink size={14} />Voir détails
         </button>
