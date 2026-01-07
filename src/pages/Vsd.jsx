@@ -8,7 +8,7 @@ import {
   Camera, Sparkles, Upload, RefreshCw, Eye, ImagePlus, AlertCircle,
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
   Tag, Hash, Factory, Gauge, Thermometer, Network, Info,
-  ClipboardCheck, History, FileText, Download
+  ClipboardCheck, History, FileText, Download, ArrowLeft
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { EquipmentAIChat } from '../components/AIAvatar';
@@ -1748,32 +1748,113 @@ export default function Vsd() {
           </div>
         )}
 
+        {/* Mobile: show tree directly when no equipment selected */}
+        {isMobile && !selectedEquipment && (
+          <div className="flex-1 bg-white p-3">
+            <div className="space-y-1">
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw size={24} className="animate-spin text-gray-400" />
+                </div>
+              ) : Object.keys(buildingTree).length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <Cpu size={32} className="mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm">Aucun variateur</p>
+                  <button
+                    onClick={handleNewEquipment}
+                    className="mt-4 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg font-medium hover:from-green-600 hover:to-emerald-700 flex items-center gap-2 mx-auto"
+                  >
+                    <Plus size={18} />
+                    Nouveau variateur
+                  </button>
+                </div>
+              ) : (
+                Object.entries(buildingTree).sort(([a], [b]) => a.localeCompare(b)).map(([building, eqs]) => (
+                  <div key={building} className="bg-gray-50 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }))}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-100"
+                    >
+                      {expandedBuildings[building] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                      <Building2 size={18} className="text-green-500" />
+                      <span className="font-semibold truncate flex-1">{building}</span>
+                      <span className="text-xs text-gray-400 bg-white px-2 py-1 rounded-full shadow-sm">
+                        {eqs.length}
+                      </span>
+                    </button>
+
+                    {expandedBuildings[building] && (
+                      <div className="bg-white border-t divide-y divide-gray-100">
+                        {eqs.map(eq => (
+                          <button
+                            key={eq.id}
+                            onClick={() => handleSelectEquipment(eq)}
+                            className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-green-50 transition-colors"
+                          >
+                            <Cpu size={16} className="text-gray-400" />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-medium text-gray-900 block truncate">{eq.name || eq.tag || 'VSD'}</span>
+                              <span className="text-xs text-gray-500 truncate block">
+                                {eq.manufacturer} {eq.power_kw ? `• ${eq.power_kw}kW` : ''}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {!placedIds.has(eq.id) && (
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-600 text-[10px] rounded-full flex items-center gap-0.5">
+                                  <MapPin size={10} />
+                                </span>
+                              )}
+                            </div>
+                            <ChevronRight size={16} className="text-gray-300" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Main Content Area */}
-        <div className="flex-1 min-h-[calc(100vh-120px)]">
+        <div className={`flex-1 min-h-[calc(100vh-120px)] ${isMobile && !selectedEquipment ? 'hidden' : ''}`}>
           {selectedEquipment ? (
-            viewMode === 'edit' ? (
-              <EditForm
-                equipment={selectedEquipment}
-                onSave={handleSaveEquipment}
-                onCancel={() => selectedEquipment?.id ? setViewMode('detail') : handleCloseEquipment()}
-                showToast={showToast}
-              />
-            ) : (
-              <DetailPanel
-                equipment={selectedEquipment}
-                onClose={handleCloseEquipment}
-                onEdit={handleEditEquipment}
-                onDelete={(eq) => { setDeleteTarget(eq); setShowDeleteModal(true); }}
-                onShare={(eq) => setShowShareModal(true)}
-                onNavigateToMap={handleNavigateToMap}
-                onPhotoUpload={handlePhotoUpload}
-                onImageClick={openLightbox}
-                isPlaced={placedIds.has(selectedEquipment.id)}
-                showToast={showToast}
-                controlStatuses={controlStatuses}
-                navigate={navigate}
-              />
-            )
+            <>
+              {/* Mobile back button */}
+              {isMobile && (
+                <button
+                  onClick={handleCloseEquipment}
+                  className="m-3 flex items-center gap-2 text-gray-600 hover:text-gray-900 px-3 py-2 bg-white rounded-xl shadow-sm w-[calc(100%-1.5rem)]"
+                >
+                  <ArrowLeft size={18} />
+                  <span className="font-medium">Retour aux variateurs</span>
+                </button>
+              )}
+              {viewMode === 'edit' ? (
+                <EditForm
+                  equipment={selectedEquipment}
+                  onSave={handleSaveEquipment}
+                  onCancel={() => selectedEquipment?.id ? setViewMode('detail') : handleCloseEquipment()}
+                  showToast={showToast}
+                />
+              ) : (
+                <DetailPanel
+                  equipment={selectedEquipment}
+                  onClose={handleCloseEquipment}
+                  onEdit={handleEditEquipment}
+                  onDelete={(eq) => { setDeleteTarget(eq); setShowDeleteModal(true); }}
+                  onShare={(eq) => setShowShareModal(true)}
+                  onNavigateToMap={handleNavigateToMap}
+                  onPhotoUpload={handlePhotoUpload}
+                  onImageClick={openLightbox}
+                  isPlaced={placedIds.has(selectedEquipment.id)}
+                  showToast={showToast}
+                  controlStatuses={controlStatuses}
+                  navigate={navigate}
+                />
+              )}
+            </>
           ) : (
             <div className="min-h-[calc(100vh-120px)] flex items-center justify-center bg-gray-50">
               <div className="text-center">
