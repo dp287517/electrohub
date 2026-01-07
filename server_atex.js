@@ -1075,6 +1075,8 @@ app.get("/api/atex/equipments", async (req, res) => {
         e.photo_path,
         e.created_at,
         e.updated_at,
+        e.created_by_email,
+        e.created_by_name,
         lc.last_check_date,
         lc.result AS last_result,
         cp.logical_name,
@@ -1157,7 +1159,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
              e.manufacturer, e.manufacturer_ref, e.atex_mark_gas, e.atex_mark_dust,
              e.zoning_gas, e.zoning_dust, e.comment, e.status, e.installed_at,
              e.next_check_date, e.photo_path, e.created_at, e.updated_at,
-             e.company_id, e.site_id,
+             e.company_id, e.site_id, e.created_by_email, e.created_by_name,
              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo,
              (SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id) AS last_check_date,
              (SELECT result FROM atex_checks c

@@ -287,6 +287,7 @@ app.get('/api/hv/equipments', async (req, res) => {
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
     const sql = `
       SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality, created_at,
+      created_by_email, created_by_name,
       (photo IS NOT NULL) AS has_photo,
       (SELECT COUNT(*) FROM hv_devices WHERE hv_equipment_id = hv_equipments.id)::int AS devices_count
       FROM hv_equipments
@@ -362,6 +363,7 @@ app.get('/api/hv/equipments/:id', async (req, res) => {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
     const r = await pool.query(`
       SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, notes, modes, quality, created_at,
+      created_by_email, created_by_name,
       (photo IS NOT NULL) AS has_photo
       FROM hv_equipments WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });

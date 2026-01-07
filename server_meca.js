@@ -570,7 +570,7 @@ app.get("/api/meca/equipments", async (req, res) => {
              e.ip_rating, e.drive_type, e.coupling, e.mounting, e.fluid, e.flow_m3h, e.pressure_bar,
              e.speed_rpm, e.building, e.floor, e.zone, e.location, e.panel, e.ui_status, e.status,
              e.criticality, e.comments, e.company_id, e.site_id, e.created_at, e.updated_at,
-             e.photo_path,
+             e.photo_path, e.created_by_email, e.created_by_name,
              (e.photo_content IS NOT NULL AND length(e.photo_content) > 0) AS has_photo
         FROM meca_equipments e
        WHERE ${tenantFilter.where}
@@ -599,7 +599,7 @@ app.get("/api/meca/equipments/:id", async (req, res) => {
               ip_rating, drive_type, coupling, mounting, fluid, flow_m3h, pressure_bar,
               speed_rpm, building, floor, zone, location, panel, ui_status, status,
               criticality, comments, company_id, site_id, created_at, updated_at,
-              photo_path,
+              photo_path, created_by_email, created_by_name,
               (photo_content IS NOT NULL AND length(photo_content) > 0) AS has_photo
        FROM meca_equipments WHERE id=$1`,
       [id]
