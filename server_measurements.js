@@ -104,11 +104,18 @@ router.get("/scale/:planId", async (req, res) => {
  * Body: { planId, pageIndex, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio }
  */
 router.post("/scale", requireTenant, async (req, res) => {
+  console.log("[measurements] POST /scale called");
+  console.log("[measurements] req.body:", JSON.stringify(req.body));
+  console.log("[measurements] req.tenant:", req.tenant);
+
   try {
     const { planId, pageIndex = 0, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio } = req.body;
     const { company_id, site_id } = req.tenant;
 
+    console.log("[measurements] Parsed values:", { planId, pageIndex, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio, company_id, site_id });
+
     if (!planId || !point1 || !point2 || !realDistanceMeters) {
+      console.log("[measurements] Missing required fields");
       return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
 
@@ -116,15 +123,19 @@ router.post("/scale", requireTenant, async (req, res) => {
     const dx = (point2.x - point1.x) * (imageWidth || 1);
     const dy = (point2.y - point1.y) * (imageHeight || 1);
     const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+    console.log("[measurements] Calculated pixelDistance:", pixelDistance);
 
     if (pixelDistance === 0) {
+      console.log("[measurements] Points are the same");
       return res.status(400).json({ ok: false, error: "Points must be different" });
     }
 
     // Calculer l'échelle: mètres par pixel
     const scaleMetersPerPixel = realDistanceMeters / pixelDistance;
+    console.log("[measurements] Calculated scaleMetersPerPixel:", scaleMetersPerPixel);
 
     // Upsert dans plan_scale_config (avec scale_ratio si fourni)
+    console.log("[measurements] Inserting into plan_scale_config...");
     const { rows } = await pool.query(
       `INSERT INTO plan_scale_config (
         plan_id, page_index, scale_meters_per_pixel,
@@ -145,8 +156,10 @@ router.post("/scale", requireTenant, async (req, res) => {
        JSON.stringify(point1), JSON.stringify(point2), realDistanceMeters,
        imageWidth, imageHeight, company_id, site_id, scaleRatio || null]
     );
+    console.log("[measurements] Insert result:", rows[0]);
 
     // Aussi mettre à jour vsd_plans pour compatibilité
+    console.log("[measurements] Updating vsd_plans...");
     await pool.query(
       `UPDATE vsd_plans SET
         scale_meters_per_pixel = $1,
@@ -155,15 +168,18 @@ router.post("/scale", requireTenant, async (req, res) => {
        WHERE id = $3`,
       [scaleMetersPerPixel, JSON.stringify({ point1, point2, realDistanceMeters, scaleRatio }), planId]
     );
+    console.log("[measurements] vsd_plans updated");
 
-    res.json({
+    const response = {
       ok: true,
       scale: {
         ...rows[0],
         scale_meters_per_pixel: parseFloat(rows[0].scale_meters_per_pixel),
         scale_ratio: rows[0].scale_ratio
       }
-    });
+    };
+    console.log("[measurements] Sending response:", response);
+    res.json(response);
   } catch (err) {
     console.error("[measurements] Error saving scale:", err);
     res.status(500).json({ ok: false, error: err.message });
