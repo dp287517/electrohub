@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api";
+import { getUserPermissions } from '../lib/permissions';
 import MiniElectro from "../components/MiniElectro";
 import {
   Plus, Search, Filter, Building2, MapPin, Trash2, Edit2, Save, X, Upload,
@@ -15,6 +16,34 @@ import {
   Bell, Folder, File, Eye, Lock, Check, Flame, Package, Tag, Bookmark, Award,
   User, Users, AlertCircle, Info, Loader2
 } from "lucide-react";
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {
+    console.warn('[CustomModule] Error getting current user email:', e);
+  }
+  return null;
+}
+
+function canDeleteItem(item) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  // Custom modules use created_by field (not created_by_email)
+  const creatorEmail = (item?.created_by_email || item?.created_by)?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  return false;
+}
 
 // Icon mapping
 const ICON_MAP = {
@@ -480,6 +509,7 @@ export default function CustomModule() {
                                 >
                                   <MapPin size={16} />
                                 </button>
+                                {canDeleteItem(item) && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -489,6 +519,7 @@ export default function CustomModule() {
                                 >
                                   <Trash2 size={16} />
                                 </button>
+                                )}
                               </div>
                             </div>
                           </div>
