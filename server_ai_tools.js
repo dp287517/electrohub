@@ -823,6 +823,182 @@ Cette fonction retourne l'agent correspondant au nom donné.`,
         required: ["agent_name"]
       }
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // COMPARAISON D'ÉQUIPEMENTS
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "compare_equipment",
+      description: `Compare deux équipements en termes de fiabilité, pannes, contrôles.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "compare ces deux équipements", "différence entre X et Y"
+- "lequel est le plus fiable", "le meilleur entre..."
+- "performance comparée", "comparer les pannes"
+- "X vs Y", "contre", "ou bien"`,
+      parameters: {
+        type: "object",
+        properties: {
+          equipment_1_name: {
+            type: "string",
+            description: "Nom ou code du premier équipement"
+          },
+          equipment_2_name: {
+            type: "string",
+            description: "Nom ou code du deuxième équipement"
+          },
+          period_days: {
+            type: "number",
+            description: "Période de comparaison en jours (défaut: 90)"
+          }
+        },
+        required: ["equipment_1_name", "equipment_2_name"]
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // PRÉDICTION DE PANNE (ML Service)
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "predict_equipment_failure",
+      description: `Prédit le risque de panne d'un équipement en utilisant l'IA prédictive.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "risque de panne", "probabilité de défaillance"
+- "quand va tomber en panne", "prédiction"
+- "équipement à risque", "vulnérable"
+- "maintenance prédictive", "anticiper les pannes"`,
+      parameters: {
+        type: "object",
+        properties: {
+          equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement à analyser"
+          },
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "all"],
+            description: "Type d'équipement"
+          }
+        },
+        required: ["equipment_name"]
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // HISTORIQUE COMPLET D'UN ÉQUIPEMENT
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_equipment_history",
+      description: `Récupère l'historique complet d'un équipement : pannes, contrôles, NC, modifications.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "historique de cet équipement", "tout sur X"
+- "depuis quand", "évolution de"
+- "vie de l'équipement", "parcours"
+- "qu'est-ce qui s'est passé avec..."`,
+      parameters: {
+        type: "object",
+        properties: {
+          equipment_name: {
+            type: "string",
+            description: "Nom ou code de l'équipement"
+          },
+          equipment_type: {
+            type: "string",
+            enum: ["switchboard", "vsd", "meca", "atex", "glo", "hv", "mobile", "doors"],
+            description: "Type d'équipement"
+          },
+          include_controls: {
+            type: "boolean",
+            description: "Inclure l'historique des contrôles (défaut: true)"
+          },
+          include_nc: {
+            type: "boolean",
+            description: "Inclure les non-conformités (défaut: true)"
+          },
+          include_troubleshooting: {
+            type: "boolean",
+            description: "Inclure les dépannages (défaut: true)"
+          }
+        },
+        required: ["equipment_name"]
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // CHARGE DE TRAVAIL ÉQUIPE
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_team_workload",
+      description: `Analyse la charge de travail de l'équipe maintenance.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "charge de travail", "planning équipe"
+- "qui fait quoi", "répartition du travail"
+- "combien de contrôles à faire", "workload"
+- "est-ce qu'on est surchargés", "capacité"`,
+      parameters: {
+        type: "object",
+        properties: {
+          period: {
+            type: "string",
+            enum: ["today", "this_week", "this_month", "next_week"],
+            description: "Période à analyser"
+          },
+          include_overdue: {
+            type: "boolean",
+            description: "Inclure les tâches en retard (défaut: true)"
+          }
+        }
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // RÉSUMÉ INTELLIGENT DU JOUR
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_daily_briefing",
+      description: `Génère un briefing intelligent pour la journée.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "brief du jour", "résumé du matin"
+- "quoi de neuf", "situation actuelle"
+- "qu'est-ce qui m'attend", "ma journée"
+- "bonjour", "salut" (en début de journée)`,
+      parameters: {
+        type: "object",
+        properties: {
+          include_yesterday: {
+            type: "boolean",
+            description: "Inclure les événements de la veille (défaut: true)"
+          },
+          include_priorities: {
+            type: "boolean",
+            description: "Inclure les priorités du jour (défaut: true)"
+          },
+          include_weather: {
+            type: "boolean",
+            description: "Inclure les conditions qui peuvent affecter le travail"
+          }
+        }
+      }
+    }
   }
 ];
 
@@ -2567,6 +2743,404 @@ function createToolHandlers(pool, site) {
         console.error('[TOOL] find_agent_by_name error:', error.message);
         return { success: false, error: error.message };
       }
+    },
+
+    // -----------------------------------------------------------------------
+    // COMPARAISON D'ÉQUIPEMENTS
+    // -----------------------------------------------------------------------
+    compare_equipment: async (params) => {
+      const { equipment_1_name, equipment_2_name, period_days = 90 } = params;
+
+      try {
+        // Fonction pour récupérer les stats d'un équipement
+        const getEquipmentStats = async (equipmentName) => {
+          const failures = await pool.query(`
+            SELECT COUNT(*) as failure_count,
+                   SUM(duration_minutes) as total_downtime,
+                   MAX(started_at) as last_failure
+            FROM troubleshooting_records
+            WHERE site = $1
+              AND LOWER(equipment_name) LIKE $2
+              AND started_at >= NOW() - INTERVAL '${parseInt(period_days)} days'
+          `, [site, `%${equipmentName.toLowerCase()}%`]);
+
+          return {
+            name: equipmentName,
+            failure_count: parseInt(failures.rows[0]?.failure_count || 0),
+            total_downtime: parseInt(failures.rows[0]?.total_downtime || 0),
+            last_failure: failures.rows[0]?.last_failure
+          };
+        };
+
+        const [eq1Stats, eq2Stats] = await Promise.all([
+          getEquipmentStats(equipment_1_name),
+          getEquipmentStats(equipment_2_name)
+        ]);
+
+        // Déterminer le meilleur
+        const eq1Score = eq1Stats.failure_count * 10 + eq1Stats.total_downtime;
+        const eq2Score = eq2Stats.failure_count * 10 + eq2Stats.total_downtime;
+        const better = eq1Score <= eq2Score ? equipment_1_name : equipment_2_name;
+
+        return {
+          success: true,
+          period_days,
+          equipment_1: eq1Stats,
+          equipment_2: eq2Stats,
+          better_reliability: better,
+          comparison: {
+            failure_difference: Math.abs(eq1Stats.failure_count - eq2Stats.failure_count),
+            downtime_difference: Math.abs(eq1Stats.total_downtime - eq2Stats.total_downtime)
+          },
+          summary: `Comparaison sur ${period_days} jours: ${eq1Stats.name} (${eq1Stats.failure_count} pannes) vs ${eq2Stats.name} (${eq2Stats.failure_count} pannes). ${better} est plus fiable.`
+        };
+      } catch (error) {
+        console.error('[TOOL] compare_equipment error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // PRÉDICTION DE PANNE
+    // -----------------------------------------------------------------------
+    predict_equipment_failure: async (params) => {
+      const { equipment_name, equipment_type } = params;
+
+      try {
+        // Récupérer l'historique des pannes
+        const history = await pool.query(`
+          SELECT COUNT(*) as total_failures,
+                 AVG(duration_minutes) as avg_downtime,
+                 MAX(started_at) as last_failure,
+                 MIN(started_at) as first_failure
+          FROM troubleshooting_records
+          WHERE site = $1
+            AND LOWER(equipment_name) LIKE $2
+        `, [site, `%${equipment_name.toLowerCase()}%`]);
+
+        const stats = history.rows[0];
+        const totalFailures = parseInt(stats.total_failures || 0);
+
+        // Calcul du risque basé sur l'historique
+        let riskLevel = 'low';
+        let riskScore = 0;
+        let prediction = 'Faible probabilité de panne à court terme';
+
+        if (totalFailures === 0) {
+          prediction = 'Aucune panne enregistrée - équipement fiable ou nouvellement installé';
+        } else if (totalFailures >= 5) {
+          riskLevel = 'high';
+          riskScore = 80;
+          prediction = 'Risque élevé - équipement avec historique de pannes fréquentes';
+        } else if (totalFailures >= 3) {
+          riskLevel = 'medium';
+          riskScore = 50;
+          prediction = 'Risque modéré - surveillance recommandée';
+        } else {
+          riskScore = 20;
+          prediction = 'Risque faible - quelques incidents isolés';
+        }
+
+        // Calcul du MTBF estimé
+        let mtbfDays = null;
+        if (stats.first_failure && stats.last_failure && totalFailures > 1) {
+          const daysBetween = Math.floor(
+            (new Date(stats.last_failure) - new Date(stats.first_failure)) / (1000 * 60 * 60 * 24)
+          );
+          mtbfDays = Math.round(daysBetween / (totalFailures - 1));
+        }
+
+        return {
+          success: true,
+          equipment_name,
+          equipment_type: equipment_type || 'unknown',
+          risk_level: riskLevel,
+          risk_score: riskScore,
+          prediction,
+          statistics: {
+            total_failures: totalFailures,
+            avg_downtime_minutes: Math.round(parseFloat(stats.avg_downtime || 0)),
+            mtbf_days: mtbfDays,
+            last_failure: stats.last_failure
+          },
+          recommendations: riskLevel === 'high'
+            ? ['Planifier une maintenance préventive', 'Vérifier les pièces d\'usure', 'Envisager un remplacement']
+            : riskLevel === 'medium'
+            ? ['Surveillance renforcée', 'Contrôle visuel régulier']
+            : ['Maintenir le plan de maintenance actuel']
+        };
+      } catch (error) {
+        console.error('[TOOL] predict_equipment_failure error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // HISTORIQUE COMPLET D'UN ÉQUIPEMENT
+    // -----------------------------------------------------------------------
+    get_equipment_history: async (params) => {
+      const {
+        equipment_name,
+        equipment_type,
+        include_controls = true,
+        include_nc = true,
+        include_troubleshooting = true
+      } = params;
+
+      try {
+        const results = {
+          equipment_name,
+          troubleshooting: [],
+          controls: [],
+          non_conformities: []
+        };
+
+        // Dépannages
+        if (include_troubleshooting) {
+          const troubleshooting = await pool.query(`
+            SELECT id, title, description, severity, status, started_at, completed_at,
+                   solution, technician_name, duration_minutes
+            FROM troubleshooting_records
+            WHERE site = $1 AND LOWER(equipment_name) LIKE $2
+            ORDER BY started_at DESC
+            LIMIT 20
+          `, [site, `%${equipment_name.toLowerCase()}%`]);
+          results.troubleshooting = troubleshooting.rows;
+        }
+
+        // Contrôles (recherche dans switchboards par nom)
+        if (include_controls) {
+          const controls = await pool.query(`
+            SELECT sc.id, sc.control_type, sc.result, sc.next_control_date,
+                   sc.control_date, sc.comments, s.name as equipment_name
+            FROM scheduled_controls sc
+            JOIN switchboards s ON sc.switchboard_id = s.id
+            WHERE s.site = $1 AND LOWER(s.name) LIKE $2
+            ORDER BY sc.control_date DESC NULLS LAST
+            LIMIT 10
+          `, [site, `%${equipment_name.toLowerCase()}%`]);
+          results.controls = controls.rows;
+        }
+
+        // Non-conformités
+        if (include_nc) {
+          const nc = await pool.query(`
+            SELECT id, title, description, severity, status, created_at, resolved_at
+            FROM non_conformities
+            WHERE site = $1 AND LOWER(equipment_name) LIKE $2
+            ORDER BY created_at DESC
+            LIMIT 10
+          `, [site, `%${equipment_name.toLowerCase()}%`]);
+          results.non_conformities = nc.rows;
+        }
+
+        const totalEvents = results.troubleshooting.length +
+                            results.controls.length +
+                            results.non_conformities.length;
+
+        return {
+          success: true,
+          ...results,
+          total_events: totalEvents,
+          summary: totalEvents === 0
+            ? `Aucun historique trouvé pour "${equipment_name}"`
+            : `${totalEvents} événements trouvés: ${results.troubleshooting.length} dépannages, ${results.controls.length} contrôles, ${results.non_conformities.length} NC`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_equipment_history error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // CHARGE DE TRAVAIL ÉQUIPE
+    // -----------------------------------------------------------------------
+    get_team_workload: async (params) => {
+      const { period = 'this_week', include_overdue = true } = params;
+
+      try {
+        // Définir la période
+        let dateFilter = '';
+        switch (period) {
+          case 'today':
+            dateFilter = "sc.next_control_date = CURRENT_DATE";
+            break;
+          case 'this_week':
+            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '7 days'";
+            break;
+          case 'next_week':
+            dateFilter = "sc.next_control_date >= CURRENT_DATE + INTERVAL '7 days' AND sc.next_control_date <= CURRENT_DATE + INTERVAL '14 days'";
+            break;
+          case 'this_month':
+            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '30 days'";
+            break;
+          default:
+            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '7 days'";
+        }
+
+        // Contrôles à venir
+        const upcoming = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM scheduled_controls sc
+          JOIN switchboards s ON sc.switchboard_id = s.id
+          WHERE s.site = $1 AND ${dateFilter}
+        `, [site]);
+
+        // Contrôles en retard
+        let overdue = { rows: [{ count: 0 }] };
+        if (include_overdue) {
+          overdue = await pool.query(`
+            SELECT COUNT(*) as count
+            FROM scheduled_controls sc
+            JOIN switchboards s ON sc.switchboard_id = s.id
+            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+          `, [site]);
+        }
+
+        // Dépannages en cours
+        const openTroubleshooting = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM troubleshooting_records
+          WHERE site = $1 AND status = 'in_progress'
+        `, [site]);
+
+        // NC ouvertes
+        const openNC = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM non_conformities
+          WHERE site = $1 AND status = 'open'
+        `, [site]);
+
+        const totalWorkload = parseInt(upcoming.rows[0].count) +
+                              parseInt(overdue.rows[0].count) +
+                              parseInt(openTroubleshooting.rows[0].count) +
+                              parseInt(openNC.rows[0].count);
+
+        return {
+          success: true,
+          period,
+          workload: {
+            upcoming_controls: parseInt(upcoming.rows[0].count),
+            overdue_controls: parseInt(overdue.rows[0].count),
+            open_troubleshooting: parseInt(openTroubleshooting.rows[0].count),
+            open_nc: parseInt(openNC.rows[0].count),
+            total: totalWorkload
+          },
+          load_level: totalWorkload > 20 ? 'high' : totalWorkload > 10 ? 'medium' : 'normal',
+          summary: `Charge de travail (${period}): ${totalWorkload} tâches (${parseInt(upcoming.rows[0].count)} contrôles prévus, ${parseInt(overdue.rows[0].count)} en retard)`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_team_workload error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // BRIEFING DU JOUR
+    // -----------------------------------------------------------------------
+    get_daily_briefing: async (params) => {
+      const { include_yesterday = true, include_priorities = true } = params;
+
+      try {
+        const briefing = {
+          date: new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }),
+          yesterday_events: null,
+          today_tasks: null,
+          priorities: null,
+          alerts: []
+        };
+
+        // Événements d'hier
+        if (include_yesterday) {
+          const yesterday = await pool.query(`
+            SELECT COUNT(*) as failures
+            FROM troubleshooting_records
+            WHERE site = $1 AND started_at >= CURRENT_DATE - INTERVAL '1 day' AND started_at < CURRENT_DATE
+          `, [site]);
+
+          const completedYesterday = await pool.query(`
+            SELECT COUNT(*) as completed
+            FROM troubleshooting_records
+            WHERE site = $1 AND completed_at >= CURRENT_DATE - INTERVAL '1 day' AND completed_at < CURRENT_DATE
+          `, [site]);
+
+          briefing.yesterday_events = {
+            new_failures: parseInt(yesterday.rows[0].failures),
+            resolved: parseInt(completedYesterday.rows[0].completed)
+          };
+        }
+
+        // Tâches du jour
+        const todayControls = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM scheduled_controls sc
+          JOIN switchboards s ON sc.switchboard_id = s.id
+          WHERE s.site = $1 AND sc.next_control_date = CURRENT_DATE
+        `, [site]);
+
+        const overdueControls = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM scheduled_controls sc
+          JOIN switchboards s ON sc.switchboard_id = s.id
+          WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+        `, [site]);
+
+        briefing.today_tasks = {
+          controls_due: parseInt(todayControls.rows[0].count),
+          overdue: parseInt(overdueControls.rows[0].count)
+        };
+
+        // Alertes
+        if (parseInt(overdueControls.rows[0].count) > 0) {
+          briefing.alerts.push({
+            level: 'warning',
+            message: `${overdueControls.rows[0].count} contrôle(s) en retard à traiter`
+          });
+        }
+
+        // Dépannages en cours
+        const openIssues = await pool.query(`
+          SELECT COUNT(*) as count
+          FROM troubleshooting_records
+          WHERE site = $1 AND status = 'in_progress'
+        `, [site]);
+
+        if (parseInt(openIssues.rows[0].count) > 0) {
+          briefing.alerts.push({
+            level: 'info',
+            message: `${openIssues.rows[0].count} dépannage(s) en cours`
+          });
+        }
+
+        // Priorités
+        if (include_priorities) {
+          const priorities = await pool.query(`
+            SELECT s.name, s.building_code,
+                   EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int as days_overdue
+            FROM scheduled_controls sc
+            JOIN switchboards s ON sc.switchboard_id = s.id
+            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+            ORDER BY days_overdue DESC
+            LIMIT 5
+          `, [site]);
+
+          briefing.priorities = priorities.rows.map(p => ({
+            equipment: p.name,
+            building: p.building_code,
+            days_overdue: p.days_overdue,
+            urgency: p.days_overdue > 30 ? 'critical' : p.days_overdue > 14 ? 'high' : 'medium'
+          }));
+        }
+
+        return {
+          success: true,
+          ...briefing,
+          summary: `Bonjour ! ${briefing.today_tasks.controls_due} contrôle(s) prévu(s) aujourd'hui, ${briefing.today_tasks.overdue} en retard. ${briefing.alerts.length} alerte(s).`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_daily_briefing error:', error.message);
+        return { success: false, error: error.message };
+      }
     }
   };
 }
@@ -2666,6 +3240,11 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "qu'est-ce que tu as appris", "ta mémoire", "tes observations" | get_agent_memory |
 | "ce qui s'est passé hier", "résumé de la veille" | get_yesterday_summary |
 | "passe-moi Daniel", "je veux parler à [NOM]", "où est Baptiste" | find_agent_by_name puis transfer_to_agent |
+| "compare X et Y", "lequel est le plus fiable", "X vs Y" | compare_equipment |
+| "risque de panne", "prédiction", "maintenance prédictive" | predict_equipment_failure |
+| "historique de cet équipement", "tout sur X" | get_equipment_history |
+| "charge de travail", "workload", "planning équipe" | get_team_workload |
+| "brief du jour", "bonjour", "résumé du matin" | get_daily_briefing |
 
 ## 🤝 PARLER À UN AUTRE AGENT
 Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipement):

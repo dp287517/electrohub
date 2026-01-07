@@ -12,7 +12,7 @@ import switchboardMapApp from "./server_switchboard_map.js";
 import adminRouter from "./server_admin.js";
 import pushRouter, { notifyAdminsPendingUser } from "./server_push.js";
 import troubleshootingRouter, { initTroubleshootingTables } from "./server_troubleshooting.js";
-import { createChatV2Router } from "./server_ai_chat_v2.js";
+import { createChatV2Router, initChatV2Tables } from "./server_ai_chat_v2.js";
 import { createAgentMemoryRouter, initAgentMemoryTables, generateAllDailySnapshots } from "./server_agent_memory.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -10223,6 +10223,9 @@ async function initEssentialTables() {
 
     // Initialize agent memory tables
     await initAgentMemoryTables(pool);
+
+    // Initialize chat V2 tables (feedback, metrics)
+    await initChatV2Tables(pool);
 
   } catch (err) {
     console.error('[init] ⚠️ Error creating essential tables:', err.message);
