@@ -15,8 +15,7 @@ import {
   Power, Battery, Plug, Gauge, Wrench, Factory, Server, Cpu, Wifi, Shield, Flag,
   Home, Building, Box, Clock, Calendar, Bell, Navigation, Compass, Pin, Bookmark,
   Award, User, Users, Folder, File, Info, Lock, Check, Flame, Thermometer,
-  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2,
-  ExternalLink
+  HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2
 } from "lucide-react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -58,19 +57,6 @@ const ICON_MAP = {
   building: Building2, home: Home, box: Box, package: Package, folder: Folder,
   file: File, clock: Clock, calendar: Calendar, bell: Bell
 };
-
-// External equipment categories (VSD, HV, MECA, etc.) for display
-const EXTERNAL_CATEGORIES = {
-  vsd: { id: 'vsd', name: 'Variateurs (VSD)', shortName: 'VSD', color: '#10b981' },
-  hv: { id: 'hv', name: 'Haute Tension', shortName: 'HT', color: '#f59e0b' },
-  meca: { id: 'meca', name: 'Electromecanique', shortName: 'MECA', color: '#3b82f6' },
-  glo: { id: 'glo', name: 'Equipements Globaux', shortName: 'GLO', color: '#34d399' },
-  mobile: { id: 'mobile', name: 'Equipements Mobiles', shortName: 'Mobiles', color: '#06b6d4' },
-  switchboards: { id: 'switchboards', name: 'Tableaux Electriques', shortName: 'Tableaux', color: '#f59e0b' },
-  datahub: { id: 'datahub', name: 'DataHub', shortName: 'DH', color: '#14b8a6' }
-};
-
-const STORAGE_KEY_EXTERNAL_VISIBLE = "infrastructure_map_external_visible";
 
 function userHeaders() {
   const email = localStorage.getItem("email") || "";
@@ -289,15 +275,6 @@ export default function InfrastructureMap() {
   const [toast, setToast] = useState(null);
   const [pdfReady, setPdfReady] = useState(false);
 
-  // External positions (other equipment types)
-  const [externalPositions, setExternalPositions] = useState({ planKey: null, positions: {} });
-  const [visibleExternalCategories, setVisibleExternalCategories] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_EXTERNAL_VISIBLE);
-      return saved ? JSON.parse(saved) : ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards', 'datahub'];
-    } catch { return ['vsd', 'hv', 'meca', 'glo', 'mobile', 'switchboards', 'datahub']; }
-  });
-
   // Creation mode
   const [createMode, setCreateMode] = useState(false);
   const [placementMode, setPlacementMode] = useState(null);
@@ -434,39 +411,14 @@ export default function InfrastructureMap() {
     } catch { setPositions([]); }
   }, [selectedPlan, pageIndex]);
 
-  // Load external positions
-  const loadExternalPositions = useCallback(async () => {
-    if (!selectedPlan) return;
-    const planKey = selectedPlan.logical_name || selectedPlan.id;
-    currentPlanKeyRef.current = `${planKey}:${pageIndex}`;
-    try {
-      const res = await api.infrastructure.maps.externalPositions(planKey, pageIndex);
-      if (currentPlanKeyRef.current === `${planKey}:${pageIndex}`) {
-        setExternalPositions({ planKey: `${planKey}:${pageIndex}`, positions: res?.positions || {} });
-      }
-    } catch (e) {
-      console.log('External positions error:', e.message);
-    }
-  }, [selectedPlan, pageIndex]);
-
-  // Save visible external categories
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_EXTERNAL_VISIBLE, JSON.stringify(visibleExternalCategories));
-  }, [visibleExternalCategories]);
-
-  const toggleExternalCategory = useCallback((catId) => {
-    setVisibleExternalCategories(prev => prev.includes(catId) ? prev.filter(id => id !== catId) : [...prev, catId]);
-  }, []);
-
   useEffect(() => {
     if (selectedPlan) {
       const newPlanKey = `${selectedPlan.logical_name || selectedPlan.id}:${pageIndex}`;
       currentPlanKeyRef.current = newPlanKey;
       loadPdf();
       loadPositions();
-      loadExternalPositions();
     }
-  }, [selectedPlan, pageIndex, loadPdf, loadPositions, loadExternalPositions]);
+  }, [selectedPlan, pageIndex, loadPdf, loadPositions]);
 
   // Initialize map
   const initMap = (imageUrl, w, h) => {
@@ -578,40 +530,7 @@ export default function InfrastructureMap() {
 
       markersRef.current.push(marker);
     });
-
-    // Draw external equipment markers
-    const currentKey = `${selectedPlan?.logical_name || selectedPlan?.id}:${pageIndex}`;
-    if (externalPositions.planKey === currentKey) {
-      Object.entries(EXTERNAL_CATEGORIES).forEach(([catKey, extCat]) => {
-        if (!visibleExternalCategories.includes(catKey)) return;
-        const positions = externalPositions.positions[catKey] || [];
-
-        positions.forEach(pos => {
-          const size = ICON_PX;
-          const lat = boundsH * pos.y_frac;
-          const lng = boundsW * pos.x_frac;
-
-          const html = `<div style="width:${size}px;height:${size}px;background:${extCat.color};border:2px solid white;border-radius:50%;
-            box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;opacity:0.8;">
-            <span style="color:white;font-size:8px;font-weight:bold;">${extCat.shortName.substring(0, 2)}</span>
-          </div>`;
-
-          const icon = L.divIcon({
-            className: "infrastructure-external-marker",
-            html,
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2]
-          });
-
-          const marker = L.marker([lat, lng], { icon, draggable: false }).addTo(map);
-          marker.bindTooltip(`<strong>${extCat.name}</strong><br/>${pos.name || 'Equipement'}`, {
-            direction: "top", offset: [0, -ICON_PX / 2]
-          });
-          markersRef.current.push(marker);
-        });
-      });
-    }
-  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon, externalPositions, visibleExternalCategories]);
+  }, [items, categories, selectedCategories, selectedPlan, pageIndex, loadPositions, makeMarkerIcon]);
 
   // Update positions ref and redraw
   useEffect(() => {

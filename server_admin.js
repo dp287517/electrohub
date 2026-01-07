@@ -2758,7 +2758,8 @@ const DEFAULT_AGENT_NAMES = {
   switchboard: 'Matrix',
   doors: 'Portal',
   datahub: 'Nexus',
-  firecontrol: 'Blaze'
+  firecontrol: 'Blaze',
+  infrastructure: 'Atlas'
 };
 
 // GET /api/admin/settings/ai-agents/names - Get all custom agent names
