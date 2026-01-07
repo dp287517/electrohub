@@ -158,18 +158,17 @@ const useScale = (planId, pageIndex) => {
 
   const fetchScale = useCallback(async () => {
     if (!planId) {
-      console.log('[useScale] No planId, skipping fetch');
       setLoading(false);
       setHasFetched(true);
       return;
     }
     setLoading(true);
     try {
-      const url = `/api/measurements/scale/${planId}?page=${pageIndex}`;
-      console.log('[useScale] Fetching:', url);
-      const res = await fetch(url, { headers: getAuthHeaders() });
+      const res = await fetch(
+        `/api/measurements/scale/${planId}?page=${pageIndex}`,
+        { headers: getAuthHeaders() }
+      );
       const data = await res.json();
-      console.log('[useScale] Response:', data);
       if (data.ok) {
         setScale(data.scale);
       }
@@ -620,26 +619,14 @@ export default function MeasurementTools({
       )
     : null;
 
-  // Debug log to help troubleshoot
-  console.log('[MeasurementTools]', {
-    planId,
-    isMobile,
-    scaleLoading,
-    scaleFetched,
-    scale: scale ? 'exists' : 'null',
-    windowWidth: typeof window !== 'undefined' ? window.innerWidth : 'N/A'
-  });
-
   // Don't render on mobile - measurement tools are desktop only
   if (isMobile) {
-    console.log('[MeasurementTools] Hidden: mobile detected');
     return null;
   }
 
   // Don't render if no scale configured (buttons should only appear when scale is set)
   // But wait until fetch is complete before deciding
   if (scaleFetched && !scale) {
-    console.log('[MeasurementTools] Hidden: no scale configured for this plan');
     return null;
   }
 
