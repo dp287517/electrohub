@@ -400,7 +400,40 @@ export default function MiniElectro({
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        {/* Message content with markdown parsing */}
+                        <div className="space-y-1">
+                          {msg.content.split('\n').map((line, lineIdx) => {
+                            // Ligne vide
+                            if (!line.trim()) return <div key={lineIdx} className="h-1" />;
+
+                            // Style de ligne
+                            const isBullet = line.trim().startsWith('•') || line.trim().startsWith('-');
+                            const isNumbered = /^\d+[\.\)]\s/.test(line.trim());
+
+                            // Parser le markdown **bold**
+                            const parseMarkdown = (text) => {
+                              if (!text) return null;
+                              const parts = text.split(/\*\*([^*]+)\*\*/g);
+                              return parts.map((part, idx) => {
+                                if (!part) return null;
+                                if (idx % 2 === 1) {
+                                  return <strong key={idx} className="font-semibold">{part}</strong>;
+                                }
+                                return <span key={idx}>{part}</span>;
+                              }).filter(Boolean);
+                            };
+
+                            return (
+                              <p
+                                key={lineIdx}
+                                className={`${isBullet ? 'ml-2 flex items-start gap-1' : ''} ${isNumbered ? 'ml-1' : ''}`}
+                              >
+                                {isBullet && <span className="text-indigo-400 mt-0.5">•</span>}
+                                <span>{parseMarkdown(isBullet ? line.trim().replace(/^[•-]\s*/, '') : line)}</span>
+                              </p>
+                            );
+                          })}
+                        </div>
                         {/* Actions suggérées */}
                         {msg.actions && msg.actions.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-2">

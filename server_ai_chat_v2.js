@@ -637,7 +637,11 @@ ${eq.type === 'doors' || eq.type === 'door' || (eq.name && eq.name.toLowerCase()
   ? `- **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="last" pour le dernier contrôle de cette porte
 - **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="history" pour l'historique des contrôles`
   : `- **get_controls** avec building="${eq.building}" pour les contrôles`}
-- **get_non_conformities** pour les NC associées`;
+- **get_non_conformities** pour les NC associées
+- **propose_troubleshooting_transfer** avec target_equipment_type="${eq.type}" pour transférer un dépannage vers un équipement du même type
+
+**IMPORTANT pour transfert de dépannage**: L'utilisateur est sur un équipement de type "${eq.type}".
+Quand il demande de transférer un dépannage vers un autre équipement, utilise TOUJOURS target_equipment_type="${eq.type}" pour chercher d'abord dans les équipements du même type.`;
   }
 
   // Résumé du contexte
