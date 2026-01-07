@@ -819,16 +819,56 @@ Demande-moi n'importe quoi !`,
                   </div>
                 )}
 
-                {/* Contenu du message avec markdown basique */}
+                {/* Contenu du message avec markdown amélioré */}
                 {message.content && (
-                  <div className="text-sm whitespace-pre-wrap">
-                    {message.content.split('\n').map((line, i) => (
-                      <p key={i} className={line.startsWith('•') ? 'ml-2' : ''}>
-                        {line.split('**').map((part, j) =>
-                          j % 2 === 1 ? <strong key={j}>{part}</strong> : part
-                        )}
-                      </p>
-                    ))}
+                  <div className="text-sm space-y-1">
+                    {message.content.split('\n').map((line, i) => {
+                      // Ligne vide
+                      if (!line.trim()) return <div key={i} className="h-2" />;
+
+                      // Titre avec emoji (ex: "🔧 Dernier dépannage")
+                      const isTitle = /^[🔧⚠️✅❌📋📊🎯💡🔍📍➡️🚨📈📉🏭⚡🔌💾🛠️🔒🚪📦🌡️]+\s*\*\*/.test(line);
+
+                      // Déterminer le style de ligne
+                      const isBullet = line.trim().startsWith('•') || line.trim().startsWith('-');
+                      const isNumbered = /^\d+[\.\)]\s/.test(line.trim());
+
+                      // Parser le markdown inline
+                      const parseInlineMarkdown = (text) => {
+                        const parts = [];
+                        let remaining = text;
+                        let keyIndex = 0;
+
+                        while (remaining.length > 0) {
+                          // Chercher **bold**
+                          const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
+                          if (boldMatch && boldMatch.index !== undefined) {
+                            // Texte avant le bold
+                            if (boldMatch.index > 0) {
+                              parts.push(<span key={keyIndex++}>{remaining.slice(0, boldMatch.index)}</span>);
+                            }
+                            // Le texte bold
+                            parts.push(<strong key={keyIndex++} className="font-semibold">{boldMatch[1]}</strong>);
+                            remaining = remaining.slice(boldMatch.index + boldMatch[0].length);
+                          } else {
+                            // Pas de markdown, ajouter le reste
+                            parts.push(<span key={keyIndex++}>{remaining}</span>);
+                            break;
+                          }
+                        }
+                        return parts;
+                      };
+
+                      return (
+                        <p
+                          key={i}
+                          className={`${isBullet ? 'ml-3 flex items-start gap-2' : ''} ${isNumbered ? 'ml-2' : ''} ${isTitle ? 'font-medium text-gray-800' : ''}`}
+                        >
+                          {isBullet && <span className="text-brand-500 mt-0.5">•</span>}
+                          <span>{parseInlineMarkdown(isBullet ? line.trim().replace(/^[•-]\s*/, '') : line)}</span>
+                        </p>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -965,22 +1005,41 @@ Demande-moi n'importe quoi !`,
                 {/* Transfer Confirmation UI */}
                 {message.showTransferConfirmation && message.transferData && (
                   <div className="mt-3 pt-3 border-t border-gray-200">
-                    <div className="p-3 bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg border border-amber-200">
-                      <div className="flex items-center gap-2 mb-3">
-                        <ArrowRightLeft className="w-5 h-5 text-amber-600" />
-                        <p className="text-sm font-medium text-amber-800">Transfert de dépannage</p>
+                    <div className="p-4 bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 rounded-xl border border-amber-200 shadow-sm">
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className="p-1.5 bg-amber-100 rounded-lg">
+                          <ArrowRightLeft className="w-4 h-4 text-amber-600" />
+                        </div>
+                        <p className="text-sm font-semibold text-amber-900">Transfert de dépannage</p>
                       </div>
 
-                      <div className="space-y-2 mb-3 text-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-500">De:</span>
-                          <span className="font-medium">{message.transferData.sourceEquipment}</span>
-                          <span className="text-xs text-gray-400">({message.transferData.sourceBuilding || 'N/A'})</span>
+                      <div className="space-y-3 mb-4">
+                        <div className="flex items-center gap-3 p-2 bg-white/60 rounded-lg">
+                          <div className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full text-gray-400">
+                            <Wrench className="w-4 h-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-gray-500">Depuis</p>
+                            <p className="font-medium text-gray-700 truncate">{message.transferData.sourceEquipment}</p>
+                            <p className="text-xs text-gray-400">{message.transferData.sourceBuilding || 'N/A'}</p>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-500">Vers:</span>
-                          <span className="font-medium text-amber-700">{message.transferData.targetEquipmentName}</span>
-                          <span className="text-xs text-gray-400">({message.transferData.targetBuilding || 'N/A'})</span>
+
+                        <div className="flex justify-center">
+                          <div className="p-1 bg-amber-200 rounded-full">
+                            <ArrowRightLeft className="w-3 h-3 text-amber-700" />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 p-2 bg-white/80 rounded-lg border border-amber-200">
+                          <div className="w-8 h-8 flex items-center justify-center bg-amber-100 rounded-full text-amber-600">
+                            <Wrench className="w-4 h-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-amber-600 font-medium">Vers</p>
+                            <p className="font-semibold text-amber-800 truncate">{message.transferData.targetEquipmentName}</p>
+                            <p className="text-xs text-amber-600">{message.transferData.targetBuilding || 'N/A'}</p>
+                          </div>
                         </div>
                       </div>
 
@@ -1031,7 +1090,7 @@ Demande-moi n'importe quoi !`,
                           setTransferLoading(false);
                         }}
                         disabled={transferLoading}
-                        className="flex items-center justify-center gap-2 w-full px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl text-sm font-semibold hover:from-amber-600 hover:to-orange-600 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {transferLoading ? (
                           <>
@@ -1057,19 +1116,24 @@ Demande-moi n'importe quoi !`,
                       {message.transferCandidates.map((candidate, i) => (
                         <button
                           key={i}
-                          onClick={() => handleSend(`C'est ${candidate.name} dans le bâtiment ${candidate.building || 'principal'}`)}
-                          className="flex items-center gap-3 w-full px-3 py-2 bg-white rounded-lg text-left text-sm hover:bg-amber-50 hover:border-amber-300 transition-colors border"
+                          onClick={() => handleSend(`C'est ${candidate.name} (${candidate.type_label || candidate.type}) dans le bâtiment ${candidate.building || 'principal'}`)}
+                          className="flex items-center gap-3 w-full px-3 py-2.5 bg-white rounded-xl text-left text-sm hover:bg-amber-50 hover:border-amber-300 transition-all border shadow-sm hover:shadow"
                         >
-                          <div className="p-1.5 bg-amber-100 rounded">
+                          <div className="p-2 bg-gradient-to-br from-amber-100 to-orange-100 rounded-lg">
                             <Wrench className="w-4 h-4 text-amber-600" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-gray-900 truncate">{candidate.name}</p>
-                            <p className="text-xs text-gray-500">
-                              {candidate.building || 'N/A'} • {candidate.type}
+                            <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{candidate.type_label || candidate.type}</span>
+                              <span>•</span>
+                              <span>{candidate.building || 'N/A'}</span>
                             </p>
                           </div>
-                          <ArrowRightLeft className="w-4 h-4 text-gray-400" />
+                          <div className="flex items-center gap-1 text-amber-600">
+                            <span className="text-xs">Sélectionner</span>
+                            <ArrowRightLeft className="w-4 h-4" />
+                          </div>
                         </button>
                       ))}
                     </div>
