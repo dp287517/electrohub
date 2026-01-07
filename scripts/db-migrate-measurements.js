@@ -103,8 +103,8 @@ async function migrate() {
         label TEXT,
         color TEXT DEFAULT '#ef4444',
 
-        -- Propriétaire (mesures privées par utilisateur)
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        -- Propriétaire (mesures privées par utilisateur) - TEXT pour UUID
+        user_id TEXT NOT NULL,
 
         -- Multi-tenant
         company_id INTEGER NOT NULL,

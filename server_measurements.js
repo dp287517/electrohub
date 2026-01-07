@@ -657,13 +657,28 @@ export async function initMeasurementsTables() {
         area_square_meters NUMERIC,
         label TEXT,
         color TEXT DEFAULT '#ef4444',
-        user_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
         company_id INTEGER NOT NULL,
         site_id INTEGER NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // Fix: Alter user_id column from INTEGER to TEXT if needed (for UUID support)
+    try {
+      const checkUserIdType = await pool.query(`
+        SELECT data_type FROM information_schema.columns
+        WHERE table_name = 'map_measurements' AND column_name = 'user_id'
+      `);
+      if (checkUserIdType.rows.length > 0 && checkUserIdType.rows[0].data_type === 'integer') {
+        console.log('[measurements] Altering user_id column from INTEGER to TEXT...');
+        await pool.query(`ALTER TABLE map_measurements ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT`);
+        console.log('[measurements] user_id column altered to TEXT');
+      }
+    } catch (alterErr) {
+      console.error('[measurements] Error altering user_id column:', alterErr.message);
+    }
 
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_map_measurements_user_plan
