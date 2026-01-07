@@ -964,9 +964,10 @@ export function TroubleshootingButton({ equipment, equipmentType, onSuccess, cla
 // ============================================================
 // TROUBLESHOOTING HISTORY - Liste des dépannages d'un équipement
 // ============================================================
-export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5 }) {
+export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, onRefresh }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(null);
 
   useEffect(() => {
     loadHistory();
@@ -982,6 +983,32 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5 }
       console.error('Load history error:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (recordId, title) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer le dépannage "${title}" ?\n\nCette action est irréversible.`)) {
+      return;
+    }
+
+    setDeleting(recordId);
+    try {
+      const response = await fetch(`${API_BASE}/api/troubleshooting/${recordId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        setRecords(prev => prev.filter(r => r.id !== recordId));
+        onRefresh?.();
+      } else {
+        alert('Erreur lors de la suppression');
+      }
+    } catch (e) {
+      console.error('Delete error:', e);
+      alert('Erreur lors de la suppression: ' + e.message);
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -1046,6 +1073,18 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5 }
               <Download size={12} />
               PDF
             </a>
+            <button
+              onClick={() => handleDelete(record.id, record.title)}
+              disabled={deleting === record.id}
+              className="flex items-center gap-1 px-2 py-1 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {deleting === record.id ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Trash2 size={12} />
+              )}
+              Supprimer
+            </button>
           </div>
         </div>
       ))}
