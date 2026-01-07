@@ -243,6 +243,25 @@ export default function MeasurementTools({
   onMeasurementClick,
   className = "",
 }) {
+  // Detect if mobile - DON'T render on mobile at all
+  // Use only screen width - touch capability check was flagging laptops with touchscreens
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768;
+  });
+
+  useEffect(() => {
+    const checkMobile = () => {
+      // Only use screen width to detect mobile - not touch capability
+      // This avoids false positives on laptops with touchscreens
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   // State
   const [isExpanded, setIsExpanded] = useState(false);
   const [mode, setMode] = useState(null); // null | 'line' | 'polygon' | 'scale'
@@ -593,6 +612,17 @@ export default function MeasurementTools({
         Math.pow((scalePoints[1].y - scalePoints[0].y) * (imageHeight || 1000), 2)
       )
     : null;
+
+  // Don't render on mobile - measurement tools are desktop only
+  if (isMobile) {
+    return null;
+  }
+
+  // Don't render if no scale configured (buttons should only appear when scale is set)
+  // But wait until loading is complete before deciding
+  if (!scaleLoading && !scale) {
+    return null;
+  }
 
   return (
     <div className={`absolute bottom-4 left-4 z-[1000] ${className}`}>
